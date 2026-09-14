@@ -1,6 +1,6 @@
 # 3D Preview Thumbnail Pipeline
 
-The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, and USD file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb inside an AWS Batch Fargate container.
+The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, and USD file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb inside an AWS Batch Fargate container. It is a [system pipeline](system-pipelines.md) in the `SYSTEM - Preview` category: registered from its `vamsSchema` bundle, read-only through the API except for its `enabled` switches and its template's configuration body and tag schema, and re-asserted by each deployment.
 
 ## Supported Formats
 
@@ -128,11 +128,11 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                                | Default | Description                                                              |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Enables the global VPC. |
-| `autoRegisterWithVAMS`                | `false` | Automatically register the pipeline and workflow during CDK deployment.  |
-| `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when supported 3D files are uploaded. |
+| Option                                | Default | Description                                                                           |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`. |
+| `autoRegisterWithVAMS`                | `true`  | Register the pipeline, its workflow, its template, and its trigger during deployment. |
+| `autoRegisterAutoTriggerOnFileUpload` | `false` | Arm the file-upload trigger. Each deployment re-asserts this value on the trigger.    |
 
 :::warning[License Notice]
 This pipeline is disabled by default because it depends on libraries with LGPL licenses (CadQuery/Open CASCADE for STEP file support). Review the `requirements.txt` file in the container directory and consult your legal team before enabling this pipeline. Other format handlers use MIT-licensed or Apache-licensed libraries.
@@ -206,4 +206,5 @@ The same `preview_pipeline` package is also built as an AWS Lambda container ima
 
 -   [Pipeline System Overview](overview.md)
 -   [Potree Point Cloud Viewer Pipeline](potree-viewer.md) -- interactive point cloud visualization (complementary to thumbnail previews)
--   [CAD/Mesh Metadata Extraction Pipeline](cad-mesh-extraction.md) -- extracts metadata from similar file formats
+-   [SYSTEM - GenAI Metadata Generation Pipeline](system-genai-metadata.md) -- shares this pipeline's renderers to extract attributes and generate metadata for the same file formats
+-   [System pipelines](system-pipelines.md) -- the rules that apply to this pipeline's records

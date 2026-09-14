@@ -421,6 +421,10 @@ The following bucket policy statement is applied to every Amazon S3 bucket in VA
 }
 ```
 
+### Data Sent to Amazon Bedrock
+
+Two features send content to Amazon Bedrock in the deployment's own AWS account and Region: the SYSTEM GenAI metadata pipeline sends rendered views or video keyframes, extracted text excerpts, file attributes, and — when the template tag `SEED_WITH_EXISTING_METADATA` is `true` — the existing metadata of the file, its asset, and its database to the configured analysis model, and — when vector search is enabled — the composed embedding text, which always carries that existing metadata, to the embeddings model; natural-language search sends each query string to the embeddings model. Requests use the deployment's Lambda roles over TLS, and Amazon Bedrock does not use customer content to train models or share it with model providers. Renders and keyframes are transient objects under the auxiliary bucket's execution prefix; embedding documents are deleted by the vector indexer once written to the vector table. Because file text, user-entered metadata, and asset descriptions are untrusted prompt content, attach an operator-created Amazon Bedrock guardrail with the prompt-attack filter through `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail`; see the [pipeline page](../pipelines/system-genai-metadata.md). Review the model provider's terms recorded in [Notices](../additional/notices.md) before enabling either feature.
+
 ## Content Security Policy (CSP)
 
 VAMS generates a dynamic Content Security Policy for the web application based on the deployment configuration. The CSP is constructed at AWS CDK synthesis time and applied to the web distribution.
@@ -687,17 +691,18 @@ Custom bucket policies can be applied to all VAMS Amazon S3 buckets via `infra/c
 
 `govCloud.enabled = true` is the restricted-partition switch: the AWS GovCloud (US), AWS European Sovereign Cloud, and ISO partitions all set it. When it is `true`:
 
-| Constraint                                | Enforcement                                                                           |
-| ----------------------------------------- | ------------------------------------------------------------------------------------- |
-| VPC required                              | `useGlobalVpc.enabled` must be `true`                                                 |
-| No Amazon CloudFront                      | `useCloudFront.enabled` must be `false`                                               |
-| No Amazon Location Service                | `useLocationService.enabled` must be `false`                                          |
-| No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                         |
-| No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable) |
-| No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                    |
-| FIPS endpoints                            | Automatically selected by service helper                                              |
+| Constraint                                | Enforcement                                                                                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| VPC required                              | `useGlobalVpc.enabled` must be `true`                                                                                          |
+| No Amazon CloudFront                      | `useCloudFront.enabled` must be `false`                                                                                        |
+| No Amazon Location Service                | `useLocationService.enabled` must be `false`                                                                                   |
+| No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                                                                  |
+| No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable)                                          |
+| No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                                                             |
+| FIPS endpoints                            | Automatically selected by service helper                                                                                       |
+| Vector search off by default              | `vectorSearch.enabled` is backfilled to `false`; enabling it is supported after the models are enabled in both linked accounts |
 
-The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain.
+The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain, and no DynamoDB vector search, so `vectorSearch.enabled` must be `false` there.
 
 When `govCloud.il6Compliant = true`:
 

@@ -58,6 +58,7 @@ One folder per domain. The current domains:
 -   `assetLinks/` — Asset relationship management
 -   `comments/` — Comment CRUD
 -   `config/` — System configuration
+-   `vectorsearch/` — Vector search: `vectorIndexer.py` (single writer of the vector embeddings table, driven by `vector.embedding.ready` events and file/asset lifecycle records), `vectorReindexer.py` (`clear`/`enqueue`/`both`), `systemWorkflowLauncher.py` (paced SQS consumer that invokes `executeWorkflow` as `SYSTEM_USER`), `vectorSearchService.py` (`POST /search/nlp`). Shared code: `common/vectorsearch/{embeddings,vectorStore,fileClassIntent}.py`, `common/indexing/{documentIds,fileEnumeration}.py`, `common/databaseAccess.py`, `common/workflows/{executionLocks,systemRecords}.py`
 -   `databases/` — Database CRUD
 -   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
 -   `metadata/` — Metadata CRUD

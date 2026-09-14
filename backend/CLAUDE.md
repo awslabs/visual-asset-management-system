@@ -39,6 +39,12 @@ backend/
 │   │   ├── dynamodb.py                             # query_all_items, query_has_match,
 │   │   │                                           #   to_update_expr, get_asset_object_from_id
 │   │   ├── resourceNames.py                        # SSM resource-name resolver + ResourceKeys
+│   │   ├── databaseAccess.py                       # DatabaseAccessManager (accessible-database scan + Casbin)
+│   │   ├── indexing/documentIds.py                 # OpenSearch doc ids + vector fileVersionKey / segment keys
+│   │   ├── indexing/fileEnumeration.py             # enumerate_latest_live_files (reindexers)
+│   │   ├── vectorsearch/embeddings.py              # Bedrock embedding adapters; vendored byte-identical into the system pipeline
+│   │   ├── vectorsearch/vectorStore.py             # VectorStore protocol + DynamoDbVectorStore (SearchVectors, MAX_TOP_K)
+│   │   ├── vectorsearch/fileClassIntent.py         # FILE_CLASSES phrases + query file-type intent (soft boost)
 │   │   ├── s3.py                                   # S3 file validation + paged list helpers
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns (mirror web/src/common/constants/fileFormats.ts)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
@@ -48,6 +54,7 @@ backend/
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
 │   │       ├── executionLocks.py                   #   perInputFileVersion lock rows (conditional put/delete, TTL, row-derived release)
+│   │       ├── systemRecords.py                    #   isSystem import marker + read-only guard messages
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
@@ -70,6 +77,9 @@ backend/
 │   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,
 │   │   │                                           #   registerPipelineExecution, workflowTriggerDispatch,
 │   │   │                                           #   deadlineCloudJobCallback
+│   │   ├── vectorsearch/                           # vectorIndexer (single writer of the vector table),
+│   │   │                                           #   vectorReindexer (clear/enqueue/both), systemWorkflowLauncher
+│   │   │                                           #   (paced SQS → executeWorkflow), vectorSearchService (POST /search/nlp)
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
 │   │   └── assetLinks, comments, config, databases, indexing, metadata,
@@ -859,7 +869,7 @@ New-handler / model / test skeletons: `backend/HANDLER_TEMPLATES.md`. Gold Stand
 
 ## Key Dependencies
 
-Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.45 / `botocore` 1.43.45 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
+Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.89 / `botocore` 1.43.89 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix; botocore **≥1.43.89** is the floor for the DynamoDB `SearchVectors` operation, pinned by `tests/common/test_vector_api_floor.py`), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
 
 Dev only: `moto` 5.1.0 (AWS mocks), `pytest` 9.0.3, `mypy` 1.0.0, `flake8` 6.0.0.
 

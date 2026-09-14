@@ -257,17 +257,23 @@ passing the deploy-time resolved resource values:
 
 ```typescript
 new VamsSchemaRegistration(this, "MyPipelineSchema", {
-    schemaPath: path.join(
+    importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+    artefactsBucket: props.storageResources.s3.artefactsBucket,
+    vamsSchemaDir: path.join(
         __dirname,
         "../../../../../backendPipelines/{category}/{pipelineName}/vamsSchema"
     ),
     resourceOverrides: { lambdaName: myPipelineFunction.functionName },
-    importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+    idOverrides: { pipelineId: "{pipeline-id}", workflowId: "{pipeline-id}" },
+    triggerEnabled:
+        props.config.app.pipelines.useMyPipeline.autoRegisterAutoTriggerOnFileUpload === true,
 });
 ```
 
 Registration is idempotent: a redeploy overwrites the definition and clears the archived flag, so it
 never duplicates a pipeline or leaves one hidden.
+
+A pipeline shipped **with the deployment** may set `"isSystem": true` in `pipeline.json` and `workflow.json` and a category of the form `SYSTEM - <Area>`. The importer is the only writer of that flag — the API ignores it — and a system record is read-only through the API except for `enabled`, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`; each deployment re-asserts the shipped values. Use it only for pipelines VAMS owns; a customer-authored pipeline is never a system pipeline. Document a system pipeline in `documentation/docusaurus-site/docs/pipelines/system-pipelines.md` as well as on its own page.
 
 ### Step 5: Create CDK Infrastructure
 
@@ -352,11 +358,15 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 
 ### Step 7: Update the VPC Builder (Batch/ECS/Fargate pipelines)
 
-**CRITICAL:** Pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Search for `useSplatToolbox` in the file to find all locations. Missing any one causes deployment failures:
+**CRITICAL:** A pipeline whose compute is an AWS Batch, ECS, or Fargate job goes into some of the three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in**, read from what `pipelineBuilder-nestedStack.ts` passes as `pipelineSubnets`. A Lambda-only pipeline goes in **no** block. The rule and the current flag lists are in `infra/lib/nestedStacks/pipelines/CLAUDE.md` ("VPC Builder Updates") and its mirror `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`.
 
-1. **Subnet creation condition** (~line 341): the `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig` into `subnetConfigurations`. Without this, Batch compute environments fail with `"Resource subnets are required"`.
-2. **VPC endpoint condition** (~line 610): the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints. Without this, Batch jobs cannot pull container images.
-3. **ECS endpoint condition** (`needsEcsPrivate`, ~line 694): controls whether the ECS VPC endpoint includes private subnets. Without this, the ECS agent on Batch instances cannot register with the ECS service.
+| Block                                                                           | Isolated-subnet pipeline | Private-subnet pipeline |
+| ------------------------------------------------------------------------------- | ------------------------ | ----------------------- |
+| 1. **Subnet creation** — pushes `subnetPublicConfig`/`subnetPrivateConfig`      | No                       | Yes                     |
+| 2. **Pipeline-only endpoints** — Batch, ECR API, ECR Docker (`"BatchEndpoint"`) | Yes                      | Yes                     |
+| 3. **ECS endpoint** — the `needsEcsPrivate` variable                            | No                       | Yes                     |
+
+Listing an isolated-subnet pipeline in block 1 creates one NAT gateway per Availability Zone that nothing routes through; omitting block 2 for any container pipeline fails the job at task start because the image cannot be pulled. When only an optional branch of the pipeline uses a container (a `useFargateRenderer`-style sub-flag), key the block condition **and** the `vpcRequiringFeatures` entry in `config.ts` on that sub-flag, not on the pipeline's `enabled`.
 
 ### Step 8: Add Config Flag
 
@@ -369,9 +379,10 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 ### Step 9: Update Documentation and Steering
 
 1. **`documentation/docusaurus-site/docs/deployment/configuration-reference.md`**: add a section for the pipeline documenting every config option, following the existing pipeline-section format.
-2. **`documentation/docusaurus-site/docs/pipelines/`**: create a new pipeline page, add it to `documentation/docusaurus-site/sidebars.ts`, and add the pipeline to the `pipelines/overview.md` table and `overview/features.md`.
-3. **Root `CLAUDE.md`**: add the pipeline to the Project Overview pipeline list **and** to the directory tree (Rule 11). The tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist.
-4. If the pipeline added a VPC subnet/endpoint requirement, update the "VPC Resource Usage by Feature" tables in the configuration reference.
+2. **`documentation/docusaurus-site/docs/pipelines/`**: create a new pipeline page, add it to `documentation/docusaurus-site/sidebars.ts`, add the pipeline to the `pipelines/overview.md` built-in table **and** VPC chart, and to `overview/features.md` (table row **and** the spelled-out count sentence — they must agree). A system pipeline is also listed in `pipelines/system-pipelines.md`.
+3. **License notices**: when the pipeline adds a third-party library, base image, or model, add entries to **both** the repo-root `NOTICE.md` (per-pipeline dependency table) and `documentation/docusaurus-site/docs/additional/notices.md` (per-pipeline license paragraph), recording the exact license and any required attribution string. Copyleft components (GPL/LGPL) get their own sentence stating how they are invoked.
+4. **Root `CLAUDE.md`**: add the pipeline to the Project Overview pipeline list **and** to the directory tree (Rule 11). The tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist.
+5. If the pipeline added a VPC subnet/endpoint requirement, update the "VPC Resource Usage by Feature" tables in the configuration reference, and the flag lists in `infra/lib/nestedStacks/pipelines/CLAUDE.md` and `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`.
 
 ### Step 10: Validate
 
@@ -397,9 +408,9 @@ After creating all files, verify:
 -   [ ] Backward-compatibility defaults + validation in `getConfig()`
 -   [ ] Pipeline nested stack is imported and registered in pipelineBuilder-nestedStack.ts
 -   [ ] `pipelineVamsLambdaFunctionName` is pushed to the array for pipeline registration
--   [ ] VPC builder updated in all three condition blocks (Batch/ECS/Fargate pipelines)
+-   [ ] VPC builder updated in the condition blocks its subnet placement requires (none for a Lambda-only pipeline; sub-flag-keyed for an optional container branch)
 -   [ ] `suppressCdkNagLambda` and CDK Nag suppressions with justified reasons on all resources
--   [ ] Documentation updated: configuration-reference.md, pipelines page, overview table, features.md, sidebars.ts, root CLAUDE.md
+-   [ ] Documentation updated: configuration-reference.md, pipelines page, overview table and VPC chart, features.md (row + count), sidebars.ts, root CLAUDE.md, NOTICE.md + additional/notices.md for licensed dependencies
 
 **After deploying**, confirm registration actually landed — a malformed bundle can fail to import while
 the deployment still reports success:

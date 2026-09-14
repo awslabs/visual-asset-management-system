@@ -179,6 +179,17 @@ actually fire — is covered by `tests/test_pagingStub.py`. Change a check in `p
 file is the one to run first: a stub that rejects legitimate behaviour makes correct code look broken,
 which is how a real paging fix gets reverted.
 
+#### Use the shared Stubber helper in `tests/vectorStub.py`
+
+Vector-search code talks to two APIs that `moto` cannot serve: DynamoDB `SearchVectors` and Amazon Bedrock Runtime. `tests/vectorStub.py` wraps `botocore.stub.Stubber` for both — `stubbed_dynamodb(expected_calls)` and `stubbed_bedrock_runtime(expected_calls)` are context managers that yield a real botocore client with the scripted responses queued, so a test exercises request serialization against the live service model rather than a `MagicMock` that accepts anything. Write one Stubber contract test per vector operation the code performs; the helper's own checks are mutation-verified in `tests/test_vectorStub.py`, the same way `pagingStub.py` is.
+
+Two rules follow from what the fakes can and cannot do:
+
+-   **Never `create_table(VectorIndexes=…)` under moto.** moto's DynamoDB does not implement vector indexes; the call either raises on the unknown parameter or silently creates a table without the index, and the test then asserts against a shape the service would never produce. Use moto for plain DynamoDB, S3, SQS, SNS, SSM, and Step Functions plumbing and the Stubber helper for the vector and Bedrock calls.
+-   **Bedrock is fakes only.** No test invokes a model; `stubbed_bedrock_runtime` and the house `_boto_client` fake are the only two doubles, and a handler's Bedrock error path is exercised by scripting the `ClientError` code (`AccessDeniedException`, `ThrottlingException`, `ValidationException`) into the stub.
+
+The service-model floor that makes `SearchVectors` stubbable at all is pinned by `tests/common/test_vector_api_floor.py`, which fails loudly (never skips) when the installed botocore lacks the operation — so a dependency downgrade shows up as one clear failure rather than as a hundred `ParamValidationError`s.
+
 The loop FORM is additionally guarded across the whole of `backend/backend` by
 `tests/common/test_paging_key_presence_form.py`, which walks the tree rather than carrying a module
 list. It fails on a new loop whose continuation decision reads the key's VALUE, and on a file that

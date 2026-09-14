@@ -126,7 +126,7 @@ write, including the latest/archived lifecycle of the item.
 
 -   **Document** — `{auxTempPrefix}embedding/{sha256(fileVersionKey)}.json` in the auxiliary bucket
     (`inputOutputS3AssetAuxiliaryFilesPath` is `auxBucket` + `auxTempPrefix`), body
-    `{schemaVersion: 1, databaseId, assetId, filePath, versionId, contentEtag, bucketId, fileClass, fileExt, fileSize, contentType, embeddingModelId, embeddingDimensions, analysisModelId, embedding: [...], sourceText, sourceModalities, pipelineExecutionId, workflowExecutionId, generatedAt}`.
+    `{schemaVersion: 1, databaseId, assetId, filePath, versionId, contentEtag, bucketId, fileClass, fileExt, fileSize, contentType, embeddingModelId, embeddingDimensions, analysisModelId, embedding: [...], sourceText, sourceModalities, pipelineExecutionId, workflowExecutionId, generatedAt, segmentKey, segmentKind, segmentLabel, segmentStartMs, segmentEndMs, segmentCount}`.
     `fileVersionKey` is `build_vector_file_version_key(filePath, versionId)` from
     `backend/backend/common/indexing/documentIds.py`; the object name is independent of the table key
     and consumers follow `documentS3Location`.
@@ -136,6 +136,18 @@ write, including the latest/archived lifecycle of the item.
     `sourceText` plus `documentS3Location` (the `s3://` URI of the document). The publishing Lambda needs
     `events:PutEvents` on the bus and write access to the auxiliary bucket; the indexer deletes the
     document once the item is written.
+-   **Segments** — one file version may carry several vectors: the whole-file document (`segmentKey ""`,
+    `segmentKind "none"`, `segmentLabel ""`, `segmentStartMs`/`segmentEndMs` null) plus one document and
+    one event per segment, each with a distinct `segmentKey` (≤ `SEGMENT_KEY_MAX_BYTES = 32`, built with
+    `build_video_segment_key(start_ms)` / `build_text_chunk_key(index)` from
+    `backend/backend/common/indexing/documentIds.py`), a `segmentKind` from `SEGMENT_KINDS`
+    (`videoTime`, `textChunk`; `animationTime` reserved), and the run's total in `segmentCount`. The aux
+    object name of a segment document is `{auxTempPrefix}embedding/{sha256(fileVersionKey + "#" + segmentKey)}.json`.
+    Give every document of one run the same `pipelineExecutionId`: the indexer, on the whole-file document,
+    deletes the version's segment items whose `pipelineExecutionId` differs, and the current run's own
+    segments may arrive before or after it. A `Detail` without the six fields is indexed as a whole-file
+    vector with the defaults above; an over-long key or an unknown kind is logged and dropped. Reference
+    producers: `containers/media/segment_handler.py` (windows) and the chunk loop of `generateEmbedding.py`.
 -   **Model discipline** — `embeddingModelId` / `embeddingDimensions` must equal the deployment's
     configured `app.vectorSearch.embeddingModelId` / `embeddingDimensions`; the indexer logs and drops a
     document produced with any other model. Embed through the canonical adapter
@@ -608,7 +620,7 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     - **Pipeline-only endpoint condition** (~line 651) — the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Required for every pipeline, either placement.** Without it Batch jobs cannot pull container images.
     - **ECS endpoint condition** (~line 736) — the `needsEcsPrivate` variable. **Private-subnet pipelines only.** This is the ECS _control-plane_ endpoint that the ECS agent on an EC2-launch-type container instance needs; **Fargate tasks do not use it** (they need ECR, Amazon S3 and CloudWatch Logs, supplied by the block above). Each endpoint adds one ENI per AZ, ~$15/month.
 
-    Six pipelines run in isolated subnets today (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Isolated-subnet flags (endpoint block only): `useConversionCoordinateTransform`, `usePreviewPcPotreeViewer.enabled`, `usePreview3dThumbnail.enabled`, `useSystemGenAiMetadata.useFargateRenderer`. Private-subnet flags (all three blocks): `useSplatToolbox.enabled`, `useNvidiaCosmos.enabled`, `useNvidiaCosmos3`, `useNvidiaGr00t.enabled`, `useIsaacLabTraining`, `useRapidPipeline.useEcs.enabled`, `useRapidPipeline.useEks.enabled`, `useModelOps.enabled`. Lambda-only pipelines (3D basic conversion, the SYSTEM GenAI metadata pipeline without its Fargate renderer) appear in no block; a container branch behind a sub-flag keys the block condition and the `vpcRequiringFeatures` entry on the sub-flag, never on the pipeline's `enabled`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
 
 10. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
 11. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).

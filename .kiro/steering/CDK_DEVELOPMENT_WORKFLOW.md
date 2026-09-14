@@ -60,7 +60,8 @@ CoreVAMSStack (root)
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
   |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
   |     |                                                    -> storage, resourceNames, ApiBuilder
-  |     +-- SearchBuilder (OpenSearch, vector indexing)      -> storage, resourceNames, ApiBuilder2
+  |     +-- SearchBuilder (OpenSearch, vector indexing, POST /search/nlp)  -> storage, resourceNames, ApiBuilder2
+  |     |    (its system-workflow launcher invokes the ApiBuilder2 executeWorkflow Lambda by name)
   |     |    (its system-workflow launcher invokes an ApiBuilder2 Lambda by name)
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
   |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
@@ -885,11 +886,8 @@ backendPipelines/
 │       ├── lambda/             # Lambda function code
 │       ├── container/          # Container code (if needed)
 │       └── README.md           # Pipeline documentation
+├── system/genAiMetadata/       # SYSTEM - GenAI metadata (deployment-owned, isSystem): lambda/, containers/{blender,media}, vamsSchema/
 ├── genAi/                      # Generative AI pipelines
-│   ├── metadata3dLabeling/     # 3D metadata labeling
-│   │   ├── lambda/
-│   │   ├── container/
-│   │   └── blender/            # Pipeline-specific tools
 │   └── nvidia/cosmos/          # NVIDIA Cosmos pipelines
 │       ├── 3/                  # Cosmos 3 (omni generation)
 │       │   ├── lambda/
@@ -1076,8 +1074,14 @@ export interface ConfigPublic {
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
             };
-            useGenAiMetadata3dLabeling: {
+            useSystemGenAiMetadata: {
                 enabled: boolean;
+                bedrockAnalysisModelId: string;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+                useFargateRenderer: boolean;
+                lambdaLimits: { maxInputFileSizeMb: number; maxPointCloudPoints: number };
+                bedrockGuardrail: { guardrailIdentifier: string; guardrailVersion: string };
             };
             useRapidPipeline: {
                 enabled: boolean;
@@ -1372,13 +1376,15 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`.
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
-8. **VPC Builder Updates (CRITICAL)**: A pipeline using AWS Batch, ECS, or Fargate goes into some of the three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Determine that from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets` (`pipelineNetwork.isolatedSubnets.pipeline` vs `pipelineNetwork.privateSubnets.pipeline`). Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
+8. **VPC Builder Updates (CRITICAL)**: A pipeline whose compute is an AWS Batch, ECS, or Fargate job must be added to condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Decide that first, by looking at what `pipelineBuilder-nestedStack.ts` passes as the pipeline's `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments. A Lambda-only pipeline appears in no block: it has no container image to pull and no compute environment to place, and its functions join the VPC only under `useGlobalVpc.useForAllLambdas`. When a pipeline offers a container branch behind a sub-flag, key the block condition — and the `vpcRequiringFeatures` entry in `config.ts` — on the **sub-flag**, never on the pipeline's `enabled`, or the pipeline forces a VPC on every deployment that enables it.
 
     - **Subnet creation** (~line 343): adds public + private subnets. **Private-subnet pipelines only** — `subnetPrivateConfig` is `PRIVATE_WITH_EGRESS` and the `ec2.Vpc` sets no `natGateways`, so listing an isolated-subnet pipeline here creates one NAT gateway per Availability Zone (~$66/month at two AZs) that nothing routes through. Omitting it for a private-subnet pipeline fails its compute environment with "Resource subnets are required".
     - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
-    Six pipelines run in isolated subnets (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `usePreviewPcPotreeViewer.enabled`, `usePreview3dThumbnail.enabled`, `useSystemGenAiMetadata.useFargateRenderer`.
+    Private-subnet flags (all three blocks): `useSplatToolbox.enabled`, `useNvidiaCosmos.enabled`, `useNvidiaCosmos3`, `useNvidiaGr00t.enabled`, `useIsaacLabTraining`, `useRapidPipeline.useEcs.enabled`, `useRapidPipeline.useEks.enabled`, `useModelOps.enabled`.
+    Lambda-only pipelines (3D basic conversion, the SYSTEM GenAI metadata pipeline without its Fargate renderer) appear in no block; the SYSTEM GenAI metadata pipeline's Amazon Bedrock Runtime endpoint is keyed on `useForAllLambdas` and `vectorSearch.enabled`, not on the renderer sub-flag. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
 
 9. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
 
@@ -2591,12 +2597,12 @@ When making CDK infrastructure changes, update the corresponding documentation a
 
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
 -   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm the `infra/test/config/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it covers **neither** `validation.ts` nor `derived.ts`, so both are kept in sync by review, not by the test. New/changed `getConfig()` validation logic must be hand-ported into `validation.ts`: a missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. `getConfig()` auto-mutations — assignments that rewrite the operator's config — must be mirrored into `derived.ts` when added or changed, and **deleted** from it when removed from `getConfig()`; a leftover mutation makes the builder keep rewriting the downloaded `config.json` in a way the deployment does not. `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Where `getConfig()` rejects a feature combination instead of assigning, the mirror is an error rule in `validation.ts` — a feature added to a constraint list such as the VPC-requiring set goes into that file's `VPC_REQUIRING_FEATURES` table, not into `derived.ts`. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
--   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
+-   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md` (built-in table **and** the VPC chart), `overview/features.md` (table and spelled-out count), `sidebars.ts`; when the pipeline adds a licensed dependency, base image, or model, add license entries to **both** `additional/notices.md` and the repo-root `NOTICE.md`. A pipeline whose bundle carries `isSystem: true` is also listed in `pipelines/system-pipelines.md`.
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`; add the resource-name constant to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve names from the published SSM parameters), then register the descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`. Same three-way constants update for new audit CloudWatch log groups. Deprecated tables kept for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
 -   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
 -   **New or changed CloudWatch log group** → Update the Amazon CloudWatch section in `architecture/aws-resources.md` and the log group cleanup in `deployment/uninstall.md`
 -   **New nested stack** → Update `architecture/details.md`
--   **New feature switch** → Update `overview/features.md`
+-   **New feature switch** → Update the feature-flag tables in `overview/features.md` **and** `architecture/details.md` (both must list every `VAMS_APP_FEATURES` member), the CLI `FEATURE_*` mirror in `tools/VamsCLI/vamscli/constants.py`, and `web/src/common/constants/featuresEnabled.ts`
 -   **New external configuration/policy file** (e.g. `config/policy/iamRoleConfig.json`) → Add it to the "Additional configuration files" table in `deployment/configuration-reference.md`, document the `config.json` flag that enables it, and explain the file structure.
 
 :::note[Document two independent properties: removal policy and custom name]

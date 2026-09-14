@@ -571,6 +571,20 @@ and staged outputs are not ingested -- so use the status object for failures the
 record.
 :::
 
+### Publishing embeddings for vector search
+
+A pipeline can contribute embeddings to [natural-language search](../concepts/vector-search.md) without touching the vector table: the SYSTEM GenAI metadata pipeline does it, and any pipeline whose role holds `events:PutEvents` on the VAMS orchestration bus can do the same. Write the embedding document to the auxiliary bucket under the execution's temporary prefix, then publish one event per file version:
+
+| Field        | Value                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Source`     | The manifest's `systemConfig.orchestrationEventPrefix`                                                                                                                                                                                                                                                                                                                                                                 |
+| `DetailType` | `vector.embedding.ready`                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Detail`     | `schemaVersion: 1`, `databaseId`, `assetId`, `filePath`, `versionId`, `contentEtag`, `bucketId`, `fileClass`, `fileExt`, `fileSize`, `contentType`, `embeddingModelId`, `embeddingDimensions`, `analysisModelId`, `sourceModalities`, `pipelineExecutionId`, `workflowExecutionId`, `generatedAt`, `documentS3Location`, `segmentKey`, `segmentKind`, `segmentLabel`, `segmentStartMs`, `segmentEndMs`, `segmentCount` |
+
+The document at `documentS3Location` carries the same fields plus `embedding` (the vector) and `sourceText`. The vector indexer reads it, writes the item, marks the file's other versions as not latest, and deletes the document; it drops a document whose `embeddingModelId` or `embeddingDimensions` differ from the deployed index, so read both from the deployment's `app.vectorSearch` configuration. Never publish the vector inside the event itself.
+
+A pipeline may publish **several vectors for one file version** — a time window of a video, a chunk of a document — by giving each document and event a distinct `segmentKey` (at most 32 bytes; a fixed-width key that sorts in content order, such as `t` plus a 10-digit start millisecond or `c` plus a 6-digit 1-based ordinal), a `segmentKind` of `videoTime` or `textChunk`, a human-readable `segmentLabel`, `segmentStartMs` and `segmentEndMs` for `videoTime` (null otherwise), and the run's total in `segmentCount`. Publish the whole-file vector with `segmentKey` empty, `segmentKind` `none`, and the same `pipelineExecutionId` as its segments: when the indexer writes a whole-file document it deletes the same version's segment vectors that carry a **different** `pipelineExecutionId`, so an earlier run's windows or chunks do not outlive the run that replaced them. A `Detail` without the six fields is indexed as a whole-file vector (`segmentKey` empty, `segmentKind` `none`, `segmentCount` 0); a key over 32 bytes or an unknown kind is logged and dropped. Search collapses a file's vectors to one hit — see [Vector search](../concepts/vector-search.md) — and the SYSTEM GenAI metadata pipeline's [video windows](system-genai-metadata.md#video-windows) and [content chunks](system-genai-metadata.md#content-chunks) are the worked example.
+
 ## Callbacks
 
 When `waitForCallback` is `"Enabled"`, the body includes `TaskToken` and the workflow waits. The
@@ -894,14 +908,15 @@ partition. Include the block for the execution type with its resource fields lef
 
 `systemConfig` is the admin-only contract that governs how the pipeline may be run:
 
-| Field                         | Purpose                                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                  |
-| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                        |
-| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata). Every key defaults to `true`. |
-| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                          |
-| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                    |
-| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                  |
+| Field                         | Purpose                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                                                                                                                                                                                                                            |
+| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                                                                                                                                                                                                                                  |
+| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata). Every key defaults to `true`.                                                                                                                                                                                                           |
+| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                                                                                                                                                                                                                                    |
+| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                                                                                                                                                                                                                              |
+| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                                                                                                                                                                                                                            |
+| `isSystem`                    | `true` marks the pipeline (and, in `workflow.json`, the workflow) as a system record — read-only through the API except for `enabled` and template content. Honoured only when the bundle is registered by the deployment's importer; an API caller who sends `isSystem` creates an ordinary record. See [System pipelines](system-pipelines.md). |
 
 **Declare only what differs from the defaults.** Registration completes the block before storing it: every
 field the bundle omits is filled with its documented default, and nested maps such as `assetScope` and
@@ -1371,6 +1386,7 @@ Use this checklist when building a new pipeline:
 -   [ ] VPC endpoint conditions updated if pipeline uses AWS Batch, Amazon ECS, or Amazon ECR
 -   [ ] CDK Nag suppressions added with detailed justification
 -   [ ] Configuration documented in the [Configuration Reference](../deployment/configuration-reference.md)
+-   [ ] If the pipeline contributes embeddings, it publishes `vector.embedding.ready` with the documented `Detail` fields and holds `events:PutEvents` on the orchestration bus — see [Publishing embeddings for vector search](#publishing-embeddings-for-vector-search)
 
 ## Related pages
 

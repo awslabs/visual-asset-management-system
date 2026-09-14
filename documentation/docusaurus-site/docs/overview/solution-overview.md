@@ -42,8 +42,8 @@ VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
 -   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, and media files directly in the browser through 20 built-in viewer plugins
--   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered labeling
--   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service across assets and files
+-   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered metadata generation
+-   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service, and natural-language (vector) search powered by Amazon Bedrock embeddings in a DynamoDB vector index, across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
 -   **Multi-Region Deployment** -- Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud with full partition awareness
 
@@ -83,11 +83,11 @@ The REST API provides full programmatic access for custom application developmen
 
 VAMS supports three primary deployment modes to meet different organizational and regulatory requirements.
 
-| Deployment Mode                  | Web Distribution                      | Search                                      | Key Characteristics                                                                                                                                       |
-| -------------------------------- | ------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | Amazon OpenSearch Serverless or Provisioned | Default mode. Full feature set including Amazon Location Service, AWS WAF, and all viewer plugins.                                                        |
-| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | Amazon OpenSearch Provisioned               | No Amazon CloudFront. FIPS endpoint support. VPC required. Supports full VPC isolation with VPC endpoints for restricted environments with VPC isolation. |
-| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | Amazon OpenSearch Serverless or Provisioned | Deploys with the GovCloud guardrails (`app.govCloud.enabled: true`): no Amazon CloudFront, no Amazon Location Service, VPC required.                      |
+| Deployment Mode                  | Web Distribution                      | Search                                                                            | Key Characteristics                                                                                                                                       |
+| -------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | Amazon OpenSearch Serverless or Provisioned; natural-language search (default on) | Default mode. Full feature set including Amazon Location Service, AWS WAF, and all viewer plugins.                                                        |
+| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | Amazon OpenSearch Provisioned; natural-language search (optional)                 | No Amazon CloudFront. FIPS endpoint support. VPC required. Supports full VPC isolation with VPC endpoints for restricted environments with VPC isolation. |
+| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | Amazon OpenSearch Serverless or Provisioned                                       | Deploys with the GovCloud guardrails (`app.govCloud.enabled: true`): no Amazon CloudFront, no Amazon Location Service, VPC required.                      |
 
 :::warning[GovCloud Constraints]
 AWS GovCloud deployments require `useGlobalVpc.enabled` set to `true`, `useCloudFront.enabled` set to `false`, and `useLocationService.enabled` set to `false`.

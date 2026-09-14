@@ -184,7 +184,7 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 | Builder File                        | Functions                                                                                                                                                                    | Purpose                                                                                              |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `searchIndexBucketSyncFunctions.ts` | searchFunction, fileIndexing, assetIndexing, sqsBucketSync (created/deleted per bucket), reindexer, fileIndexerSnsQueuing, assetIndexerSnsQueuing, databaseIndexerSnsQueuing | OpenSearch indexing and S3 bucket synchronization                                                    |
-| `vectorSearchFunctions.ts`          | vectorIndexer, vectorReindexer, systemWorkflowLauncher                                                                                                                       | Vector embeddings table maintenance and reindex launches (conditional on `app.vectorSearch.enabled`) |
+| `vectorSearchFunctions.ts`          | vectorIndexer, vectorReindexer, systemWorkflowLauncher, vectorSearch (`POST /search/nlp`)                                                                                    | Vector embeddings table maintenance and reindex launches (conditional on `app.vectorSearch.enabled`) |
 
 ### Infrastructure Functions
 
@@ -230,7 +230,7 @@ VAMS creates Step Functions state machines dynamically for each workflow definit
 | **Configuration** | `openSearch.useServerless.enabled`                                                                                                     | `openSearch.useProvisioned.enabled` |
 
 :::info[No OpenSearch Mode]
-Both OpenSearch modes can be disabled. When neither is enabled, the `NOOPENSEARCH` feature flag is set and search functionality is unavailable in the UI.
+Both OpenSearch modes can be disabled. When neither is enabled, the `NOOPENSEARCH` feature flag is set and keyword search, metadata filtering, and map view are unavailable in the UI. Natural-language search remains available when `app.vectorSearch.enabled` is `true`, because it reads the DynamoDB vector index rather than OpenSearch; the search page then shows the asset list and natural-language search only. See [Vector search](../concepts/vector-search.md).
 :::
 
 :::warning[Provisioned is for advanced deployments only]
@@ -344,7 +344,7 @@ The AWS WAF groups are the one set outside the `/aws/vendedlogs/` namespace: AWS
 
 ### Pipeline Log Groups (per enabled pipeline)
 
-Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-Metadata3dLabelingPipeline`. Container-based pipelines (RapidPipeline, ModelOps) additionally create `/aws/vendedlogs/Pipelines/<containerName>` groups.
+Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-SystemGenAiMetadata`. Container-based pipelines (RapidPipeline, ModelOps) additionally create `/aws/vendedlogs/Pipelines/<containerName>` groups.
 
 :::note[Log Retention]
 A CDK aspect (`LogRetentionAspect`) sets one-year retention on every CloudWatch log group **declared in the stack**, including the audit groups and the `/aws/vendedlogs/` groups above. A `retention` value declared on an individual log group has no effect, because the aspect runs afterwards and overwrites it. To hold logs longer across the whole deployment, pass a longer `logs.RetentionDays` value to the aspect in `infra/lib/core-stack.ts` — see [Configuring Log Retention](../developer/audit-logging.md#configuring-log-retention).
