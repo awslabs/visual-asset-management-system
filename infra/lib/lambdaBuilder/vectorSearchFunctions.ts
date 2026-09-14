@@ -14,7 +14,7 @@ import { SYSTEM_WORKFLOW_DATABASE_ID } from "../../common/systemPipelines";
 import * as Config from "../../config/config";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import { searchLambdasInVpc } from "../helper/searchPlacement";
-import { Partition, Service } from "../helper/service-helper";
+import { Service } from "../helper/service-helper";
 import {
     globalLambdaEnvironmentsAndPermissions,
     grantReadPermissionsToAllAssetBuckets,
@@ -24,6 +24,7 @@ import {
     suppressCdkNagLambda,
 } from "../helper/security";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
+import { grantBedrockInvokeModel } from "../nestedStacks/pipelines/system/genAiMetadata/lambdaBuilder/systemGenAiMetadataFunctions";
 
 /** Environment shared by every Lambda that addresses the vector index. */
 export function vectorIndexEnvironment(config: Config.Config): Record<string, string> {
@@ -193,7 +194,8 @@ export function buildSystemWorkflowLauncherFunction(
 /**
  * The search-domain Lambda behind POST /search/nlp: query embedding through Bedrock and similarity
  * search on the vector embeddings table. Its own IAM statements name exact resources: the vector
- * table and its one index for SearchVectors, the one foundation model for InvokeModel, and, only when
+ * table and its one index for SearchVectors, the one embedding model for InvokeModel (through the
+ * shared Bedrock statement, exact for a plain id and for an inference profile alike), and, only when
  * an OpenSearch mode is on, the three aos/* parameters the lazily imported /search code reads.
  */
 export function buildVectorSearchFunction(
@@ -230,7 +232,6 @@ export function buildVectorSearchFunction(
     });
 
     const vectorTable = storageResources.dynamo.vectorEmbeddingsStorageTable;
-    const partition = Partition();
     // Similarity search on the one vector index; the statement names the table and that index only.
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -242,17 +243,9 @@ export function buildVectorSearchFunction(
             ],
         })
     );
-    // Query embeddings come from the configured foundation model and no other; a foundation-model ARN
-    // carries no account, so it is spelled here rather than through the account-scoped service helper.
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["bedrock:InvokeModel"],
-            resources: [
-                `arn:${partition}:bedrock:${config.env.region}::foundation-model/${config.app.vectorSearch.embeddingModelId}`,
-            ],
-        })
-    );
+    // Query embeddings come from the configured embedding model and no other; the shared statement
+    // names the exact model (and, for an inference profile, the exact profile) — see its builder.
+    grantBedrockInvokeModel(fun, config, [config.app.vectorSearch.embeddingModelId]);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     if (openSearchEnabled) {

@@ -707,15 +707,16 @@ describe("system GenAI metadata pipeline validation", () => {
         expect(resolve(() => undefined)).not.toThrow(/require a VPC/);
     });
 
-    test("useFargateRenderer on a disabled pipeline still requires a VPC (the sub-flag is the condition)", () => {
-        // The sub-flag is pushed with no enabled guard, as useRapidPipeline.useEcs/useEks are.
+    test("useFargateRenderer on a disabled pipeline requires no VPC (the render branch exists only in an enabled pipeline)", () => {
+        // The VPC builder keys the renderer's endpoints on `enabled && useFargateRenderer`; the config
+        // gate agrees, so a disabled pipeline with the sub-flag left on deploys without a VPC.
         expect(
             resolve((c) => {
                 vectorSearchOff(c);
                 c.app.pipelines.useSystemGenAiMetadata.enabled = false;
                 c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
             })
-        ).toThrow(/require a VPC: pipelines\.useSystemGenAiMetadata\.useFargateRenderer\./);
+        ).not.toThrow(/require a VPC/);
     });
 
     describe("bedrockGuardrail", () => {
@@ -728,7 +729,7 @@ describe("system GenAI metadata pipeline validation", () => {
         };
 
         test("accepts both fields set", () => {
-            expect(resolve(withGuardrail("gr-0123456789ab", "1"))).not.toThrow();
+            expect(resolve(withGuardrail("kb4v3hkqvi6f", "1"))).not.toThrow();
         });
 
         test("accepts both fields empty", () => {
@@ -736,7 +737,7 @@ describe("system GenAI metadata pipeline validation", () => {
         });
 
         test.each([
-            ["identifier only", "gr-0123456789ab", ""],
+            ["identifier only", "kb4v3hkqvi6f", ""],
             ["version only", "", "DRAFT"],
         ])("rejects %s", (_label, identifier, version) => {
             expect(resolve(withGuardrail(identifier, version))).toThrow(
@@ -747,7 +748,7 @@ describe("system GenAI metadata pipeline validation", () => {
         test("a half-set pair is rejected on a disabled pipeline too", () => {
             expect(
                 resolve((c) => {
-                    withGuardrail("gr-0123456789ab", "")(c);
+                    withGuardrail("kb4v3hkqvi6f", "")(c);
                     c.app.pipelines.useSystemGenAiMetadata.enabled = false;
                 })
             ).toThrow(/bedrockGuardrail requires both/);
@@ -762,6 +763,66 @@ describe("system GenAI metadata pipeline validation", () => {
                 guardrailIdentifier: "",
                 guardrailVersion: "",
             });
+        });
+
+        test.each(["DRAFT", "1", "42", "99999999"])("accepts guardrailVersion %s", (version) => {
+            expect(resolve(withGuardrail("kb4v3hkqvi6f", version))).not.toThrow();
+        });
+
+        test.each([
+            ["an ARN", "arn:aws:bedrock:us-east-1:123456789012:guardrail/kb4v3hkqvi6f"],
+            ["a name", "my-guardrail"],
+            ["an upper-case id", "KB4V3HKQVI6F"],
+            ["a short id", "kb4v3hkqvi6"],
+            ["a long id", "kb4v3hkqvi6f0"],
+        ])(
+            "rejects guardrailIdentifier that is %s: the IAM grant composes the ARN from the id",
+            (_label, identifier) => {
+                expect(resolve(withGuardrail(identifier, "1"))).toThrow(
+                    /guardrailIdentifier must be the guardrail's 12-character id .* not its ARN or name/
+                );
+            }
+        );
+
+        test.each([
+            ["a lower-case draft", "draft"],
+            ["zero", "0"],
+            ["a negative number", "-1"],
+            ["a decimal", "1.0"],
+            ["a nine-digit number", "100000000"],
+            ["an alias", "latest"],
+        ])("rejects guardrailVersion that is %s", (_label, version) => {
+            expect(resolve(withGuardrail("kb4v3hkqvi6f", version))).toThrow(
+                /guardrailVersion must be "DRAFT" or a published version number/
+            );
+        });
+
+        test("the format checks apply on a disabled pipeline too, like the pair check", () => {
+            expect(
+                resolve((c) => {
+                    withGuardrail("my-guardrail", "1")(c);
+                    c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                })
+            ).toThrow(/guardrailIdentifier must be the guardrail's 12-character id/);
+        });
+
+        test("an enabled pipeline without a guardrail deploys with a warning that records the deviation", () => {
+            resolve(withGuardrail("", ""))();
+            expect(warnings()).toContain(
+                "pipelines.useSystemGenAiMetadata is enabled without a bedrockGuardrail"
+            );
+            expect(warnings()).toContain("prompt-attack");
+        });
+
+        test("no such warning with a guardrail, or on a disabled pipeline without one", () => {
+            resolve(withGuardrail("kb4v3hkqvi6f", "1"))();
+            expect(warnings()).not.toContain("enabled without a bedrockGuardrail");
+            warn.mockClear();
+            resolve((c) => {
+                withGuardrail("", "")(c);
+                c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+            })();
+            expect(warnings()).not.toContain("enabled without a bedrockGuardrail");
         });
     });
 });

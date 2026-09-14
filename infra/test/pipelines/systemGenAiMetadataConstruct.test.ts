@@ -158,7 +158,7 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
     });
     const guarded = synth("Guarded", (c) => {
         c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
-            guardrailIdentifier: "gr-test",
+            guardrailIdentifier: "kb4v3hkqvi6f",
             guardrailVersion: "1",
         };
     });
@@ -453,6 +453,52 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         }
     });
 
+    test("the state machine role's Resource `*` statements are the log-delivery, X-Ray and (Fargate) DescribeJobs actions its Nag reason names", () => {
+        const starActions = (template: Template): string[] => {
+            const roleId = Object.keys(template.findResources("AWS::IAM::Role")).find((id) =>
+                id.startsWith("SystemGenAiMetadataProcessingStateMachineRole")
+            ) as string;
+            const defaultPolicy = Object.entries(template.findResources("AWS::IAM::Policy")).find(
+                ([id, p]) =>
+                    /^SystemGenAiMetadataProcessingStateMachineRoleDefaultPolicy/.test(id) &&
+                    JSON.stringify((p as any).Properties.Roles).includes(roleId)
+            ) as [string, any];
+            const statements = defaultPolicy[1].Properties.PolicyDocument.Statement as any[];
+            return actionsOf(statements.filter((s) => s.Resource === "*")).sort();
+        };
+        const LOGS_AND_XRAY = [
+            "logs:CreateLogDelivery",
+            "logs:DeleteLogDelivery",
+            "logs:DescribeLogGroups",
+            "logs:DescribeResourcePolicies",
+            "logs:GetLogDelivery",
+            "logs:ListLogDeliveries",
+            "logs:PutResourcePolicy",
+            "logs:UpdateLogDelivery",
+            "xray:GetSamplingRules",
+            "xray:GetSamplingTargets",
+            "xray:PutTelemetryRecords",
+            "xray:PutTraceSegments",
+        ];
+        expect(starActions(lambdaOnly)).toEqual(LOGS_AND_XRAY);
+        expect(starActions(fargate)).toEqual([...LOGS_AND_XRAY, "batch:DescribeJobs"].sort());
+        // The reason the suppression carries names each of these groups, and no other resource of the
+        // pipeline is suppressed under a construct-path regex (which a `Resource::` finding never
+        // matches, so such an entry would suppress nothing while reading as if it did).
+        const source = fs.readFileSync(
+            path.resolve(
+                __dirname,
+                "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct.ts"
+            ),
+            "utf-8"
+        );
+        for (const named of ["CreateLogDelivery", "PutTraceSegments", "batch:DescribeJobs"]) {
+            expect(source).toContain(named);
+        }
+        expect(source).not.toMatch(/ServiceRole\/\.\*/);
+        expect(source).not.toContain("Intended Solution.");
+    });
+
     test("PipelineEndTask ends the execution on $.error", () => {
         expect(asl.States.PipelineEndTask.Next).toBe("EndStatesChoice");
         const choice = asl.States.EndStatesChoice;
@@ -529,21 +575,26 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         const statements = statementsOf(lambdaOnly, "SegmentAnalyze");
         const bedrock = withActions(statements, "bedrock:InvokeModel");
         expect(bedrock).toHaveLength(2);
+        // Neither statement grants a streaming call: no function streams a response.
+        expect(actionsOf(bedrock)).toEqual(["bedrock:InvokeModel", "bedrock:InvokeModel"]);
         const analysis = bedrock.find((s) =>
-            actionsOf([s]).includes("bedrock:InvokeModelWithResponseStream")
+            JSON.stringify(s.Resource).includes("inference-profile")
         );
         const embedding = bedrock.find(
-            (s) => !actionsOf([s]).includes("bedrock:InvokeModelWithResponseStream")
+            (s) => !JSON.stringify(s.Resource).includes("inference-profile")
         );
-        expect(JSON.stringify(analysis.Resource)).toContain(
-            "foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
-        );
-        expect(JSON.stringify(analysis.Resource)).toContain(":inference-profile/*");
-        expect(actionsOf([embedding])).toEqual(["bedrock:InvokeModel"]);
-        expect(JSON.stringify(embedding.Resource)).toContain(
-            `foundation-model/${createMockConfig().app.vectorSearch.embeddingModelId}`
-        );
-        expect(JSON.stringify(embedding.Resource)).not.toContain("inference-profile");
+        // The analysis model is a global inference profile: its exact profile ARN plus the underlying
+        // model in every Region of the partition (the profile picks the destination per request).
+        expect(analysis.Resource).toEqual([
+            `arn:aws:bedrock:${REGION}:${ACCOUNT}:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0`,
+            "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+        ]);
+        // The embedding model is a plain id: the deployment Region's and the Region-less model ARN.
+        const embeddingModelId = createMockConfig().app.vectorSearch.embeddingModelId;
+        expect(embedding.Resource).toEqual([
+            `arn:aws:bedrock:${REGION}::foundation-model/${embeddingModelId}`,
+            `arn:aws:bedrock:::foundation-model/${embeddingModelId}`,
+        ]);
         const actions = actionsOf(statements);
         expect(actions).toContain("events:PutEvents");
         expect(actions).toContain("s3:GetObject*");
@@ -557,14 +608,41 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         });
         const bedrock = withActions(statementsOf(off, "SegmentAnalyze"), "bedrock:InvokeModel");
         expect(bedrock).toHaveLength(1);
-        expect(actionsOf(bedrock)).toEqual([
-            "bedrock:InvokeModel",
-            "bedrock:InvokeModelWithResponseStream",
-        ]);
+        expect(actionsOf(bedrock)).toEqual(["bedrock:InvokeModel"]);
+        expect(JSON.stringify(bedrock[0].Resource)).toContain(
+            ":inference-profile/global.anthropic"
+        );
         // Control: the whole-file embedding function keeps its grant regardless of the flag.
         expect(
             withActions(statementsOf(off, "GenerateEmbedding"), "bedrock:InvokeModel")
         ).toHaveLength(1);
+    });
+
+    test("no Bedrock grant of the pipeline carries a wildcard resource other than the profile's Region", () => {
+        for (const template of [lambdaOnly, fargate, guarded]) {
+            const all = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
+                (p: any) => p.Properties.PolicyDocument.Statement
+            );
+            const bedrock = all.filter((s: any) =>
+                actionsOf([s]).some((a: string) => a.startsWith("bedrock:"))
+            );
+            expect(bedrock.length).toBeGreaterThan(0);
+            for (const statement of bedrock) {
+                for (const resource of ([] as string[]).concat(statement.Resource)) {
+                    // The only `*` a Bedrock grant carries is the Region of a geographic profile's model.
+                    expect(
+                        resource.replace(
+                            ":bedrock:*::foundation-model/",
+                            ":bedrock:R::foundation-model/"
+                        )
+                    ).not.toContain("*");
+                    expect(resource).not.toContain("inference-profile/*");
+                }
+                expect(actionsOf([statement])).not.toContain(
+                    "bedrock:InvokeModelWithResponseStream"
+                );
+            }
+        }
     });
 
     test("the state machine log group is a vended log group named for the pipeline", () => {
@@ -643,27 +721,76 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         ).toBeDefined();
     });
 
-    test("Bedrock grants: analysis model with inference profiles, embedding model without", () => {
+    test("Bedrock grants: the analysis profile exactly with its model in every Region, the embedding model exactly in this one", () => {
         const metadata = withActions(
             statementsOf(lambdaOnly, "GenerateMetadata"),
             "bedrock:InvokeModel"
         );
         expect(metadata).toHaveLength(1);
-        const metadataResources = JSON.stringify(metadata[0].Resource);
-        expect(metadataResources).toContain(":inference-profile/*");
-        expect(metadataResources).toContain(
-            "foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
-        );
-        expect(metadataResources).not.toContain("global.anthropic");
+        expect(actionsOf(metadata)).toEqual(["bedrock:InvokeModel"]);
+        expect(metadata[0].Resource).toEqual([
+            `arn:aws:bedrock:${REGION}:${ACCOUNT}:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0`,
+            "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+        ]);
 
+        const embeddingModelId = createMockConfig().app.vectorSearch.embeddingModelId;
         const embedding = withActions(
             statementsOf(lambdaOnly, "GenerateEmbedding"),
             "bedrock:InvokeModel"
         );
         expect(embedding).toHaveLength(1);
-        expect(JSON.stringify(embedding[0].Resource)).not.toContain("inference-profile");
+        expect(embedding[0].Resource).toEqual([
+            `arn:aws:bedrock:${REGION}::foundation-model/${embeddingModelId}`,
+            `arn:aws:bedrock:::foundation-model/${embeddingModelId}`,
+        ]);
         expect(actionsOf(statementsOf(lambdaOnly, "GenerateEmbedding"))).toContain(
             "events:PutEvents"
+        );
+    });
+
+    test("a plain analysis model id is granted in the deployment Region and Region-less, with no profile", () => {
+        const plain = synth("PlainModel", (c) => {
+            c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+                "anthropic.claude-haiku-4-5-20251001-v1:0";
+        });
+        for (const fragment of ["GenerateMetadata", "SegmentAnalyze"]) {
+            const analysis = withActions(
+                statementsOf(plain, fragment),
+                "bedrock:InvokeModel"
+            ).filter((s) => JSON.stringify(s.Resource).includes("anthropic"));
+            expect(analysis).toHaveLength(1);
+            expect(analysis[0].Resource).toEqual([
+                `arn:aws:bedrock:${REGION}::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
+                "arn:aws:bedrock:::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+            ]);
+        }
+        // No wildcard is left, so no function carries the geographic-routing justification.
+        expect(JSON.stringify(plain.toJSON())).not.toContain("cross-Region inference profile");
+    });
+
+    test("the geographic model grant of a profile carries its own IAM5 justification on the function's policy", () => {
+        for (const fragment of ["GenerateMetadata", "SegmentAnalyze"]) {
+            const policies = Object.entries(lambdaOnly.findResources("AWS::IAM::Policy")).filter(
+                ([logicalId]) => logicalId.includes(fragment)
+            ) as [string, any][];
+            expect(policies).toHaveLength(1);
+            const rules: any[] = policies[0][1].Metadata?.cdk_nag?.rules_to_suppress ?? [];
+            const geographic = rules.filter(
+                (r) =>
+                    r.id === "AwsSolutions-IAM5" &&
+                    String(r.reason).includes("cross-Region inference profile") &&
+                    JSON.stringify(r).includes("foundation-model")
+            );
+            expect(geographic).toHaveLength(1);
+            expect(geographic[0].reason).toContain("destination Regions");
+            expect(geographic[0].reason).not.toContain("not known at synthesis");
+        }
+        // The embedding function's model is a plain id, so it carries no such justification.
+        const embeddingPolicies = Object.entries(
+            lambdaOnly.findResources("AWS::IAM::Policy")
+        ).filter(([logicalId]) => logicalId.includes("GenerateEmbedding")) as [string, any][];
+        expect(JSON.stringify(embeddingPolicies[0][1].Metadata ?? {})).not.toContain(
+            "cross-Region inference profile"
         );
     });
 
@@ -701,7 +828,7 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
             const grants = withActions(statementsOf(guarded, fragment), "bedrock:ApplyGuardrail");
             expect(grants).toHaveLength(1);
             expect(JSON.stringify(grants[0].Resource)).toMatch(
-                /:bedrock:us-east-1:123456789012:guardrail\/gr-test/
+                /:bedrock:us-east-1:123456789012:guardrail\/kb4v3hkqvi6f/
             );
         }
         // The whole-file analysis and the per-segment analysis each carry one, and no one else does.
@@ -712,7 +839,7 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
             ) as any
         ).Properties.Environment.Variables;
         expect(env).toMatchObject({
-            BEDROCK_GUARDRAIL_IDENTIFIER: "gr-test",
+            BEDROCK_GUARDRAIL_IDENTIFIER: "kb4v3hkqvi6f",
             BEDROCK_GUARDRAIL_VERSION: "1",
         });
         const segmentEnv = (
@@ -721,7 +848,7 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
             ) as [string, any]
         )[1].Properties.Environment.Variables;
         expect(segmentEnv).toMatchObject({
-            BEDROCK_GUARDRAIL_IDENTIFIER: "gr-test",
+            BEDROCK_GUARDRAIL_IDENTIFIER: "kb4v3hkqvi6f",
             BEDROCK_GUARDRAIL_VERSION: "1",
         });
     });

@@ -7,7 +7,8 @@
  * The vector indexing construct's wiring, asserted on the emitted template in both partitions.
  *
  * Two source queues (auto-named, so an orphan never blocks a redeploy), one DLQ each plus a rule-target
- * DLQ, an EventBridge rule for `vector.embedding.ready`, two SNS subscriptions on the same indexer queue,
+ * DLQ and the reindexer's asynchronous-invocation DLQ, an EventBridge rule for `vector.embedding.ready`,
+ * two SNS subscriptions on the same indexer queue,
  * and two event source mappings whose GovCloud L1 branch strips `Tags` while carrying exactly the settings
  * of the commercial `addEventSource()` branch — the indexer's capped at 10 concurrent invocations, the
  * launcher's at the configured indexing concurrency. The indexer addresses its own queue for continuation
@@ -187,7 +188,7 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         "VectorIndexingSystemWorkflowLaunchQueue"
     )[0];
 
-    test("emits two auto-named source queues and three dead-letter queues", () => {
+    test("emits two auto-named source queues and four dead-letter queues", () => {
         expect(
             byPrefix(template, "AWS::SQS::Queue", "VectorIndexingVectorIndexerQueue")
         ).toHaveLength(1);
@@ -203,6 +204,10 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         expect(
             byPrefix(template, "AWS::SQS::Queue", "VectorIndexingSystemWorkflowLaunchDLQ")
         ).toHaveLength(1);
+        expect(
+            byPrefix(template, "AWS::SQS::Queue", "VectorIndexingVectorReindexerAsyncDLQ")
+        ).toHaveLength(1);
+        expect(Object.keys(template.findResources("AWS::SQS::Queue"))).toHaveLength(6);
         for (const [, q] of Object.entries(template.findResources("AWS::SQS::Queue")) as [
             string,
             any
@@ -283,8 +288,8 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         ]);
         expect(indexerMapping.Properties.BatchSize).toBe(10);
         expect(indexerMapping.Properties.MaximumBatchingWindowInSeconds).toBe(3);
-        // Spec §7.1: one asset's item collection is one DynamoDB partition, and continuation messages
-        // re-enter this queue, so the indexer's concurrency is capped independently of the launcher's.
+        // One asset's item collection is one DynamoDB partition, and continuation messages re-enter
+        // this queue, so the indexer's concurrency is capped independently of the launcher's.
         expect(indexerMapping.Properties.ScalingConfig).toEqual({ MaximumConcurrency: 10 });
         expect(indexerMapping.Properties.FunctionName.Ref).toBe(
             functionByHandler(template, "vectorIndexer")[0]
@@ -329,13 +334,18 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         );
     });
 
-    test("the reindexer may send to the launch queue and both consumers may receive from their own queue", () => {
+    test("the reindexer may send to the launch queue and its own async DLQ, and both consumers may receive from their own queue", () => {
         const [, reindexer] = functionByHandler(template, "vectorReindexer");
         const send = statementsForFunction(template, reindexer).filter((s) =>
             JSON.stringify(s.Action).includes("sqs:SendMessage")
         );
-        expect(send).toHaveLength(1);
-        expect(JSON.stringify(send[0].Resource)).toContain(launchQueueId);
+        // Two exact queues: the launch queue it enqueues to, and the DLQ Lambda delivers its failed
+        // asynchronous self-invocations to (the destination grant is on the function's own role).
+        expect(send).toHaveLength(2);
+        const sendTargets = send.map((s) => JSON.stringify(s.Resource)).join();
+        expect(sendTargets).toContain(launchQueueId);
+        expect(sendTargets).toContain("VectorIndexingVectorReindexerAsyncDLQ");
+        expect(sendTargets).not.toContain(indexerQueueId);
         for (const [module, queueId] of [
             ["vectorIndexer", indexerQueueId],
             ["systemWorkflowLauncher", launchQueueId],
@@ -363,11 +373,39 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         expect(JSON.stringify(send[0].Resource)).not.toContain(launchQueueId);
     });
 
-    test("the three dead-letter queues carry the SQS3 suppression and the source queues do not", () => {
+    test("the reindexer's asynchronous self-invocations have an on-failure destination: its CMK-encrypted DLQ, after two retries", () => {
+        const [reindexerId] = functionByHandler(template, "vectorReindexer");
+        const [, dlq] = byPrefix(
+            template,
+            "AWS::SQS::Queue",
+            "VectorIndexingVectorReindexerAsyncDLQ"
+        )[0];
+        expect(dlq.Properties.KmsMasterKeyId).toBeDefined();
+        expect(dlq.Properties.MessageRetentionPeriod).toBe(14 * 24 * 60 * 60);
+        expect(dlq.Properties).not.toHaveProperty("RedrivePolicy");
+        const configs = Object.values(
+            template.findResources("AWS::Lambda::EventInvokeConfig")
+        ).filter((c: any) => c.Properties.FunctionName.Ref === reindexerId);
+        expect(configs).toHaveLength(1);
+        const [config] = configs as any[];
+        expect(config.Properties.Qualifier).toBe("$LATEST");
+        expect(config.Properties.MaximumRetryAttempts).toBe(2);
+        expect(config.Properties.DestinationConfig.OnFailure.Destination["Fn::GetAtt"][0]).toMatch(
+            /^VectorIndexingVectorReindexerAsyncDLQ/
+        );
+        expect(config.Properties.DestinationConfig.OnSuccess).toBeUndefined();
+        // Nothing else has an asynchronous invoke configuration: the other functions are queue consumers.
+        expect(Object.keys(template.findResources("AWS::Lambda::EventInvokeConfig"))).toHaveLength(
+            1
+        );
+    });
+
+    test("the four dead-letter queues carry the SQS3 suppression and the source queues do not", () => {
         for (const prefix of [
             "VectorIndexingVectorIndexerDLQ",
             "VectorIndexingVectorEmbeddingReadyRuleDLQ",
             "VectorIndexingSystemWorkflowLaunchDLQ",
+            "VectorIndexingVectorReindexerAsyncDLQ",
         ]) {
             const [, dlq] = byPrefix(template, "AWS::SQS::Queue", prefix)[0];
             const rules = dlq.Metadata?.cdk_nag?.rules_to_suppress ?? [];

@@ -60,13 +60,95 @@ const MEDIA_IMAGE_EPHEMERAL_STORAGE = cdk.Size.mebibytes(4096);
 const SEGMENT_ANALYZE_TIMEOUT = Duration.seconds(300);
 
 /**
- * The foundation-model id underneath a cross-Region inference-profile prefix, which is what the
- * `foundation-model/` ARNs in a Bedrock grant name. The prefix set is partition-specific:
- * `global.`/`us.` in the commercial partition, `us-gov.` in GovCloud, `eu.`/`apac.` for the regional
- * profiles. Anchored, and only the leading prefix is removed.
+ * The geographic prefixes of Bedrock's system-defined cross-Region inference profiles. The set is
+ * partition-specific: `global.`/`us.` in the commercial partition, `us-gov.` in GovCloud, `eu.`/`apac.`
+ * for the regional profiles. Anchored: only a leading prefix counts.
  */
-function foundationModelId(modelId: string): string {
-    return modelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
+export const BEDROCK_INFERENCE_PROFILE_PREFIX = /^(global|us-gov|us|eu|apac)\./;
+
+/** True when the model id names a system-defined cross-Region inference profile rather than a model. */
+export function isBedrockInferenceProfileId(modelId: string): boolean {
+    return BEDROCK_INFERENCE_PROFILE_PREFIX.test(modelId);
+}
+
+/**
+ * The foundation-model id underneath a cross-Region inference-profile prefix, which is what the
+ * `foundation-model/` ARNs in a Bedrock grant name. Only the leading prefix is removed.
+ */
+export function bedrockFoundationModelId(modelId: string): string {
+    return modelId.replace(BEDROCK_INFERENCE_PROFILE_PREFIX, "");
+}
+
+/**
+ * The one `bedrock:InvokeModel` statement for a configured model id, shared by every VAMS Lambda that
+ * calls Bedrock (the pipeline's analysis and embedding functions and the search API's query embedder).
+ *
+ * A plain model id is invoked in the deployment Region, so the statement names that Region's
+ * `foundation-model` ARN and the Region-less form. A system-defined cross-Region inference profile
+ * (`global.`, `us.`, `us-gov.`, `eu.`, `apac.` prefix) is a resource of this account whose id IS the
+ * configured model id, so the profile ARN is exact. The profile routes each request to the underlying
+ * model in one of its destination Regions and Bedrock authorises the call against THAT Region's
+ * `foundation-model` ARN, so the model is granted in every Region of the partition (`bedrock:*::`);
+ * the destination set is chosen by Bedrock per request and changes over time, so no narrower list is
+ * correct. No function streams a response, so `InvokeModelWithResponseStream` is never granted.
+ */
+export function bedrockInvokeModelStatement(
+    config: Config.Config,
+    modelId: string
+): iam.PolicyStatement {
+    const partition = ServiceHelper.Partition();
+    const model = bedrockFoundationModelId(modelId);
+    const resources = isBedrockInferenceProfileId(modelId)
+        ? [
+              Service("BEDROCK").ARN("inference-profile", modelId),
+              `arn:${partition}:bedrock:*::foundation-model/${model}`,
+          ]
+        : [
+              `arn:${partition}:bedrock:${config.env.region}::foundation-model/${model}`,
+              `arn:${partition}:bedrock:::foundation-model/${model}`,
+          ];
+    return new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["bedrock:InvokeModel"],
+        resources: resources,
+    });
+}
+
+/**
+ * Grants `bedrock:InvokeModel` on each configured model id (one statement per id) and, when any of them
+ * is a cross-Region inference profile, records the one IAM5 justification the geographic
+ * `foundation-model` grant needs. Called after the function's other grants so the role's default policy
+ * exists for the suppression to attach to.
+ */
+export function grantBedrockInvokeModel(
+    fun: lambda.Function,
+    config: Config.Config,
+    modelIds: string[]
+): void {
+    for (const modelId of modelIds) {
+        fun.addToRolePolicy(bedrockInvokeModelStatement(config, modelId));
+    }
+    if (modelIds.some(isBedrockInferenceProfileId)) {
+        NagSuppressions.addResourceSuppressions(
+            fun,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "The model is invoked through a system-defined cross-Region inference profile, " +
+                        "which routes each request to the foundation model in one of the profile's " +
+                        "destination Regions; Bedrock authorises the call against the foundation-model " +
+                        "ARN of the Region it chose, so the grant names the one model in every Region " +
+                        "of this partition (Region wildcard, exact model id). The inference-profile ARN " +
+                        "beside it is exact: the profile id is the configured model id.",
+                    appliesTo: [
+                        { regex: "/^Resource::arn:.*:bedrock:\\*::foundation-model/.*$/g" },
+                    ],
+                },
+            ],
+            true
+        );
+    }
 }
 
 /** Every function of the pipeline sits in the isolated pipeline subnets only when every Lambda does. */
@@ -83,43 +165,6 @@ function vpcPlacement(
     return lambdasInVpc(config)
         ? { vpc: vpc, vpcSubnets: { subnets: subnets }, securityGroups: securityGroups }
         : {};
-}
-
-/**
- * Bedrock invoke grant for one model id: the model's Region-qualified and Region-less
- * `foundation-model` ARNs and, for models reached through a cross-Region inference profile, the
- * account's inference-profile namespace (the profile id is chosen by the operator and is not known
- * at synthesis).
- */
-function bedrockInvokeStatement(
-    config: Config.Config,
-    modelId: string,
-    withInferenceProfiles: boolean
-): iam.PolicyStatement {
-    const model = foundationModelId(modelId);
-    const resources = [
-        `arn:${ServiceHelper.Partition()}:bedrock:` +
-            config.env.region +
-            "::foundation-model/" +
-            model,
-        `arn:${ServiceHelper.Partition()}:bedrock:` + "::foundation-model/" + model,
-    ];
-    if (withInferenceProfiles) {
-        resources.push(
-            `arn:${ServiceHelper.Partition()}:bedrock:` +
-                config.env.region +
-                ":" +
-                config.env.account +
-                ":inference-profile/*"
-        );
-    }
-    return new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: withInferenceProfiles
-            ? ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-            : ["bedrock:InvokeModel"],
-        resources: resources,
-    });
 }
 
 export function buildVamsExecuteSystemGenAiMetadataFunction(
@@ -322,7 +367,8 @@ export function buildGenerateMetadataFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
-    fun.addToRolePolicy(bedrockInvokeStatement(config, analysisModelId, true));
+    // The analysis model, whether a plain id or a cross-Region inference profile.
+    grantBedrockInvokeModel(fun, config, [analysisModelId]);
 
     if (guardrail.guardrailIdentifier !== "") {
         // arn:<partition>:bedrock:<region>:<account>:guardrail/<identifier> — the one guardrail the
@@ -335,22 +381,6 @@ export function buildGenerateMetadataFunction(
             })
         );
     }
-
-    NagSuppressions.addResourceSuppressions(
-        fun,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Cross-Region inference profiles are created by Bedrock under an account-scoped id " +
-                    "that is not known at synthesis, so the analysis model's inference-profile grant is a " +
-                    "wildcard on this account's inference-profile namespace in this Region only; the " +
-                    "foundation-model ARNs beside it are exact.",
-                appliesTo: [{ regex: "/^Resource::arn:.*:bedrock:.*:inference-profile/\\*$/g" }],
-            },
-        ],
-        true
-    );
 
     suppressCdkNagLambda(fun);
     return fun;
@@ -392,8 +422,8 @@ export function buildGenerateEmbeddingFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
-    // Embedding models are invoked by their foundation-model id; they have no inference profiles.
-    fun.addToRolePolicy(bedrockInvokeStatement(config, embeddingModelId, false));
+    // The embedding model, whether a plain id or a cross-Region inference profile.
+    grantBedrockInvokeModel(fun, config, [embeddingModelId]);
 
     suppressCdkNagLambda(fun);
     return fun;
@@ -574,11 +604,13 @@ export function buildSegmentAnalyzeFunction(
     grantImageFunction(scope, fun, assetAuxiliaryBucket, config, kmsKey);
     orchestrationBus.grantPutEventsTo(fun);
 
-    fun.addToRolePolicy(bedrockInvokeStatement(config, analysisModelId, true));
-    // The Map runs only on the vector-search path, so the embedding grant follows that flag.
-    if (config.app.vectorSearch.enabled) {
-        fun.addToRolePolicy(bedrockInvokeStatement(config, embeddingModelId, false));
-    }
+    // The analysis model always; the embedding model only on the vector-search path, which is the
+    // only path the Map runs on.
+    grantBedrockInvokeModel(
+        fun,
+        config,
+        config.app.vectorSearch.enabled ? [analysisModelId, embeddingModelId] : [analysisModelId]
+    );
 
     if (guardrail.guardrailIdentifier !== "") {
         // arn:<partition>:bedrock:<region>:<account>:guardrail/<identifier> — the one guardrail the
@@ -591,21 +623,5 @@ export function buildSegmentAnalyzeFunction(
             })
         );
     }
-
-    NagSuppressions.addResourceSuppressions(
-        fun,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Cross-Region inference profiles are created by Bedrock under an account-scoped id " +
-                    "that is not known at synthesis, so the analysis model's inference-profile grant is a " +
-                    "wildcard on this account's inference-profile namespace in this Region only; the " +
-                    "foundation-model ARNs beside it are exact.",
-                appliesTo: [{ regex: "/^Resource::arn:.*:bedrock:.*:inference-profile/\\*$/g" }],
-            },
-        ],
-        true
-    );
     return fun;
 }

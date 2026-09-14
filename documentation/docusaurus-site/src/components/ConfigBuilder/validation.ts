@@ -539,9 +539,14 @@ const VPC_REQUIRING_FEATURES: {
     {
         id: "vpc-required-system-genai-fargate-renderer",
         label: "pipelines.useSystemGenAiMetadata.useFargateRenderer",
-        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.useFargateRenderer"],
-        // The sub-flag alone is the condition, as for the useRapidPipeline.useEcs/useEks rows.
-        appliesWhen: (c) => !!g(c, "app.pipelines.useSystemGenAiMetadata.useFargateRenderer"),
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.enabled",
+            "app.pipelines.useSystemGenAiMetadata.useFargateRenderer",
+        ],
+        // The render branch exists only in an enabled pipeline, so both flags are the condition.
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useSystemGenAiMetadata.enabled") &&
+            !!g(c, "app.pipelines.useSystemGenAiMetadata.useFargateRenderer"),
     },
     {
         id: "vpc-required-nvidia-cosmos",
@@ -2393,6 +2398,53 @@ export const RULES: Rule[] = [
             ),
         message:
             "pipelines.useSystemGenAiMetadata.bedrockGuardrail requires both guardrailIdentifier and guardrailVersion, or neither.",
+    },
+    // (config.ts: "guardrailIdentifier must be the guardrail's 12-character id", "guardrailVersion must
+    // be "DRAFT" or a published version number", "is enabled without a bedrockGuardrail")
+    {
+        id: "system-genai-guardrail-identifier-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier"],
+        // The IAM grant composes the guardrail ARN from the id, so an ARN or a name here is a malformed
+        // resource and every analysis call is denied. Not gated on the pipeline state, like the pair rule.
+        appliesWhen: (c) => {
+            const id = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier"
+            );
+            return !isBlank(id) && !/^[a-z0-9]{12}$/.test(String(id));
+        },
+        message:
+            'pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier must be the guardrail\'s 12-character id (lowercase letters and digits, for example "kb4v3hkqvi6f"), not its ARN or name.',
+    },
+    {
+        id: "system-genai-guardrail-version-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion"],
+        appliesWhen: (c) => {
+            const version = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion"
+            );
+            return !isBlank(version) && !/^(DRAFT|[1-9][0-9]{0,7})$/.test(String(version));
+        },
+        message:
+            'pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion must be "DRAFT" or a published version number (for example "1").',
+    },
+    {
+        id: "system-genai-no-guardrail",
+        severity: "warning",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.enabled",
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useSystemGenAiMetadata.enabled") &&
+            isBlank(
+                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier")
+            ),
+        message:
+            "useSystemGenAiMetadata is enabled without a bedrockGuardrail. The analysis prompts (file content, rendered views, operator vocabulary) are sent to Amazon Bedrock with no guardrail; create one with prompt-attack and content filters in this account and Region and set bedrockGuardrail.guardrailIdentifier and guardrailVersion.",
     },
 
     // ----- Vector search (config.ts: "DynamoDB vector search is not available in the European Sovereign

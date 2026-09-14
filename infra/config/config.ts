@@ -123,6 +123,12 @@ export function deriveVectorIndexName(
 // synchronous request/response API. Compared against, never assigned.
 export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
 
+// The shapes Amazon Bedrock gives a guardrail id (the 12-character `guardrailId` of CreateGuardrail, not
+// an ARN or a name) and a guardrail version (`DRAFT` or a published version number). The IAM grant
+// composes the guardrail ARN from the id, so any other shape is a malformed resource.
+export const SYSTEM_GENAI_GUARDRAIL_IDENTIFIER_PATTERN = /^[a-z0-9]{12}$/;
+export const SYSTEM_GENAI_GUARDRAIL_VERSION_PATTERN = /^(DRAFT|[1-9][0-9]{0,7})$/;
+
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
@@ -776,6 +782,44 @@ export function getConfig(app: cdk.App): Config {
                 "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail requires both " +
                     "guardrailIdentifier and guardrailVersion, or neither. Received: " +
                     JSON.stringify(guardrail)
+            );
+        }
+        //The identifier is the 12-character guardrail id, not its ARN: the IAM grant composes the ARN
+        //from it (Service("BEDROCK").ARN("guardrail", id)), so an ARN here yields a malformed resource
+        //and every analysis call is denied. The version is "DRAFT" or a published version number, as
+        //Bedrock's ApplyGuardrail contract defines them.
+        if (
+            identifierSet &&
+            !SYSTEM_GENAI_GUARDRAIL_IDENTIFIER_PATTERN.test(guardrail.guardrailIdentifier)
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier " +
+                    `must be the guardrail's 12-character id (lowercase letters and digits, for example ` +
+                    `"kb4v3hkqvi6f"), not its ARN or name. Received: ${JSON.stringify(
+                        guardrail.guardrailIdentifier
+                    )}`
+            );
+        }
+        if (
+            versionSet &&
+            !SYSTEM_GENAI_GUARDRAIL_VERSION_PATTERN.test(guardrail.guardrailVersion)
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion " +
+                    `must be "DRAFT" or a published version number (for example "1"). Received: ` +
+                    JSON.stringify(guardrail.guardrailVersion)
+            );
+        }
+        //Amazon security guidance for Bedrock calls is a guardrail with prompt-attack filtering on every
+        //invocation. The guardrail is account state VAMS cannot create, so an enabled pipeline without
+        //one deploys, with this warning as the record of the deviation.
+        if (config.app.pipelines.useSystemGenAiMetadata.enabled && !identifierSet) {
+            console.warn(
+                "Configuration Warning: pipelines.useSystemGenAiMetadata is enabled without a " +
+                    "bedrockGuardrail. The analysis prompts (file content, rendered views, operator " +
+                    "vocabulary) are sent to Amazon Bedrock with no guardrail; create one with prompt-attack " +
+                    "and content filters in this account and Region and set bedrockGuardrail.guardrailIdentifier " +
+                    "and guardrailVersion."
             );
         }
     }
@@ -1529,7 +1573,12 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useIsaacLabTraining");
     if (config.app.pipelines.usePreview3dThumbnail.enabled)
         vpcRequiringFeatures.push("pipelines.usePreview3dThumbnail");
-    if (config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer)
+    //The Fargate render branch exists only in an enabled pipeline (the VPC builder keys its endpoints
+    //the same way), so the sub-flag on a disabled pipeline demands nothing.
+    if (
+        config.app.pipelines.useSystemGenAiMetadata.enabled &&
+        config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer
+    )
         vpcRequiringFeatures.push("pipelines.useSystemGenAiMetadata.useFargateRenderer");
     if (config.app.pipelines.useNvidiaCosmos.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaCosmos");

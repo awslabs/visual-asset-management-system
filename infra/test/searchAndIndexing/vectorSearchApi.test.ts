@@ -6,7 +6,8 @@
 /**
  * POST /search/nlp and its Lambda exist exactly when vector search is enabled, on every shipped
  * template, and the function's own IAM statements name exact resources: the vector table and its one
- * index for SearchVectors, the one foundation model for InvokeModel. OpenSearch grants appear only when
+ * index for SearchVectors, the one embedding model for InvokeModel (a plain id in this Region, or an
+ * inference profile's exact ARN with its model in every Region). OpenSearch grants appear only when
  * an OpenSearch mode is on. Placement follows searchLambdasInVpc().
  */
 
@@ -90,12 +91,48 @@ describe.each(ENABLED_TEMPLATES)("vector search API enabled on %s", (name) => {
 
         const bedrock = withAction(stmts, "bedrock:InvokeModel");
         expect(bedrock).toHaveLength(1);
-        const bedrockResources: string[] = ([] as string[]).concat(bedrock[0].Resource);
-        expect(bedrockResources).toHaveLength(1);
-        expect(bedrockResources[0]).toBe(
-            `arn:${synth.partition}:bedrock:${synth.region}::foundation-model/${env.EMBEDDING_MODEL_ID}`
+        expect(([] as string[]).concat(bedrock[0].Action)).toEqual(["bedrock:InvokeModel"]);
+        // The shared Bedrock statement: a plain embedding model id is the deployment Region's and the
+        // Region-less model ARN, exact and wildcard-free.
+        const bedrockResources: string[] = ([] as string[]).concat(bedrock[0].Resource).sort();
+        expect(bedrockResources).toEqual(
+            [
+                `arn:${synth.partition}:bedrock:${synth.region}::foundation-model/${env.EMBEDDING_MODEL_ID}`,
+                `arn:${synth.partition}:bedrock:::foundation-model/${env.EMBEDDING_MODEL_ID}`,
+            ].sort()
         );
-        expect(bedrockResources[0]).not.toContain("*");
+        for (const arn of bedrockResources) expect(arn).not.toContain("*");
+    });
+
+    test("an inference-profile embedding model is granted through its exact profile ARN and the model in every Region", () => {
+        // GovCloud ships the `us-gov.` profile prefix; the commercial partition `global.`/`us.`.
+        const prefix = name === "govcloud" ? "us-gov." : "us.";
+        const synth = synthTemplate(name, {
+            mutate: (c: any) => {
+                enable(c);
+                c.app.vectorSearch.embeddingModelId = `${prefix}amazon.nova-2-multimodal-embeddings-v1:0`;
+            },
+            mutateKey: "vectorSearchOnProfile",
+        });
+        const [fun] = fn(synth);
+        const bedrock = withAction(statementsOf(synth, fun), "bedrock:InvokeModel");
+        expect(bedrock).toHaveLength(1);
+        expect(([] as string[]).concat(bedrock[0].Resource).sort()).toEqual(
+            [
+                `arn:${synth.partition}:bedrock:${synth.region}:123456789012:inference-profile/${prefix}amazon.nova-2-multimodal-embeddings-v1:0`,
+                `arn:${synth.partition}:bedrock:*::foundation-model/amazon.nova-2-multimodal-embeddings-v1:0`,
+            ].sort()
+        );
+        // The Region wildcard on the model is the one the function's policy justifies by name.
+        const policy = synth
+            .ofType("AWS::IAM::Policy")
+            .find((p) =>
+                JSON.stringify(p.raw.Properties.PolicyDocument).includes("inference-profile/")
+            );
+        expect(JSON.stringify(policy?.raw.Metadata ?? {})).toContain(
+            "cross-Region inference profile"
+        );
+        expect(synth.grep("inference-profile/*")).toEqual([]);
     });
 
     test("no OpenSearch grant and OPENSEARCH_DISABLED=true when no OpenSearch mode is on", () => {

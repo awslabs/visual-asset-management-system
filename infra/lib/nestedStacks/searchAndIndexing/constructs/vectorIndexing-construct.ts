@@ -10,6 +10,7 @@ import * as events from "aws-cdk-lib/aws-events";
 import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as destinations from "aws-cdk-lib/aws-lambda-destinations";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
@@ -62,8 +63,9 @@ interface SqsConsumerSettings {
 }
 
 /**
- * Vector indexing: the single writer of the vector embeddings table and its two feeds, the reindexer, and
- * the paced launcher of the system GenAI workflow. Present only when `app.vectorSearch.enabled`.
+ * Vector indexing: the single writer of the vector embeddings table and its two feeds, the reindexer (with
+ * the dead-letter queue of its asynchronous continuations), and the paced launcher of the system GenAI
+ * workflow. Present only when `app.vectorSearch.enabled`.
  */
 export class VectorIndexingConstruct extends Construct {
     public readonly vectorIndexerQueue: sqs.Queue;
@@ -171,6 +173,21 @@ export class VectorIndexingConstruct extends Construct {
         // Asset- and file-wide rules that run out of time re-enqueue the rest of their work here.
         this.vectorIndexerQueue.grantSendMessages(this.vectorIndexerFunction);
         this.systemWorkflowLaunchQueue.grantSendMessages(this.vectorReindexerFunction);
+
+        // The reindexer continues a long run by invoking itself asynchronously. An asynchronous
+        // invocation Lambda could not complete (a timeout, a crash, exhausted retries after throttling)
+        // is otherwise dropped, and the reindex ends part-way with nothing recording that it did; the
+        // failed event lands here with its continuation state, from which the run can be resumed. The
+        // two retries are Lambda's default for asynchronous events; a continuation re-run from the same
+        // state repeats idempotent deletes and re-enqueues the same files, both of which are harmless.
+        const reindexerAsyncDlq = new sqs.Queue(this, "VectorReindexerAsyncDLQ", {
+            retentionPeriod: DLQ_RETENTION,
+            ...encryption,
+        });
+        this.vectorReindexerFunction.configureAsyncInvoke({
+            onFailure: new destinations.SqsDestination(reindexerAsyncDlq),
+            retryAttempts: 2,
+        });
         // The execute-workflow Lambda lives in ApiBuilder2; its ARN is composed from the name so no
         // function object crosses the nested-stack boundary.
         this.systemWorkflowLauncherFunction.addToRolePolicy(
@@ -206,11 +223,11 @@ export class VectorIndexingConstruct extends Construct {
         );
 
         NagSuppressions.addResourceSuppressions(
-            [vectorIndexerDlq, embeddingReadyRuleDlq, launchDlq],
+            [vectorIndexerDlq, embeddingReadyRuleDlq, launchDlq, reindexerAsyncDlq],
             [
                 {
                     id: "AwsSolutions-SQS3",
-                    reason: "This queue IS a dead-letter queue (of the vector indexer queue, of the embedding-ready rule target, or of the system-workflow launch queue). A DLQ is the terminal destination for records the consumer could not process, so a redrive policy of its own would only defer the same failure to a further queue.",
+                    reason: "This queue IS a dead-letter queue (of the vector indexer queue, of the embedding-ready rule target, of the system-workflow launch queue, or of the reindexer's asynchronous self-invocations). A DLQ is the terminal destination for records the consumer could not process, so a redrive policy of its own would only defer the same failure to a further queue.",
                 },
             ],
             true

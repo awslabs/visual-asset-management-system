@@ -651,36 +651,18 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
         this.pipelineVamsLambdaFunctionName = vamsExecuteFunction.functionName;
 
         /**
-         * Nag Suppressions
+         * Nag Suppressions. The Lambda roles' grants are covered by the shape-specific entries every
+         * builder applies (suppressCdkNagErrorsByGrantReadWrite, suppressCdkNagLambda) and by the
+         * per-function Bedrock justification in the lambda builder; only the state machine role's own
+         * policies need entries here.
          */
-        const reason =
-            "Intended Solution. The pipeline lambda functions need appropriate access to S3.";
-        for (const rolePath of [
-            "SystemGenAiMetadataOpenPipeline/ServiceRole",
-            "SystemGenAiMetadataPipelineEnd/ServiceRole",
-            "VamsExecuteSystemGenAiMetadataPipeline/ServiceRole",
-            "SystemGenAiMetadataProcessing-StateMachine/Role",
-        ]) {
-            NagSuppressions.addResourceSuppressions(
-                this,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: reason,
-                        appliesTo: [{ regex: `/^Resource::.*${rolePath}/.*/g` }],
-                    },
-                ],
-                true
-            );
-        }
-
         NagSuppressions.addResourceSuppressionsByPath(
             Stack.of(this),
             `/${this.toString()}/SystemGenAiMetadataProcessing-StateMachine/Role/DefaultPolicy/Resource`,
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "The state machine role's default policy carries the wildcard permissions Step Functions needs to invoke the pipeline's Lambda functions by version and, with the Fargate renderer, to submit and track Batch jobs: batch:DescribeJobs supports no resource-level permissions and Batch job ids are generated at submit time, so cancelling the .sync job on StopExecution needs DescribeJobs on * and TerminateJob on job/*. The video-segment map reads its items file from, and writes its result manifest under, run-time prefixes of the CMK-encrypted auxiliary bucket, so its two S3 grants name the bucket with an object wildcard and the deployment key's data-key actions sit beside them",
+                    reason: "The state machine role's default policy carries the wildcard permissions Step Functions needs. Resource `*` is required by the actions that publish no resource type: the CloudWatch Logs delivery actions (CreateLogDelivery, GetLogDelivery, UpdateLogDelivery, DeleteLogDelivery, ListLogDeliveries, PutResourcePolicy, DescribeResourcePolicies, DescribeLogGroups) that the ALL-level execution log needs, the X-Ray trace actions (PutTraceSegments, PutTelemetryRecords, GetSamplingRules, GetSamplingTargets) that tracing needs, and, with the Fargate renderer, batch:DescribeJobs. The role invokes the pipeline's Lambda functions by version and, with the Fargate renderer, submits and tracks Batch jobs: Batch job ids are generated at submit time, so cancelling the .sync job on StopExecution needs TerminateJob on this account's job/*. The video-segment map reads its items file from, and writes its result manifest under, run-time prefixes of the CMK-encrypted auxiliary bucket, so its two S3 grants name the bucket with an object wildcard and the deployment key's data-key actions sit beside them",
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
