@@ -12,7 +12,11 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Pipelines** The Potree point cloud viewer container job role holds `states:SendTaskHeartbeat` alongside `SendTaskSuccess`/`SendTaskFailure` (scoped to the deployment account and region), so the PDAL/Potree container's workflow task-token heartbeat is delivered instead of logging an `AccessDeniedException` on every job.
+
 ### Chores
+
+-   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin.
 
 ### Known Outstanding Issues
 
@@ -23,8 +27,6 @@ All notable changes to this project will be documented in this file. See [standa
 ### Major Change Summary:
 
 -   Workflow Orchestration Refinements - Triggers can be defined while creating a workflow, the execute-workflow flow is a single stepped dialog with the workflow picker as its first step, and execution details report each pipeline step's registered sub-processes with per-stage status and every log source known for the step — readable one source at a time through the logs API, the CLI, the MCP server, and the web log viewer. Built-in AWS Batch pipelines register their container logs per stage
-
-### ⚠ BREAKING CHANGES
 
 ### Features
 

@@ -74,10 +74,8 @@ jobs:
               run: npm run prettier-check
 
             - name: Install Poetry Action
-              # Third-party action on its major-version tag, the repo's current pinning convention;
-              # commit-SHA pinning is tracked as a 2.6.1 follow-up.
-              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: snok/install-poetry@v1
+              # Third-party action pinned to the commit its release tag resolved to.
+              uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263 # v1.4.2
               with:
                   version: 1.8.2
                   virtualenvs-create: true
@@ -161,18 +159,16 @@ jobs:
               run: npm run lint
 
             - name: Scan VAMS WAF Cloudformation template
-              # Third-party action referenced by branch, as its own README documents; accepted for
-              # the 2.6.1 gate per release policy and flagged for commit-SHA pinning follow-up.
-              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: stelligent/cfn_nag@master
+              # Third-party action pinned to the commit its master branch resolved to (the README
+              # documents @master; the last tagged release, v0.8.10, is one commit behind it).
+              uses: stelligent/cfn_nag@8b5f03da74202ba323a145e9d037ddce6cab9dec # master 2022-06-07
               with:
                   input_path: vams/infra/cdk.out/vams-waf-prod-us-east-1.template.json
 
             - name: Scan VAMS Cloudformation template
-              # Third-party action referenced by branch, as its own README documents; accepted for
-              # the 2.6.1 gate per release policy and flagged for commit-SHA pinning follow-up.
-              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: stelligent/cfn_nag@master
+              # Third-party action pinned to the commit its master branch resolved to (the README
+              # documents @master; the last tagged release, v0.8.10, is one commit behind it).
+              uses: stelligent/cfn_nag@8b5f03da74202ba323a145e9d037ddce6cab9dec # master 2022-06-07
               with:
                   input_path: vams/infra/cdk.out/vams-core-prod-us-east-1.template.json
 
