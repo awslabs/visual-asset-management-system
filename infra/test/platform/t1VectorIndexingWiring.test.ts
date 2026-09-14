@@ -83,7 +83,7 @@ describe("commercial: vector indexing is wired into the search stack", () => {
         s = synthTemplate("commercial");
     });
 
-    test("emits the two source queues, the embedding-ready rule and the three Lambdas", () => {
+    test("emits the two source queues, the embedding-ready rule and the four Lambdas", () => {
         expect(
             vectorQueues(s)
                 .map((q) => q.logicalId.replace(/[0-9A-F]{8}$/, ""))
@@ -98,6 +98,7 @@ describe("commercial: vector indexing is wired into the search stack", () => {
             "handlers.vectorsearch.systemWorkflowLauncher.lambda_handler",
             "handlers.vectorsearch.vectorIndexer.lambda_handler",
             "handlers.vectorsearch.vectorReindexer.lambda_handler",
+            "handlers.vectorsearch.vectorSearchService.lambda_handler",
         ]);
         expect(vectorLambdas(s).every(inSearchStack)).toBe(true);
     });

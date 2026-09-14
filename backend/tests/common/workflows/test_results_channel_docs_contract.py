@@ -61,7 +61,8 @@ class TestSteeringFile:
         text = _read(STEERING)
         assert EMBEDDING_SECTION in text
         for term in ("vector.embedding.ready", "documentS3Location", "embeddingModelId",
-                     "embeddingDimensions", "orchestrationEventPrefix", "events:PutEvents"):
+                     "embeddingDimensions", "orchestrationEventPrefix", "events:PutEvents",
+                     "segmentKey", "segmentKind", "segmentCount", "SEGMENT_KEY_MAX_BYTES"):
             assert term in text, term
 
     def test_the_byte_identity_test_it_names_exists(self):
