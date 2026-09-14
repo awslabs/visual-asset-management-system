@@ -88,6 +88,7 @@ This software includes third party software subject to the following copyrights:
 | prop-types                          | ^15.8.1       | MIT                     |
 | react                               | ^18.3.1       | MIT                     |
 | react-data-grid                     | 7.0.0-beta.16 | MIT                     |
+| react-diff-viewer-continued         | 4.4.0         | MIT                     |
 | react-dom                           | ^18.3.1       | MIT                     |
 | react-error-boundary                | ^4.0.9        | MIT                     |
 | react-hook-form                     | ^7.53.0       | MIT                     |
