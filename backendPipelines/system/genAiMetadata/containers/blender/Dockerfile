@@ -89,6 +89,4 @@ RUN /usr/sbin/useradd --uid 10001 --user-group --no-create-home renderer \
 ENV HOME=/tmp/home
 USER renderer
 
-# The base image's Lambda runtime interface client, stated so the entry point and the handler sit together.
-ENTRYPOINT ["/lambda-entrypoint.sh"]
 CMD ["handler.lambda_handler"]
