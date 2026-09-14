@@ -3,7 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import React, {
+    Suspense,
+    forwardRef,
+    useCallback,
+    useEffect,
+    useImperativeHandle,
+    useRef,
+    useState,
+} from "react";
 
 // Lazy-load the editor together with the local-Monaco setup (loader.config + workers) so the
 // runtime is bundled from `monaco-editor` (same-origin, CSP-safe) rather than fetched from a CDN.
@@ -32,20 +40,57 @@ interface ConfigEditorProps {
     selectionLength?: number;
 }
 
-const ConfigEditor: React.FC<ConfigEditorProps> = ({
-    value,
-    language,
-    readOnly = false,
-    onChange,
-    height = "400px",
-    startLine,
-    startColumn,
-    selectionLength,
-}) => {
+/** Imperative surface for callers that write into the editor (the template form's tag chips). */
+export interface ConfigEditorHandle {
+    /** Insert text at the cursor, replacing any selection, and return focus to the editor. */
+    insertAtCursor: (text: string) => void;
+}
+
+const ConfigEditor = forwardRef<ConfigEditorHandle, ConfigEditorProps>(function ConfigEditor(
+    {
+        value,
+        language,
+        readOnly = false,
+        onChange,
+        height = "400px",
+        startLine,
+        startColumn,
+        selectionLength,
+    },
+    ref
+) {
     // A handle on the Monaco instance, so a new target can be revealed in the SAME editor. Keying the
     // component on the target instead would remount Monaco on every step — slow, and it loses scroll
     // state and selection, which is what made stepping look like it did nothing.
     const editorRef = useRef<any>(null);
+
+    useImperativeHandle(
+        ref,
+        () => ({
+            insertAtCursor: (text: string) => {
+                const editor = editorRef.current;
+                if (!editor) {
+                    // The editor is still loading: append, so the click is not lost.
+                    onChange?.(`${value}${text}`);
+                    return;
+                }
+                const selection = editor.getSelection() || {
+                    startLineNumber: 1,
+                    startColumn: 1,
+                    endLineNumber: 1,
+                    endColumn: 1,
+                };
+                // An edit through the model (not a value swap) keeps the undo stack and fires the same
+                // onChange a keystroke does.
+                editor.executeEdits("insert-placeholder", [
+                    { range: selection, text, forceMoveMarkers: true },
+                ]);
+                editor.pushUndoStop();
+                editor.focus();
+            },
+        }),
+        [value, onChange]
+    );
 
     const revealTarget = useCallback(() => {
         const editor = editorRef.current;
@@ -126,6 +171,6 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({
             />
         </Suspense>
     );
-};
+});
 
 export default ConfigEditor;

@@ -97,8 +97,10 @@ class PipelineExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     from_pipeline_execution_id: Optional[str] = ""
     # EventBridge source prefix the pipeline reports under, plus the typed lists of reported
     # sub-process resources and CloudWatch log locations. Each registeredSubExecutions entry is
-    # typed by resourceType (stepFunctionsExecution today; batchJob/ecsTask/... later); each
-    # registeredLogs entry is {logGroupArn, logGroupName, logStreamName, logStreamPrefix}.
+    # typed by resourceType (stepFunctionsExecution, batchJob, deadlineCloudJob, ...) with optional
+    # stageName/label; each registeredLogs entry is {logGroupArn, logGroupName, logStreamName,
+    # logStreamPrefix, stageName, label, sourceType}, unique by location. Entries stay untyped
+    # dicts: the registration lambda validates every field before it is stored.
     orchestrationBusEventPrefix: Optional[str] = ""
     registeredSubExecutions: Optional[List[Dict[str, Any]]] = []
     registeredLogs: Optional[List[Dict[str, Any]]] = []

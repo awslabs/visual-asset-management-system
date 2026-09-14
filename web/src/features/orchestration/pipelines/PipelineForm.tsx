@@ -1223,9 +1223,16 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                             checked={metadataInputs[key]}
                                             disabled={isDeadlineCloudDisabled}
                                             onChange={(e) =>
+                                                // A fresh map: setting the nested key alone mutates the
+                                                // watched object in place, so the memo above never sees a
+                                                // change and the box keeps its old state.
                                                 setValue(
-                                                    `systemConfig.metadataInputs.${key}` as const,
-                                                    e.target.checked
+                                                    "systemConfig.metadataInputs",
+                                                    {
+                                                        ...(storedMetadataInputs || {}),
+                                                        [key]: e.target.checked,
+                                                    },
+                                                    { shouldDirty: true }
                                                 )
                                             }
                                         />

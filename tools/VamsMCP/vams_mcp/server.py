@@ -1150,7 +1150,7 @@ def list_executions(
 
 @mcp.tool()
 @tool_result
-def get_execution_details(execution_id: str) -> Dict[str, Any]:
+def get_execution_details(execution_id: str, include_sub_executions: bool = False) -> Dict[str, Any]:
     """Get an execution's full detail: per-pipeline step status, inputs, outputs, and any error.
 
     This is the tool to reach for when asked why a run failed or what it produced.
@@ -1192,8 +1192,34 @@ def get_execution_details(execution_id: str) -> Dict[str, Any]:
     So to report what a step really ran with, read the location's object even when the inline copy is
     complete — which is the common case. Diagnosing from `renderedConfig` alone reports a config the
     step never saw.
+
+    Every pipeline entry lists its log sources in `availableLogs`: [{logId, kind, label, sourceType,
+    stageName, logGroupName, logStreamName, logStreamPrefix}], where `kind` is "invocation" (the step's
+    own invocation log), "registered" (a location the pipeline reported for itself), "subStateMachine"
+    (a registered nested state machine's log group) or "deadlineCloudJob" (the session log group of a
+    registered AWS Deadline Cloud job, read by its exact session streams), and `sourceType` is one of
+    stateMachine, lambda, batch, ecs, container, custom, deadlineCloud. `logId` is the value
+    get_execution_logs(log_id=...) reads ONE source by. Names only — no ARNs are returned.
+
+    Pass include_sub_executions=True to add `subExecutions` to each entry: one per registered
+    sub-process (a nested state machine, a Batch job or a Deadline Cloud job) with `label`,
+    `resourceName`, `status` (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED, UNKNOWN),
+    `startDate`/`stopDate` (ISO-8601 UTC), `error`/`cause`, `stageSource` ("definition" when the
+    stage order came from the sub-state-machine definition, "history" when only its history was
+    readable, "none"), and `stages` — each with `stageName`, `stateType`, `status`, a `caught` flag on
+    a failure the sub-process handled and continued past (the common shape for a failed container
+    job), `attempts`, Map `iterations`, and for a Batch task the resolved `batch` {jobId,
+    logStreamName}. A Deadline Cloud job (`resourceType` "deadlineCloudJob") carries its live job
+    status folded onto that vocabulary (a cancelled job is ABORTED), `cause` from its lifecycle
+    message, no stages, and a `deadline` {farmId, queueId, jobId} block. `stagesTruncated`
+    and `historyTruncated` mark a capped read of that sub-process; `subExecutionsTruncated` and
+    `subExecutionWarnings` sit on the entry; and a bounded step section names
+    "pipelines.subExecutions" in `truncatedCollections` when every sub-process kept its summary but
+    lost its stages. The flag is off by default because the derivation reads each sub-process's
+    execution history — set it when asked where inside a step a run is, or where it failed.
     """
-    return CLIENT.unwrap_message(CLIENT.api.get_execution_details(execution_id))
+    params = {"includeSubExecutions": "true"} if include_sub_executions else None
+    return CLIENT.unwrap_message(CLIENT.api.get_execution_details(execution_id, params=params))
 
 
 @mcp.tool()
@@ -1261,6 +1287,8 @@ def get_execution_logs(
     filter_pattern: Optional[str] = None,
     start_time: Optional[int] = None,
     end_time: Optional[int] = None,
+    log_id: Optional[str] = None,
+    stage_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Retrieve an execution's logs.
 
@@ -1283,6 +1311,31 @@ def get_execution_logs(
     CloudWatch ingestion), and that section is served only on a tokenless first call — read it there
     rather than expecting it on a continuation.
 
+    With pipeline_execution_id, the full-mode response also carries `logSources`: every log source
+    known for the step (the same entries get_execution_details lists in `availableLogs`) with a
+    `status` of "read" (plus `eventCount`), "denied", "notFound", "error" (the read failed for
+    another reason — throttling, an invalid CloudWatch token, an unparseable location; `warnings`
+    names the cause), "empty", "skipped" (past the per-request registered-log cap) or "unscoped" — a
+    container log prefix searched with the execution-scope terms because no exact stream was
+    resolved; container output does not print the execution id, so an empty "unscoped" source means
+    unresolved, not silent. Each CloudWatch
+    `subProcessEvents` item names its source by `logId`; a nested state machine's history line
+    carries the `logId` of the log group that machine writes to ("" when it has no logging
+    destination); the list is sorted by timestamp. A "deadlineCloudJob" source is read by the exact
+    session streams of the registered AWS Deadline Cloud job (its 10 most recent sessions), never by
+    prefix: "notFound" until the job has a session, "denied" when listing the sessions or reading
+    the group is refused, never "unscoped".
+
+    Pass log_id to read ONE source: `events` becomes that source's events, `nextToken` its CloudWatch
+    token, and when the source is the log group a registered nested state machine writes to (kind
+    "subStateMachine", or "registered" when the pipeline reported that group itself — the usual
+    case) the response adds that sub-execution's `sfnHistoryEvents`. Pass stage_name to keep only
+    the sources registered for one sub-state-machine stage and the history between that stage's
+    entry and exit. Both apply only in full mode with pipeline_execution_id — the server answers 400
+    otherwise, and 404 for a log_id the step does not have; that 404 comes back here as
+    {"error": "Log source not found for this pipeline execution", ...}, distinct from a missing
+    execution's "Execution '<id>' not found".
+
     This route is administrative — it exposes full execution logs — so a role without it will get a
     403 rather than empty output.
     """
@@ -1298,6 +1351,8 @@ def get_execution_logs(
             ("filterPattern", filter_pattern),
             ("startTime", start_time),
             ("endTime", end_time),
+            ("logId", log_id),
+            ("stageName", stage_name),
         ):
             if value:
                 params[key] = value

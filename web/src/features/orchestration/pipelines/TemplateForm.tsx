@@ -3,18 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTemplate, useTemplateMutations, usePipeline } from "../api/queries";
 import type { Template, ConfigFormat, TagSchemaField } from "../types";
 import ConfigEditor from "../components/ConfigEditor";
+import type { ConfigEditorHandle } from "../components/ConfigEditor";
 import DynamicTagForm from "../components/DynamicTagForm";
 import SystemTagHelp, { CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS } from "../components/SystemTagHelp";
-import TagSchemaBuilder, { TAG_KEY_PATTERN } from "./TagSchemaBuilder";
+import TagSchemaBuilder from "./TagSchemaBuilder";
 import TemplateOverridesEditor from "./TemplateOverridesEditor";
+import {
+    TAG_KEY_PATTERN,
+    placeholderFor,
+    rendersJsonValue,
+    unreferencedTagKeys,
+    validateJsonConfigBody,
+} from "./templateBodyValidation";
 import Stepper from "../components/Stepper";
 import InfoTooltip from "../components/InfoTooltip";
 import Breadcrumb from "../components/Breadcrumb";
+import Callout from "../components/Callout";
+import CollapsibleSection from "../components/CollapsibleSection";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import InstructionsPanel from "../components/InstructionsPanel";
@@ -35,30 +45,32 @@ const TEMPLATE_BODY_CAP_BYTES = TEMPLATE_BODY_CAP_MB * 1024 * 1024;
 
 const STEPS = [
     { id: "basic", label: "Basic" },
-    { id: "config", label: "Configuration" },
-    { id: "tags", label: "Tags" },
+    { id: "config", label: "Pipeline overrides" },
+    { id: "tags", label: "Tags and Config Body" },
     { id: "review", label: "Review" },
 ];
 
-/**
- * The declared tags no `{{tagKey}}` in the body references. The renderer only substitutes tags the
- * body names, so such a tag is collected on the execute form and then dropped — matched with the
- * whitespace tolerance of the backend's own _TAG_PATTERN (common/workflows/templateRender.py). Keys
- * outside the substitutable charset are skipped: they can never be referenced, and the tag builder
- * already reports them.
- */
-const unreferencedTagKeys = (schema: TagSchemaField[], body: string): string[] =>
-    schema
-        .map((field) => field.tagKey)
-        .filter(
-            (key) =>
-                TAG_KEY_PATTERN.test(key || "") &&
-                !new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`).test(body)
-        );
+const OVERRIDE_LABELS: Record<string, string> = {
+    inputFileArity: "Input file count",
+    assetScope: "Asset selection rules",
+    metadataInputs: "Metadata inputs",
+    inputFileFilters: "Input file filters",
+};
+
+const fieldClass =
+    "orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary";
+
+/** A tag's default as the review table shows it. */
+const formatDefault = (value: unknown): string => {
+    if (value === undefined || value === null || value === "") return "—";
+    return Array.isArray(value) ? value.join(", ") : String(value);
+};
 
 /**
  * Full-page create/edit Template wizard (mirrors the pipeline/workflow builder pages). Reached from
- * the pipeline's Templates list. Steps: Basic → Configuration → Tags → Review.
+ * the pipeline's Templates list. Steps: Basic → Pipeline overrides → Tags and Config Body → Review.
+ * The tag schema and the config body are authored side by side, so the body can be written against
+ * the tags it references and the placeholders can be inserted rather than typed.
  */
 const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineId, initial }) => {
     const toast = useToast();
@@ -90,6 +102,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     const [tagSchemaValid, setTagSchemaValid] = useState(true);
     const [saveError, setSaveError] = useState<string | null>(null);
     const [wizardStep, setWizardStep] = useState<string>("basic");
+    const editorRef = useRef<ConfigEditorHandle>(null);
 
     const stepIndex = STEPS.findIndex((s) => s.id === wizardStep);
     const isLastStep = stepIndex === STEPS.length - 1;
@@ -98,11 +111,24 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     // required to save at all); the Tags step requires every tag row to be valid.
     const basicError = !templateName.trim() ? "Template name is required" : null;
     const tagsError = !tagSchemaValid ? "Fix the highlighted tag definitions to continue" : null;
+    const stepError = (id: string) =>
+        id === "basic" ? basicError : id === "tags" ? tagsError : null;
+    const canAdvance = !stepError(wizardStep);
+    // Back is always allowed; forward jumps need every step from here to the target to pass its gate.
+    const canJumpTo = (targetId: string) => {
+        const target = STEPS.findIndex((s) => s.id === targetId);
+        if (target < 0 || target === stepIndex) return false;
+        return target < stepIndex || STEPS.slice(stepIndex, target).every((s) => !stepError(s.id));
+    };
     // A warning, not a save block: with allowCustomEdit the placeholder can legitimately be added to
     // the body at launch time, and the backend accepts the schema either way.
     const unreferencedTags = unreferencedTagKeys(tagSchema, configBody);
-    const canAdvance =
-        wizardStep === "basic" ? !basicError : wizardStep === "tags" ? !tagsError : true;
+    // The save-time verdict on a json body, shown while typing. Not a save block either: the backend
+    // re-checks and is the authority, and the same text comes back inline if it disagrees.
+    const bodyError = validateJsonConfigBody(configBody, configFormat, tagSchema);
+    // The declared tags a chip can insert — keys the renderer can substitute at all.
+    const insertableTags = tagSchema.filter((field) => TAG_KEY_PATTERN.test(field.tagKey || ""));
+    const overriddenKeys = Object.keys(overrides).filter((key) => overrides[key] !== undefined);
 
     const done = () => navigate(`/databases/${databaseId}/pipelines/${pipelineId}/templates`);
 
@@ -121,6 +147,35 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
         if (dirty && !confirm("Discard the unsaved changes to this template?")) return;
         done();
     };
+
+    const insertPlaceholder = (field: TagSchemaField) => {
+        const text = placeholderFor(field, configFormat);
+        if (editorRef.current) {
+            editorRef.current.insertAtCursor(text);
+        } else {
+            setConfigBody((body) => `${body}${text}`);
+        }
+    };
+
+    // Rendered on both the authoring step and Review, so the two never word the verdict differently.
+    const bodyErrorCallout = bodyError ? (
+        <div data-testid="config-body-error">
+            <Callout tone="error">{bodyError}</Callout>
+        </div>
+    ) : null;
+    const unreferencedWarning =
+        unreferencedTags.length > 0 ? (
+            <p className="text-vams-warning text-sm" data-testid="unreferenced-tags-warning">
+                {unreferencedTags.join(", ")} {unreferencedTags.length === 1 ? "is" : "are"}{" "}
+                declared but the config body never references{" "}
+                {unreferencedTags.map((key) => `{{${key}}}`).join(", ")} — the value
+                {unreferencedTags.length === 1 ? " is" : "s are"} collected on the execute form and
+                then ignored.
+                {allowCustomEdit
+                    ? " Add the placeholder to the body, or leave it for the execute-time body edit this template allows."
+                    : " Add the placeholder to the body, or remove the tag."}
+            </p>
+        ) : null;
 
     const handleSave = async () => {
         if (createRefused) return;
@@ -223,7 +278,12 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                 </h1>
             </div>
 
-            <Stepper steps={STEPS} current={wizardStep} />
+            <Stepper
+                steps={STEPS}
+                current={wizardStep}
+                onJumpTo={setWizardStep}
+                canJumpTo={canJumpTo}
+            />
 
             <div className="orch-outline bg-surface-container border border-border-default rounded-lg p-4 space-y-4">
                 {lockedFields && (
@@ -240,238 +300,371 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                     </div>
                 )}
                 {wizardStep === "basic" && (
-                    <>
-                        <fieldset
-                            disabled={lockedFields}
-                            className="m-0 p-0 border-0 min-w-0 space-y-4"
-                        >
-                            <div>
-                                <label className="block text-sm font-medium mb-1">
-                                    Template Name *
-                                </label>
-                                <input
-                                    type="text"
-                                    value={templateName}
-                                    onChange={(e) => setTemplateName(e.target.value)}
-                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                                    placeholder="Template name"
-                                />
-                                {basicError && (
-                                    <p className="text-vams-error text-sm mt-1">{basicError}</p>
-                                )}
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-1">
-                                    Description
-                                </label>
-                                <textarea
-                                    value={description}
-                                    onChange={(e) => setDescription(e.target.value)}
-                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                                    rows={2}
-                                    placeholder="Template description"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-1">
-                                    Input Instructions
-                                </label>
-                                <textarea
-                                    value={inputInstructions}
-                                    onChange={(e) => setInputInstructions(e.target.value)}
-                                    // Monospace and tall enough to author a metadata-key list: these
-                                    // instructions are where a pipeline documents every metadata field
-                                    // it reads, so line breaks and alignment are load-bearing and a
-                                    // 2-row proportional box made that effectively unwritable.
-                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary font-mono text-xs"
-                                    rows={10}
-                                    placeholder={
-                                        "Instructions shown to the person running an execution with this template.\n\n" +
-                                        "Line breaks and indentation are preserved. For a pipeline that reads metadata, " +
-                                        "list each key, whether it is asset- or file-level, and whether it is required."
-                                    }
-                                />
-                                <p className="mt-1 text-xs text-text-secondary">
-                                    Line breaks are preserved. Long instructions collapse into a
-                                    hover panel on the execute screen so they do not crowd out the
-                                    form.
-                                </p>
-                                {inputInstructions.trim() && (
-                                    <div className="mt-2">
-                                        <div className="text-xs font-medium text-text-secondary mb-1">
-                                            Preview (as shown when running)
-                                        </div>
-                                        {/* Live preview: the inline/tooltip choice is length-based, so an
-                                            author cannot otherwise tell which one their text will get. */}
-                                        <InstructionsPanel
-                                            text={inputInstructions}
-                                            title="Instructions for this template"
-                                        />
+                    <fieldset
+                        disabled={lockedFields}
+                        className="m-0 p-0 border-0 min-w-0 space-y-4"
+                    >
+                        <div>
+                            <label
+                                htmlFor="templateName"
+                                className="block text-sm font-medium mb-1"
+                            >
+                                Template Name *
+                            </label>
+                            <input
+                                id="templateName"
+                                type="text"
+                                value={templateName}
+                                onChange={(e) => setTemplateName(e.target.value)}
+                                className={fieldClass}
+                                placeholder="Template name"
+                            />
+                            {basicError && (
+                                <p className="text-vams-error text-sm mt-1">{basicError}</p>
+                            )}
+                        </div>
+                        <div>
+                            <label
+                                htmlFor="templateDescription"
+                                className="block text-sm font-medium mb-1"
+                            >
+                                Description
+                            </label>
+                            <textarea
+                                id="templateDescription"
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                className={fieldClass}
+                                rows={2}
+                                placeholder="Template description"
+                            />
+                        </div>
+                        <div>
+                            <label
+                                htmlFor="inputInstructions"
+                                className="block text-sm font-medium mb-1"
+                            >
+                                Input Instructions
+                            </label>
+                            <textarea
+                                id="inputInstructions"
+                                value={inputInstructions}
+                                onChange={(e) => setInputInstructions(e.target.value)}
+                                // Monospace and tall enough to author a metadata-key list: these
+                                // instructions are where a pipeline documents every metadata field
+                                // it reads, so line breaks and alignment are load-bearing and a
+                                // 2-row proportional box made that effectively unwritable.
+                                className={`${fieldClass} font-mono text-xs`}
+                                rows={10}
+                                placeholder={
+                                    "Instructions shown to the person running an execution with this template.\n\n" +
+                                    "Line breaks and indentation are preserved. For a pipeline that reads metadata, " +
+                                    "list each key, whether it is asset- or file-level, and whether it is required."
+                                }
+                            />
+                            <p className="mt-1 text-xs text-text-secondary">
+                                Line breaks are preserved. Long instructions collapse into a hover
+                                panel on the execute screen so they do not crowd out the form.
+                            </p>
+                            {inputInstructions.trim() && (
+                                <div className="mt-2">
+                                    <div className="text-xs font-medium text-text-secondary mb-1">
+                                        Preview (as shown when running)
                                     </div>
-                                )}
-                            </div>
-                            <div>
-                                <label className="flex items-center space-x-2">
-                                    <input
-                                        type="checkbox"
-                                        checked={isDefault}
-                                        onChange={(e) => setIsDefault(e.target.checked)}
-                                        className="w-4 h-4"
+                                    {/* Live preview: the inline/tooltip choice is length-based, so an
+                                        author cannot otherwise tell which one their text will get. */}
+                                    <InstructionsPanel
+                                        text={inputInstructions}
+                                        title="Instructions for this template"
                                     />
-                                    <span className="text-sm">
-                                        Set as the pipeline's default template
-                                    </span>
-                                    <InfoTooltip text="The default template is pre-selected first on the execute form, and is auto-selected by the backend when a require-template pipeline runs without a template chosen. Only one template per pipeline can be the default — setting this clears any prior default." />
-                                </label>
-                                {isDefault && (
-                                    <p className="text-xs text-vams-warning mt-1">
-                                        A pipeline can have only one default template. Saving this
-                                        will unset the default on any other template of this
-                                        pipeline.
-                                    </p>
-                                )}
-                            </div>
-                        </fieldset>
-                    </>
+                                </div>
+                            )}
+                        </div>
+                        <div>
+                            <label className="flex items-center space-x-2">
+                                <input
+                                    type="checkbox"
+                                    checked={isDefault}
+                                    onChange={(e) => setIsDefault(e.target.checked)}
+                                    className="w-4 h-4"
+                                />
+                                <span className="text-sm">
+                                    Set as the pipeline's default template
+                                </span>
+                                <InfoTooltip text="The default template is pre-selected first on the execute form, and is auto-selected by the backend when a require-template pipeline runs without a template chosen. Only one template per pipeline can be the default — setting this clears any prior default." />
+                            </label>
+                            {isDefault && (
+                                <p className="text-xs text-vams-warning mt-1">
+                                    A pipeline can have only one default template. Saving this will
+                                    unset the default on any other template of this pipeline.
+                                </p>
+                            )}
+                        </div>
+                        <div>
+                            <label className="flex items-center space-x-2">
+                                <input
+                                    type="checkbox"
+                                    checked={allowCustomEdit}
+                                    onChange={(e) => setAllowCustomEdit(e.target.checked)}
+                                    className="w-4 h-4"
+                                />
+                                <span className="text-sm">
+                                    Allow editing the config body at execution time
+                                </span>
+                                <InfoTooltip text="When on, the person running an execution with this template may edit the config body inline before launch (a one-off change for that run)." />
+                            </label>
+                        </div>
+                    </fieldset>
                 )}
 
                 {wizardStep === "config" && (
-                    <>
-                        <div>
-                            <label
-                                htmlFor="configFormat"
-                                className="block text-sm font-medium mb-1"
-                            >
-                                Config Format *
-                            </label>
-                            <select
-                                id="configFormat"
-                                value={configFormat}
-                                onChange={(e) => setConfigFormat(e.target.value as ConfigFormat)}
-                                disabled={lockedFields}
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                            >
-                                {CONFIG_FORMATS.map((format) => (
-                                    <option key={format} value={format}>
-                                        {format}
-                                    </option>
-                                ))}
-                            </select>
+                    <fieldset disabled={lockedFields} className="m-0 p-0 border-0 min-w-0">
+                        <div className="flex items-center gap-1.5 text-sm font-medium mb-2">
+                            Pipeline setting overrides
+                            <InfoTooltip text="Optional. Overrides the pipeline's input-handling settings for executions that use this template (input file count, asset selection rules, metadata inputs, input-file filters). This does NOT edit the config body. Anything left un-toggled inherits the pipeline's value." />
                         </div>
-                        <div>
-                            <div className="flex items-center gap-1.5 text-sm font-medium mb-1">
-                                Config Body
-                                <InfoTooltip text={CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS} />
-                            </div>
-                            <ConfigEditor
-                                value={configBody}
-                                language={configFormat}
-                                onChange={(val) => setConfigBody(val || "")}
-                                height="300px"
-                            />
-                            <div className="mt-2">
-                                <SystemTagHelp />
-                            </div>
-                        </div>
-                        <fieldset
-                            disabled={lockedFields}
-                            className="m-0 p-0 border-0 min-w-0 space-y-4"
-                        >
-                            <div>
-                                <label className="flex items-center space-x-2">
-                                    <input
-                                        type="checkbox"
-                                        aria-label="Allow editing the config body at execution time"
-                                        checked={allowCustomEdit}
-                                        onChange={(e) => setAllowCustomEdit(e.target.checked)}
-                                        className="w-4 h-4"
-                                    />
-                                    <span className="text-sm">
-                                        Allow editing the config body at execution time
-                                    </span>
-                                    <InfoTooltip text="When on, the person running an execution with this template may edit the config body inline before launch (a one-off change for that run)." />
-                                </label>
-                            </div>
-                            <div>
-                                <div className="flex items-center gap-1.5 text-sm font-medium mb-2">
-                                    Pipeline setting overrides
-                                    <InfoTooltip text="Optional. Overrides the pipeline's input-handling settings for executions that use this template (input file count, asset selection rules, metadata inputs, input-file filters). This does NOT edit the config body. Anything left un-toggled inherits the pipeline's value." />
-                                </div>
-                                <TemplateOverridesEditor
-                                    value={overrides}
-                                    onChange={setOverrides}
-                                    inheritedAssetScope={pipeline?.systemConfig?.assetScope}
-                                    inheritedArity={pipeline?.systemConfig?.inputFileArity}
-                                    inheritedFilters={pipeline?.systemConfig?.inputFileFilters}
-                                />
-                            </div>
-                        </fieldset>
-                    </>
+                        <p className="text-xs text-text-secondary mb-3">
+                            Optional. Each setting left un-toggled inherits the pipeline&apos;s
+                            value; the config body itself is authored on the next step.
+                        </p>
+                        <TemplateOverridesEditor
+                            value={overrides}
+                            onChange={setOverrides}
+                            inheritedAssetScope={pipeline?.systemConfig?.assetScope}
+                            inheritedArity={pipeline?.systemConfig?.inputFileArity}
+                            inheritedFilters={pipeline?.systemConfig?.inputFileFilters}
+                        />
+                    </fieldset>
                 )}
 
                 {wizardStep === "tags" && (
                     <>
-                        <div>
-                            <div className="flex items-center gap-1.5 text-sm font-medium mb-1">
-                                Tag Schema
-                                <InfoTooltip text="Typed tags that fill the {{tagName}} placeholders in the config body. Each tag becomes a field on the execute form." />
-                            </div>
-                            <p className="text-xs text-text-secondary mb-2">
-                                These tags define the execute-time form for this template — one
-                                input field per tag. They fill the <code>{"{{tagName}}"}</code>{" "}
-                                placeholders in the config body.
-                            </p>
-                            <TagSchemaBuilder
-                                value={tagSchema}
-                                onChange={(next) => {
-                                    setTagSchema(next);
-                                    setTagSchemaEdited(true);
-                                }}
-                                onValidityChange={setTagSchemaValid}
-                            />
+                        {/* Two panes on md and up, stacked below: the tag schema on the left, the body
+                            on the right and sticky, so the editor stays in view while a long tag list
+                            is edited. */}
+                        <div
+                            className="grid grid-cols-1 gap-4 md:grid-cols-2"
+                            data-testid="tags-and-body"
+                        >
+                            <section className="min-w-0 space-y-2" aria-label="Tag schema">
+                                <div className="flex items-center gap-1.5 text-sm font-medium">
+                                    Tag Schema
+                                    <InfoTooltip text="Typed tags that fill the {{tagName}} placeholders in the config body. Each tag becomes a field on the execute form." />
+                                </div>
+                                <p className="text-xs text-text-secondary">
+                                    One execute-form field per tag. Declare a tag here, then click
+                                    its chip under the editor to place the placeholder it fills.
+                                </p>
+                                <TagSchemaBuilder
+                                    value={tagSchema}
+                                    onChange={(next) => {
+                                        setTagSchema(next);
+                                        setTagSchemaEdited(true);
+                                    }}
+                                    onValidityChange={setTagSchemaValid}
+                                />
+                            </section>
+
+                            <section
+                                className="min-w-0 space-y-3 md:sticky md:top-4 md:self-start"
+                                aria-label="Config body"
+                            >
+                                <div>
+                                    <label
+                                        htmlFor="configFormat"
+                                        className="block text-sm font-medium mb-1"
+                                    >
+                                        Config Format *
+                                    </label>
+                                    <select
+                                        id="configFormat"
+                                        value={configFormat}
+                                        onChange={(e) =>
+                                            setConfigFormat(e.target.value as ConfigFormat)
+                                        }
+                                        disabled={lockedFields}
+                                        className={fieldClass}
+                                    >
+                                        {CONFIG_FORMATS.map((format) => (
+                                            <option key={format} value={format}>
+                                                {format}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <div className="flex items-center gap-1.5 text-sm font-medium mb-1">
+                                        Config Body
+                                        <InfoTooltip text={CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS} />
+                                    </div>
+                                    <ConfigEditor
+                                        ref={editorRef}
+                                        value={configBody}
+                                        language={configFormat}
+                                        onChange={(val) => setConfigBody(val || "")}
+                                        height="360px"
+                                    />
+                                </div>
+                                {bodyErrorCallout}
+                                <div>
+                                    <div className="text-xs font-medium text-text-secondary mb-1">
+                                        This template&apos;s tags
+                                    </div>
+                                    {insertableTags.length > 0 ? (
+                                        <div
+                                            className="flex flex-wrap gap-1.5"
+                                            data-testid="template-tag-chips"
+                                        >
+                                            {insertableTags.map((field) => (
+                                                <button
+                                                    key={field.tagKey}
+                                                    type="button"
+                                                    data-testid="tag-chip"
+                                                    data-tag-key={field.tagKey}
+                                                    aria-label={`Insert {{${field.tagKey}}}`}
+                                                    title={`Inserts ${placeholderFor(
+                                                        field,
+                                                        configFormat
+                                                    )} at the cursor`}
+                                                    onClick={() => insertPlaceholder(field)}
+                                                    className="orch-outline inline-flex items-center gap-1 rounded-full border border-border-input bg-surface px-2 py-0.5 font-mono text-xs text-text-primary hover:bg-surface-hover"
+                                                >
+                                                    {`{{${field.tagKey}}}`}
+                                                    <span className="font-sans text-text-secondary">
+                                                        {field.type}
+                                                        {configFormat === "json" &&
+                                                            (rendersJsonValue(field.type)
+                                                                ? " · bare"
+                                                                : " · quoted")}
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p className="text-xs text-text-secondary">
+                                            No tags declared yet — add one on the left and its chip
+                                            appears here.
+                                        </p>
+                                    )}
+                                    <p className="mt-1 text-xs text-text-secondary">
+                                        Click a chip to insert the placeholder at the cursor. In a{" "}
+                                        <strong>json</strong> body a string or enum tag is inserted
+                                        in quotes (<code>{'"{{KEY}}"'}</code>) because it renders
+                                        text, and an integer, number, boolean or string-list tag
+                                        bare (<code>{"{{KEY}}"}</code>) because it renders a JSON
+                                        value of that type. Other formats always insert the bare
+                                        placeholder.
+                                    </p>
+                                </div>
+                                {unreferencedWarning}
+                                <SystemTagHelp templateTags={tagSchema} />
+                            </section>
                         </div>
                         {tagSchema.length > 0 && (
-                            <div>
-                                <div className="flex items-center gap-1.5 text-sm font-medium mb-2">
-                                    Live preview
-                                    <InfoTooltip text="How the tag fields appear on the execute form when this template is chosen." />
-                                </div>
-                                <div className="orch-outline rounded-lg border border-border-default bg-surface-secondary p-4">
-                                    <div className="text-xs text-text-secondary mb-3">
-                                        Execute-form preview
-                                    </div>
-                                    <DynamicTagForm schema={tagSchema} />
-                                </div>
-                            </div>
+                            <CollapsibleSection
+                                title="Execute-form preview"
+                                description="How the tag fields appear on the execute form when this template is chosen."
+                                defaultOpen={false}
+                            >
+                                <DynamicTagForm schema={tagSchema} />
+                            </CollapsibleSection>
                         )}
                     </>
                 )}
 
                 {wizardStep === "review" && (
-                    <div className="text-sm text-text-primary space-y-1">
-                        <div>
-                            <span className="text-text-secondary">Name:</span> {templateName || "—"}
-                        </div>
-                        <div>
-                            <span className="text-text-secondary">Format:</span> {configFormat}
-                        </div>
-                        <div>
-                            <span className="text-text-secondary">Allow custom edit:</span>{" "}
-                            {allowCustomEdit ? "Yes" : "No"}
-                        </div>
-                        <div>
-                            <span className="text-text-secondary">Default template:</span>{" "}
-                            {isDefault ? "Yes" : "No"}
-                        </div>
-                        <div>
-                            <span className="text-text-secondary">Tags:</span> {tagSchema.length}
+                    <div className="text-sm text-text-primary space-y-4">
+                        <div className="space-y-1">
+                            <div>
+                                <span className="text-text-secondary">Name:</span>{" "}
+                                {templateName || "—"}
+                            </div>
+                            {description.trim() && (
+                                <div>
+                                    <span className="text-text-secondary">Description:</span>{" "}
+                                    {description}
+                                </div>
+                            )}
+                            <div>
+                                <span className="text-text-secondary">Format:</span> {configFormat}
+                            </div>
+                            <div>
+                                <span className="text-text-secondary">Allow custom edit:</span>{" "}
+                                {allowCustomEdit ? "Yes" : "No"}
+                            </div>
+                            <div>
+                                <span className="text-text-secondary">Default template:</span>{" "}
+                                {isDefault ? "Yes" : "No"}
+                            </div>
+                            <div>
+                                <span className="text-text-secondary">Input instructions:</span>{" "}
+                                {inputInstructions.trim() ? "Yes" : "None"}
+                            </div>
+                            <div>
+                                <span className="text-text-secondary">Pipeline overrides:</span>{" "}
+                                {overriddenKeys.length > 0
+                                    ? overriddenKeys
+                                          .map((key) => OVERRIDE_LABELS[key] || key)
+                                          .join(", ")
+                                    : "None (inherits the pipeline's settings)"}
+                            </div>
+                            <div>
+                                <span className="text-text-secondary">Tags:</span>{" "}
+                                {tagSchema.length}
+                            </div>
                         </div>
                         {isDefault && (
-                            <p className="text-xs text-vams-warning pt-1">
+                            <p className="text-xs text-vams-warning">
                                 Saving will make this the default template for this pipeline and
                                 unset the default on any other template of this pipeline.
                             </p>
                         )}
+                        {tagSchema.length > 0 && (
+                            <table className="w-full text-xs" data-testid="review-tag-table">
+                                <thead>
+                                    <tr className="text-left text-text-secondary">
+                                        <th className="py-1 pr-3 font-medium">Tag</th>
+                                        <th className="py-1 pr-3 font-medium">Type</th>
+                                        <th className="py-1 pr-3 font-medium">Required</th>
+                                        <th className="py-1 pr-3 font-medium">Default</th>
+                                        <th className="py-1 pr-3 font-medium">Label</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {tagSchema.map((field, index) => (
+                                        <tr
+                                            key={`${field.tagKey}-${index}`}
+                                            className="border-t border-border-default"
+                                        >
+                                            <td className="py-1 pr-3">
+                                                <code>{`{{${field.tagKey}}}`}</code>
+                                            </td>
+                                            <td className="py-1 pr-3">{field.type}</td>
+                                            <td className="py-1 pr-3">
+                                                {field.required ? "Yes" : "No"}
+                                            </td>
+                                            <td className="py-1 pr-3">
+                                                {formatDefault(field.default)}
+                                            </td>
+                                            <td className="py-1 pr-3">{field.label || "—"}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                        <div>
+                            <div className="text-xs font-medium text-text-secondary mb-1">
+                                Config body
+                            </div>
+                            <ConfigEditor
+                                value={configBody}
+                                language={configFormat}
+                                readOnly
+                                height="200px"
+                            />
+                        </div>
+                        {bodyErrorCallout}
+                        {unreferencedWarning}
                     </div>
                 )}
 
@@ -481,23 +674,11 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                     </p>
                 )}
 
-                {(wizardStep === "tags" || wizardStep === "review") &&
-                    unreferencedTags.length > 0 && (
-                        <p className="text-vams-warning text-sm">
-                            {unreferencedTags.join(", ")}{" "}
-                            {unreferencedTags.length === 1 ? "is" : "are"} declared but the config
-                            body never references{" "}
-                            {unreferencedTags.map((key) => `{{${key}}}`).join(", ")} — the value
-                            {unreferencedTags.length === 1 ? " is" : "s are"} collected on the
-                            execute form and then ignored.
-                            {allowCustomEdit
-                                ? " Add the placeholder to the body, or leave it for the execute-time body edit this template allows."
-                                : " Add the placeholder to the body, or remove the tag."}
-                        </p>
-                    )}
-
                 {saveError && (
-                    <div className="orch-outline p-3 bg-red-100 dark:bg-red-900 border border-red-300 dark:border-red-700 rounded">
+                    <div
+                        className="orch-outline p-3 bg-red-100 dark:bg-red-900 border border-red-300 dark:border-red-700 rounded"
+                        data-testid="template-save-error"
+                    >
                         <p className="text-sm text-red-800 dark:text-red-200 whitespace-pre-line">
                             {saveError}
                         </p>

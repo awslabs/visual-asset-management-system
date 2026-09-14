@@ -370,3 +370,169 @@ class TestUnarchiveFile:
         # Must restore the exact key's version, never the sibling's newer version.
         assert recorded["CopySource"]["VersionId"] == "v1"
         assert recorded["CopySource"]["Key"] == self.FULL_KEY
+
+
+@pytest.mark.unit
+class TestCurrentVersionWorkflowProvenance:
+    """The file-info response and the enriched list-files items carry the workflow and
+    execution ids stamped on the current version, read from the same live object
+    metadata as changeSource/changeUserId. Blank ids (every non-workflow change source
+    stamps the keys empty) read back as None, folders carry no provenance, and basic
+    mode makes no head_object call at all.
+    """
+
+    KEY = "db/asset/optimized/x.glb"
+
+    def _head_response(self, metadata):
+        from datetime import datetime
+        return {
+            "ContentLength": 10,
+            "ContentType": "model/gltf-binary",
+            "LastModified": datetime(2026, 9, 12, 0, 0, 0),
+            "ETag": '"e1"',
+            "StorageClass": "STANDARD",
+            "Metadata": metadata,
+        }
+
+    def _workflow_metadata(self):
+        from common.s3MetadataKeys import (
+            VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+            VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
+        )
+        return {
+            VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+            VAMS_CHANGE_USER_ID_METADATA_KEY: "alice",
+            VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: "conversion-3d-basic",
+            VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: "exec-571a47bf",
+        }
+
+    def _upload_metadata(self):
+        # An upload stamps the workflow keys present-but-empty (see build_change_metadata).
+        from common.s3MetadataKeys import (
+            VAMS_CHANGE_SOURCE_UPLOAD,
+            VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
+        )
+        return {
+            VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD,
+            VAMS_CHANGE_USER_ID_METADATA_KEY: "alice",
+            VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: "",
+            VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: "",
+        }
+
+    def _s3_for_head(self, metadata):
+        head = self._head_response(metadata)
+
+        class _S3:
+            def head_object(self, Bucket, Key, **kwargs):
+                return head
+
+        return _S3()
+
+    def test_file_info_surfaces_workflow_ids(self, monkeypatch):
+        from backend.backend.models.assetsV3 import FileInfoResponseModel
+        af = _load_asset_files()
+        monkeypatch.setattr(af, "s3_client", self._s3_for_head(self._workflow_metadata()))
+
+        result = af.get_s3_object_metadata("bucket", self.KEY)
+
+        assert result["changeSource"] == "workflowExecution"
+        assert result["changeUserId"] == "alice"
+        assert result["changeWorkflowId"] == "conversion-3d-basic"
+        assert result["changeWorkflowExecutionId"] == "exec-571a47bf"
+        # The response model passes both ids through rather than dropping them.
+        model = FileInfoResponseModel(**result)
+        assert model.changeWorkflowId == "conversion-3d-basic"
+        assert model.changeWorkflowExecutionId == "exec-571a47bf"
+
+    def test_file_info_blank_workflow_ids_read_as_none(self, monkeypatch):
+        af = _load_asset_files()
+        monkeypatch.setattr(af, "s3_client", self._s3_for_head(self._upload_metadata()))
+
+        result = af.get_s3_object_metadata("bucket", self.KEY)
+
+        assert result["changeSource"] == "upload"
+        assert result["changeWorkflowId"] is None
+        assert result["changeWorkflowExecutionId"] is None
+
+    def test_file_info_legacy_object_without_keys_reads_as_none(self, monkeypatch):
+        af = _load_asset_files()
+        monkeypatch.setattr(af, "s3_client", self._s3_for_head({}))
+
+        result = af.get_s3_object_metadata("bucket", self.KEY)
+
+        assert result["changeWorkflowId"] is None
+        assert result["changeWorkflowExecutionId"] is None
+
+    def test_file_info_folder_carries_no_provenance(self, monkeypatch):
+        af = _load_asset_files()
+        monkeypatch.setattr(af, "s3_client", self._s3_for_head(self._workflow_metadata()))
+
+        result = af.get_s3_object_metadata("bucket", "db/asset/folder/")
+
+        assert result["isFolder"] is True
+        assert result["changeSource"] is None
+        assert result["changeWorkflowId"] is None
+        assert result["changeWorkflowExecutionId"] is None
+
+    def _s3_for_list(self, metadata, head_calls):
+        from datetime import datetime
+        key = self.KEY
+        head = self._head_response(metadata)
+        head["VersionId"] = "v-current"
+
+        class _S3:
+            def list_objects_v2(self, **kwargs):
+                return {"Contents": [
+                    {"Key": key, "Size": 10, "ETag": '"e1"',
+                     "LastModified": datetime(2026, 9, 12, 0, 0, 0),
+                     "StorageClass": "STANDARD"},
+                ]}
+
+            def head_object(self, Bucket, Key, **kwargs):
+                head_calls.append(Key)
+                return head
+
+        return _S3()
+
+    def test_list_files_enrichment_surfaces_workflow_ids(self, monkeypatch):
+        from backend.backend.models.assetsV3 import AssetFileItemModel
+        af = _load_asset_files()
+        head_calls = []
+        monkeypatch.setattr(af, "s3_client", self._s3_for_list(self._workflow_metadata(), head_calls))
+
+        result = af.list_s3_objects_with_archive_status(
+            "bucket", "db/asset/", {}, include_archived=False, basic_mode=False)
+
+        assert head_calls == [self.KEY]
+        item = result["items"][0]
+        assert item["changeSource"] == "workflowExecution"
+        assert item["changeWorkflowId"] == "conversion-3d-basic"
+        assert item["changeWorkflowExecutionId"] == "exec-571a47bf"
+        assert AssetFileItemModel(**item).changeWorkflowExecutionId == "exec-571a47bf"
+
+    def test_list_files_enrichment_blank_workflow_ids_read_as_none(self, monkeypatch):
+        af = _load_asset_files()
+        monkeypatch.setattr(af, "s3_client", self._s3_for_list(self._upload_metadata(), []))
+
+        result = af.list_s3_objects_with_archive_status(
+            "bucket", "db/asset/", {}, include_archived=False, basic_mode=False)
+
+        item = result["items"][0]
+        assert item["changeSource"] == "upload"
+        assert item["changeWorkflowId"] is None
+        assert item["changeWorkflowExecutionId"] is None
+
+    def test_list_files_basic_mode_makes_no_head_call(self, monkeypatch):
+        from backend.backend.models.assetsV3 import AssetFileItemModel
+        af = _load_asset_files()
+        head_calls = []
+        monkeypatch.setattr(af, "s3_client", self._s3_for_list(self._workflow_metadata(), head_calls))
+
+        result = af.list_s3_objects_with_archive_status(
+            "bucket", "db/asset/", {}, include_archived=False, basic_mode=True)
+
+        assert head_calls == []
+        item = result["items"][0]
+        assert "changeWorkflowExecutionId" not in item
+        # The model still admits the item, defaulting the absent ids to None.
+        assert AssetFileItemModel(**item).changeWorkflowExecutionId is None

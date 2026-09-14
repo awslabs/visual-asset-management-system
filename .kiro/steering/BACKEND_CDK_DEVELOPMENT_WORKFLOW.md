@@ -76,7 +76,7 @@ One folder per domain. The current domains:
 
 #### **Workflow Execution Storage**
 
-Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed as the Step Functions execution name, so `$$.Execution.Name == executionId`. Asset/database linkage is not on the main row — it lives in `WorkflowExecutionInputsStorageTable`, queried via the `WorkflowExecInputsByAssetGSI` GSI for the asset-scoped execution listing. `executeWorkflow` writes the V2 main execution row plus the workflow inputs/configuration rows, one `PipelineExecutions` row per pipeline in the workflow, and the first-pipeline input rows (files/metadata/configuration). `processWorkflowExecutionOutput` writes the end-state pipeline's output/metadata/log rows and the completion status back to the main row. The pure record-building logic (key construction, S3 prefix derivation, record-dict builders, text truncation) lives in `common/workflows/executionRecords.py` and is unit-tested in isolation.
+Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed as the Step Functions execution name, so `$$.Execution.Name == executionId`. Asset/database linkage is not on the main row — it lives in `WorkflowExecutionInputsStorageTable`, queried via the `WorkflowExecInputsByAssetGSI` GSI for the asset-scoped execution listing. `executeWorkflow` writes the V2 main execution row plus the workflow inputs/configuration rows, one `PipelineExecutions` row per pipeline in the workflow, and the first-pipeline input rows (files/metadata/configuration). `processWorkflowExecutionOutput` writes the end-state pipeline's output/metadata/log rows and the completion status back to the main row. The pure record-building logic (key construction, S3 prefix derivation, record-dict builders, text truncation) lives in `common/workflows/executionRecords.py` and is unit-tested in isolation. The execution details/logs read side keeps its pure logic in the same package: `common/workflows/subExecutionStages.py` folds a sub-state-machine's ASL definition and execution history into per-stage status, and `common/workflows/availableLogs.py` identifies a pipeline execution's log sources by location (`logId`), plans each read and classifies its outcome; `executionService.py` holds only the memoised `DescribeStateMachine`, `DescribeExecution`/`DescribeJobs`, paged `GetExecutionHistory` and `FilterLogEvents` calls around them.
 
 ## 📋 **Development Workflow Checklist**
 
@@ -459,7 +459,21 @@ raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}
 
 # Specialized Validators
 'SAGEMAKER_NOTEBOOK_ID' # SageMaker notebook naming
+
+# Sub-Process Registration Validators (partition-aware where they name a resource)
+'ARN'                       # Any AWS resource ARN
+'CLOUDWATCH_LOG_GROUP_ARN'  # Log-group ARN
+'CLOUDWATCH_LOG_GROUP_NAME' # 1-512 chars, -_./# + alnum
+'LOG_STREAM_NAME'           # 1-512 chars, no ':' or '*' (stream names and prefixes)
+'SFN_STATE_NAME'            # 1-80 printable chars, no control characters (an ASL state name)
+'DISPLAY_LABEL'             # 1-128 printable chars, no control characters
+'LOG_SOURCE_TYPE'           # stateMachine | lambda | batch | ecs | container | custom (unknown -> custom)
 ```
+
+A new validator name is one `_VALIDATOR_DISPATCH` entry **plus** one `LEGITIMATE_VALUES` row in
+`backend/tests/common/test_validator_name_dispatch.py` (the table-equality test
+`test_the_table_covers_every_implemented_name` fails otherwise) and a negative sample in
+`backend/tests/common/test_mock_validators_delegates.py`.
 
 #### **Request/Response Model Strategy**:
 

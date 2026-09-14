@@ -491,6 +491,109 @@ class TestExecutionDetails:
             assert result.exit_code == 0
             assert 'Input database metadata: 0 row(s) [PARTIAL - more rows exist]' in result.output
 
+    def test_details_default_sends_no_query_parameters(self, cli_runner, generic_command_mocks):
+        """The default call is the cheap one: no includeSubExecutions, so the server derives no
+        stage status and reads no Step Functions history."""
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {'workflowExecutionId': 'e1'})
+            assert result.exit_code == 0, result.output
+            call = mocks['api_client'].get_execution_details.call_args
+            assert call.args == ('e1',)
+            assert call.kwargs['params'] is None
+
+    def test_details_include_sub_executions_sends_the_flag(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details.return_value = {
+                'message': {'workflowExecutionId': 'e1'}}
+            result = cli_runner.invoke(cli, ['execution', 'details', 'e1', '--include-sub-executions'])
+            assert result.exit_code == 0, result.output
+            call = mocks['api_client'].get_execution_details.call_args
+            assert call.args == ('e1',)
+            assert call.kwargs['params'] == {'includeSubExecutions': 'true'}
+
+    def test_details_renders_sub_processes_with_stage_status(self, cli_runner, generic_command_mocks):
+        """A registered sub-process and its stages reach the human-readable output — status, span,
+        a caught failure marked as such, and the error text — so where inside a step a run failed is
+        visible without --json-output."""
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'pipelines': [{'name': 'p1', 'executionStatus': 'FAILED', 'subExecutions': [{
+                    'resourceType': 'stepFunctionsExecution', 'label': 'thumbnail processing',
+                    'stageName': '', 'resourceName': 'PipelineJob_1', 'status': 'FAILED',
+                    'startDate': '2026-09-11T10:00:00Z', 'stopDate': '2026-09-11T10:02:00Z',
+                    'error': 'States.TaskFailed', 'cause': '', 'stageSource': 'definition',
+                    'stagesTruncated': False, 'historyTruncated': False,
+                    'stages': [
+                        {'stageName': 'ConstructPipelineTask', 'stateType': 'Task',
+                         'status': 'SUCCEEDED', 'startDate': '2026-09-11T10:00:00Z',
+                         'stopDate': '2026-09-11T10:00:05Z', 'error': '', 'cause': '', 'attempts': 1},
+                        {'stageName': 'Preview3dThumbnailBatchJob', 'stateType': 'Task',
+                         'status': 'FAILED', 'caught': True, 'startDate': '2026-09-11T10:00:05Z',
+                         'stopDate': '2026-09-11T10:02:00Z', 'error': 'States.TaskFailed',
+                         'cause': 'Essential container in task exited', 'attempts': 1,
+                         'batch': {'jobId': 'j-1', 'logStreamName': 'thumb/default/abc'}},
+                    ]}]}]})
+            assert result.exit_code == 0, result.output
+            assert 'Sub-processes (1):' in result.output
+            assert 'thumbnail processing (PipelineJob_1) [FAILED]' in result.output
+            assert 'ConstructPipelineTask [SUCCEEDED] 2026-09-11T10:00:00Z → 2026-09-11T10:00:05Z' in result.output
+            assert 'Preview3dThumbnailBatchJob [FAILED (caught)]' in result.output
+            assert 'States.TaskFailed' in result.output
+
+    def test_details_renders_the_available_log_sources(self, cli_runner, generic_command_mocks):
+        """Every log source the step has is listed with the logId that `execution logs --log-id`
+        takes; a source with no stage shows '-' so the columns stay readable."""
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'pipelines': [{'name': 'p1', 'executionStatus': 'SUCCEEDED', 'availableLogs': [
+                    {'logId': '3f9a0c1d2e4b5a67', 'kind': 'invocation', 'label': 'vams-open',
+                     'sourceType': 'lambda', 'stageName': '', 'logGroupName': '/aws/lambda/vams-open',
+                     'logStreamName': '', 'logStreamPrefix': ''},
+                    {'logId': '9b8c7d6e5f4a3b21', 'kind': 'registered', 'label': 'Batch container',
+                     'sourceType': 'batch', 'stageName': 'Preview3dThumbnailBatchJob',
+                     'logGroupName': '/aws/batch/job', 'logStreamName': '',
+                     'logStreamPrefix': 'thumb/default/'},
+                ]}]})
+            assert result.exit_code == 0, result.output
+            assert 'Logs available (2):' in result.output
+            assert '3f9a0c1d2e4b5a67  invocation  lambda  -  /aws/lambda/vams-open' in result.output
+            assert ('9b8c7d6e5f4a3b21  registered  batch  Preview3dThumbnailBatchJob  /aws/batch/job'
+                    in result.output)
+
+    def test_details_marks_truncated_sub_process_reporting_and_shows_warnings(
+            self, cli_runner, generic_command_mocks):
+        """A capped read is marked where it is rendered, and a best-effort failure (a throttled
+        describe) is shown rather than swallowed, so a short stage list is never read as complete."""
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'pipelines': [{'name': 'p1', 'executionStatus': 'RUNNING',
+                               'subExecutions': [{'resourceType': 'stepFunctionsExecution',
+                                                  'label': 'potree processing', 'resourceName': 'PJ_2',
+                                                  'status': 'RUNNING', 'startDate': '2026-09-11T10:00:00Z',
+                                                  'stopDate': '', 'error': '', 'cause': '',
+                                                  'stageSource': 'history', 'stagesTruncated': True,
+                                                  'historyTruncated': True, 'stages': []}],
+                               'subExecutionsTruncated': True,
+                               'subExecutionWarnings': ['DescribeStateMachine throttled for PJ_2']}]})
+            assert result.exit_code == 0, result.output
+            assert '(stages truncated in this response)' in result.output
+            assert '(history truncated: later stages may be missing)' in result.output
+            assert '(Sub-processes truncated in this response)' in result.output
+            assert 'Sub-process warning: DescribeStateMachine throttled for PJ_2' in result.output
+
+    def test_details_omits_sub_process_sections_when_absent(self, cli_runner, generic_command_mocks):
+        # Control: a step with neither key (a default call, or an SQS step) prints no empty headers.
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'pipelines': [{'name': 'p1', 'executionStatus': 'SUCCEEDED'}]})
+            assert result.exit_code == 0, result.output
+            assert 'Sub-processes' not in result.output
+            assert 'Logs available' not in result.output
+
 
 class TestExecutionDetailsMetadata:
     def test_input_collection_is_the_default(self, cli_runner, generic_command_mocks):
@@ -706,6 +809,8 @@ class TestExecutionLogs:
         ('--start-time', '1'),
         ('--end-time', '2'),
         ('--next-token', 'tok'),
+        ('--log-id', '3f9a0c1d2e4b5a67'),
+        ('--stage-name', 'Convert'),
     ])
     def test_logs_rejects_a_full_mode_option_in_truncated_mode(self, cli_runner,
                                                                generic_command_mocks, option, value):
@@ -716,6 +821,7 @@ class TestExecutionLogs:
 
         Rejected rather than warned: `output_warning` is suppressed under `--json-output`, which is
         exactly where an unfiltered log read as an empty result.
+        The two source-scoped options (--log-id, --stage-name) read a live source, so they join the rule.
         """
         with generic_command_mocks('execution') as mocks:
             result = cli_runner.invoke(cli, ['execution', 'logs', 'e1', option, value])
@@ -783,7 +889,7 @@ class TestExecutionLogs:
                 'sfnHistoryEvents': [{'timestamp': 2, 'message': 'TaskStateEntered: Convert'}],
                 'subProcessEvents': [{
                     'timestamp': 3, 'message': 'lambda-evt',
-                    'logGroupArn': 'arn:aws:logs:us-west-2:1:log-group:/aws/lambda/vams-fn:*'}],
+                    'logGroupName': '/aws/lambda/vams-fn'}],
             }}
             result = cli_runner.invoke(cli, ['execution', 'logs', 'e1', '--mode', 'full'])
             assert result.exit_code == 0
@@ -817,6 +923,75 @@ class TestExecutionLogs:
             assert result.exit_code == 0
             assert 'Sub-Process Logs' not in result.output
             assert 'Warnings' not in result.output
+            assert 'Log sources' not in result.output
+
+    @pytest.mark.parametrize("option,value", [
+        ('--log-id', '3f9a0c1d2e4b5a67'),
+        ('--stage-name', 'Convert'),
+    ])
+    def test_logs_rejects_a_source_scoped_option_without_a_pipeline_scope(
+            self, cli_runner, generic_command_mocks, option, value):
+        """--log-id and --stage-name read a single step's sources; the server answers 400 without
+        --pipeline-execution-id, and the CLI says so before making the call."""
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, ['execution', 'logs', 'e1', '--mode', 'full', option, value])
+            assert result.exit_code != 0
+            mocks['api_client'].get_execution_logs.assert_not_called()
+            assert option in result.output
+            assert '--pipeline-execution-id' in result.output
+
+    def test_logs_forwards_log_id_and_stage_name_with_a_pipeline_scope(self, cli_runner,
+                                                                       generic_command_mocks):
+        """Positive control for the rejections above: full mode plus the step scope sends both."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_logs.return_value = {'message': {'mode': 'full'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'logs', 'e1', '--mode', 'full', '--pipeline-execution-id', 'pe1',
+                '--log-id', '3f9a0c1d2e4b5a67', '--stage-name', 'Convert'])
+            assert result.exit_code == 0, result.output
+            params = mocks['api_client'].get_execution_logs.call_args.kwargs['params']
+            assert params == {'mode': 'full', 'pipelineExecutionId': 'pe1',
+                              'logId': '3f9a0c1d2e4b5a67', 'stageName': 'Convert'}
+
+    def test_logs_full_mode_renders_the_log_sources(self, cli_runner, generic_command_mocks):
+        """logSources says which logs the step has and whether each could be read. Without it a
+        denied or empty container log is indistinguishable from a step that wrote nothing."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_logs.return_value = {'message': {
+                'mode': 'full', 'pipelineExecutionId': 'pe1',
+                'events': [{'timestamp': 1, 'message': 'evt'}],
+                'logSources': [
+                    {'logId': '3f9a0c1d2e4b5a67', 'kind': 'invocation', 'label': 'vams-open',
+                     'sourceType': 'lambda', 'stageName': '', 'logGroupName': '/aws/lambda/vams-open',
+                     'logStreamName': '', 'logStreamPrefix': '', 'status': 'read', 'eventCount': 3},
+                    {'logId': '9b8c7d6e5f4a3b21', 'kind': 'registered', 'label': 'Batch container',
+                     'sourceType': 'batch', 'stageName': 'Preview3dThumbnailBatchJob',
+                     'logGroupName': '/aws/batch/job', 'logStreamName': '',
+                     'logStreamPrefix': 'thumb/default/', 'status': 'denied', 'eventCount': 0},
+                ]}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'logs', 'e1', '--mode', 'full', '--pipeline-execution-id', 'pe1'])
+            assert result.exit_code == 0, result.output
+            assert 'Log sources (2)' in result.output
+            assert '3f9a0c1d2e4b5a67  invocation  lambda  -  /aws/lambda/vams-open  [read 3]' in result.output
+            assert ('9b8c7d6e5f4a3b21  registered  batch  Preview3dThumbnailBatchJob  /aws/batch/job  [denied]'
+                    in result.output)
+
+    def test_logs_sub_process_lines_carry_their_log_id(self, cli_runner, generic_command_mocks):
+        """Each Sub-Process Logs line ends with the logId of its source, so a line can be traced to
+        the Log sources row (and re-read alone with --log-id); the log-group tail stays."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_logs.return_value = {'message': {
+                'mode': 'full', 'pipelineExecutionId': 'pe1',
+                'subProcessEvents': [{
+                    'timestamp': 3, 'message': 'lambda-evt', 'logId': '3f9a0c1d2e4b5a67',
+                    'logGroupName': '/aws/lambda/vams-fn'}],
+            }}
+            result = cli_runner.invoke(cli, [
+                'execution', 'logs', 'e1', '--mode', 'full', '--pipeline-execution-id', 'pe1'])
+            assert result.exit_code == 0, result.output
+            assert '/aws/lambda/vams-fn' in result.output
+            assert '[3f9a0c1d2e4b5a67]' in result.output
 
 
 class TestExecutionAbort:

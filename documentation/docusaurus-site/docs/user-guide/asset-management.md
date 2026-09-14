@@ -193,15 +193,18 @@ The left panel displays a hierarchical directory tree:
 
 When you select a file in the tree, the right panel displays:
 
-| Property           | Description                                              |
-| ------------------ | -------------------------------------------------------- |
-| **File name**      | The name of the selected file.                           |
-| **File path**      | The full relative path within the asset.                 |
-| **File size**      | The size of the file in human-readable format.           |
-| **Last modified**  | The date and time the file was last modified.            |
-| **Archive status** | Whether the file is currently archived.                  |
-| **Preview**        | If the file has a preview image, it is displayed inline. |
-| **Actions**        | Contextual action buttons based on the file state.       |
+| Property           | Description                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **File name**      | The name of the selected file.                                                                                                                                                                                                                                                                                                                                                                              |
+| **File path**      | The full relative path within the asset.                                                                                                                                                                                                                                                                                                                                                                    |
+| **File size**      | The size of the file in human-readable format.                                                                                                                                                                                                                                                                                                                                                              |
+| **Last modified**  | The date and time the file was last modified.                                                                                                                                                                                                                                                                                                                                                               |
+| **Archive status** | Whether the file is currently archived.                                                                                                                                                                                                                                                                                                                                                                     |
+| **Change source**  | How the current version was created (for example **Upload**, **Workflow Execution**, or **File Copy**) and the user it is attributed to. When a workflow execution wrote the version, a **View execution** link opens that execution's quick view beside the page; its **Open full details** link leads to the execution detail page. The link appears only when you are allowed to view execution details. |
+| **Preview**        | If the file has a preview image, it is displayed inline.                                                                                                                                                                                                                                                                                                                                                    |
+| **Actions**        | Contextual action buttons based on the file state.                                                                                                                                                                                                                                                                                                                                                          |
+
+Select **(versions)** beside the **Version Date** to open the file's version history. Each version lists its date, size, the asset versions that include it, and its change source, with the workflow and execution for a version written by a workflow. Selecting **View execution** on such a version closes the version history and opens the execution detail page. From the version history you can also download a version, view it, or revert the file to it.
 
 ### Uploading Additional Files
 
@@ -443,7 +446,7 @@ You can start a new workflow execution directly from the asset detail page, from
 -   **Executions tab** -- Select **Execute workflow** in the tab's toolbar.
 -   **File Manager tab** -- Select the files you want to process, then choose **Execute Workflow** from the **Automation** menu in the file details toolbar, beside **Export**. Launching from here pre-fills your file selection.
 
-Either entry point opens the same execution wizard, which asks for the input files, then the configuration for each pipeline step, then a review before launching. For a walkthrough of each stage, see [Executing workflows](pipelines-and-workflows.md#executing-workflows).
+Either entry point opens the same execution dialog: a step rail walks through choosing the workflow, the inputs, the configuration for each pipeline step, then a review before launching. For a walkthrough of each step, see [Executing workflows](pipelines-and-workflows.md#executing-workflows).
 
 The new execution appears in the Executions tab immediately with a **Running** status. The tab auto-refreshes to show status updates.
 

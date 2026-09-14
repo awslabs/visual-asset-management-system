@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import type { TagSchemaField } from "../types";
 
 /**
  * Collapsible help panel listing the SYSTEM template tags the renderer resolves automatically in a
@@ -197,10 +198,13 @@ export const CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS =
 interface SystemTagHelpProps {
     /** Start expanded (default collapsed). */
     defaultOpen?: boolean;
+    /** The template's own declared tags, listed first with the placeholder each one fills. */
+    templateTags?: TagSchemaField[];
 }
 
-const SystemTagHelp: React.FC<SystemTagHelpProps> = ({ defaultOpen = false }) => {
+const SystemTagHelp: React.FC<SystemTagHelpProps> = ({ defaultOpen = false, templateTags }) => {
     const [open, setOpen] = useState(defaultOpen);
+    const ownTags = (templateTags || []).filter((t) => t && t.tagKey);
 
     return (
         <div className="orch-outline rounded-lg border border-border-default bg-surface-secondary">
@@ -233,6 +237,24 @@ const SystemTagHelp: React.FC<SystemTagHelpProps> = ({ defaultOpen = false }) =>
                         the reverse of either: quoting a typed tag would deliver <code>"150"</code>{" "}
                         where the pipeline expects <code>150</code>.
                     </p>
+                    {ownTags.length > 0 && (
+                        <div data-testid="template-own-tags">
+                            <div className="text-xs font-semibold text-text-primary mb-1">
+                                This template's tags
+                            </div>
+                            <ul className="space-y-0.5">
+                                {ownTags.map((t) => (
+                                    <li key={t.tagKey} className="text-xs text-text-secondary">
+                                        <code className="text-text-primary">{`{{${t.tagKey}}}`}</code>
+                                        {" — "}
+                                        {t.label || t.tagKey}
+                                        {t.type ? ` (${t.type})` : ""}
+                                        {t.description ? `: ${t.description}` : ""}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                     {SYSTEM_TAG_GROUPS.map((group) => (
                         <div key={group.title}>
                             <div className="text-xs font-semibold text-text-primary mb-1">

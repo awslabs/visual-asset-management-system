@@ -14,7 +14,7 @@
  * ENIs never occupy. It was also in `needsEcsPrivate`, placing the ECS control-plane endpoint in those
  * same unused subnets (~$15/month more).
  *
- * The code followed the documented rule literally: both `backendPipelines/CLAUDE.md` step 9 and
+ * The code followed the documented rule literally: both `backendPipelines/CLAUDE.md` step 10 and
  * `infra/lib/nestedStacks/pipelines/CLAUDE.md` said every Batch/ECS/Fargate pipeline goes into all three
  * VPC blocks. The rule was the defect — it did not distinguish isolated-subnet pipelines. Five peers
  * (3dBasic, CAD/mesh metadata extraction, Potree, 3D thumbnail, GenAI metadata labeling) run in isolated

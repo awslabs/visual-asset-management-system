@@ -37,6 +37,11 @@ export function tableRows(page: Page): Locator {
     return page.locator("table tbody tr");
 }
 
+/** The execute dialog's step rail — one navigation landmark, present on every step of the dialog. */
+export function wizardRail(page: Page): Locator {
+    return page.getByRole("navigation", { name: "Execution steps" });
+}
+
 /**
  * Navigate to an orchestration page and wait for it to finish its first load. Waits on the page's
  * own heading — never on specific data — so an empty environment is a valid state.

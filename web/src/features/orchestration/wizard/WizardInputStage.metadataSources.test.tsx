@@ -357,3 +357,93 @@ describe("WizardInputStage input-file arities are unaffected", () => {
         ).not.toBeInTheDocument();
     });
 });
+
+describe("WizardInputStage layout", () => {
+    it("shows requirements nowhere on the step itself (the strip above it owns them)", () => {
+        renderStage();
+        expect(screen.queryByText("What this workflow accepts")).not.toBeInTheDocument();
+        expect(screen.queryByText(/template can narrow these further/i)).not.toBeInTheDocument();
+        // Arity none: the files card carries one muted line instead of a picker.
+        expect(screen.getByText("Input Files")).toBeInTheDocument();
+        expect(
+            screen.getByText("This workflow takes no input files (results-only execution).")
+        ).toBeInTheDocument();
+    });
+
+    it("stacks the cards full width, files first, and hides Output Target on a results-only workflow", () => {
+        renderStage();
+        const files = screen.getByText("Input Files").closest(".orch-outline") as HTMLElement;
+        const metadata = screen
+            .getByText("Metadata Sources")
+            .closest(".orch-outline") as HTMLElement;
+        // Results-only: no asset output, so no Output Target card at all.
+        expect(screen.queryByText("Output Target")).not.toBeInTheDocument();
+        expect(screen.queryByLabelText("Output path prefix")).not.toBeInTheDocument();
+        // Both cards are siblings in one vertical stack — nothing spans or splits columns.
+        expect(files.parentElement).toBe(metadata.parentElement);
+        expect(files.parentElement!.className).toContain("space-y-4");
+        expect(files.parentElement!.className).not.toContain("grid");
+        expect(document.querySelector("[class*='col-span']")).toBeNull();
+        expect(
+            files.compareDocumentPosition(metadata) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+    });
+
+    it("orders the cards files, output, metadata and lays the output target on one three-column row", () => {
+        renderStage({
+            workflow: noneWorkflow({
+                outputTarget: { locationType: "asset", allowOverride: true },
+            }),
+        });
+        const files = screen.getByText("Input Files").closest(".orch-outline") as HTMLElement;
+        const output = screen.getByText("Output Target").closest(".orch-outline") as HTMLElement;
+        const metadata = screen
+            .getByText("Metadata Sources")
+            .closest(".orch-outline") as HTMLElement;
+        expect(files.parentElement).toBe(output.parentElement);
+        expect(output.parentElement).toBe(metadata.parentElement);
+        expect(
+            files.compareDocumentPosition(output) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+        expect(
+            output.compareDocumentPosition(metadata) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+
+        // Every output field is present, and all three sit in the same responsive row.
+        const database = screen.getByLabelText("Output Database");
+        const asset = screen.getByRole("button", { name: "Output Asset" });
+        const prefix = screen.getByLabelText("Output path prefix");
+        const row = database.closest(".md\\:grid-cols-3") as HTMLElement;
+        expect(row).not.toBeNull();
+        expect(asset.closest(".md\\:grid-cols-3")).toBe(row);
+        expect(prefix.closest(".md\\:grid-cols-3")).toBe(row);
+        expect(output.contains(row)).toBe(true);
+        expect(screen.getByRole("button", { name: "Output path prefix help" })).toBeInTheDocument();
+
+        // Every metadata field is still present: the notice, the database select, then the asset
+        // rows' control below it.
+        expect(screen.getByRole("status")).toHaveAccessibleName(
+            "Metadata source selection is optional"
+        );
+        const metadataDb = screen.getByLabelText("Metadata source database");
+        const addAsset = screen.getByRole("button", { name: "Add Metadata Source Asset" });
+        expect(metadata.contains(metadataDb)).toBe(true);
+        expect(metadata.contains(addAsset)).toBe(true);
+        expect(
+            metadataDb.compareDocumentPosition(addAsset) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+    });
+
+    it("keeps the path prefix in the output row when the workflow allows no output override", () => {
+        renderStage({
+            workflow: noneWorkflow({
+                outputTarget: { locationType: "asset", allowOverride: false },
+            }),
+        });
+        expect(screen.queryByLabelText("Output Database")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Output Asset" })).not.toBeInTheDocument();
+        const note = screen.getByText(/Output is written to the input asset/);
+        const prefix = screen.getByLabelText("Output path prefix");
+        expect(note.closest(".md\\:grid-cols-3")).toBe(prefix.closest(".md\\:grid-cols-3"));
+    });
+});

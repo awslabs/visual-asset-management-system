@@ -112,6 +112,7 @@ export const FileVersionsModal: React.FC<FileVersionsModalProps> = ({
                 displayMode="modal"
                 visible={visible}
                 assetVersionId={assetVersionId}
+                onNavigateAway={onDismiss}
             />
         </Modal>
     );

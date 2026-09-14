@@ -484,6 +484,14 @@ class TestOpenPipeline:
         assert detail["subExecution"]["executionArn"].endswith("PipelineJobEKS_x")
         assert detail["subExecution"]["stateMachineArn"] == mod.STATE_MACHINE_ARN
         assert detail["logs"][0]["logGroupName"] == "/aws/vendedlogs/RapidPipelineEKS"
+        assert detail["subExecution"]["label"] == "RapidPipeline EKS processing"
+        assert detail["logs"] == [{
+            "logGroupArn": mod.STATE_MACHINE_LOG_GROUP_ARN,
+            "logGroupName": "/aws/vendedlogs/RapidPipelineEKS",
+            "logStreamName": "",
+            "sourceType": "stateMachine",
+            "label": "RapidPipeline EKS state machine",
+        }]
 
     def test_registration_skipped_without_event_prefix(self):
         mod = self._load()

@@ -81,6 +81,13 @@ describe("ExecutionQuickView", () => {
         expect(screen.getByText("/")).toBeInTheDocument();
     });
 
+    it("names the execution it shows", () => {
+        // Opened from a file's provenance link, nothing else on screen identifies the run.
+        renderPanel();
+        const idRow = screen.getByText("Execution ID").closest("div")!;
+        expect(idRow).toHaveTextContent("e1");
+    });
+
     it("names the panel's close control", () => {
         // Every row click on the executions board opens this panel, and its close button is the only
         // control in it — with the glyph as the whole accessible name it announces as "multiplication

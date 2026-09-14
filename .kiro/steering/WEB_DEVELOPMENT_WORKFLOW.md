@@ -37,17 +37,23 @@ web/
     features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
+                            #   triggerCache.ts
       permissions/          # useAllowedRoutes.ts (Tier-1 gating)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, ConfigEditor, ToastProvider, ...)
+                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider, ...)
       pipelines/            # PipelinesPage, PipelineForm (wizard), TemplateEditor, TemplateForm,
                             #   TagSchemaBuilder, TemplateOverridesEditor, pipelineValidation
-      workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor,
+      workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor (live),
+                            #   TriggerDraftsEditor (create), TriggerList, TriggerForm, triggerDraft,
                             #   WorkflowSystemConfigFields, DagPreview, workflowValidation
       executions/           # ExecutionsBoard, ExecutionDetailPage, ExecutionLogViewer,
-                            #   ExecutionQuickView, ExecuteWorkflowModal, logSearch
-      wizard/               # ExecuteWizard + pipeline/input/review stages, InputFileSelector,
-                            #   MetadataSourceSelector, resolveRestrictions, resolveTemplate
+                            #   ExecutionQuickView, ExecuteWorkflowModal, SubProcessesSection, StageTimeline,
+                            #   logSearch
+      wizard/               # ExecuteWizard (+ExecuteWizardBody), WizardRail, RequirementsStrip, WorkflowPicker,
+                            #   pipeline/input/review stages, InputFileSelector, MetadataSourceSelector,
+                            #   SelectedInputFilesList, BulkFilePicker, selectedInputFiles (multi-file
+                            #   selection: windowed list, bulk/paste picker, dedupe, 1000 cap),
+                            #   railSteps, reviewBlockers, resolveRestrictions, resolveTemplate
       types.ts reservedTagKeys.ts
 
     FedAuth/                # Authentication orchestrator

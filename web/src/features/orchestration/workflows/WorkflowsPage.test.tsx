@@ -31,8 +31,8 @@ jest.mock("react-router-dom", () => ({
     useNavigate: () => mockNavigate,
 }));
 
-// Mock ExecuteWizard
-jest.mock("../wizard/ExecuteWizard", () => ({
+// Mock the execute dialog
+jest.mock("../executions/ExecuteWorkflowModal", () => ({
     __esModule: true,
     default: () => null,
 }));

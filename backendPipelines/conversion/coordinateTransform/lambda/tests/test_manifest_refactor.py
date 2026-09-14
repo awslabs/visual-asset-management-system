@@ -164,6 +164,9 @@ class TestOpenPipeline:
         assert detail["pipelineExecutionId"] == "P1"
         assert detail["subExecution"]["executionArn"].endswith("CoordXform_x")
         assert detail["subExecution"]["stateMachineArn"] == mod.STATE_MACHINE_ARN
+        assert detail["subExecution"]["label"] == "Coordinate transform processing"
+        assert detail["logs"][0]["sourceType"] == "stateMachine"
+        assert detail["logs"][0]["label"] == "Coordinate transform state machine"
 
     def test_registration_failure_never_fails_pipeline(self):
         mod = self._load()

@@ -363,6 +363,69 @@ describe("executionService environment", () => {
 });
 
 /**
+ * The execution details and logs APIs read registered sub-executions: Step Functions state and
+ * history on any CDK-named pipeline state machine, the Batch container group every Batch pipeline
+ * writes to by default, and the Batch job a self-submitting pipeline registers by id. A missing grant
+ * surfaces as an UNKNOWN stage or a `denied` log source, never as a failed request, so it is the
+ * grant that has to be asserted.
+ */
+describe("executionService sub-execution read grants", () => {
+    const synthed = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildExecutionServiceFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const STATES_ACTIONS = [
+        "states:DescribeExecution",
+        "states:StopExecution",
+        "states:GetExecutionHistory",
+        "states:DescribeStateMachine",
+    ];
+    const LOGS_ACTIONS = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"];
+
+    test("keeps the four Step Functions actions on every state machine and execution", () => {
+        const { template } = synthed();
+        for (const action of STATES_ACTIONS) {
+            const entries = resourceEntries(template, "executionService", action);
+            expect(entries).toContain("arn:aws:states:us-east-1:123456789012:stateMachine:*");
+            expect(entries).toContain("arn:aws:states:us-east-1:123456789012:execution:*");
+        }
+    });
+
+    test("reads the Batch default container log group and its streams", () => {
+        const { template } = synthed();
+        for (const action of LOGS_ACTIONS) {
+            const entries = resourceEntries(template, "executionService", action);
+            expect(entries).toContain(
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job"
+            );
+            expect(entries).toContain(
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job:*"
+            );
+            // Positive control for the scan: a pipeline prefix that was already granted.
+            expect(entries).toContain(
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/Pipelines/*"
+            );
+        }
+    });
+
+    test("grants batch:DescribeJobs on the account-wide resource the action forces", () => {
+        const { template } = synthed();
+        expect(actionsOnRole(template, "executionService")).toContain("batch:DescribeJobs");
+        expect(resourceEntries(template, "executionService", "batch:DescribeJobs")).toEqual(["*"]);
+        // The abort grant it sits beside is unchanged.
+        expect(resourceEntries(template, "executionService", "batch:TerminateJob")).toEqual(["*"]);
+    });
+});
+
+/**
  * The error handler CALLS stop_execution and terminate_job on every caught workflow failure — it
  * builds both clients and passes them into `mark_inflight_pipelines_terminal`. Its role held neither
  * action, so both stops were attempted and denied, and the handler recorded the AccessDenied as

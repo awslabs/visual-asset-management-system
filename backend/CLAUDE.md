@@ -50,7 +50,7 @@ backend/
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
-│   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure)
+│   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
 │   │       ├── executionLocks.py                   #   perInputFileVersion lock rows (conditional put/delete, TTL, row-derived release)
@@ -569,6 +569,12 @@ Partition-aware AWS-resource validators (used by pipeline sub-process registrati
 `ARN` (any AWS resource ARN), `CLOUDWATCH_LOG_GROUP_ARN`, `CLOUDWATCH_LOG_GROUP_NAME`
 (1-512 chars, `-_./#`+alnum), `LOG_STREAM_NAME` (1-512 chars, no `:`/`*`),
 plus `EVENTBRIDGE_BUS_ARN`, `EVENTBRIDGE_SOURCE`, `EVENTBRIDGE_DETAIL_TYPE`, `SQS_QUEUE_URL`.
+Registration descriptors: `SFN_STATE_NAME` (1-80 printable chars, no control characters — an ASL
+state name), `DISPLAY_LABEL` (same class, 1-128), `LOG_SOURCE_TYPE` (closed enum `stateMachine`,
+`lambda`, `batch`, `ecs`, `container`, `custom`; an unknown value is stored as `custom`). A new name
+is one `_VALIDATOR_DISPATCH` entry **plus** one `LEGITIMATE_VALUES` row in
+`tests/common/test_validator_name_dispatch.py` (its table-equality test fails otherwise) and a
+negative sample in `tests/common/test_mock_validators_delegates.py`.
 
 Array validators (each element runs the scalar rule): `ID_ARRAY`, `UUID_ARRAY`,
 `STRING_256_ARRAY`, `EMAIL_ARRAY`, `USERID_ARRAY`, `OBJECT_NAME_ARRAY`,

@@ -6,7 +6,11 @@
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import DynamicTagForm, { tagSchemaToJsonSchema, formDataToTags } from "./DynamicTagForm";
+import DynamicTagForm, {
+    tagSchemaToJsonSchema,
+    formDataToTags,
+    spansFullRow,
+} from "./DynamicTagForm";
 import type { TagSchemaField } from "../types";
 
 describe("DynamicTagForm converters", () => {
@@ -167,5 +171,129 @@ describe("DynamicTagForm field presentation", () => {
             />
         );
         expect(screen.getByText("Enabled")).toBeInTheDocument();
+        // RJSF hands a boolean's title to the widget (displayLabel is false for a checkbox), so the
+        // tag's name is lost unless the widget renders it.
+        expect(screen.getByRole("checkbox", { name: /Fast mode/ })).toBeChecked();
+    });
+
+    it("shows the {{tagKey}} placeholder each field fills, beside its label and in a checkbox title", () => {
+        render(
+            <DynamicTagForm
+                schema={
+                    [
+                        { tagKey: "PROMPT", type: "string", label: "Prompt" },
+                        { tagKey: "FAST", type: "boolean", label: "Fast mode" },
+                    ] as TagSchemaField[]
+                }
+                formData={{ PROMPT: "", FAST: true }}
+                onChange={jest.fn()}
+            />
+        );
+        const chips = screen.getAllByTestId("tag-placeholder").map((c) => c.textContent);
+        expect(chips).toEqual(["{{PROMPT}}", "{{FAST}}"]);
+        expect(screen.getByRole("checkbox", { name: /Fast mode/ })).toBeInTheDocument();
+    });
+
+    it("keeps the placeholder chip when an external uiSchema customises the same field", () => {
+        render(
+            <DynamicTagForm
+                schema={[{ tagKey: "NOTES", type: "string", label: "Notes" }] as TagSchemaField[]}
+                uiSchema={{ NOTES: { "ui:widget": "textarea" } }}
+                formData={{ NOTES: "" }}
+                onChange={jest.fn()}
+            />
+        );
+        expect(screen.getByTestId("tag-placeholder")).toHaveTextContent("{{NOTES}}");
+        expect(screen.getByRole("textbox", { name: /Notes/ }).tagName).toBe("TEXTAREA");
+    });
+
+    it("renders a boolean tag's description after the checkbox, not above an unnamed control", () => {
+        const { container } = render(
+            <DynamicTagForm
+                schema={
+                    [
+                        {
+                            tagKey: "FAST",
+                            type: "boolean",
+                            label: "Fast mode",
+                            description: "Skips the slow passes.",
+                        },
+                    ] as TagSchemaField[]
+                }
+                formData={{ FAST: false }}
+                onChange={jest.fn()}
+            />
+        );
+        const box = screen.getByRole("checkbox", { name: /Fast mode/ });
+        const guidance = screen.getByText("Skips the slow passes.");
+        // eslint-disable-next-line no-bitwise
+        expect(
+            box.compareDocumentPosition(guidance) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+        expect(container.textContent).toContain("Disabled");
+    });
+});
+
+/**
+ * The pipeline step lays template inputs on a two-column grid. The switch travels through RJSF's
+ * `formContext` because the templates object is a module constant a prop cannot reach; a field that
+ * needs the width (a list, a long description, a textarea, or an explicit hint) takes the full row.
+ */
+describe("DynamicTagForm grid layout", () => {
+    const LONG = "x".repeat(121);
+    const SCHEMA = [
+        { tagKey: "short", type: "string", label: "Short" },
+        { tagKey: "list", type: "string-list", label: "List" },
+        { tagKey: "wordy", type: "string", label: "Wordy", description: LONG },
+        { tagKey: "multiline", type: "string", label: "Multiline" },
+        { tagKey: "wide", type: "string", label: "Wide" },
+    ] as TagSchemaField[];
+
+    const cell = (container: HTMLElement, name: string) =>
+        container.querySelector(`[data-tag-field="${name}"]`) as HTMLElement;
+
+    it("stacks fields by default (no formContext)", () => {
+        const { container } = render(<DynamicTagForm schema={SCHEMA} formData={{}} />);
+        const wrapper = screen.getByTestId("tag-form-fields");
+        expect(wrapper.className).toContain("space-y-3");
+        expect(wrapper.className).not.toContain("grid-cols-2");
+        expect(cell(container, "list").className).not.toContain("col-span-2");
+    });
+
+    it("lays fields on a two-column grid when asked, spanning the ones that need width", () => {
+        const { container } = render(
+            <DynamicTagForm
+                schema={SCHEMA}
+                formData={{}}
+                formContext={{ layout: "grid" }}
+                uiSchema={{
+                    multiline: { "ui:widget": "textarea" },
+                    wide: { "ui:colSpan": 2 },
+                }}
+            />
+        );
+        expect(screen.getByTestId("tag-form-fields").className).toContain("md:grid-cols-2");
+        expect(cell(container, "short").className).not.toContain("md:col-span-2");
+        expect(cell(container, "list").className).toContain("md:col-span-2");
+        expect(cell(container, "wordy").className).toContain("md:col-span-2");
+        expect(cell(container, "multiline").className).toContain("md:col-span-2");
+        expect(cell(container, "wide").className).toContain("md:col-span-2");
+    });
+
+    it("decides the span from the schema and uiSchema alone", () => {
+        const schema = {
+            properties: {
+                a: { type: "array" },
+                b: { type: "string", description: LONG },
+                c: { type: "string", description: "short" },
+                d: { type: "string" },
+            },
+        };
+        expect(spansFullRow("a", schema, {})).toBe(true);
+        expect(spansFullRow("b", schema, {})).toBe(true);
+        expect(spansFullRow("c", schema, {})).toBe(false);
+        expect(spansFullRow("d", schema, { d: { "ui:widget": "textarea" } })).toBe(true);
+        expect(spansFullRow("d", schema, { d: { "ui:colSpan": 2 } })).toBe(true);
+        expect(spansFullRow("d", schema, {})).toBe(false);
     });
 });

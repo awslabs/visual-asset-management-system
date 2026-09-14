@@ -247,6 +247,116 @@ export interface Execution {
     outputDatabaseId?: string;
 }
 
+/** Status of a registered sub-process or of one of its stages, as resolved by the details API. */
+export type SubExecutionStatus =
+    | "RUNNING"
+    | "SUCCEEDED"
+    | "FAILED"
+    | "ABORTED"
+    | "TIMED_OUT"
+    | "NOT_STARTED"
+    | "UNKNOWN";
+
+/** Where a sub-process's stage frame came from: its state machine definition, the history alone, or neither. */
+export type StageSource = "definition" | "history" | "none";
+
+/** One state of a registered sub-state-machine, with the status derived from its execution history. */
+export interface SubExecutionStage {
+    stageName: string;
+    stateType: string;
+    status: SubExecutionStatus;
+    /** The stage failed but the state machine caught the error and ran on to its end state. */
+    caught?: boolean;
+    startDate?: string;
+    stopDate?: string;
+    error?: string;
+    cause?: string;
+    /** Task/Lambda schedulings seen for the stage; above 1 means the state retried. */
+    attempts?: number;
+    /** Map-state iteration counts; absent when the map is distributed. */
+    iterations?: { started: number; succeeded: number; failed: number; aborted: number };
+    /** A Distributed Map, whose children are separate executions this view does not enumerate. */
+    distributed?: boolean;
+    /** The AWS Batch job a `.sync` task submitted, when the history carried it. */
+    batch?: { jobId?: string; logStreamName?: string };
+}
+
+/** A sub-process a pipeline step registered for itself, with its resolved status and stages. */
+export interface SubExecution {
+    resourceType: string;
+    label?: string;
+    stageName?: string;
+    /** Name tail of the state machine or job, never its ARN. */
+    resourceName?: string;
+    status: SubExecutionStatus;
+    startDate?: string;
+    stopDate?: string;
+    error?: string;
+    cause?: string;
+    stageSource: StageSource;
+    stagesTruncated?: boolean;
+    historyTruncated?: boolean;
+    /** Empty, with `stagesTruncated` set, when the details response dropped stages to stay inside
+     *  its size budget (`truncatedCollections` then names `pipelines.subExecutions`). */
+    stages?: SubExecutionStage[];
+    /** The registered AWS Batch job's id and container stream, when resourceType is `batchJob`. */
+    batch?: { jobId?: string; logStreamName?: string };
+    /** The registered AWS Deadline Cloud job's farm, queue, and job ids, when resourceType is
+     *  `deadlineCloudJob`. */
+    deadline?: { farmId?: string; queueId?: string; jobId?: string };
+}
+
+/** One log a pipeline step's logs can be read from; `logId` is what the logs API takes to select it. */
+export interface AvailableLog {
+    logId: string;
+    kind: "invocation" | "registered" | "subStateMachine" | "deadlineCloudJob";
+    label: string;
+    sourceType: string;
+    stageName: string;
+    logGroupName: string;
+    logStreamName: string;
+    logStreamPrefix: string;
+}
+
+/**
+ * How a full-mode logs read went for one source. `denied` is a refused permission and `notFound` a
+ * missing log group; `error` is a read that failed for any other reason (throttling, an invalid
+ * CloudWatch token, an unparseable location).
+ */
+export type LogSourceStatus =
+    | "read"
+    | "denied"
+    | "notFound"
+    | "empty"
+    | "skipped"
+    | "unscoped"
+    | "error";
+
+/** An `availableLogs` entry as reported back by a full-mode logs read, with the outcome of reading it. */
+export interface LogSourceReport extends AvailableLog {
+    status: LogSourceStatus;
+    eventCount?: number;
+}
+
+/**
+ * One pipeline step of the details response. The step carries many more recorded keys (template
+ * snapshot, rendered configuration, settings) that the detail page reads dynamically; only the keys
+ * the typed consumers depend on are declared.
+ */
+export interface ExecutionDetailPipeline {
+    pipelineId?: string;
+    pipelineExecutionId?: string;
+    name?: string;
+    executionStatus?: string;
+    /** Every log this step's logs can be read from; present on every details response. */
+    availableLogs?: AvailableLog[];
+    /** Present only when details were requested with includeSubExecutions=true. */
+    subExecutions?: SubExecution[];
+    subExecutionsTruncated?: boolean;
+    subExecutionWarnings?: string[];
+    [key: string]: any;
+}
+
 export interface ExecutionDetail extends Execution {
     /**
      * The workflow's systemConfig, read LIVE from the workflow record — so it reflects the workflow as
@@ -256,7 +366,7 @@ export interface ExecutionDetail extends Execution {
     workflowSystemConfig?: Record<string, any>;
     workflowName?: string;
     workflowDescription?: string;
-    pipelines?: any[];
+    pipelines?: ExecutionDetailPipeline[];
     inputFiles?: any[];
     inputMetadata?: any[];
     /** A metadata-source database's own metadata — its own collection because it belongs to no asset. */
@@ -267,6 +377,8 @@ export interface ExecutionDetail extends Execution {
      * bound: "inputFiles", "inputMetadata", "inputDatabaseMetadata", "outputs.files",
      * "outputs.metadata", "outputs.results". A named section holds fewer rows than the run produced,
      * and there is no token to fetch the rest — so it must be shown as partial, never as the full set.
+     * "pipelines.subExecutions" names the case where every sub-process kept its summary but lost its
+     * stage list to the response size budget.
      */
     truncatedCollections?: string[];
     // outputLocationType / outputAssetId / outputDatabaseId are inherited from Execution.

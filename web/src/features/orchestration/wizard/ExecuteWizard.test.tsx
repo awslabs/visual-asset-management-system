@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ExecuteWizard, { validateInputSelection } from "./ExecuteWizard";
 import type { Workflow, Pipeline, Template } from "../types";
@@ -786,10 +786,23 @@ describe("ExecuteWizard", () => {
             </QueryClientProvider>
         );
 
-        // The Input step already flags the unmet requirement.
+        // Nothing is flagged before the user has acted or tried to move on — the requirement is on the
+        // rail chip, not in a banner over an untouched form.
         expect(
-            screen.getByText(/requires at least one input file but none were provided/i)
+            screen.queryByText(/requires at least one input file but none were provided/i)
+        ).not.toBeInTheDocument();
+
+        // Trying to move on with the requirement unmet is what surfaces the list.
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Back/i }));
+        expect(
+            await screen.findByText(/requires at least one input file but none were provided/i)
         ).toBeInTheDocument();
+        expect(screen.getByText("To continue")).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole("button", { name: /Next/i }));
         await waitFor(() => {
@@ -856,6 +869,189 @@ describe("ExecuteWizard", () => {
                 expect.objectContaining({ body: expect.objectContaining({ inputFiles: [] }) })
             );
         });
+    });
+
+    // --- Readiness gating on the Inputs step -----------------------------------------------------
+
+    it("keeps the Inputs step clean on first paint and marks the rail chip instead", () => {
+        const multiWorkflow: Workflow = {
+            ...mockWorkflow,
+            systemConfig: { inputFileArity: "multi" },
+        };
+        const { useWorkflow } = require("../api/queries");
+        useWorkflow.mockReturnValue({ data: multiWorkflow, isLoading: false });
+        withSatisfiedTags();
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={multiWorkflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+
+        expect(screen.queryByText("To continue")).not.toBeInTheDocument();
+        expect(screen.queryByText(/none were provided/i)).not.toBeInTheDocument();
+        const rail = screen.getByRole("navigation", { name: "Execution steps" });
+        expect(rail).toHaveTextContent("Incomplete");
+        // No alert on the step: the only alert the wizard ever renders is the launch failure.
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("lists what is still needed once the user changes something on the Inputs step", async () => {
+        const multiWorkflow: Workflow = {
+            ...mockWorkflow,
+            systemConfig: { inputFileArity: "multi" },
+        };
+        const { useWorkflow } = require("../api/queries");
+        useWorkflow.mockReturnValue({ data: multiWorkflow, isLoading: false });
+        withSatisfiedTags();
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={multiWorkflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+
+        // A DOM interaction on the step (adding a row) is what opens the list.
+        fireEvent.click(screen.getByRole("button", { name: "Add Input File" }));
+        const list = await screen.findByText("To continue");
+        expect(list.closest("[aria-live]")).toHaveAttribute("aria-live", "polite");
+        expect(screen.getByText("Every input row needs an asset.")).toBeInTheDocument();
+    });
+
+    it("leaves the readiness list closed when only the seeding effects have written input state", () => {
+        // The prefix seed (an effect on workflowData) and the presetAsset row (initial state) write
+        // input state without a DOM event, so neither counts as the user having touched the step —
+        // even though the seeded row is incomplete and the rail chip already says Incomplete.
+        const seeded = prefixWorkflow("/{{jobName}}/");
+        const wf: Workflow = {
+            ...seeded,
+            systemConfig: { ...seeded.systemConfig, inputFileArity: "multi" },
+        };
+        const { useWorkflow } = require("../api/queries");
+        useWorkflow.mockReturnValue({ data: wf, isLoading: false });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard
+                    open
+                    onClose={jest.fn()}
+                    workflow={wf}
+                    databaseId="db1"
+                    presetAsset={{ databaseId: "db1", assetId: "a1" }}
+                />
+            </QueryClientProvider>
+        );
+
+        // Both seeds ran: the prefix is filled and the preset row is on the step (its Remove button).
+        expect(screen.getByLabelText("Output path prefix")).toHaveValue("/{{jobName}}/");
+        expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+        // The requirement is unmet (the row has no file) and shows on the rail chip only.
+        expect(screen.getByRole("navigation", { name: "Execution steps" })).toHaveTextContent(
+            "Incomplete"
+        );
+        expect(screen.queryByText("To continue")).not.toBeInTheDocument();
+    });
+
+    // --- Requirements strip -----------------------------------------------------------------------
+
+    it("says the requirements may narrow while a required template is unchosen", () => {
+        const { useAllPipelines, useTemplates } = require("../api/queries");
+        useAllPipelines.mockReturnValue({
+            data: [
+                {
+                    ...mockPipeline,
+                    systemConfig: { inputFileArity: "none", requireTemplate: true },
+                },
+            ],
+            isLoading: false,
+            isSuccess: true,
+        });
+        useTemplates.mockReturnValue({ data: [], isLoading: false, isSuccess: true });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={mockWorkflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+
+        // `templateKnown` is carried into the resolution: a required template still to be chosen can
+        // narrow it, so the strip says so — exactly once.
+        expect(screen.getAllByText(/may narrow once a template is chosen/)).toHaveLength(1);
+        expect(screen.getByTestId("requirements-strip")).toHaveTextContent("No input files");
+        expect(screen.getByTestId("requirements-strip")).toHaveTextContent("Writes to an asset");
+    });
+
+    it("drops the caveat when no step requires a template", () => {
+        // Control: the default fixture's pipeline does not require one.
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={mockWorkflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+        expect(screen.queryByText(/may narrow once a template is chosen/)).not.toBeInTheDocument();
+        expect(screen.getByTestId("requirements-strip")).toBeInTheDocument();
+    });
+
+    // --- Rail navigation --------------------------------------------------------------------------
+
+    it("jumps back to a visited step from the rail", async () => {
+        withSatisfiedTags();
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={mockWorkflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+
+        const rail = screen.getByRole("navigation", { name: "Execution steps" });
+        fireEvent.click(within(rail).getByRole("button", { name: /Inputs/ }));
+        expect(await screen.findByText("Input Files")).toBeInTheDocument();
+        // The current and future rows are not buttons.
+        expect(
+            within(rail).queryByRole("button", { name: /Test Pipeline/ })
+        ).not.toBeInTheDocument();
+        expect(within(rail).queryByRole("button", { name: /Review/ })).not.toBeInTheDocument();
+    });
+
+    // --- Review blockers --------------------------------------------------------------------------
+
+    it("lists every blocker once on Review and its Edit link jumps to the step", async () => {
+        const multiWorkflow: Workflow = {
+            ...mockWorkflow,
+            systemConfig: { inputFileArity: "multi" },
+        };
+        const { useWorkflow } = require("../api/queries");
+        useWorkflow.mockReturnValue({ data: multiWorkflow, isLoading: false });
+        withSatisfiedTags();
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={multiWorkflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument());
+
+        const blockers = screen.getByText("Blockers").closest("[aria-live]") as HTMLElement;
+        expect(
+            within(blockers).getAllByText(/requires at least one input file but none were provided/)
+        ).toHaveLength(1);
+        expect(screen.getByRole("button", { name: /Launch/i })).toBeDisabled();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+        fireEvent.click(within(blockers).getByRole("button", { name: "Edit Inputs" }));
+        expect(await screen.findByText("Input Files")).toBeInTheDocument();
+        // Having tried to launch, the readiness list is now open on Inputs too.
+        expect(screen.getByText("To continue")).toBeInTheDocument();
     });
 });
 

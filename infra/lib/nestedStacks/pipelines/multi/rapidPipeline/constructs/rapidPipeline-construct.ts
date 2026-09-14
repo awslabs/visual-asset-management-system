@@ -469,6 +469,7 @@ export class RapidPipelineConstruct extends NestedStack {
             props.pipelineSubnetsIsolated,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            logGroup,
             props.storageResources.encryption.kmsKey
         );
 

@@ -30,7 +30,12 @@ import type {
 } from "../types";
 import type { DatabaseSummary } from "./databases";
 import type { DetailMetadataCollection, DetailMetadataPage } from "./executions";
-import type { AssetFileVersionSummary, AssetSearchPage, AssetFilePage } from "./assets";
+import type {
+    AssetFileVersionSummary,
+    AssetSearchPage,
+    AssetFilePage,
+    AssetFileListPage,
+} from "./assets";
 
 // Query key factory for stable, structured keys
 export const qk = {
@@ -51,6 +56,10 @@ export const qk = {
     executions: (scope: ExecutionScope, filters?: any) =>
         ["executions", scope, filters ?? null] as const,
     execution: (executionId: string) => ["execution", executionId] as const,
+    // The details read keyed by its request shape, under the `execution` prefix so an invalidation
+    // of qk.execution(id) reaches both variants.
+    executionDetails: (executionId: string, includeSubExecutions: boolean) =>
+        ["execution", executionId, { includeSubExecutions }] as const,
     executionDetailMetadata: (executionId: string, collection: DetailMetadataCollection) =>
         ["executionDetailMetadata", executionId, collection] as const,
     allowedRoutes: () => ["allowedRoutes"] as const,
@@ -59,6 +68,8 @@ export const qk = {
         ["assetSearch", databaseId ?? null, query] as const,
     assetFileSearch: (databaseId: string, assetId: string, query: string) =>
         ["assetFileSearch", databaseId, assetId, query] as const,
+    assetFilePages: (databaseId: string, assetId: string, prefix: string) =>
+        ["assetFilePages", databaseId, assetId, prefix] as const,
     fileVersions: (databaseId: string, assetId: string, relativeFileKey: string) =>
         ["fileVersions", databaseId, assetId, relativeFileKey] as const,
 };
@@ -104,6 +115,30 @@ export function useAssetFileSearch(query: string, databaseId?: string, assetId?:
             ),
         enabled: !!databaseId && !!assetId,
         placeholderData: (previous: any) => previous,
+    });
+}
+
+/**
+ * An asset's file LISTING, page by page, for the bulk input picker.
+ *
+ * An infinite query rather than a search: the picker offers "select every file under this folder",
+ * which needs the asset's complete, ordered file set walked to the execution cap — a search page is
+ * capped and unordered. `prefix` scopes the walk to one folder on the server, so a large asset's
+ * other folders are never fetched.
+ */
+export function useAssetFilePages(databaseId?: string, assetId?: string, prefix = "") {
+    return useInfiniteQuery({
+        queryKey: qk.assetFilePages(databaseId || "", assetId || "", prefix),
+        queryFn: ({ pageParam }: { pageParam?: string }) =>
+            callService<AssetFileListPage>(() =>
+                assetService.listAssetFilesPage(databaseId as string, assetId as string, {
+                    startingToken: pageParam,
+                    prefix,
+                })
+            ),
+        getNextPageParam: (lastPage: AssetFileListPage) => lastPage.nextToken,
+        initialPageParam: undefined as string | undefined,
+        enabled: !!databaseId && !!assetId,
     });
 }
 
@@ -626,11 +661,25 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
     });
 }
 
-export function useExecutionDetails(executionId: string) {
+export interface ExecutionDetailsOptions {
+    /** Resolve each step's registered sub-processes and their stage statuses (a costlier read). */
+    includeSubExecutions?: boolean;
+}
+
+export function useExecutionDetails(executionId: string, options: ExecutionDetailsOptions = {}) {
+    const includeSubExecutions = !!options.includeSubExecutions;
     return useQuery({
-        queryKey: qk.execution(executionId),
+        // The flag is part of the key: the two payload shapes must not answer each other's read. The
+        // parameter is sent only when the flag is set; an unflagged caller issues the plain details
+        // request.
+        queryKey: qk.executionDetails(executionId, includeSubExecutions),
         queryFn: () =>
-            callService<ExecutionDetail>(() => executionService.getExecutionDetails(executionId)),
+            callService<ExecutionDetail>(() =>
+                executionService.getExecutionDetails(
+                    executionId,
+                    includeSubExecutions ? { includeSubExecutions: "true" } : undefined
+                )
+            ),
         enabled: !!executionId,
         // Poll while the run is still going, on the same 5s cadence as the lists. The list views
         // auto-advanced but this page did not, so opening a RUNNING execution to watch it finish

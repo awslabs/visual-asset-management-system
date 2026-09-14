@@ -28,17 +28,27 @@ jest.mock("react-router-dom", () => ({
     useNavigate: () => jest.fn(),
     Link: ({ children }: any) => <span>{children}</span>,
 }));
-// Monaco is lazy/heavy — stub it to a plain textarea that reports edits.
-jest.mock("../components/ConfigEditor", () => ({
-    __esModule: true,
-    default: ({ value, onChange }: any) => (
-        <textarea
-            data-testid="config-editor"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-        />
-    ),
-}));
+// Monaco is lazy/heavy — stub it to a plain textarea that reports edits. The stub takes the
+// editor's ref so the form's imperative handle has somewhere to land; the Review step renders a
+// second, read-only copy, so the editable one is addressed by its own test id.
+jest.mock("../components/ConfigEditor", () => {
+    const ReactModule = require("react");
+    const Stub = ReactModule.forwardRef(({ value, onChange, readOnly }: any, ref: any) => {
+        ReactModule.useImperativeHandle(ref, () => ({
+            insertAtCursor: (text: string) => onChange?.(`${value}${text}`),
+        }));
+        return (
+            <textarea
+                data-testid={readOnly ? "config-editor-readonly" : "config-editor"}
+                value={value}
+                readOnly={readOnly}
+                onChange={(e) => onChange?.(e.target.value)}
+            />
+        );
+    });
+    Stub.displayName = "ConfigEditorStub";
+    return { __esModule: true, default: Stub };
+});
 const mockToast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
 jest.mock("../components/ToastProvider", () => ({
     ...jest.requireActual("../components/ToastProvider"),
@@ -96,13 +106,15 @@ describe("TemplateForm on a system pipeline", () => {
             />,
             { wrapper }
         );
+        // Basic: name, description, the default switch and the execution-time edit switch.
         expect(screen.getByText(/System template:/)).toBeInTheDocument();
         expect(screen.getByPlaceholderText("Template name")).toBeDisabled();
         expect(screen.getByPlaceholderText("Template description")).toBeDisabled();
-        await nextTimes(user, 1);
+        expect(screen.getByLabelText(/Allow editing the config body/)).toBeDisabled();
+        // Basic -> Pipeline overrides -> Tags and Config Body
+        await nextTimes(user, 2);
         expect(screen.getByLabelText("Config Format *")).toBeDisabled();
         expect(screen.getByTestId("config-editor")).not.toBeDisabled();
-        expect(screen.getByLabelText(/Allow editing the config body/)).toBeDisabled();
     });
 
     it("sends the full body with the unchanged locked values and the edited config body", async () => {
@@ -116,10 +128,12 @@ describe("TemplateForm on a system pipeline", () => {
             />,
             { wrapper }
         );
-        await nextTimes(user, 1);
+        // Basic -> Pipeline overrides -> Tags and Config Body
+        await nextTimes(user, 2);
         await user.clear(screen.getByTestId("config-editor"));
         await user.type(screen.getByTestId("config-editor"), '{{"RENDER_VIEWS": 8}');
-        await nextTimes(user, 2);
+        // -> Review
+        await nextTimes(user, 1);
         await user.click(screen.getByRole("button", { name: "Save" }));
         await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
         const { body } = mockUpdate.mock.calls[0][0];

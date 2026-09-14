@@ -1237,8 +1237,8 @@ class TestExecuteOrchestration:
 
     def test_output_lock_multi_asset_blocks(self):
         # Inputs spanning two assets with NO explicit output target -> cannot resolve a single output
-        # asset. (allowOverride no longer matters for multi-asset: an explicit output is honored when
-        # supplied regardless, and its absence is the error.)
+        # asset. The workflow's own selection rules are named first (this workflow is arity one and
+        # single-asset), because they are the cause; the unresolved output is only the consequence.
         p = self._patches()
         body = {"inputFiles": [
             {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
@@ -1246,7 +1246,9 @@ class TestExecuteOrchestration:
         with p["get_workflow"], p["get_pipeline"], p["enforcer"], p["claims"]:
             resp = ewv2.lambda_handler(_event(body=body), MagicMock())
         assert resp["statusCode"] == 400
-        assert "does not resolve to a single input asset" in json.loads(resp["body"])["message"].lower()
+        message = json.loads(resp["body"])["message"].lower()
+        assert "single input file" in message or "single asset only" in message, message
+        assert "does not resolve to a single input asset" not in message
 
     def test_multi_asset_explicit_output_honored_without_override(self):
         # Inputs spanning two assets + an explicit output target (both ids) -> honored regardless of

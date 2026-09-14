@@ -1059,6 +1059,98 @@ vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
 vamscli pipeline template list -d GLOBAL -p {pipelineId}
 ```
 
+### **Registering Sub-Processes and Logs (Abort, Stage Status, Log Sources)**
+
+A pipeline reports the resources it starts by putting one event on the orchestration bus.
+`backend/backend/handlers/workflows/sfn/registerPipelineExecution.py` appends them to the
+pipeline-execution row, and three readers consume the record: abort (`registeredSubExecutions`), the
+execution details API (`availableLogs` on every step; `subExecutions` with per-stage status behind
+`includeSubExecutions=true`, derived at read time from the sub-state-machine definition and history —
+nothing about stages is stored), and the full-mode logs API (`logSources`, one source at a time by `logId`).
+
+Event contract:
+
+-   `Source` = `<ORCHESTRATION_EVENT_SOURCE_PREFIX>.execution.<executionId>.pipeline.<pipelineExecutionId>`
+    (the manifest/payload already carries it). The handler ignores an event whose `Source` does not end in
+    `.pipeline.<pipelineExecutionId>` for the id the detail names.
+-   `DetailType` = `pipeline.execution.register`.
+-   `Detail.pipelineExecutionId` (required); `Detail.subExecution` =
+    `{resourceType, <locator keys>, stageName?, label?}`; `Detail.logs[]` =
+    `{logGroupArn, logGroupName, logStreamName, logStreamPrefix, stageName?, label?, sourceType?}` with
+    `sourceType` one of `stateMachine | lambda | batch | ecs | container | custom` (anything else is stored
+    as `custom`).
+-   Validators: `CLOUDWATCH_LOG_GROUP_ARN`, `CLOUDWATCH_LOG_GROUP_NAME`, `LOG_STREAM_NAME` (also the prefix
+    — no `:` or `*`), `SFN_STATE_NAME` (`^[^\x00-\x1f\x7f]{1,80}$`), `DISPLAY_LABEL` (same class, 1–128),
+    `LOG_SOURCE_TYPE`. An invalid optional field is dropped with a warning; the entry survives.
+-   Dedup is by location `(logGroupArn without ":*" | logGroupName, logStreamName, logStreamPrefix)`; a
+    redelivered entry that carries `stageName` / `label` / `sourceType` the stored one lacks merges them in.
+    At most 50 logs and 50 sub-executions are stored per pipeline execution. Registration stays best-effort:
+    wrap `put_events` so a failure logs and returns.
+
+What every built-in emits (the `register_sub_execution` helper in each `openPipeline.py`, or
+`register_batch_job` in `executeBatchJob.py`):
+
+-   The state-machine log entry with `sourceType: "stateMachine"`, `label: "<pipeline> state machine"`; the
+    `subExecution` with `label: "<pipeline> processing"`.
+-   One **container** entry per Batch state, only when the env vars are present:
+
+    ```python
+    {"logGroupArn": BATCH_JOB_LOG_GROUP_ARN, "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+     "logStreamPrefix": f"{<job definition name>}/default/", "stageName": "<Batch state name>",
+     "sourceType": "batch", "label": "<Batch state name> container"}
+    ```
+
+    Which group that is depends on the compute family. The five **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree) write through the `awslogs` driver to a
+    VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and register **that** group;
+    the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
+    so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
+    `<jobDefinitionName>/default/<ecs-task-id>` — the Fargate construct sets `awslogs-stream-prefix` to the
+    physical (hashed) job definition name, the same string the producer's derived `*_JOB_DEFINITION_NAME`
+    resolves to. Container output does not print the VAMS execution ids, so a registered prefix that the
+    real stream falls under is what lets the read skip the execution-scope terms; a prefix the stream does
+    not start with reads as `scoped`, and the filter drops every container line.
+
+CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
+
+-   The registering lambda's environment spreads one of the two helpers in
+    `infra/lib/helper/batchJobLogGroup.ts`: `...vendedBatchJobLogGroupEnvironment(containerLogGroup)` for a
+    Fargate pipeline (the group its `BatchFargatePipelineConstruct` was given as `logGroup`; the Potree
+    builder sets `PDAL_` / `POTREE_JOB_LOG_GROUP_NAME` / `_ARN` inline because its two jobs write to two
+    groups), or `...batchJobLogGroupEnvironment()` for a GPU pipeline — `BATCH_JOB_LOG_GROUP_NAME =
+"/aws/batch/job"` and `BATCH_JOB_LOG_GROUP_ARN = IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup`, the colon
+    `log-group:` form. The helper is the one place the default group is named: never spell the literal or
+    derive the ARN in a builder, and never `formatArn(..., ArnFormat.SLASH_RESOURCE_NAME)`, which renders
+    `log-group//aws/batch/job`, fails `CLOUDWATCH_LOG_GROUP_ARN`, and degrades the entry to a name-only
+    read. Beside those two, the builder sets
+    the job-definition env its producer reads (`BATCH_JOB_DEFINITION_NAME` for an `openPipeline.py`, `PDAL_` /
+    `POTREE_JOB_DEFINITION_NAME` for the two Potree states, the pre-existing `BATCH_JOB_DEFINITION` for an
+    `executeBatchJob.py`) from the `{ jobDefinitionName }` the construct passes it — a per-builder
+    `OpenPipelineBatchLogProps` interface in the `openPipeline` builders.
+-   `jobDefinitionName` is the job definition **name**, never its ARN: Fargate `EcsJobDefinition` →
+    `.jobDefinitionName` (a token that resolves to the hashed name); GPU `CfnJobDefinition` given a
+    `jobDefinitionName` prop → that same string (never `.ref`, the ARN with revision); an unnamed
+    `CfnJobDefinition` → `jobDefinitionNameFromRef(jobDef.ref)` from the same helper. An ARN in
+    `logStreamPrefix` contains `:`, fails `LOG_STREAM_NAME`, and leaves the container source permanently
+    `unscoped`.
+-   `stageName` must equal the ASL state name, which is the CDK construct id because no construct sets
+    `stateName`. `infra/test/pipelines/batchLogRegistrationEnvFargate.test.ts`,
+    `batchLogRegistrationEnvGpu.test.ts` and `containerLogRegistrationEnvEcs.test.ts` synthesize each
+    pipeline construct (`infra/test/support/pipelineConstructHarness.ts`), parse its ASL
+    (`infra/test/support/asl.ts`) and assert that every module-level `*_STATE_NAME = "…"` literal the
+    producer declares (`declaredStageNames`; for cosmos, the `COSMOS_BATCH_STATE_NAME` env value) is a
+    key of `States`; renaming a Batch construct without changing the producer's `stageName` fails those
+    tests instead of silently breaking the stage ⇄ history join. Declare a stage name as a module-level
+    string literal, never built at runtime, or the test cannot see it.
+-   A `lambda` entry uses `` `/aws/lambda/${fn.functionName}` `` with `IAMArn(name).loggroup`; never read
+    `fn.logGroup` on a function without an explicit log group (it synthesizes a `Custom::LogRetention`
+    resource).
+
+Producer tests (`lambda/tests/test_manifest_refactor.py`, `test_batch_job_registration.py`) assert the new
+keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes
+`LOG_STREAM_NAME`. Run each pipeline's `tests/` in its own pytest process (module-name collision across
+pipelines).
+
 ### **Pipeline Configuration Management**
 
 #### **Configuration Structure for Pipelines**
@@ -1373,7 +1465,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`.
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`.
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
 8. **VPC Builder Updates (CRITICAL)**: A pipeline whose compute is an AWS Batch, ECS, or Fargate job must be added to condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Decide that first, by looking at what `pipelineBuilder-nestedStack.ts` passes as the pipeline's `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments. A Lambda-only pipeline appears in no block: it has no container image to pull and no compute environment to place, and its functions join the VPC only under `useGlobalVpc.useForAllLambdas`. When a pipeline offers a container branch behind a sub-flag, key the block condition — and the `vpcRequiringFeatures` entry in `config.ts` — on the **sub-flag**, never on the pipeline's `enabled`, or the pipeline forces a VPC on every deployment that enables it.
@@ -1397,6 +1489,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 10. **Adaptive Retry Configuration on Every Client**: every `boto3.client(...)` and `boto3.resource(...)` in `backendPipelines/` takes `config=Config(retries={'max_attempts': 5, 'mode': 'adaptive'})`. A pipeline Lambda or container calls Step Functions, Amazon S3, and EventBridge for the length of a job — hours on the GPU pipelines — so a bare client sits on botocore's default retry mode with no client-side rate limiting, and a sustained burst surfaces as a throttling error rather than being smoothed.
 
     Declare the constant **above the first client**, not merely after the imports: a few modules interleave imports with executable code (`multi/rapidPipelineEKS/lambda/consolidated_handler.py` builds a client and then keeps importing), and a constant placed after the last import lands below the client that uses it — `NameError` at module import, which in a Lambda is a cold-start 500 on every request. A deliberate departure (a non-idempotent call a retry would duplicate) needs a comment saying why, because the ratchet cannot tell it from an oversight. Coverage: `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`.
+
+11. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
 
 #### **Pipeline Configuration Rules**
 
@@ -2912,7 +3006,7 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 
 7. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
 
-8. **IAM resource matching is case-sensitive.** `/aws/vendedlogs/*` grants are explicit allow-lists, and pipeline constructs are split across `VAMSStateMachine-*` and `VAMSstateMachine-*` (both granted). A new pipeline inventing a third casing silently loses log-read access.
+8. **IAM resource matching is case-sensitive.** Log-group grants are explicit allow-lists: the `/aws/vendedlogs/*` prefixes (pipeline constructs are split across `VAMSStateMachine-*` and `VAMSstateMachine-*`, both granted) plus AWS Batch's default container group `/aws/batch/job`, which the executionService reads because the built-in Batch pipelines register it as a per-stage log source (`infra/lib/helper/batchJobLogGroup.ts` names it; no VAMS job definition sets a log configuration). A new pipeline inventing a third casing silently loses log-read access.
 
 ### **Verifying a partition change**
 

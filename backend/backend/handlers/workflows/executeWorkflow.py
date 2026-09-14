@@ -2446,6 +2446,13 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
                     "alone does not name a target asset."}, event=event)
     else:
         # 0 or multiple input assets with an asset output: honor the explicit output (both ids required).
+        # A selection the workflow itself rejects (arity, asset span, filters) is the real cause when it
+        # also fails to resolve an output asset, so the workflow's own rules are reported first.
+        selection_errors = ev.workflow_selection_errors(
+            workflow.get("systemConfig", {}) or {}, selected_inputs,
+            {"outputAssetId": requested_output_asset or "", "outputDatabaseId": requested_output_db or ""})
+        if selection_errors:
+            return validation_error(body={"message": " ".join(selection_errors)}, event=event)
         output_asset_id = requested_output_asset or ""
         output_database_id = requested_output_db or ""
         if not output_asset_id or not output_database_id:

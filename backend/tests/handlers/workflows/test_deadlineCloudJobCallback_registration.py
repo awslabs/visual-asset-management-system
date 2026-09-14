@@ -137,6 +137,20 @@ class TestInFlightRegistration:
             sub = _registered(mock_events)
             assert (sub["farmId"], sub["queueId"], sub["jobId"]) == (FARM, QUEUE, JOB)
 
+    def test_the_source_names_the_pipeline_execution_the_registration_lambda_matches_on(self):
+        """registerPipelineExecution ignores an event whose Source does not end in
+        `.pipeline.<pipelineExecutionId>`; the callback builds its Source through the shared
+        orchestration_event_prefix, and this is the pin that it stays on that shape."""
+        with patch.object(cb, "deadline_client") as mock_dl, \
+             patch.object(cb, "sfn_client"), \
+             patch.object(cb, "events_client") as mock_events, \
+             patch.object(cb, "orchestration_bus_arn", "arn:bus"):
+            mock_dl.get_job.return_value = _vams_job()
+            cb.lambda_handler({"detail": _run_status("READY")}, MagicMock())
+
+            entry = mock_events.put_events.call_args.kwargs["Entries"][0]
+            assert entry["Source"].endswith(f".execution.{WEXEC}.pipeline.{PEXEC}")
+
     def test_the_registered_resource_type_is_the_one_abort_dispatches_on(self):
         """The producer and the consumer of this string live in different modules with no shared
         constant, so a rename on either side leaves abort silently on its "not abortable" arm."""

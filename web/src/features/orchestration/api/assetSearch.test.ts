@@ -51,6 +51,7 @@ describe("searchAssetsPaged", () => {
         const body = api().searchAssets.mock.calls[0][0];
         expect(JSON.stringify(body.filters)).toContain("db-scoped");
         expect(body.entityTypes).toEqual(["asset"]);
+        expect(body.sort).toEqual([{ field: "str_assetname", order: "asc" }]);
         expect(body.includeArchived).toBe(false);
     });
 

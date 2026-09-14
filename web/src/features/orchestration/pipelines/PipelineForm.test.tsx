@@ -321,6 +321,33 @@ describe("PipelineForm", () => {
         expect(body.pipelineName).toBe("New Pipe");
     });
 
+    it("unchecks a metadata toggle on screen and in the create body together", async () => {
+        const user = userEvent.setup();
+        const mutateAsync = jest.fn().mockResolvedValue({ pipeline: { pipelineId: "gen" } });
+        const { useCreatePipeline } = require("../api/queries");
+        (useCreatePipeline as jest.Mock).mockReturnValue({ mutateAsync });
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.type(screen.getByLabelText(/Pipeline Name/), "New Pipe");
+        const box = screen.getByRole("checkbox", { name: /^Database metadata/ });
+        expect(box).toBeChecked();
+        await user.click(box);
+        // The toggle is controlled from the watched map, so the click must reach the screen as well
+        // as the form value — a box that stays checked while the value flips saves false silently.
+        expect(box).not.toBeChecked();
+        expect(screen.getByRole("checkbox", { name: /^Asset metadata/ })).toBeChecked();
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+
+        await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+        const metadataInputs = mutateAsync.mock.calls[0][0].systemConfig.metadataInputs;
+        expect(metadataInputs.databaseMetadata).toBe(false);
+        // Untouched keys stay omitted (read as ON) rather than being declared by the click.
+        expect(metadataInputs.assetMetadata).toBeUndefined();
+    });
+
     it("submits with both timeout fields left blank", async () => {
         const user = userEvent.setup();
         const mutateAsync = jest.fn().mockResolvedValue({ pipeline: { pipelineId: "p1" } });

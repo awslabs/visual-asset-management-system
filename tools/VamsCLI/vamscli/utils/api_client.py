@@ -3806,6 +3806,22 @@ class APIClient:
             return "\n".join(str(item) for item in msg)
         return msg
 
+    @staticmethod
+    def _pwe_handler_message(e: "requests.exceptions.HTTPError") -> Optional[str]:
+        """The handler's own `message` string, or None when the response carries no JSON body with
+        one. Unlike _pwe_error_message this never substitutes str(e) — the "404 Client Error: Not Found
+        for url: ..." text requests composes — so a caller can tell a handler-authored 404 from a
+        body-less one (API Gateway, a WAF page) and choose its own wording for the latter."""
+        response = e.response
+        if response is None or not response.content:
+            return None
+        try:
+            data = response.json()
+        except ValueError:
+            return None
+        msg = data.get('message') if isinstance(data, dict) else None
+        return msg if isinstance(msg, str) and msg else None
+
     # ---- Pipeline CRUD ------------------------------------------------
 
     def list_pipelines(self, database_id: Optional[str] = None, include_archived: bool = False,
@@ -4265,17 +4281,25 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to list executions: {e}")
 
-    def get_execution_details(self, execution_id: str) -> Dict[str, Any]:
+    def get_execution_details(self, execution_id: str,
+                              params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Get an execution's full detail/traceability. GET /workflows/executions/{executionId}/details.
 
-        Collections are bounded server-side; truncatedCollections names any that came back partial.
+        params may include: includeSubExecutions ('true' | 'false'). Every pipeline entry carries
+        availableLogs — the step's log sources, each with the logId that get_execution_logs reads one
+        source by — and with includeSubExecutions='true' also subExecutions (the registered
+        sub-processes with per-stage status derived from the sub-state-machine history),
+        subExecutionsTruncated and subExecutionWarnings. All dates are ISO-8601 UTC strings; no ARNs.
+
+        Collections are bounded server-side; truncatedCollections names any that came back partial
+        ('pipelines.subExecutions' means every sub-execution kept its summary but lost its stages).
         A pipeline entry carries renderedConfigLocation ({bucket, key}) whenever that object exists
         — not only on truncation — because it is the FULLY substituted body the step ran with,
         while the inline renderedConfig is pre-system-tag. renderedConfigTruncated reports only
         whether the inline copy was shortened."""
         try:
             endpoint = API_WORKFLOW_EXECUTION_DETAILS.format(executionId=execution_id)
-            return self._pwe_request('GET', endpoint)
+            return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
@@ -4313,13 +4337,29 @@ class APIClient:
         """Get an execution's logs. GET /workflows/executions/{executionId}/logs.
 
         params may include: mode (truncated|full), pipelineExecutionId, and (full mode)
-        filterPattern/limit/startTime/endTime/nextToken.
+        filterPattern/limit/startTime/endTime/nextToken, plus — full mode with pipelineExecutionId
+        only — logId (read one log source; events and nextToken then describe that source alone,
+        and a source that is a registered sub-state-machine's log destination also returns that
+        sub-execution's sfnHistoryEvents) and stageName (restrict the sources and the sub-execution
+        history to one sub-state-machine stage). A step-scoped full-mode response carries logSources
+        (each known source with a read status and eventCount) and every CloudWatch subProcessEvents
+        item names its source by logId (a sub-state-machine history line carries the logId of the
+        source its state machine logs to, or "" when it has none). An unknown logId is a 404 whose
+        message is raised as ExecutionNotFoundError text.
         """
         try:
             endpoint = API_WORKFLOW_EXECUTION_LOGS.format(executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
+                # Three 404s share this route. A step-scoped one (a logId or pipelineExecutionId the
+                # execution does not have) carries a handler message that names the rule and is raised
+                # verbatim. A missing execution carries the id-less "Execution not found", and a
+                # body-less 404 (API Gateway, a WAF page) carries no handler message at all; both are
+                # raised as the id-bearing text the details read uses, never as requests' URL text.
+                msg = self._pwe_handler_message(e)
+                if msg and msg != "Execution not found":
+                    raise ExecutionNotFoundError(msg)
                 raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
             if e.response.status_code == 400:
                 raise InvalidExecutionDataError(self._pwe_error_message(e))

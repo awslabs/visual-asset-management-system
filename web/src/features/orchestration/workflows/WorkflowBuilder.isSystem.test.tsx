@@ -7,6 +7,7 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import WorkflowBuilder from "./WorkflowBuilder";
 import type { Workflow } from "../types";
 
@@ -33,6 +34,10 @@ jest.mock("../api/queries", () => {
         usePrefetchPipelineTemplates: jest.fn(),
     };
 });
+// The builder gates the create-mode Triggers step on the trigger PUT route; the real hook fetches.
+jest.mock("../permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: jest.fn(() => ({ loading: false, can: jest.fn(() => true) })),
+}));
 jest.mock("./DagPreview", () => ({ __esModule: true, default: () => null }));
 jest.mock("./TriggersEditor", () => ({ __esModule: true, default: () => null }));
 const mockToast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
@@ -57,10 +62,15 @@ const systemWorkflow: Workflow = {
 const renderBuilder = (workflow: Workflow) => {
     const { useWorkflow } = require("../api/queries");
     useWorkflow.mockReturnValue({ data: workflow });
+    const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
     return render(
-        <MemoryRouter>
-            <WorkflowBuilder mode="edit" databaseId="GLOBAL" workflowId={workflow.workflowId} />
-        </MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+            <MemoryRouter>
+                <WorkflowBuilder mode="edit" databaseId="GLOBAL" workflowId={workflow.workflowId} />
+            </MemoryRouter>
+        </QueryClientProvider>
     );
 };
 

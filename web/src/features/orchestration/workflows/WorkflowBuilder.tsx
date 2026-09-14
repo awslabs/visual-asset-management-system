@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useReducer, useEffect, useCallback, useState, Suspense } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useReducer, useEffect, useCallback, useRef, useState, Suspense } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import {
     useAllPipelines,
     useWorkflow,
@@ -20,9 +21,16 @@ import Breadcrumb from "../components/Breadcrumb";
 import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { validateWorkflow, allPipelineRefsSelected } from "./workflowValidation";
+import TriggerDraftsEditor from "./TriggerDraftsEditor";
+import { withCurrentPipelineTemplates } from "./triggerDraft";
+import type { PendingTrigger } from "./triggerDraft";
+import { setTrigger } from "../api/workflows";
+import { invalidateTriggerQueries, seedWorkflowCache } from "../api/triggerCache";
+import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import type {
     Workflow,
     WorkflowCreateRequest,
+    WorkflowTrigger,
     SpecifiedPipelineRef,
     InputFileArity,
     ConcurrencyRestriction,
@@ -37,6 +45,16 @@ interface WorkflowBuilderProps {
     mode: "create" | "edit";
     databaseId: string;
     workflowId?: string;
+}
+
+/** The route template the allowed-routes API returns for the trigger endpoint. */
+const TRIGGER_ROUTE = "/database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}";
+
+/** What the create flow hands the edit route once the workflow exists. */
+interface BuilderHopState {
+    step?: string;
+    pendingTriggers?: PendingTrigger[];
+    backendWarnings?: string[];
 }
 
 interface WorkflowFormState {
@@ -57,6 +75,8 @@ interface WorkflowFormState {
     allowWorkflowTriggerChaining: boolean;
     defaultOutputPathPrefix: string;
     specifiedPipelines: SpecifiedPipelineRef[];
+    /** Triggers drafted before the workflow exists; written after the create POST. */
+    triggerDrafts: WorkflowTrigger[];
     templatesByPipeline: Record<string, Template[]>;
     validationErrors: string[];
     validationWarnings: string[];
@@ -73,6 +93,7 @@ type WorkflowFormAction =
     | { type: "SET_FIELD"; field: keyof WorkflowFormState; value: any; authored?: boolean }
     | { type: "LOAD_WORKFLOW"; workflow: Workflow }
     | { type: "SET_TEMPLATES"; key: string; templates: Template[] }
+    | { type: "SET_TRIGGER_DRAFTS"; drafts: WorkflowTrigger[] }
     | { type: "SET_VALIDATION"; errors: string[]; warnings: string[] }
     | { type: "SET_SAVING"; saving: boolean }
     | { type: "SET_SAVE_ERROR"; error: string | null }
@@ -97,6 +118,7 @@ const initialState: WorkflowFormState = {
     allowWorkflowTriggerChaining: false,
     defaultOutputPathPrefix: "",
     specifiedPipelines: [],
+    triggerDrafts: [],
     templatesByPipeline: {},
     validationErrors: [],
     validationWarnings: [],
@@ -150,6 +172,8 @@ function workflowFormReducer(
                     [action.key]: action.templates,
                 },
             };
+        case "SET_TRIGGER_DRAFTS":
+            return { ...state, triggerDrafts: action.drafts, dirty: true };
         case "SET_VALIDATION":
             return {
                 ...state,
@@ -223,12 +247,27 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     // field is locked and the save sends nothing else, so the unsent body is not validated either.
     const isSystemWorkflow = mode === "edit" && !!workflow?.isSystem;
     const { createWorkflow, updateWorkflow } = useWorkflowMutations();
+    const location = useLocation();
+    const queryClient = useQueryClient();
+    // Trigger writes go to their own endpoint with their own Tier-1 grant, so a role may create a
+    // workflow yet be unable to set a trigger on it.
+    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const canSetTriggers = can("PUT", TRIGGER_ROUTE);
 
     const [state, dispatch] = useReducer(workflowFormReducer, initialState);
     const [wizardStep, setWizardStep] = useState<string>("basic");
     // Set once the save succeeded but the backend returned non-fatal warnings. The builder stays
     // mounted so the warning list is readable, and navigation waits for an explicit acknowledgement.
     const [savedWithWarnings, setSavedWithWarnings] = useState(false);
+    // Drafts the create flow could not write, handed to this route for the live editor. The editor
+    // hands the list back as drafts are written, so what remains here is what Cancel would discard.
+    const [pendingTriggers, setPendingTriggers] = useState<PendingTrigger[]>([]);
+    // Asks the editor to open the first pending draft; cleared once it has, so revisiting the step
+    // lists the rest without reopening a form.
+    const [openPendingTrigger, setOpenPendingTrigger] = useState(false);
+    const handlePendingOpened = useCallback(() => setOpenPendingTrigger(false), []);
+    // Whether this route was reached from the create flow's hand-off, whose history entry it replaced.
+    const hopLandedRef = useRef(false);
 
     const handleTemplatesLoaded = useCallback((key: string, templates: Template[]) => {
         dispatch({ type: "SET_TEMPLATES", key, templates });
@@ -256,7 +295,33 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     // values instead of showing them until the new query resolves.
     useEffect(() => {
         dispatch({ type: "RESET" });
+        setPendingTriggers([]);
+        setOpenPendingTrigger(false);
+        hopLandedRef.current = false;
     }, [databaseId, workflowId]);
+
+    // The create flow hands off to this route once the workflow exists, carrying the step to show
+    // and anything it could not finish. That hand-off is a prop change on this same element, never
+    // a mount, so the state is read here; it is then cleared from history so a reload or Back does
+    // not replay it.
+    useEffect(() => {
+        const hop = location.state as BuilderHopState | null;
+        if (!hop || typeof hop !== "object") return;
+        if (typeof hop.step === "string") setWizardStep(hop.step);
+        const pending = Array.isArray(hop.pendingTriggers) ? hop.pendingTriggers : [];
+        setPendingTriggers(pending);
+        setOpenPendingTrigger(pending.length > 0);
+        hopLandedRef.current = true;
+        dispatch({
+            type: "SET_BACKEND_WARNINGS",
+            warnings: Array.isArray(hop.backendWarnings) ? hop.backendWarnings : [],
+        });
+        setSavedWithWarnings(false);
+        navigate(location.pathname, { replace: true, state: null });
+        // Keyed on the history entry: the same state must not be consumed twice, and the values
+        // read here all belong to that entry.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [databaseId, workflowId, location.key]);
 
     useEffect(() => {
         if (mode === "edit" && workflow) {
@@ -346,6 +411,85 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         dispatch({ type: "SET_VALIDATION", errors: result.errors, warnings: result.warnings });
     }, [assembleWorkflow, pipelines, pipelinesLoaded]);
 
+    // Create is two phases: the workflow POST, then one trigger PUT per draft against the returned
+    // id (the trigger endpoint needs the stored row, and its sibling checks are order-dependent, so
+    // the PUTs run one at a time). Every branch after the POST leaves create mode — a second Save
+    // here would create a second workflow.
+    const createWorkflowWithTriggers = async (body: WorkflowCreateRequest) => {
+        const result = await createWorkflow.mutateAsync(body);
+        const newId: string = typeof result?.workflowId === "string" ? result.workflowId : "";
+        const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+        const drafts = state.triggerDrafts;
+        const listRoute = `/databases/${databaseId}/workflows`;
+        const editRoute = `/databases/${databaseId}/workflows/${newId}`;
+        const triggerCount = (n: number) => `${n} trigger${n === 1 ? "" : "s"}`;
+
+        if (!newId) {
+            // Without the id neither a trigger PUT nor the edit route can be addressed, so the
+            // outcome is reported the way a create without drafts always has been.
+            dispatch({ type: "SET_BACKEND_WARNINGS", warnings });
+            if (drafts.length > 0) {
+                toast.warning(`Workflow created; ${triggerCount(drafts.length)} not saved`, {
+                    description: "The response did not include the workflow id.",
+                });
+            }
+            if (warnings.length > 0) {
+                setSavedWithWarnings(true);
+                toast.warning("Workflow created", { description: warnings[0] });
+                return;
+            }
+            toast.success("Workflow created", { description: state.workflowName || undefined });
+            navigate(listRoute);
+            return;
+        }
+
+        seedWorkflowCache(queryClient, databaseId, newId, result);
+
+        const failed: PendingTrigger[] = [];
+        for (const draft of drafts) {
+            // Only pipelines in the saved body count: one may have been removed after drafting.
+            const triggerBody = withCurrentPipelineTemplates(draft, body.specifiedPipelines);
+            const [ok, data] = await setTrigger(databaseId, newId, draft.triggerType, triggerBody);
+            if (ok) {
+                invalidateTriggerQueries(queryClient, databaseId, newId);
+            } else {
+                failed.push({
+                    draft: triggerBody,
+                    error: typeof data === "string" ? data : "Failed to set trigger",
+                });
+            }
+        }
+
+        // The hop replaces the create entry in history: the workflow exists now, so Back from the
+        // edit route must not land on a blank create form for it.
+        if (failed.length > 0) {
+            toast.warning(`Workflow created; ${triggerCount(failed.length)} not saved`, {
+                description: failed[0].error,
+            });
+            navigate(editRoute, {
+                replace: true,
+                state: { step: "triggers", pendingTriggers: failed, backendWarnings: warnings },
+            });
+            return;
+        }
+        if (warnings.length > 0) {
+            toast.warning("Workflow created", { description: warnings[0] });
+            navigate(editRoute, {
+                replace: true,
+                state: { step: "review", backendWarnings: warnings },
+            });
+            return;
+        }
+        // Navigating away removes the form, so the toast carries the confirmation.
+        toast.success("Workflow created", {
+            description:
+                drafts.length > 0
+                    ? `${state.workflowName} · ${triggerCount(drafts.length)} saved`
+                    : state.workflowName || undefined,
+        });
+        navigate(listRoute);
+    };
+
     const handleSave = async () => {
         if (!isSystemWorkflow && state.validationErrors.length > 0) return;
 
@@ -367,29 +511,27 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
 
             const body = assembleWorkflow();
 
-            const result =
-                mode === "create"
-                    ? await createWorkflow.mutateAsync(body)
-                    : await updateWorkflow.mutateAsync({
-                          databaseId,
-                          // The route param is authoritative; reducer state lags a workflowId change.
-                          workflowId: targetWorkflowId,
-                          body: { ...body, workflowId: targetWorkflowId },
-                      });
+            if (mode === "create") {
+                await createWorkflowWithTriggers(body);
+                return;
+            }
+
+            const result = await updateWorkflow.mutateAsync({
+                databaseId,
+                // The route param is authoritative; reducer state lags a workflowId change.
+                workflowId: targetWorkflowId,
+                body: { ...body, workflowId: targetWorkflowId },
+            });
 
             const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
             dispatch({ type: "SET_BACKEND_WARNINGS", warnings });
             if (warnings.length > 0) {
                 // Keep the author on the form so the warnings are read before leaving.
                 setSavedWithWarnings(true);
-                toast.warning(mode === "create" ? "Workflow created" : "Workflow saved", {
-                    description: warnings[0],
-                });
+                toast.warning("Workflow saved", { description: warnings[0] });
             } else {
                 // Navigating away removes the form, so the toast carries the confirmation.
-                toast.success(mode === "create" ? "Workflow created" : "Workflow saved", {
-                    description: state.workflowName || undefined,
-                });
+                toast.success("Workflow saved", { description: state.workflowName || undefined });
                 navigate(`/databases/${databaseId}/workflows`);
             }
         } catch (err) {
@@ -408,14 +550,14 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         ? state.saving
         : state.validationErrors.length > 0 || state.saving;
 
-    // Wizard steps. Each section is one step; Review is last. The optional Triggers step is only
-    // shown when editing — triggers are set through a separate endpoint keyed by an existing
-    // workflow, so a not-yet-created workflow has nothing to attach them to.
+    // Wizard steps. Each section is one step; Review is last. Triggers are optional in both modes:
+    // when editing they are written live; when creating they are drafted and written once the
+    // workflow exists, since the trigger endpoint is keyed by a stored workflow.
     const WIZARD_STEPS = [
         { id: "basic", label: "Basic information" },
         { id: "execution", label: "Execution settings" },
         { id: "pipelines", label: "Pipelines" },
-        ...(mode === "edit" ? [{ id: "triggers", label: "Triggers (optional)" }] : []),
+        { id: "triggers", label: "Triggers (optional)" },
         { id: "review", label: "Review" },
     ];
     const stepIndex = WIZARD_STEPS.findIndex((s) => s.id === wizardStep);
@@ -436,17 +578,30 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     const goBack = () => setWizardStep(WIZARD_STEPS[Math.max(stepIndex - 1, 0)].id);
 
     // Cancel leaves the wizard, discarding everything entered across its steps. A completed
-    // four-step definition is a lot to lose to one mis-click next to Back, so confirm while there is
-    // anything to lose. After a warned save the entered values are already persisted.
+    // definition is a lot to lose to one mis-click next to Back, so confirm while there is
+    // anything to lose. After a warned save the entered values are already persisted. Trigger
+    // drafts still waiting to be written are not part of the workflow body, so `dirty` does not
+    // cover them: they get their own confirmation. A route reached from the create flow's hand-off
+    // has no create form behind it to return to, so Cancel leaves to the list.
     const handleCancel = () => {
-        if (
+        const unsaved = pendingTriggers.length;
+        if (unsaved > 0) {
+            const message = `${unsaved} unsaved trigger${
+                unsaved === 1 ? "" : "s"
+            } will be discarded. Leave anyway?`;
+            if (!confirm(message)) return;
+        } else if (
             state.dirty &&
             !savedWithWarnings &&
             !confirm("Discard this workflow and leave without saving?")
         ) {
             return;
         }
-        navigate(-1);
+        if (hopLandedRef.current) {
+            navigate(`/databases/${databaseId}/workflows`);
+        } else {
+            navigate(-1);
+        }
     };
 
     return (
@@ -709,11 +864,43 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
             {wizardStep === "triggers" && mode === "edit" && (
                 <TriggersEditor
                     databaseId={databaseId}
-                    workflowId={state.workflowIdValue}
+                    workflowId={workflowId || ""}
                     pipelineRefs={state.specifiedPipelines}
                     systemLocked={isSystemWorkflow}
+                    pendingTriggers={pendingTriggers}
+                    onPendingTriggersChange={setPendingTriggers}
+                    openFirstPending={openPendingTrigger}
+                    onPendingOpened={handlePendingOpened}
                 />
             )}
+
+            {wizardStep === "triggers" &&
+                mode === "create" &&
+                (permissionsLoading ? (
+                    <div
+                        data-testid="triggers-permission-skeleton"
+                        aria-busy="true"
+                        className="orch-outline border border-border-default rounded p-6 bg-surface-container space-y-3"
+                    >
+                        <h2 className="text-xl font-semibold text-text-primary">Triggers</h2>
+                        <div className="h-4 w-1/2 rounded bg-surface-secondary animate-pulse" />
+                        <div className="h-4 w-1/3 rounded bg-surface-secondary animate-pulse" />
+                    </div>
+                ) : canSetTriggers ? (
+                    <TriggerDraftsEditor
+                        drafts={state.triggerDrafts}
+                        onChange={(drafts) => dispatch({ type: "SET_TRIGGER_DRAFTS", drafts })}
+                        pipelineRefs={state.specifiedPipelines}
+                    />
+                ) : (
+                    <div className="orch-outline border border-border-default rounded p-6 bg-surface-container space-y-2">
+                        <h2 className="text-xl font-semibold text-text-primary">Triggers</h2>
+                        <p className="text-sm text-text-secondary">
+                            Your role can create workflows but cannot set triggers; a workflow
+                            administrator can add them later.
+                        </p>
+                    </div>
+                ))}
 
             {wizardStep === "review" && (
                 <div className="space-y-4">
@@ -725,7 +912,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                 {state.workflowName || "—"}
                             </div>
                             <div>
-                                <span className="text-text-secondary">Database:</span> {databaseId}
+                                <span className="text-text-secondary">Database:</span>{" "}
+                                {databaseId === "GLOBAL" ? "🌐 GLOBAL" : databaseId}
                             </div>
                             <div>
                                 <span className="text-text-secondary">Input file count:</span>{" "}
@@ -741,7 +929,40 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                 <span className="text-text-secondary">Pipelines:</span>{" "}
                                 {state.specifiedPipelines.length}
                             </div>
+                            {mode === "create" && (
+                                <div>
+                                    <span className="text-text-secondary">Triggers:</span>{" "}
+                                    {state.triggerDrafts.length}
+                                </div>
+                            )}
                         </div>
+                        {mode === "create" && state.triggerDrafts.length > 0 && (
+                            <ul
+                                aria-label="Trigger drafts"
+                                className="text-sm text-text-primary list-disc list-inside"
+                            >
+                                {state.triggerDrafts.map((draft) => {
+                                    const allow = draft.inputFileFilters?.allow || [];
+                                    const exclude = draft.inputFileFilters?.exclude || [];
+                                    // Counted from what Save sends: a template chosen for a
+                                    // pipeline since removed from the workflow is not in the body.
+                                    const templates = Object.values(
+                                        withCurrentPipelineTemplates(
+                                            draft,
+                                            state.specifiedPipelines
+                                        ).defaultTemplateIds || {}
+                                    ).filter(Boolean).length;
+                                    return (
+                                        <li key={draft.triggerType}>
+                                            {draft.triggerType} —{" "}
+                                            {draft.enabled ? "enabled" : "disabled"}, {allow.length}{" "}
+                                            allow / {exclude.length} exclude, {templates} default
+                                            template{templates === 1 ? "" : "s"}
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        )}
                     </div>
                 </div>
             )}
