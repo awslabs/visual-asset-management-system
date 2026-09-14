@@ -12,7 +12,7 @@
  * `batch:TerminateJob` on the account's jobs. Without them the state machine stops and the Fargate
  * container keeps running, and billing, until its attempt duration ends.
  *
- * The three Fargate pipelines that submit through `.sync` are asserted alongside the Splat Toolbox
+ * The Fargate pipelines that submit through `.sync` are asserted alongside the Splat Toolbox
  * GPU pipeline, which is the positive control: it has carried both grants throughout, so the
  * assertion is known to find them where they exist.
  */
@@ -32,6 +32,7 @@ import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-
 import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
 import { SplatToolboxConstruct } from "../../lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct";
+import { SystemGenAiMetadataConstruct } from "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
 
@@ -145,6 +146,24 @@ describe.each([
                 new Preview3dThumbnailConstruct(
                     h.stack,
                     "Preview3dThumbnailPipeline",
+                    commonProps(h)
+                )
+            ),
+    ],
+    [
+        // The Batch branch exists on the useFargateRenderer sub-flag only.
+        "System GenAI metadata (Fargate renderer)",
+        "SystemGenAiMetadataTerminateStack",
+        (c: Config.Config) => {
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = false;
+            c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
+        },
+        (h: Harness) =>
+            Template.fromStack(
+                new SystemGenAiMetadataConstruct(
+                    h.stack,
+                    "SystemGenAiMetadataPipeline",
                     commonProps(h)
                 )
             ),

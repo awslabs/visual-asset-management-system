@@ -205,6 +205,7 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
         let batchPipeline: BatchFargatePipelineConstruct | undefined;
         let containerExecutionRole: iam.Role | undefined;
         let containerJobRole: iam.Role | undefined;
+        let renderLogGroup: logs.LogGroup | undefined;
         if (pipelineConfig.useFargateRenderer) {
             const inputBucketPolicy = new iam.PolicyDocument({
                 statements: [
@@ -280,6 +281,23 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             // Cross-account encrypted asset buckets (no-op when no external keys are configured).
             grantExternalAssetBucketKmsKeys(containerJobRole);
 
+            // The container's stdout/stderr. A named vended group under the /aws/vendedlogs/Pipelines/
+            // prefix the execution-service role is granted to read; KMS-encrypted and retained for a
+            // year, unlike Batch's default group.
+            renderLogGroup = new logs.LogGroup(this, "SystemGenAiMetadataRenderBatchJobLogGroup", {
+                logGroupName:
+                    "/aws/vendedlogs/Pipelines/SystemGenAiMetadataRender" +
+                    generateUniqueNameHash(
+                        props.config.env.coreStackName,
+                        props.config.env.account,
+                        "SystemGenAiMetadataRenderBatchJobLogGroup",
+                        10
+                    ),
+                encryptionKey: kmsKey,
+                retention: logs.RetentionDays.ONE_YEAR,
+                removalPolicy: cdk.RemovalPolicy.DESTROY,
+            });
+
             batchPipeline = new BatchFargatePipelineConstruct(
                 this,
                 "BatchFargatePipeline_SystemGenAiMetadata",
@@ -291,6 +309,7 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
                     securityGroups: props.pipelineSecurityGroups,
                     jobRole: containerJobRole,
                     executionRole: containerExecutionRole,
+                    logGroup: renderLogGroup,
                     imageAssetPath: path.join(
                         "..",
                         "..",
@@ -532,6 +551,28 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             pipelineStateMachine.addToRolePolicy(kmsKeyPolicyStatementGenerator(kmsKey));
         }
 
+        // Stopping the state machine cancels the .sync Batch task, which requires terminating the
+        // running job; the BatchSubmitJob task grants only batch:SubmitJob. DescribeJobs has no resource
+        // type; job ids are generated at submit time, so TerminateJob is scoped to this account's jobs.
+        if (batchPipeline) {
+            pipelineStateMachine.addToRolePolicy(
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["batch:DescribeJobs"],
+                    resources: ["*"],
+                })
+            );
+            pipelineStateMachine.addToRolePolicy(
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["batch:TerminateJob"],
+                    resources: [
+                        `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job/*`,
+                    ],
+                })
+            );
+        }
+
         /**
          * Entry Lambdas
          */
@@ -547,6 +588,14 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             props.pipelineSecurityGroups,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            // The Fargate render job's vended container group + job definition name, registered as
+            // the FargateRenderJob state's log source; absent without the renderer sub-flag.
+            batchPipeline && renderLogGroup
+                ? {
+                      jobDefinitionName: batchPipeline.batchJobDefinition.jobDefinitionName,
+                      logGroup: renderLogGroup,
+                  }
+                : undefined,
             kmsKey
         );
 
@@ -631,12 +680,13 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "The state machine role's default policy carries the wildcard permissions Step Functions needs to invoke the pipeline's Lambda functions by version and, with the Fargate renderer, to submit and track Batch jobs. The video-segment map reads its items file from, and writes its result manifest under, run-time prefixes of the CMK-encrypted auxiliary bucket, so its two S3 grants name the bucket with an object wildcard and the deployment key's data-key actions sit beside them",
+                    reason: "The state machine role's default policy carries the wildcard permissions Step Functions needs to invoke the pipeline's Lambda functions by version and, with the Fargate renderer, to submit and track Batch jobs: batch:DescribeJobs supports no resource-level permissions and Batch job ids are generated at submit time, so cancelling the .sync job on StopExecution needs DescribeJobs on * and TerminateJob on job/*. The video-segment map reads its items file from, and writes its result manifest under, run-time prefixes of the CMK-encrypted auxiliary bucket, so its two S3 grants name the bucket with an object wildcard and the deployment key's data-key actions sit beside them",
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
                         "Action::kms:ReEncrypt*",
                         `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        { regex: "/^Resource::arn:.*:batch:.*:job/\\*$/g" },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },

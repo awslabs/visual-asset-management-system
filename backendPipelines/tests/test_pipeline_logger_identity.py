@@ -44,7 +44,16 @@ LOGGER_COPIES = (
     "backendPipelines/preview/3dThumbnail/lambda/customLogging/logger.py",
     "backendPipelines/preview/pcPotreeViewer/lambda/customLogging/logger.py",
     "backendPipelines/simulation/isaacLabTraining/lambda/customLogging/logger.py",
+    # The system GenAI metadata pipeline vendors the logger into its Lambda asset AND its two
+    # container images (the media extractor under the usual package path, the Blender image as a
+    # flat module), because every hop of that pipeline carries the task token in its state.
+    "backendPipelines/system/genAiMetadata/lambda/customLogging/logger.py",
+    "backendPipelines/system/genAiMetadata/containers/media/customLogging/logger.py",
+    "backendPipelines/system/genAiMetadata/containers/blender/containerLogger.py",
 )
+
+# Vendored copies that live outside a `<pipeline>/lambda/customLogging/` directory, by file name.
+CONTAINER_LOGGER_FILENAMES = ("containerLogger.py",)
 
 TOKEN_SPELLINGS = (
     "externalSfnTaskToken",
@@ -85,20 +94,32 @@ def test_every_copy_is_the_same_file():
 
 
 def test_every_lambda_directory_carries_a_copy():
-    """A pipeline lambda directory with no customLogging/logger.py fails at import in Lambda."""
+    """A pipeline lambda directory with no customLogging/logger.py fails at import in Lambda, and a
+    vendored copy that is not listed above escapes the byte-identity check."""
     listed = set(LOGGER_COPIES)
     found = set()
+    skip = {"node_modules", ".venv", "__pycache__", ".pytest_cache"}
     for root, dirs, files in os.walk(os.path.join(_REPO_ROOT, "backendPipelines")):
+        dirs[:] = [d for d in dirs if d not in skip]
         if os.path.basename(root) == "customLogging" and "logger.py" in files:
-            rel = os.path.relpath(os.path.join(root, "logger.py"), _REPO_ROOT).replace(os.sep, "/")
-            if "/lambda/" in rel:
-                found.add(rel)
+            found.add(os.path.relpath(os.path.join(root, "logger.py"), _REPO_ROOT).replace(os.sep, "/"))
+        for name in CONTAINER_LOGGER_FILENAMES:
+            if name in files:
+                found.add(os.path.relpath(os.path.join(root, name), _REPO_ROOT).replace(os.sep, "/"))
     assert found == listed, (
         f"unlisted copies: {sorted(found - listed)}; listed but missing: {sorted(listed - found)}"
     )
 
 
-@pytest.mark.parametrize("rel_path", LOGGER_COPIES, ids=[p.split("/")[-4] for p in LOGGER_COPIES])
+def _copy_id(rel_path):
+    """`<pipeline>` for a lambda copy, `<pipeline>-<container>` for a container copy."""
+    parts = rel_path.split("/")
+    if "lambda" in parts:
+        return parts[parts.index("lambda") - 1]
+    return parts[parts.index("containers") - 1] + "-" + parts[parts.index("containers") + 1]
+
+
+@pytest.mark.parametrize("rel_path", LOGGER_COPIES, ids=[_copy_id(p) for p in LOGGER_COPIES])
 class TestRedaction:
     def test_every_token_spelling_is_redacted_in_a_dict(self, rel_path):
         logger = _load(rel_path)

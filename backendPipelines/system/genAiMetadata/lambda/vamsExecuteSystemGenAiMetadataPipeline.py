@@ -94,7 +94,9 @@ def abort_external_workflow(error, task_token):
 
 
 def lambda_handler(event, context):
-    logger.info(event)
+    # The body carries the workflow's task token; log the envelope's shape, not its content.
+    logger.info("Event", eventKeys=sorted(event) if isinstance(event, dict) else [],
+                hasBody=bool(isinstance(event, dict) and event.get("body")))
 
     external_task_token = None
 

@@ -2,7 +2,6 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import hashlib
-import json
 import os
 import boto3
 from botocore.config import Config
@@ -121,7 +120,11 @@ def lambda_handler(event, context):
     and returns the pipeline state the render branches and the analysis steps read.
     """
 
-    logger.info(f"Event: {event}")
+    # Identifiers only: the state carries externalSfnTaskToken, so it is never rendered whole.
+    logger.info("Event", jobName=event.get("jobName", ""), assetId=event.get("assetId", ""),
+                databaseId=event.get("databaseId", ""),
+                workflowExecutionId=event.get("workflowExecutionId", ""),
+                inputS3AssetFilePath=event.get("inputS3AssetFilePath", ""), eventKeys=sorted(event))
     logger.info(f"Context: {context}")
 
     bucket, key = manifestHelper.parse_s3_uri(event["inputS3AssetFilePath"])
@@ -189,5 +192,9 @@ def lambda_handler(event, context):
         "maxPointCloudPoints": MAX_POINT_CLOUD_POINTS,
         "render": True,
     })
-    logger.info(f"State: {json.dumps(state)}")
+    # The classification outcome by its keys; the state itself carries externalSfnTaskToken.
+    logger.info("State", fileClass=state.get("fileClass"), renderBranch=state.get("renderBranch"),
+                renderSkipped=state.get("renderSkipped"),
+                analysisManifestS3Location=state.get("analysisManifestS3Location"),
+                vectorSearchEnabled=state.get("vectorSearchEnabled"), stateKeys=sorted(state))
     return state

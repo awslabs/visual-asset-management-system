@@ -35,7 +35,17 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# The Fargate render job's vended container log group (the group its job definition writes to through
+# the awslogs driver) + its job definition name. Set by the CDK only when the `useFargateRenderer`
+# sub-flag deploys the Batch branch; the container log source is registered only when both are set.
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
+BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
+# The Batch state of this pipeline's state machine (its CDK construct id).
+BATCH_STATE_NAME = "FargateRenderJob"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
+SUB_EXECUTION_LABEL = "GenAI metadata processing"
+STATE_MACHINE_LOG_LABEL = "GenAI metadata state machine"
 
 # Every field vamsExecute forwards that the state machine's Lambdas read. Passed through unchanged so
 # the sub-state-machine input is the complete pipeline state from its first task; the executing
@@ -50,7 +60,8 @@ _FORWARDED_FIELDS = (
 
 def abort_external_workflow(error, task_token):
     if task_token is not None and task_token != "":
-        logger.info("Aborting pipeline: Calling external workflow with task token: " + task_token)
+        # The token is a bearer credential for the parent workflow's task; it is never logged.
+        logger.info("Aborting pipeline: failing the external workflow task", error=error)
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
@@ -58,9 +69,26 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def batch_container_log_entry(job_definition_name, state_name):
+    """The log source for one Batch state's container: the job's vended group, streamed under
+    `<jobDefinitionName>/default/`. None when the group or the job definition is not configured."""
+    if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name:
+        return None
+    return {
+        "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+        "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": f"{job_definition_name}/default/",
+        "stageName": state_name,
+        "sourceType": "batch",
+        "label": f"{state_name} container",
+    }
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    # Best-effort: report this sub-SFN execution to the orchestration bus; failures are swallowed
+    """Best-effort: report this sub-SFN execution + its log sources to the orchestration bus;
+    failures are swallowed."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -74,14 +102,23 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": SUB_EXECUTION_LABEL,
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": STATE_MACHINE_LOG_LABEL,
+        })
+    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)
+    if container_log:
+        logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,
@@ -100,7 +137,11 @@ def lambda_handler(event, context):
     Gates the input extension and starts the analysis state machine with the complete pipeline state.
     """
 
-    logger.info(f"Event: {event}")
+    # Identifiers only: the event carries the parent workflow's task token, so it is never rendered
+    # whole into a log line.
+    logger.info("Event", assetId=event.get("assetId", ""), databaseId=event.get("databaseId", ""),
+                workflowExecutionId=event.get("workflowExecutionId", ""),
+                inputS3AssetFilePath=event.get("inputS3AssetFilePath", ""), eventKeys=sorted(event))
     logger.info(f"Context: {context}")
 
     external_sfn_task_token = event.get('sfnExternalTaskToken', '') or ''
@@ -147,7 +188,10 @@ def lambda_handler(event, context):
 
     try:
         logger.info(f"Starting SFN State Machine: {STATE_MACHINE_ARN}")
-        logger.info(f"SFN Input: {json.dumps(sfn_input)}")
+        # The input carries externalSfnTaskToken; log its shape, not its content.
+        logger.info("SFN Input", jobName=job_name, inputKeys=sorted(sfn_input),
+                    inputS3AssetFilePath=sfn_input["inputS3AssetFilePath"],
+                    workflowExecutionId=sfn_input["workflowExecutionId"])
 
         sfn_response = sfn.start_execution(
             stateMachineArn=STATE_MACHINE_ARN,
@@ -155,7 +199,7 @@ def lambda_handler(event, context):
             input=json.dumps(sfn_input)
         )
 
-        logger.info(f"SFN Response: {sfn_response}")
+        logger.info("SFN Response", executionArn=sfn_response.get("executionArn", ""))
 
         # Best-effort: register this sub-SFN execution with the VAMS execution
         register_sub_execution(

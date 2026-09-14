@@ -665,6 +665,9 @@ holding:
 -   the `vectorsearch/embeddings.py` byte-identity check against its canonical
     `backend/backend/common/vectorsearch/embeddings.py`
     (`backendPipelines/system/genAiMetadata/lambda/tests/test_sysgenai_vendored_copies.py`)
+-   the system GenAI metadata pipeline's whole-state log scan
+    (`backendPipelines/system/genAiMetadata/lambda/tests/test_sysgenai_no_whole_state_logs.py`) — a
+    handler can always be edited back to `logger.info(f"Event: {event}")`
 -   the `_run_streaming` no-drift comparison across the four deployable NVIDIA containers
 -   `test_container_file_inventory.py`'s `from .utils` scan — the package is `vams_utils`, so that import
     fails at container **runtime** on a GPU Batch job, invisible to the image build and to CDK synth
@@ -690,9 +693,13 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     copy, then propagate to the rest in the same change, and add the new pipeline's path to the
     `LOGGER_COPIES` tuple in `backendPipelines/tests/test_pipeline_logger_identity.py`, which pins the
     single digest, fails on an unlisted copy, and is the list `test_pipeline_logger_formatter.py` reads
-    too. Log an
+    too. The system GenAI metadata pipeline's two container images carry the same file as well
+    (`containers/media/customLogging/logger.py`, `containers/blender/containerLogger.py`), listed in
+    the same tuple. Log an
     event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never
-    log a task token on its own.
+    log a task token on its own. `backendPipelines/system/genAiMetadata` goes further: no module there
+    may log the whole `event`, `state`, `sfn_input` or token at all — log identifiers, keys and counts —
+    and `lambda/tests/test_sysgenai_no_whole_state_logs.py` walks the AST to enforce it.
 
     A pipeline that reads the workflow manifest also vendors `manifestHelper.py`. **All copies must stay
     byte-identical** — `backendPipelines/tests/test_manifest_helper_byte_identity.py` holds every copy to

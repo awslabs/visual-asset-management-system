@@ -489,7 +489,11 @@ def lambda_handler(event, context):
     outcome on the results prefix.
     """
 
-    logger.info(f"Event: {event}")
+    # Identifiers only: the state carries externalSfnTaskToken, so it is never rendered whole.
+    logger.info("Event", jobName=event.get("jobName", ""), assetId=event.get("assetId", ""),
+                fileClass=event.get("fileClass", ""), renderBranch=event.get("renderBranch", ""),
+                analysisManifestS3Location=event.get("analysisManifestS3Location", ""),
+                eventKeys=sorted(event))
     logger.info(f"Context: {context}")
 
     manifest_uri = event["analysisManifestS3Location"]

@@ -7,7 +7,10 @@ pre-start rejection against the parent task token WITHOUT wrapping the callback 
 rule: a swallowed callback failure returns a payload-level 400 the caller never inspects)."""
 
 import datetime
+import importlib
 import json
+import os
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +18,25 @@ import pytest
 import sysgenai_harness as h
 
 _ALLOWED = ".glb,.png,.pdf"
+
+# The Fargate render branch's env, as the CDK sets it when the `useFargateRenderer` sub-flag is on:
+# the vended container group the job definition writes to + the physical job definition name.
+_BATCH_ENV = {
+    "BATCH_JOB_LOG_GROUP_NAME": "/aws/vendedlogs/Pipelines/SystemGenAiMetadataRenderabcdef1234",
+    "BATCH_JOB_LOG_GROUP_ARN":
+        "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/Pipelines/SystemGenAiMetadataRenderabcdef1234:*",
+    "BATCH_JOB_DEFINITION_NAME": "SystemGenAiMetadataRenderJobvams-test_vamsabcdef1234",
+}
+
+
+def _backend_validators():
+    """The backend's real validators module, so registered values are checked against the regexes
+    registerPipelineExecution applies rather than a copy of them. Appended to the END of sys.path so
+    nothing under backend/backend shadows this pipeline's own modules."""
+    backend_pkg = os.path.join(h.REPO_ROOT, "backend", "backend")
+    if backend_pkg not in sys.path:
+        sys.path.append(backend_pkg)
+    return importlib.import_module("common.validators")
 
 
 def _event(file_uri, **over):
@@ -183,6 +205,61 @@ class TestRegistration:
         assert detail["logs"][0]["logGroupName"] == h.DEFAULT_ENV["STATE_MACHINE_LOG_GROUP_NAME"]
         assert detail["logs"][0]["logGroupArn"] == h.DEFAULT_ENV["STATE_MACHINE_LOG_GROUP_ARN"]
         assert detail["logs"][0]["logStreamName"] == ""
+
+    def test_the_sub_execution_and_its_state_machine_log_are_labelled(self):
+        """The #321 contract: `label` on the sub-execution, `sourceType` + `label` on each log entry."""
+        mod = _load()
+        _run(mod, _event("s3://abkt/xidM/models/pump.glb"))
+        detail = json.loads(mod.events_client.put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "GenAI metadata processing"
+        assert len(detail["logs"]) == 1
+        assert detail["logs"][0]["sourceType"] == "stateMachine"
+        assert detail["logs"][0]["label"] == "GenAI metadata state machine"
+        validators = _backend_validators()
+        assert validators.validate_display_label("label", detail["subExecution"]["label"])[0]
+        assert validators.validate_display_label("label", detail["logs"][0]["label"])[0]
+
+    def test_registers_the_render_job_container_log_when_the_fargate_branch_is_deployed(self):
+        mod = h.load_handler("openPipeline", dict({"ALLOWED_INPUT_FILEEXTENSIONS": _ALLOWED}, **_BATCH_ENV))
+        _run(mod, _event("s3://abkt/xidM/models/pump.glb"))
+        detail = json.loads(mod.events_client.put_events.call_args.kwargs["Entries"][0]["Detail"])
+        sfn_log, batch_log = detail["logs"]
+        assert sfn_log["sourceType"] == "stateMachine"
+        assert batch_log == {
+            "logGroupArn": _BATCH_ENV["BATCH_JOB_LOG_GROUP_ARN"],
+            "logGroupName": _BATCH_ENV["BATCH_JOB_LOG_GROUP_NAME"],
+            "logStreamName": "",
+            "logStreamPrefix": _BATCH_ENV["BATCH_JOB_DEFINITION_NAME"] + "/default/",
+            "stageName": "FargateRenderJob",
+            "sourceType": "batch",
+            "label": "FargateRenderJob container",
+        }
+        # The values pass the validators the backend applies on receipt; a shape it rejects is
+        # dropped silently there and surfaces only as a missing log source.
+        validators = _backend_validators()
+        assert validators.validate_cloudwatch_log_group_arn("logGroupArn", batch_log["logGroupArn"])[0]
+        assert validators.validate_log_stream_name("logStreamPrefix", batch_log["logStreamPrefix"])[0]
+        assert validators.validate_sfn_state_name("stageName", batch_log["stageName"])[0]
+        assert validators.validate_display_label("label", batch_log["label"])[0]
+        assert not validators.validate_cloudwatch_log_group_arn(
+            "logGroupArn", "arn:aws:logs:us-east-1:123456789012:log-group//aws/batch/job")[0]
+
+    @pytest.mark.parametrize("missing", ["BATCH_JOB_DEFINITION_NAME", "BATCH_JOB_LOG_GROUP_NAME"])
+    def test_the_container_log_is_skipped_when_its_env_is_incomplete(self, missing):
+        env = dict({"ALLOWED_INPUT_FILEEXTENSIONS": _ALLOWED}, **_BATCH_ENV)
+        env[missing] = ""
+        if missing == "BATCH_JOB_LOG_GROUP_NAME":
+            env["BATCH_JOB_LOG_GROUP_ARN"] = ""
+        mod = h.load_handler("openPipeline", env)
+        _run(mod, _event("s3://abkt/xidM/models/pump.glb"))
+        detail = json.loads(mod.events_client.put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert [log["sourceType"] for log in detail["logs"]] == ["stateMachine"]
+
+    def test_the_batch_state_name_is_the_construct_id_of_the_fargate_task(self):
+        """The CDK test asserts every `*_STATE_NAME` literal here is a key of the synthesized ASL; this
+        pins the producer side of that contract to the one Batch state the construct declares."""
+        mod = _load()
+        assert mod.BATCH_STATE_NAME == "FargateRenderJob"
 
     def test_registration_is_skipped_without_a_prefix(self):
         mod = _load()

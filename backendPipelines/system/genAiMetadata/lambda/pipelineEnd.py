@@ -29,7 +29,11 @@ def lambda_handler(event, context):
     A caught Bedrock failure is recorded through execution.status.json and is not an error here.
     """
 
-    logger.info(f"Event Input: {event}")
+    # Identifiers only: the state carries externalSfnTaskToken, so it is never rendered whole.
+    logger.info("Event Input", jobName=event.get("jobName", ""), assetId=event.get("assetId", ""),
+                workflowExecutionId=event.get("workflowExecutionId", ""),
+                analysisStatus=event.get("analysisStatus", ""), hasError="error" in event,
+                eventKeys=sorted(event))
     logger.info(f"Context Input: {context}")
 
     external_sfn_task_token = event.get('externalSfnTaskToken', "")

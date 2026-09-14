@@ -30,6 +30,7 @@ import {
 } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
+import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 
 /** The zip handlers of the pipeline: one module per state-machine task plus the two entry Lambdas. */
 const LAMBDA_DIR = path.join(
@@ -170,6 +171,16 @@ export function buildVamsExecuteSystemGenAiMetadataFunction(
     return fun;
 }
 
+/**
+ * The Fargate render job definition whose container log stream prefix openPipeline registers, and
+ * the VAMS-owned group that job definition writes its container output to. Absent when the
+ * `useFargateRenderer` sub-flag is off: the pipeline then has no Batch state to register a source for.
+ */
+export interface OpenPipelineBatchLogProps {
+    jobDefinitionName: string;
+    logGroup: logs.ILogGroup;
+}
+
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -182,6 +193,7 @@ export function buildOpenPipelineFunction(
     pipelineSecurityGroups: ec2.ISecurityGroup[],
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
+    batchLogs: OpenPipelineBatchLogProps | undefined,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -199,6 +211,16 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // The Fargate render job's vended container log group + its job definition name,
+            // registered as the FargateRenderJob state's log source (streams are
+            // `<jobDefinitionName>/default/<task-id>`). Left unset without the renderer, and the
+            // producer then registers no container source.
+            ...(batchLogs
+                ? {
+                      ...vendedBatchJobLogGroupEnvironment(batchLogs.logGroup),
+                      BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
+                  }
+                : {}),
         },
     });
 
