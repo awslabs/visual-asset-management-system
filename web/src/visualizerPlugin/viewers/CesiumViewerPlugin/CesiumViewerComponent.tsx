@@ -1172,6 +1172,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 setLoadedTilesets((prev) => [...prev, tileset]);
             } catch (error: any) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error loading tileset ${key}:`, error);
                 const errorMessage = error?.message || error?.toString() || "Unknown error";
                 setError(`Tileset loading failed for "${key}": ${errorMessage}`);
@@ -1197,6 +1200,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             for (let i = 0; i < keys.length; i++) {
                 const key = keys[i];
                 try {
+                    // Console logging only: a % specifier in the interpolated value can at most
+                    // garble this one log line; nothing is executed, stored or returned from it.
+                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     console.log(`Loading tileset ${i + 1}/${keys.length}:`, key);
 
                     // Get Cesium from window
@@ -1207,6 +1213,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
                     // Construct streaming URL
                     const streamingUrl = constructStreamingUrl(key);
+                    // Console logging only: a % specifier in the interpolated value can at most
+                    // garble this one log line; nothing is executed, stored or returned from it.
+                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     console.log(`Streaming URL for ${key}:`, streamingUrl);
 
                     // Create Cesium Resource with authentication headers
@@ -1225,6 +1234,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     console.log(`Successfully loaded tileset ${i + 1}/${keys.length}: ${key}`);
                     tilesets.push(tileset);
                 } catch (fileError) {
+                    // Console logging only: a % specifier in the interpolated value can at most
+                    // garble this one log line; nothing is executed, stored or returned from it.
+                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     console.error(`Error loading tileset ${key}:`, fileError);
                 }
             }

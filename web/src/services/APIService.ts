@@ -196,7 +196,8 @@ export const fetchAllowedApiRoutes = async () => {
  * @param {string} [params.versionId] - Optional version ID
  * @param {string} [params.assetVersionId] - Optional asset version ID
  * @param {string} [params.downloadType="assetFile"] - Download type: "assetFile" (default) or "assetPreview"
- * @returns {Promise<boolean|{message}|any>}
+ * @returns {Promise<boolean|{message}|any>} `[true, url]` on success; `[false, message, status?]` on
+ *   failure, where `status` is the HTTP status when the request itself was rejected (e.g. 403, 410).
  */
 export const downloadAsset = async ({
     databaseId,
@@ -243,11 +244,14 @@ export const downloadAsset = async ({
         }
     } catch (error: any) {
         console.log(error);
+        // Failure tuple is [false, message, status?]. The status is the HTTP status of the download
+        // request when known (ApiError), so a caller fetching several entries can tell a per-entry
+        // authorization denial (401/403) or archived version (410) apart from a generic failure.
         // Check for 410 Gone status (archived file)
         if (error.status === 410) {
-            return [false, "This file version has been archived and cannot be downloaded"];
+            return [false, "This file version has been archived and cannot be downloaded", 410];
         }
-        return [false, error?.message];
+        return [false, error?.message, error?.status];
     }
 };
 
@@ -2228,6 +2232,9 @@ export const fetchAssetS3FilesPage = async ({
         });
 
         console.log(
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             `fetchAssetS3FilesPage (basic=${basic}, page=${startingToken ? "next" : "first"}):`,
             response?.items?.length || 0,
             "items"

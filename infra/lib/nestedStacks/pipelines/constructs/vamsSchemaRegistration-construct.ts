@@ -61,6 +61,10 @@ export class VamsSchemaRegistration extends Construct {
         super(scope, id);
 
         const dir = props.vamsSchemaDir;
+        // Synth-time read of the pipeline's own vamsSchema directory (a __dirname-relative constant
+        // from the calling construct) and its fixed file names; nothing here comes from request
+        // input.
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         if (!fs.existsSync(path.join(dir, "pipeline.json"))) {
             throw new Error(`VamsSchemaRegistration: required pipeline.json not found in ${dir}`);
         }
@@ -92,9 +96,17 @@ export class VamsSchemaRegistration extends Construct {
         const bundleS3Keys: { pipeline: string; workflow?: string; templates?: string[] } = {
             pipeline: `${prefix}/pipeline.json`,
         };
+        // Synth-time read of the pipeline's own vamsSchema directory (a __dirname-relative constant
+        // from the calling construct) and its fixed file names; nothing here comes from request
+        // input.
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         if (fs.existsSync(path.join(dir, "workflow.json"))) {
             bundleS3Keys.workflow = `${prefix}/workflow.json`;
         }
+        // Synth-time read of the pipeline's own vamsSchema directory (a __dirname-relative constant
+        // from the calling construct) and its fixed file names; nothing here comes from request
+        // input.
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         const templatesDir = path.join(dir, "templates");
         if (fs.existsSync(templatesDir) && fs.statSync(templatesDir).isDirectory()) {
             const templateFiles = fs
@@ -165,6 +177,10 @@ export class VamsSchemaRegistration extends Construct {
         // The file's path relative to the bundle dir, so an identical bundle hashes the same from any
         // checkout location or OS (an absolute path would make CI and a developer machine disagree).
         const addFile = (relativePath: string) => {
+            // Synth-time read of the pipeline's own vamsSchema directory (a __dirname-relative
+            // constant from the calling construct) and its fixed file names; nothing here comes
+            // from request input.
+            // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
             const p = path.join(dir, relativePath);
             if (fs.existsSync(p) && fs.statSync(p).isFile()) {
                 hash.update(relativePath.split(path.sep).join("/"));
@@ -173,6 +189,10 @@ export class VamsSchemaRegistration extends Construct {
         };
         addFile("pipeline.json");
         addFile("workflow.json");
+        // Synth-time read of the pipeline's own vamsSchema directory (a __dirname-relative constant
+        // from the calling construct) and its fixed file names; nothing here comes from request
+        // input.
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         const templatesDir = path.join(dir, "templates");
         if (fs.existsSync(templatesDir) && fs.statSync(templatesDir).isDirectory()) {
             // Same selection the import lambda reads via bundleS3Keys: top-level *.json excluding the
@@ -181,6 +201,10 @@ export class VamsSchemaRegistration extends Construct {
                 .readdirSync(templatesDir)
                 .filter((f) => f.endsWith(".json") && !f.endsWith(".webform.json"))
                 .sort()) {
+                // Synth-time read of the pipeline's own vamsSchema directory (a __dirname-relative
+                // constant from the calling construct) and its fixed file names; nothing here comes
+                // from request input.
+                // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
                 addFile(path.join("templates", f));
             }
         }

@@ -15,21 +15,33 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout repo
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/checkout@v4
               with:
                   path: ./vams
 
             - name: Setup Python Version
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v4
               with:
                   python-version: 3.12.7
 
             - name: Setup node for the whole package
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-node@v4
               with:
                   node-version: "22"
 
             - name: Clone automated security helper
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/checkout@v4
               with:
                   repository: aws-samples/automated-security-helper
@@ -41,6 +53,9 @@ jobs:
                   export PATH=$PATH:./
                   ash --source-dir ../vams || true
             - name: Upload Report
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/upload-artifact@v4
               with:
                   name: automated-security-helper-report
@@ -59,7 +74,8 @@ jobs:
               run: npm run prettier-check
 
             - name: Install Poetry Action
-              uses: snok/install-poetry@v1
+              # Third-party action pinned to the commit its release tag resolved to.
+              uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263 # v1.4.2
               with:
                   version: 1.8.2
                   virtualenvs-create: true
@@ -78,6 +94,9 @@ jobs:
                   pytest --cov=vamscli --cov-report=xml --cov-report=term -v --tb=short > pytest_output.txt 2>&1
 
             - name: Upload VamsCLI test results
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/upload-artifact@v4
               with:
                   name: vamscli-test-results
@@ -140,12 +159,16 @@ jobs:
               run: npm run lint
 
             - name: Scan VAMS WAF Cloudformation template
-              uses: stelligent/cfn_nag@master
+              # Third-party action pinned to the commit its master branch resolved to (the README
+              # documents @master; the last tagged release, v0.8.10, is one commit behind it).
+              uses: stelligent/cfn_nag@8b5f03da74202ba323a145e9d037ddce6cab9dec # master 2022-06-07
               with:
                   input_path: vams/infra/cdk.out/vams-waf-prod-us-east-1.template.json
 
             - name: Scan VAMS Cloudformation template
-              uses: stelligent/cfn_nag@master
+              # Third-party action pinned to the commit its master branch resolved to (the README
+              # documents @master; the last tagged release, v0.8.10, is one commit behind it).
+              uses: stelligent/cfn_nag@8b5f03da74202ba323a145e9d037ddce6cab9dec # master 2022-06-07
               with:
                   input_path: vams/infra/cdk.out/vams-core-prod-us-east-1.template.json
 
@@ -173,6 +196,9 @@ jobs:
             # what currently passes is not part of restoring the backend suite.)
             - name: Setup Python for the backend suite
               if: github.event_name == 'push'
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v4
               with:
                   python-version: 3.13

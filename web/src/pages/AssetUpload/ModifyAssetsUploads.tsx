@@ -108,6 +108,9 @@ const getFilesFromFileHandles = async (
                 total: file.size,
             });
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Error processing file at index ${i}:`, error);
             // Add a placeholder entry with error status
             fileUploadTableItems.push({

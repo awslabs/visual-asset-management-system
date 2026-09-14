@@ -788,6 +788,10 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         "cosmos",
                         "reason",
                         "vamsSchema",
+                        // Synth-time path built from __dirname and the deployment config's typed
+                        // model selection; CDK resolves it on the operator's machine, never from
+                        // request input.
+                        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
                         `reason-${modelSize.toLowerCase()}`
                     ),
                     resourceOverrides: {

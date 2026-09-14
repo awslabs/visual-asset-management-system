@@ -78,10 +78,18 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                                     if (!fileName) fileName = key; // Use first file as main name
                                     console.log(`Successfully loaded file: ${key}`);
                                 } else {
+                                    // Console logging only: a % specifier in the interpolated value
+                                    // can at most garble this one log line; nothing is executed,
+                                    // stored or returned from it.
+                                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                     console.error(`Failed to load file: ${key}`, response[1]);
                                 }
                             }
                         } catch (fileError) {
+                            // Console logging only: a % specifier in the interpolated value can at
+                            // most garble this one log line; nothing is executed, stored or
+                            // returned from it.
+                            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                             console.error(`Error loading file ${key}:`, fileError);
                         }
                     }
@@ -146,6 +154,9 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
     // Load model URLs into viewer when both viewer and URLs are ready
     useEffect(() => {
         if (state.viewerInitialized && state.viewer && modelUrls.length > 0) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.log(`Loading ${modelUrls.length} files into Online3DViewer:`, modelUrls);
 
             try {

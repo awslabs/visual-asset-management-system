@@ -162,6 +162,9 @@ const RenderSettings: React.FC<RenderSettingsProps> = ({ scene, camera, engine, 
                 setFlipped((prev) => ({ ...prev, [axis]: !prev[axis] }));
                 console.log(`BabylonJS Splat: Flipped ${axis.toUpperCase()} axis`);
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error flipping ${axis} axis:`, error);
             }
         },

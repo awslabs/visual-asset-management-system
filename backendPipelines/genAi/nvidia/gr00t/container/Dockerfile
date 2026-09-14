@@ -74,4 +74,8 @@ RUN mkdir -p /workspace/scripts
 COPY finetune_gr00t.py /workspace/scripts/finetune_gr00t.py
 
 WORKDIR /opt/ml/code
+# Isolated AWS Batch GPU job (no inbound listener) built on a root-only NVIDIA base image; running
+# as a non-root USER needs a uid/volume-permission design first -- suppressed for the 2.6.1 gate per
+# release policy, flagged for follow-up.
+# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]
