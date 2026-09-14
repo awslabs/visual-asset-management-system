@@ -1,17 +1,20 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""`vector.embedding.ready` -> one vector item (spec §7.2, row 1).
+"""`vector.embedding.ready` -> one vector item.
 
-The indexer reads the embedding document, rejects a model/dimension mismatch, derives `isLatest` from the
-key's current S3 version, `isArchived` from a current delete marker or an asset row found only in the
-`{db}#deleted` partition, builds the item with the five string filter attributes and the two flags as
-Python bools (the store serialises them to `"true"`/`"false"`; a string here would be a `TypeError` in
-`VectorItem`, which the indexer lets fail the record), and deletes the document. A latest WHOLE-FILE
-document is written through `put_latest_item` (the store's transactional put-and-flip, scoped to the file's
-OTHER versions); every other document — an older version, or a segment document of any version — through
-the plain `put_item`, with no sibling query. An empty `bucketId` in the event is resolved from the asset row
-(the pipeline itself never emits one); an empty `versionId` (unversioned bucket) is stored as `null`.
+The indexer reads the embedding document from the auxiliary bucket (an event locating it anywhere else,
+or an object over `EMBEDDING_DOCUMENT_MAX_BYTES`, is dropped untouched), rejects a model/dimension
+mismatch, derives `isLatest` from the key's current S3 version, `isArchived` from a current delete marker
+or an asset row found only in the `{db}#deleted` partition, builds the item with the five string filter
+attributes and the two flags as Python bools (the store serialises them to `"true"`/`"false"`; a string
+here would be a `TypeError` in `VectorItem`, which the indexer lets fail the record), and deletes the
+document. A latest WHOLE-FILE document is written through `put_latest_item` (the store's transactional
+put-and-flip, scoped to the file's OTHER versions) and the key's S3 state is then read again: when a newer
+version landed in between, the file's latest marks are realigned to it. Every other document — an older
+version, or a segment document of any version — goes through the plain `put_item`, with no sibling query.
+An empty `bucketId` in the event is resolved from the asset row (the pipeline itself never emits one); an
+empty `versionId` (unversioned bucket) is stored as `null`.
 
 A document is the file version's whole-file vector or one of its segment vectors. The six segment fields
 are read from the Detail, then the document, then default to the whole-file values; an unknown kind, an
@@ -23,6 +26,7 @@ the version's segment items of other runs (`delete_other_run_segments`); a segme
 
 import io
 import json
+import os
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -31,6 +35,9 @@ from botocore.exceptions import ClientError
 
 from tests.handlers.vectorsearch.vectorsearch_support import FakeVectorStore, load_handler, seeded_item
 
+# The auxiliary bucket as common.resourceNames resolves it in tests (the root conftest's env override).
+AUX_BUCKET = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
+DOCUMENT_KEY = "db1/a1/temp/embedding/abc.json"
 WHOLE_FILE_SEGMENT = {"segmentKey": "", "segmentKind": "none", "segmentLabel": "",
                       "segmentStartMs": None, "segmentEndMs": None, "segmentCount": 0}
 VIDEO_SEGMENT = {"segmentKey": "t0000083456", "segmentKind": "videoTime",
@@ -47,7 +54,7 @@ DETAIL = {
     "sourceModalities": ["render", "text"], "pipelineExecutionId": "pe-1",
     "workflowExecutionId": "we-1", "generatedAt": "2026-09-08T00:00:00+00:00",
     **WHOLE_FILE_SEGMENT,
-    "documentS3Location": "s3://test-aux-bucket/db1/a1/temp/embedding/abc.json",
+    "documentS3Location": f"s3://{AUX_BUCKET}/{DOCUMENT_KEY}",
 }
 DOCUMENT = {**DETAIL, "embedding": [0.1234567891234, 0.2, 0.3, 0.4], "sourceText": "a bracket"}
 
@@ -125,16 +132,18 @@ class TestLatestLiveVersion:
         assert item.pipelineExecutionId == "pe-1" and item.workflowExecutionId == "we-1"
         assert item.indexedAt.endswith("+00:00")
 
-    def test_reads_the_document_from_the_uri_and_deletes_it_after_the_write(self, indexer):
+    def test_reads_the_document_from_the_auxiliary_bucket_and_deletes_it_after_the_write(self, indexer):
         indexer.handle_embedding_ready(dict(DETAIL))
-        indexer.s3_client.get_object.assert_called_once_with(
-            Bucket="test-aux-bucket", Key="db1/a1/temp/embedding/abc.json")
-        indexer.s3_client.delete_object.assert_called_once_with(
-            Bucket="test-aux-bucket", Key="db1/a1/temp/embedding/abc.json")
+        indexer.s3_client.get_object.assert_called_once_with(Bucket=AUX_BUCKET, Key=DOCUMENT_KEY)
+        indexer.s3_client.delete_object.assert_called_once_with(Bucket=AUX_BUCKET, Key=DOCUMENT_KEY)
 
     def test_head_object_resolves_the_object_under_the_asset_location_key(self, indexer):
         indexer.handle_embedding_ready(dict(DETAIL))
-        indexer.s3_client.head_object.assert_called_once_with(Bucket="assets", Key="prefix-a/a1/models/part.glb")
+        # The state read before the write and the re-check after it, both on the same object; nothing
+        # else heads an object.
+        assert 1 <= indexer.s3_client.head_object.call_count <= 2
+        assert {tuple(sorted(c.kwargs.items())) for c in indexer.s3_client.head_object.call_args_list} == {
+            (("Bucket", "assets"), ("Key", "prefix-a/a1/models/part.glb"))}
 
     def test_preview_file_key_is_looked_up_beside_the_object(self, indexer):
         indexer.s3_client.list_objects_v2.return_value = {
@@ -225,8 +234,10 @@ class TestSegmentDocuments:
         assert (item.segmentStartMs, item.segmentEndMs, item.segmentCount) == (None, None, 0)
         assert store.names() == ["put_latest_item", "delete_other_run_segments"]
         assert store.calls[1] == ("delete_other_run_segments", "db1:a1", "/models/part.glb", "v2", "pe-1")
+        # The two stale v2 chunks are gone; the current run's chunk, the v1 chunk and the whole-file item
+        # just written remain.
         assert sorted(seeded["fileVersionKey"] for seeded in store.seeded) == [
-            "/models/part.glb#v1#c000001", "/models/part.glb#v2#c000001"]
+            "/models/part.glb#v1#c000001", "/models/part.glb#v2", "/models/part.glb#v2#c000001"]
         assert "staleSegments=2" in outcome.detail
 
     def test_a_detail_without_segment_fields_gets_the_whole_file_defaults(self, indexer):
@@ -287,6 +298,134 @@ class TestSegmentDocuments:
         keys = [(item.filePath, item.versionId, item.segmentKey) for item in indexer.vector_store.items]
         assert keys == [("/models/part.glb", "v2", "t0000083456")] * 2
         assert indexer.s3_client.delete_object.call_count == 2
+
+
+@pytest.mark.unit
+class TestDocumentBoundary:
+    """The document is read from, and deleted in, the auxiliary bucket only, and only up to a size cap."""
+
+    def test_the_auxiliary_bucket_is_resolved_through_resource_names(self, indexer):
+        assert indexer.aux_bucket_name == AUX_BUCKET
+        assert indexer.aux_bucket_name == indexer.get_bucket_name(indexer.ResourceKeys.ASSET_AUXILIARY_BUCKET)
+
+    def test_a_document_located_in_another_bucket_is_dropped_untouched(self, indexer):
+        # The event's location is publisher input; a bucket other than the auxiliary one is never read or
+        # deleted from, even one this role could reach.
+        outcome = indexer.handle_embedding_ready(
+            {**DETAIL, "documentS3Location": f"s3://some-asset-bucket/{DOCUMENT_KEY}"})
+        assert outcome.ok and outcome.action == "drop" and "auxiliary bucket" in outcome.detail
+        indexer.s3_client.get_object.assert_not_called()
+        indexer.s3_client.delete_object.assert_not_called()
+        indexer.s3_client.head_object.assert_not_called()
+        assert indexer.vector_store.calls == []
+
+    def test_a_document_over_the_size_cap_by_content_length_is_dropped_without_being_read(self, indexer):
+        body = MagicMock()
+        indexer.s3_client.get_object.side_effect = lambda **kw: {
+            "ContentLength": indexer.EMBEDDING_DOCUMENT_MAX_BYTES + 1, "Body": body}
+        outcome = indexer.handle_embedding_ready(dict(DETAIL))
+        assert outcome.ok and outcome.action == "drop" and str(indexer.EMBEDDING_DOCUMENT_MAX_BYTES) in outcome.detail
+        body.read.assert_not_called()
+        assert indexer.vector_store.calls == []
+        indexer.s3_client.delete_object.assert_not_called()
+
+    def test_a_body_longer_than_the_cap_is_dropped_after_a_bounded_read(self, indexer):
+        # No ContentLength on the response: the body itself is read one byte past the cap and refused.
+        oversized = b"[" + b"0," * (indexer.EMBEDDING_DOCUMENT_MAX_BYTES // 2 + 1) + b"0]"
+        assert len(oversized) > indexer.EMBEDDING_DOCUMENT_MAX_BYTES
+        stream = io.BytesIO(oversized)
+        indexer.s3_client.get_object.side_effect = lambda **kw: {"Body": stream}
+        outcome = indexer.handle_embedding_ready(dict(DETAIL))
+        assert outcome.ok and outcome.action == "drop"
+        assert stream.tell() <= indexer.EMBEDDING_DOCUMENT_MAX_BYTES + 1
+        assert indexer.vector_store.calls == []
+        indexer.s3_client.delete_object.assert_not_called()
+
+    def test_a_document_at_the_cap_is_read(self, indexer):
+        # The control for the two drops above: a body of exactly the cap, with a matching ContentLength,
+        # is read and written like any other.
+        padded = dict(DOCUMENT)
+        raw = json.dumps(padded).encode("utf-8")
+        padded["sourceText"] = "x" * (indexer.EMBEDDING_DOCUMENT_MAX_BYTES - len(raw) + len(padded["sourceText"]))
+        raw = json.dumps(padded).encode("utf-8")
+        assert len(raw) == indexer.EMBEDDING_DOCUMENT_MAX_BYTES
+        indexer.s3_client.get_object.side_effect = lambda **kw: {"ContentLength": len(raw), "Body": io.BytesIO(raw)}
+        outcome = indexer.handle_embedding_ready(dict(DETAIL))
+        assert outcome.ok and outcome.action == "put"
+        assert indexer.vector_store.names() == ["put_latest_item", "delete_other_run_segments"]
+
+    def test_a_document_that_is_not_a_json_object_is_dropped(self, indexer):
+        indexer.s3_client.get_object.side_effect = lambda **kw: {"Body": io.BytesIO(b"[1, 2, 3]")}
+        outcome = indexer.handle_embedding_ready(dict(DETAIL))
+        assert outcome.ok and outcome.action == "drop"
+        assert indexer.vector_store.calls == []
+
+
+@pytest.mark.unit
+class TestNewerVersionRace:
+    """A whole-file document of one version indexed while a newer version of the file lands: the latest
+    write is re-checked against S3 and the file's marks realigned when the current version moved on."""
+
+    def _versions_in_order(self, indexer, *version_ids):
+        indexer.s3_client.head_object.side_effect = [{"VersionId": v, "Metadata": {}} for v in version_ids]
+
+    def test_v1_indexed_after_v2_uploaded_leaves_v2_the_latest_version(self, indexer):
+        # v2's whole-file item is already stored as latest (its own event was processed first). The v1
+        # document reads S3 while v1 is still current, writes v1 latest (demoting v2), then re-reads S3,
+        # finds v2 current, and realigns: v2 back to latest, its own v1 item not latest.
+        store = FakeVectorStore(seed=[seeded_item("db1:a1", "/models/part.glb#v2", "v2", is_latest=True)])
+        indexer.vector_store = store
+        self._versions_in_order(indexer, "v1", "v2")
+        outcome = indexer.handle_embedding_ready({**DETAIL, "versionId": "v1"})
+        assert outcome.ok and outcome.action == "put"
+        assert store.names() == ["put_latest_item", "set_latest_for_file_version", "delete_other_run_segments"]
+        assert store.calls[1] == ("set_latest_for_file_version", "db1:a1", "/models/part.glb", "v2")
+        latest = {row["fileVersionKey"]: row["isLatest"] for row in store.seeded}
+        assert latest == {"/models/part.glb#v2": True, "/models/part.glb#v1": False}
+        assert "realigned=2" in outcome.detail
+        # The sweep is still the v1 document's own: it clears other runs' v1 segments, not v2's.
+        assert store.calls[2] == ("delete_other_run_segments", "db1:a1", "/models/part.glb", "v1", "pe-1")
+
+    def test_v1_indexed_after_v2_uploaded_but_before_v2_is_stored_demotes_itself(self, indexer):
+        # v2's item has not landed yet; the realignment demotes v1 and v2's own event later writes v2 latest
+        # with nothing left to demote.
+        store = FakeVectorStore()
+        indexer.vector_store = store
+        self._versions_in_order(indexer, "v1", "v2")
+        outcome = indexer.handle_embedding_ready({**DETAIL, "versionId": "v1"})
+        assert outcome.ok
+        assert ("set_latest_for_file_version", "db1:a1", "/models/part.glb", "v2") in store.calls
+        assert {row["fileVersionKey"]: row["isLatest"] for row in store.seeded} == {"/models/part.glb#v1": False}
+
+    def test_a_write_the_recheck_confirms_is_not_realigned(self, indexer):
+        store = FakeVectorStore(seed=[seeded_item("db1:a1", "/models/part.glb#v1", "v1", is_latest=True)])
+        indexer.vector_store = store
+        self._versions_in_order(indexer, "v2", "v2")
+        outcome = indexer.handle_embedding_ready(dict(DETAIL))
+        assert outcome.ok and outcome.action == "put"
+        assert "set_latest_for_file_version" not in store.names()
+        assert {row["fileVersionKey"]: row["isLatest"] for row in store.seeded} == {
+            "/models/part.glb#v1": False, "/models/part.glb#v2": True}
+        assert "flipped=1" in outcome.detail and "realigned=0" in outcome.detail
+
+    def test_a_non_latest_or_segment_write_is_not_rechecked(self, indexer):
+        _serve_document(indexer, DOCUMENT)
+        indexer.s3_client.head_object.return_value = {"VersionId": "v3", "Metadata": {}}
+        first = indexer.handle_embedding_ready(dict(DETAIL))
+        second = indexer.handle_embedding_ready({**DETAIL, **VIDEO_SEGMENT})
+        assert first.action == second.action == "put"
+        # One state read per document: neither a not-latest whole-file put nor a segment put re-reads S3.
+        assert indexer.s3_client.head_object.call_count == 2
+        assert "set_latest_for_file_version" not in indexer.vector_store.names()
+
+    def test_a_file_deleted_between_the_write_and_the_recheck_is_left_to_the_delete_rule(self, indexer):
+        store = FakeVectorStore()
+        indexer.vector_store = store
+        indexer.s3_client.head_object.side_effect = [{"VersionId": "v2", "Metadata": {}}, _not_found()]
+        indexer.s3_client.list_object_versions.return_value = {"Versions": [], "DeleteMarkers": []}
+        outcome = indexer.handle_embedding_ready(dict(DETAIL))
+        assert outcome.ok and outcome.action == "put"
+        assert "set_latest_for_file_version" not in store.names()
 
 
 @pytest.mark.unit

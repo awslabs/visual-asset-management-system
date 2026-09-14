@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""systemWorkflowLauncher: one execute-workflow cross-call per launch message (spec §7.1).
+"""systemWorkflowLauncher: one execute-workflow cross-call per launch message.
 
 The launcher invokes executeWorkflowV2 exactly once (no retry: the call is not idempotent), as
 SYSTEM_USER, with `triggerType: "systemReindex"` and `executionGroupId: vec-{runId}-{chunk}`, using the
@@ -56,6 +56,21 @@ def launcher():
     m.workflow_triggers_table.query.return_value = {"Items": [TRIGGER_ROW]}
     m._trigger_row_cache.clear()
     return m
+
+
+@pytest.mark.unit
+class TestEnvironment:
+    def test_the_workflow_database_id_has_no_default_and_fails_the_load(self, monkeypatch):
+        # The workflow identity is deployment configuration; a silent literal would launch against a
+        # workflow the deployment never registered.
+        monkeypatch.delenv("GENAI_METADATA_WORKFLOW_DATABASE_ID")
+        with pytest.raises(KeyError, match="GENAI_METADATA_WORKFLOW_DATABASE_ID"):
+            load_handler("systemWorkflowLauncher")
+
+    def test_the_workflow_database_id_is_read_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv("GENAI_METADATA_WORKFLOW_DATABASE_ID", "SYSTEMDB")
+        m = load_handler("systemWorkflowLauncher")
+        assert m.system_workflow_database_id == "SYSTEMDB"
 
 
 @pytest.mark.unit

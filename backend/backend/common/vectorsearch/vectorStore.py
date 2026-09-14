@@ -16,7 +16,9 @@ versions go through ``put_latest_item``: a plain ``PutItem`` when nothing needs 
 ``TransactWriteItems`` of at most DEMOTION_BATCH_ACTIONS actions -- the ``Put`` and the first 24
 conditional demotions together, the rest in batches of 25 -- sized to the write throughput of the one
 partition an asset's items share; until the last batch commits an older segmented version's remaining
-chunks read as latest beside the new version. The file-wide and asset-wide walks (the archive flips,
+chunks read as latest beside the new version. ``set_latest_for_file_version`` walks a file and aligns
+every item's ``isLatest`` to one version, for the writer that finds its latest write raced a newer
+upload. The file-wide and asset-wide walks (the archive flips,
 the S3 ObjectCreated demotion, the deletes) page under a caller-supplied time budget and hand back the
 cursor to resume from, so an item collection of any size is processed across invocations. The
 low-level client is used throughout because neither the vector operations nor the ``L``-of-``N``
@@ -194,6 +196,7 @@ class VectorStore(Protocol):
         self, pk: str, key_path: str, version_id: str, *, start_key: Optional[dict] = None,
         time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
     ) -> Tuple[int, Optional[dict]]: ...
+    def set_latest_for_file_version(self, pk: str, key_path: str, version_id: str) -> int: ...
     def delete_file(
         self, pk: str, key_path: str, *, start_key: Optional[dict] = None,
         time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
@@ -496,6 +499,22 @@ class DynamoDbVectorStore:
             start_key=start_key, time_remaining_fn=time_remaining_fn, min_remaining_ms=min_remaining_ms,
         )
 
+    def set_latest_for_file_version(self, pk: str, key_path: str, version_id: str) -> int:
+        """Make ``version_id`` the file's one latest version: its items are flipped to ``isLatest="true"``
+        and every other item under the file's key path to ``"false"``, each conditionally on the value
+        read. Walks the whole file; returns the number of items changed. Used when a latest write turns
+        out to have raced a newer upload, so the marks a ``put_latest_item`` demoted are restored."""
+        def align(items: List[Dict[str, Any]]) -> int:
+            current = [image for image in items if image.get("versionId", {}).get("S") == version_id]
+            others = [image for image in items if image.get("versionId", {}).get("S") != version_id]
+            return self._flip(current, "isLatest", "true") + self._flip(others, "isLatest", "false")
+
+        changed, _ = self._paged(
+            self._file_query(pk, key_path, _FILE_ITEM_PROJECTION), align,
+            start_key=None, time_remaining_fn=None, min_remaining_ms=0,
+        )
+        return changed
+
     def set_archived_for_file(
         self, pk: str, key_path: str, archived: bool, *, start_key: Optional[dict] = None,
         time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
@@ -536,10 +555,29 @@ class DynamoDbVectorStore:
             start_key=start_key, time_remaining_fn=time_remaining_fn, min_remaining_ms=min_remaining_ms,
         )
 
+    def _delete_if_other_run(self, image: Dict[str, Any], pipeline_execution_id: str) -> int:
+        """Delete one segment item unless it now belongs to ``pipeline_execution_id``; 1 when deleted, 0
+        when the current run rewrote the key between the read and the delete (segment keys are shared
+        across runs, so the current run's own segment may have landed at the stale item's key)."""
+        try:
+            self._client.delete_item(
+                TableName=self._table_name,
+                Key=key_of(image),
+                ConditionExpression="pipelineExecutionId <> :run",
+                ExpressionAttributeValues={":run": {"S": pipeline_execution_id}},
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return 0
+            raise
+        return 1
+
     def delete_other_run_segments(self, pk: str, key_path: str, version_id: str, pipeline_execution_id: str) -> int:
         """Delete the segment items of one file version that a pipeline run other than
         ``pipeline_execution_id`` published; the current run's own segments, whichever order they arrive
-        in, are left alone. ``version_id`` is the stored form (``null`` on an unversioned bucket)."""
+        in, are left alone. Each delete is conditional on the item still carrying another run's id, so a
+        segment the current run wrote at the same key after the read survives. ``version_id`` is the
+        stored form (``null`` on an unversioned bucket). Returns the number of items deleted."""
         segments = self._query(self._query_kwargs(
             "#pk = :pk AND begins_with(#sk, :prefix)",
             {":pk": {"S": pk}, ":prefix": {"S": f"{key_path}#{version_id or 'null'}#"}},
@@ -549,7 +587,10 @@ class DynamoDbVectorStore:
             image for image in segments
             if image.get("pipelineExecutionId", {}).get("S") != pipeline_execution_id
         ]
-        return self.delete_keys(stale)
+        if not stale:
+            return 0
+        with ThreadPoolExecutor(max_workers=FLIP_WORKERS) as pool:
+            return sum(pool.map(lambda image: self._delete_if_other_run(image, pipeline_execution_id), stale))
 
     def delete_keys(self, keys: List[dict]) -> int:
         deleted = 0

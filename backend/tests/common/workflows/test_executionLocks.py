@@ -93,14 +93,28 @@ class TestLockTtl:
     def test_a_short_task_timeout_is_lifted_to_the_floor(self):
         assert el.lock_ttl_seconds([{"executionConfig": {"taskTimeout": "3600"}}]) == 86400 + 1800
 
-    def test_the_longest_task_timeout_wins_when_it_exceeds_the_floor(self):
+    def test_two_pipelines_lock_for_the_sum_of_their_timeouts(self):
+        # The pipelines run one after another: a workflow of a 2-day and a 1-day pipeline can run for three
+        # days, so a lock sized to the longest single pipeline would expire while the run is still going
+        # and admit a second launch on the same file version.
+        records = [{"executionConfig": {"taskTimeout": "172800"}},
+                   {"executionConfig": {"taskTimeout": "86400"}}]
+        assert el.lock_ttl_seconds(records) == 172800 + 86400 + 1800
+        assert el.lock_ttl_seconds(records) > el.lock_ttl_seconds(records[:1])
+
+    def test_a_pipeline_without_a_timeout_counts_the_one_day_default_in_the_sum(self):
         records = [{"executionConfig": {"taskTimeout": "100000"}},
                    {"executionConfig": {"taskTimeout": "604800"}},
                    {"executionConfig": {"taskTimeout": ""}}]
-        assert el.lock_ttl_seconds(records) == 604800 + 1800
+        assert el.lock_ttl_seconds(records) == 100000 + 604800 + 86400 + 1800
 
-    def test_a_malformed_or_missing_timeout_counts_as_the_floor(self):
-        assert el.lock_ttl_seconds([{"executionConfig": {"taskTimeout": "abc"}}, {}, None]) == 86400 + 1800
+    def test_a_malformed_or_missing_timeout_counts_as_one_day_each(self):
+        assert el.lock_ttl_seconds([{"executionConfig": {"taskTimeout": "abc"}}, {}, None]) == 3 * 86400 + 1800
+
+    @pytest.mark.parametrize("raw, seconds", [("3600", 3600), (7200, 7200), ("", 86400), (None, 86400),
+                                              ("abc", 86400), ("0", 86400), ("-5", 86400)])
+    def test_one_pipelines_bound(self, raw, seconds):
+        assert el.pipeline_timeout_seconds({"executionConfig": {"taskTimeout": raw}}) == seconds
 
 
 @pytest.mark.unit

@@ -1,8 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Asset- and file-wide rules hand off under the time budget and resume from a continuation message
-(spec §7.2 closing paragraph).
+"""Asset- and file-wide rules hand off under the time budget and resume from a continuation message.
 
 Each of the five rules calls its store method with the invocation's remaining-time callable and, when the
 store returns a `next_key`, sends ONE `vector.indexer.continue` message to the indexer's own queue naming

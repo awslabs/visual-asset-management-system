@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""vectorReindexer: `enqueue` and `both` (spec §7.3).
+"""vectorReindexer: `enqueue` and `both`.
 
 Enumerated files are filtered by the system workflow's aggregate input filters (the same finite list its
 upload trigger applies), sent in SendMessageBatch entries of ten, chunked per 1,000 files into
@@ -59,6 +59,20 @@ def reindexer():
         _ref("a1", "/part.glb"), _ref("a1", "/notes.txt"), _ref("a2", "/photo.png"),
         _ref("a2", "/scratch.tmp.glb")], None))
     return m
+
+
+@pytest.mark.unit
+class TestEnvironment:
+    def test_the_workflow_database_id_has_no_default_and_fails_the_load(self, monkeypatch):
+        # The system workflow's database id is deployment configuration, read the same fail-fast way as
+        # GENAI_METADATA_WORKFLOW_ID; a silent literal would enqueue launches for an unregistered workflow.
+        monkeypatch.delenv("GENAI_METADATA_WORKFLOW_DATABASE_ID")
+        with pytest.raises(KeyError, match="GENAI_METADATA_WORKFLOW_DATABASE_ID"):
+            load_handler("vectorReindexer")
+
+    def test_the_workflow_database_id_is_read_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv("GENAI_METADATA_WORKFLOW_DATABASE_ID", "SYSTEMDB")
+        assert load_handler("vectorReindexer").system_workflow_database_id == "SYSTEMDB"
 
 
 @pytest.mark.unit

@@ -1,11 +1,11 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""vectorReindexer: the payload contract and the `clear` operation (spec §7.3).
+"""vectorReindexer: the payload contract and the `clear` operation.
 
 `clear` pages the table on the two key attributes only (never the embedding) and batch-deletes; when
 fewer than 90 s remain it re-invokes itself asynchronously with a continuation carrying the scan cursor.
-With `databaseId` the scan is filtered to partition keys beginning `<databaseId>:` (spec §7.3), so a
+With `databaseId` the scan is filtered to partition keys beginning `<databaseId>:`, so a
 scoped clear never touches another database's vectors; the Stubber tests pin that filter on the wire.
 Unknown top-level keys are rejected: the migration tooling and operators are the only callers, and a
 misspelt `dry_run` silently running a real clear is the failure this guards.
@@ -121,7 +121,7 @@ class TestClear:
 
 @pytest.mark.unit
 class TestScopedClear:
-    """`databaseId` confines `clear` to partition keys beginning `<databaseId>:` (spec §7.3). `K_OTHER`
+    """`databaseId` confines `clear` to partition keys beginning `<databaseId>:`. `K_OTHER`
     belongs to `db10`, so a prefix without the trailing colon would wrongly sweep it up."""
 
     @pytest.fixture
@@ -175,7 +175,7 @@ def _scan_params(m, **extra):
 
 @pytest.mark.unit
 class TestScanFilterContract:
-    """The scoped scan reaches DynamoDB with the spec §7.3 FilterExpression and the unscoped scan carries
+    """The scoped scan reaches DynamoDB with the `begins_with` FilterExpression and the unscoped scan carries
     none. `Stubber` matches `expected_params` exactly, so a key present in the call but absent from the
     expectation (or the reverse) fails the test — the absence of the filter is asserted, not assumed."""
 

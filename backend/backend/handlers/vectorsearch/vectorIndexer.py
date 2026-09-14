@@ -7,12 +7,14 @@ Consumes one SQS queue fed by four sources and maps each record onto the lifecyc
 vector item:
 
 * `vector.embedding.ready` events from the orchestration bus (EventBridge -> SQS; the event JSON is the
-  message body): read the embedding document from the auxiliary bucket, resolve the bucket registration
+  message body): read the embedding document from the auxiliary bucket (an event locating it in any other
+  bucket, or a document over EMBEDDING_DOCUMENT_MAX_BYTES, is dropped), resolve the bucket registration
   from the event's `bucketId` or, when the pipeline left it empty, the asset row's, decide `isLatest` /
   `isArchived` against live S3 state and the asset row, write the item, delete the document. A document
   is either the file version's whole-file vector or one of its segment vectors (a video time window or a
   content chunk, keyed `{keyPath}#{versionId}#{segmentKey}`); a whole-file document also removes the
-  version's segment items left by an earlier run.
+  version's segment items left by an earlier run. After a latest whole-file write the key's S3 state is
+  read again: when a newer version landed in between, the file's latest marks are realigned to it.
 * Bucket-sync S3 records republished on the file indexer SNS topic (the SQS -> SNS -> SQS -> SNS -> S3
   envelope `fileIndexer.py` unwraps): a new version flips the file's other items to `isLatest="false"`, a
   delete marker archives them, a marker removal un-archives them, a permanent delete removes them.
@@ -54,7 +56,7 @@ from common.indexing.documentIds import (
     build_vector_file_version_key,
     vector_file_key_path,
 )
-from common.resourceNames import ResourceKeys, get_table_name
+from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
 from common.s3 import list_all_object_versions
 from common.s3MetadataKeys import ASSET_ID_METADATA_KEY, DATABASE_ID_METADATA_KEY
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, key_has_reserved_segment
@@ -104,6 +106,9 @@ REQUIRED_DETAIL_KEYS = ('databaseId', 'assetId', 'filePath',
                         'embeddingModelId', 'embeddingDimensions', 'documentS3Location')
 # Present in every event but legitimately empty: '' is an unversioned bucket, stored as 'null'.
 PRESENT_DETAIL_KEYS = ('versionId',)
+# Largest embedding document read: the document is one embedding of at most a few thousand numbers plus
+# an excerpt of the embedded text, well under this; a larger object is not a document this indexer wrote.
+EMBEDDING_DOCUMENT_MAX_BYTES = 1_048_576
 
 try:
     vector_table_name = get_table_name(ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE)
@@ -112,7 +117,8 @@ try:
     vector_index_name = os.environ["VECTOR_INDEX_NAME"]
     embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
     embedding_dimensions = int(os.environ["EMBEDDING_DIMENSIONS"])
-    aux_bucket_name = os.environ["AUX_BUCKET_NAME"]
+    # Embedding documents live in the auxiliary bucket only; an event naming any other bucket is dropped.
+    aux_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
     vector_indexer_queue_url = os.environ["VECTOR_INDEXER_QUEUE_URL"]
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
@@ -266,6 +272,20 @@ def _parse_s3_uri(location: Any) -> Tuple[str, str]:
     return parsed.netloc, key
 
 
+def _read_document(key: str) -> Optional[Dict[str, Any]]:
+    """The embedding document at ``key`` in the auxiliary bucket, or None when the object is larger than
+    EMBEDDING_DOCUMENT_MAX_BYTES. The body is read one byte past the cap at most, so an object of any size
+    costs that much memory before it is refused; a document that is not a JSON object reads as empty."""
+    response = s3_client.get_object(Bucket=aux_bucket_name, Key=key)
+    if int(response.get('ContentLength') or 0) > EMBEDDING_DOCUMENT_MAX_BYTES:
+        return None
+    raw = response['Body'].read(EMBEDDING_DOCUMENT_MAX_BYTES + 1)
+    if len(raw) > EMBEDDING_DOCUMENT_MAX_BYTES:
+        return None
+    parsed = json.loads(raw.decode('utf-8'))
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _segment_fields(detail: Dict[str, Any], document: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
     """The six segment fields of a document — the Detail's value, else the document's, else the whole-file
     default — checked against the store's key rules: (fields, '') or (None, reason) when the document is
@@ -319,8 +339,15 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
     except ValueError as e:
         logger.error(str(e))
         return Outcome(False, 'error', str(e))
-    document = json.loads(
-        s3_client.get_object(Bucket=doc_bucket, Key=doc_key)['Body'].read().decode('utf-8'))
+    if doc_bucket != aux_bucket_name:
+        # The event names where the document is; the indexer reads and deletes only in the auxiliary
+        # bucket, so a location elsewhere is a publisher fault, acknowledged and left untouched.
+        logger.warning("embedding.ready names a document outside the auxiliary bucket; dropping")
+        return Outcome(True, 'drop', 'document is not in the auxiliary bucket')
+    document = _read_document(doc_key)
+    if document is None:
+        logger.warning(f"embedding.ready document {doc_key} exceeds {EMBEDDING_DOCUMENT_MAX_BYTES} bytes; dropping")
+        return Outcome(True, 'drop', f"document exceeds {EMBEDDING_DOCUMENT_MAX_BYTES} bytes")
     if document.get('embeddingModelId') != embedding_model_id or \
             int(document.get('embeddingDimensions') or 0) != embedding_dimensions:
         return Outcome(True, 'drop', 'document model or dimensions differ from the configured index')
@@ -407,8 +434,20 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
     # document leaves the flip to the run's whole-file document (published first) and to the S3
     # ObjectCreated rule, so a 1,000-chunk document costs 1,000 writes rather than 1,000 sibling reads.
     whole_file = segment['segmentKind'] == SEGMENT_KIND_NONE
+    pk = f"{database_id}:{asset_id}"
+    key_path = vector_file_key_path(file_path)
+    realigned = 0
     if whole_file and is_latest:
         flipped = vector_store.put_latest_item(item)
+        # The put demoted the file's latest items of every other version, including those of a version
+        # uploaded after the state read above (documents of concurrent runs are written in any order). The
+        # key is read again: when the current version has moved on, the file's latest marks are aligned to
+        # it -- this item and the rest read "false", the current version's items read "true".
+        after = resolve_key_state(bucket_name, object_key)
+        if after.exists and after.current_version_id not in (None, version_id):
+            realigned = vector_store.set_latest_for_file_version(pk, key_path, after.current_version_id)
+            logger.info(f"{file_path}#{version_id} was superseded by a newer version while being indexed; "
+                        f"realigned {realigned} latest marks")
     else:
         vector_store.put_item(item)
         flipped = 0
@@ -416,14 +455,14 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
     # (another interval or chunking setting); the current run's own segments are never touched.
     stale_segments = 0
     if whole_file:
-        stale_segments = vector_store.delete_other_run_segments(
-            f"{database_id}:{asset_id}", vector_file_key_path(file_path), version_id, item.pipelineExecutionId)
+        stale_segments = vector_store.delete_other_run_segments(pk, key_path, version_id, item.pipelineExecutionId)
         if stale_segments:
             logger.info(f"Removed {stale_segments} segment items of {file_path}#{version_id} left by an earlier run")
-    s3_client.delete_object(Bucket=doc_bucket, Key=doc_key)
+    s3_client.delete_object(Bucket=aux_bucket_name, Key=doc_key)
     return Outcome(True, 'put',
                    f"{database_id}:{asset_id}{sort_key} latest={str(is_latest).lower()} "
-                   f"archived={str(is_archived).lower()} flipped={flipped} staleSegments={stale_segments}")
+                   f"archived={str(is_archived).lower()} flipped={flipped} realigned={realigned} "
+                   f"staleSegments={stale_segments}")
 
 
 # --- S3 lifecycle rules ------------------------------------------------------------------------------

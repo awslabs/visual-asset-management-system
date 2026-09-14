@@ -350,16 +350,30 @@ class TestDeleteOtherRunSegmentsContract:
             "ExpressionAttributeValues": {":pk": {"S": "db1:a1"}, ":prefix": {"S": "/m.glb#v2#"}},
             "ProjectionExpression": SEGMENT_PROJECTION,
         }
+        delete = {
+            "TableName": TABLE,
+            "Key": _key("v2#t0000010000"),
+            "ConditionExpression": "pipelineExecutionId <> :run",
+            "ExpressionAttributeValues": {":run": {"S": "pe1"}},
+        }
         calls = [
             {"method": "query", "expected_params": query,
              "response": {"Items": [_segment_image("v2", "t0000000000", "pe1"), _segment_image("v2", "t0000010000", "pe0")]}},
-            {"method": "batch_write_item",
-             "expected_params": {"RequestItems": {TABLE: [{"DeleteRequest": {"Key": _key("v2#t0000010000")}}]}},
-             "response": {"UnprocessedItems": {}}},
+            {"method": "delete_item", "expected_params": delete, "response": {}},
         ]
         with stubbed_dynamodb(calls) as client:
             assert vs.DynamoDbVectorStore(TABLE, INDEX, MODEL, 2, client).delete_other_run_segments(
                 "db1:a1", "/m.glb", "v2", "pe1") == 1
+
+    def test_a_delete_that_loses_its_condition_is_not_counted(self, vs):
+        calls = [
+            {"method": "query", "response": {"Items": [_segment_image("v2", "t0000010000", "pe0")]}},
+            {"method": "delete_item", "error": {"code": "ConditionalCheckFailedException",
+                                                "message": "The conditional request failed", "http_status_code": 400}},
+        ]
+        with stubbed_dynamodb(calls) as client:
+            assert vs.DynamoDbVectorStore(TABLE, INDEX, MODEL, 2, client).delete_other_run_segments(
+                "db1:a1", "/m.glb", "v2", "pe1") == 0
 
 
 @pytest.mark.unit

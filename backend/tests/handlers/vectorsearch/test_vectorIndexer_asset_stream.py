@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Asset table stream records -> asset-wide archive flag or delete (spec §7.2, rows 6-9).
+"""Asset table stream records -> asset-wide archive flag or delete.
 
 Archive moves the row to `{db}#deleted` (INSERT there, REMOVE live); unarchive moves it back (INSERT
 live, REMOVE `#deleted`) and by default leaves the files' delete markers in place, so the vector items
@@ -98,7 +98,8 @@ class TestPermanentDelete:
 
 @pytest.mark.unit
 class TestSegmentItemsFollowTheirAsset:
-    """Spec §7.2 rows 6 and 8 reach the whole `databaseId:assetId` partition, segment items included."""
+    """The asset archive and the asset delete reach the whole `databaseId:assetId` partition, segment items
+    included."""
 
     def _seed(self, indexer):
         store = FakeVectorStore(seed=[

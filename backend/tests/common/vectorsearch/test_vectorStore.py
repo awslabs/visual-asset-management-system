@@ -73,13 +73,15 @@ def _raiser(error):
 
 
 class FakeDynamo:
-    """Records every call; query pages come from a Pager, update_item can fail its condition per sort key,
-    batch_write_item can echo the first request back as unprocessed once, transact_write_items can be
-    cancelled once or always with the CancellationReasons codes of ``transact_cancel_reasons``."""
+    """Records every call; query pages come from a Pager, update_item and delete_item can fail their
+    condition per sort key, batch_write_item can echo the first request back as unprocessed once,
+    transact_write_items can be cancelled once or always with the CancellationReasons codes of
+    ``transact_cancel_reasons``."""
 
     def __init__(self):
         self.put_items = []
         self.updates = []
+        self.deletes = []
         self.batch_writes = []
         self.transactions = []
         self.scans = []
@@ -111,6 +113,12 @@ class FakeDynamo:
         self.updates.append(kwargs)
         if kwargs["Key"][SK]["S"] in self.conditional_failures:
             raise _client_error("ConditionalCheckFailedException")
+        return {}
+
+    def delete_item(self, **kwargs):
+        self.deletes.append(kwargs)
+        if kwargs["Key"][SK]["S"] in self.conditional_failures:
+            raise _client_error("ConditionalCheckFailedException", operation="DeleteItem")
         return {}
 
     def batch_write_item(self, RequestItems):
@@ -586,12 +594,61 @@ class TestLatestFlips:
             _store(vs, fake).set_not_latest_for_file_except("db1:a1", "/m.glb", "v2")
 
     def test_the_store_has_no_second_name_for_the_sibling_flip(self, vs):
-        """Registry §3.3: ``set_not_latest_for_file_except`` is the one sibling-flip method and
-        ``put_latest_item`` the one put-and-flip; a ``mark_others_not_latest`` alias would let WP07
-        pick a name the registry retired."""
+        """``set_not_latest_for_file_except`` is the one sibling-flip method and ``put_latest_item`` the
+        one put-and-flip; a ``mark_others_not_latest`` alias would let a caller pick a name the store
+        retired."""
         assert not hasattr(vs.VectorStore, "mark_others_not_latest")
         assert not hasattr(vs.DynamoDbVectorStore, "mark_others_not_latest")
         assert callable(vs.DynamoDbVectorStore.put_latest_item)
+
+
+@pytest.mark.unit
+class TestSetLatestForFileVersion:
+    """The realignment a writer runs when its latest write raced a newer upload: the named version's
+    items are flipped to latest, every other item of the file to not-latest, each conditionally."""
+
+    def test_the_named_version_is_promoted_and_every_other_item_demoted(self, vs):
+        # A v2 segment item carries versionId "v2" under its own sort key and is promoted with its file.
+        v2_segment = {**_image("v2", is_latest="false"), SK: {"S": "/m.glb#v2#t0000083456"}}
+        fake = FakeDynamo()
+        fake.query_pager = Pager(
+            {"Items": [_image("v1", is_latest="true"), _image("v2", is_latest="false")],
+             "LastEvaluatedKey": {SK: {"S": "/m.glb#v2"}}},
+            {"Items": [v2_segment, _image("v3", is_latest="false")]},
+            name="file versions",
+        )
+        changed = _store(vs, fake).set_latest_for_file_version("db1:a1", "/m.glb", "v2")
+        assert changed == 3
+        fake.query_pager.assert_paged_to_exhaustion()
+        flips = {(u["Key"][SK]["S"], u["ExpressionAttributeValues"][":target"]["S"]) for u in fake.updates}
+        assert flips == {("/m.glb#v1", "false"), ("/m.glb#v2", "true"), ("/m.glb#v2#t0000083456", "true")}
+        assert all(u["ExpressionAttributeValues"][":current"]["S"] != u["ExpressionAttributeValues"][":target"]["S"]
+                   for u in fake.updates)
+
+    def test_items_already_aligned_are_not_written(self, vs):
+        fake = FakeDynamo()
+        fake.query_pager = Pager({"Items": [_image("v1", is_latest="false"), _image("v2", is_latest="true")]}, name="file")
+        assert _store(vs, fake).set_latest_for_file_version("db1:a1", "/m.glb", "v2") == 0
+        assert fake.updates == []
+
+    def test_the_walk_reads_the_file_prefix_and_completes_whatever_the_page_count(self, vs):
+        fake = FakeDynamo()
+        fake.query_pager = Pager(
+            {"Items": [_image("v1")], "LastEvaluatedKey": {SK: {"S": "/m.glb#v1"}}},
+            {"Items": [_image("v2", is_latest="false")]},
+            name="file versions",
+        )
+        _store(vs, fake).set_latest_for_file_version("db1:a1", "/m.glb", "v2")
+        fake.query_pager.assert_paged_to_exhaustion()
+        first = fake.query_pager.calls[0]
+        assert first["ExpressionAttributeValues"] == {":pk": {"S": "db1:a1"}, ":prefix": {"S": "/m.glb#"}}
+        assert "begins_with" in first["KeyConditionExpression"]
+
+    def test_a_lost_condition_is_not_counted(self, vs):
+        fake = FakeDynamo()
+        fake.query_pager = Pager({"Items": [_image("v1"), _image("v2", is_latest="false")]}, name="file")
+        fake.conditional_failures = {"/m.glb#v1"}
+        assert _store(vs, fake).set_latest_for_file_version("db1:a1", "/m.glb", "v2") == 1
 
 
 @pytest.mark.unit
@@ -651,7 +708,7 @@ def _touched(fake):
 class TestContinuation:
     """The walks page under a time budget: a page is processed whole, then, when ``time_remaining_fn``
     reports fewer than ``min_remaining_ms`` milliseconds and a next page exists, its cursor is returned
-    for the caller (WP07's indexer) to re-enqueue; the resumed call reads from that cursor."""
+    for the caller (the indexer) to re-enqueue; the resumed call reads from that cursor."""
 
     CURSOR = {SK: {"S": "/m.glb#v1"}}
 
@@ -760,10 +817,16 @@ class TestDeletes:
         assert fake.batch_writes == []
 
 
+def _deleted_keys(fake):
+    """Every sort key the fake saw a conditional DeleteItem for."""
+    return {d["Key"][SK]["S"] for d in fake.deletes}
+
+
 @pytest.mark.unit
 class TestDeleteOtherRunSegments:
     """The whole-file document's cleanup: the same version's segments that another pipeline run
-    published are deleted; the current run's own segments are left alone."""
+    published are deleted, each conditionally on still belonging to another run; the current run's own
+    segments are left alone."""
 
     def test_deletes_the_segments_another_run_published_and_pages_to_exhaustion(self, vs):
         fake = FakeDynamo()
@@ -777,8 +840,39 @@ class TestDeleteOtherRunSegments:
         )
         assert _store(vs, fake).delete_other_run_segments("db1:a1", "/m.glb", "v2", "pe1") == 2
         fake.query_pager.assert_paged_to_exhaustion()
-        (batch,) = fake.batch_writes
-        assert [r["DeleteRequest"]["Key"][SK]["S"] for r in batch[TABLE]] == ["/m.glb#v2#t0000010000", "/m.glb#v2#c000001"]
+        assert _deleted_keys(fake) == {"/m.glb#v2#t0000010000", "/m.glb#v2#c000001"}
+        assert fake.batch_writes == []
+
+    def test_each_delete_is_conditional_on_the_item_still_belonging_to_another_run(self, vs):
+        fake = FakeDynamo()
+        fake.query_pager = Pager({"Items": [_segment_image("v2", "t0000010000", "pe0")]}, name="version segments")
+        _store(vs, fake).delete_other_run_segments("db1:a1", "/m.glb", "v2", "pe1")
+        (delete,) = fake.deletes
+        assert delete == {
+            "TableName": TABLE,
+            "Key": {PK: {"S": "db1:a1"}, SK: {"S": "/m.glb#v2#t0000010000"}},
+            "ConditionExpression": "pipelineExecutionId <> :run",
+            "ExpressionAttributeValues": {":run": {"S": "pe1"}},
+        }
+
+    def test_a_key_the_current_run_rewrote_between_the_read_and_the_delete_survives(self, vs):
+        # Segment keys are shared across runs: the current run's t0000010000 landed after the query read
+        # the earlier run's item at that key, so the conditional delete loses and the item is kept.
+        fake = FakeDynamo()
+        fake.query_pager = Pager(
+            {"Items": [_segment_image("v2", "t0000010000", "pe0"), _segment_image("v2", "c000001", "pe0")]},
+            name="version segments",
+        )
+        fake.conditional_failures = {"/m.glb#v2#t0000010000"}
+        assert _store(vs, fake).delete_other_run_segments("db1:a1", "/m.glb", "v2", "pe1") == 1
+        assert _deleted_keys(fake) == {"/m.glb#v2#t0000010000", "/m.glb#v2#c000001"}
+
+    def test_other_client_errors_propagate(self, vs):
+        fake = FakeDynamo()
+        fake.query_pager = Pager({"Items": [_segment_image("v2", "c000001", "pe0")]}, name="version segments")
+        fake.delete_item = _raiser(_client_error("ProvisionedThroughputExceededException", operation="DeleteItem"))
+        with pytest.raises(ClientError):
+            _store(vs, fake).delete_other_run_segments("db1:a1", "/m.glb", "v2", "pe1")
 
     def test_queries_the_version_prefix_projecting_the_keys_and_the_run_id(self, vs):
         fake = FakeDynamo()
@@ -799,19 +893,26 @@ class TestDeleteOtherRunSegments:
             name="version segments",
         )
         assert _store(vs, fake).delete_other_run_segments("db1:a1", "/m.glb", "v2", "pe1") == 0
-        assert fake.batch_writes == []
+        assert fake.deletes == [] and fake.batch_writes == []
 
-    def test_a_stale_run_with_more_than_a_batch_of_chunks_is_deleted_in_batches_of_twenty_five(self, vs):
-        """Thirty stale chunks of an earlier run beside the current run's first chunk: the deletes split
-        25 + 5 and the current run's key is in neither batch."""
+    def test_a_stale_run_with_many_chunks_is_deleted_item_by_item_on_the_bounded_pool(self, vs):
+        """Thirty stale chunks of an earlier run beside the current run's first chunk: every stale key is
+        deleted, the current run's key is not, and the deletes run through the FLIP_WORKERS pool."""
         fake = FakeDynamo()
         stale = [_segment_image("v2", f"c{i:06d}", "pe0") for i in range(2, 32)]
         fake.query_pager = Pager({"Items": [_segment_image("v2", "c000001", "pe1"), *stale]}, name="version segments")
-        assert _store(vs, fake).delete_other_run_segments("db1:a1", "/m.glb", "v2", "pe1") == 30
-        assert [len(w[TABLE]) for w in fake.batch_writes] == [25, 5]
-        deleted = {r["DeleteRequest"]["Key"][SK]["S"] for w in fake.batch_writes for r in w[TABLE]}
-        assert deleted == {f"/m.glb#v2#c{i:06d}" for i in range(2, 32)}
-        assert "/m.glb#v2#c000001" not in deleted
+        seen = {}
+        real_executor = vs.ThreadPoolExecutor
+
+        def recording(*args, **kwargs):
+            seen["max_workers"] = kwargs.get("max_workers", args[0] if args else None)
+            return real_executor(*args, **kwargs)
+
+        with patch.object(vs, "ThreadPoolExecutor", side_effect=recording):
+            assert _store(vs, fake).delete_other_run_segments("db1:a1", "/m.glb", "v2", "pe1") == 30
+        assert seen["max_workers"] == vs.FLIP_WORKERS
+        assert _deleted_keys(fake) == {f"/m.glb#v2#c{i:06d}" for i in range(2, 32)}
+        assert "/m.glb#v2#c000001" not in _deleted_keys(fake)
 
     def test_an_unversioned_file_is_addressed_under_the_null_version(self, vs):
         fake = FakeDynamo()

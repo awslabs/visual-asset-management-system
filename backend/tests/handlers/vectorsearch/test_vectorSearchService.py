@@ -26,8 +26,11 @@ _DATABASE_ACCESS = os.path.join(support._BACKEND, "common", "databaseAccess.py")
 
 
 def _bind_database_access():
-    """The real ``common.databaseAccess`` under the mock ``common`` package, so the handler's import binds."""
-    if "common.databaseAccess" in sys.modules:
+    """The real ``common.databaseAccess`` under the mock ``common`` package, so the handler's import binds
+    and the live-database scoping test below runs the real scan-and-enforce loop."""
+    current = sys.modules.get("common.databaseAccess")
+    bound_file = os.path.abspath(getattr(current, "__file__", "") or "")
+    if current is not None and bound_file == os.path.abspath(_DATABASE_ACCESS):
         return
     os.environ.setdefault("DATABASE_STORAGE_TABLE_NAME", "test-database-table")
     with patch("boto3.client", return_value=MagicMock()), patch("boto3.resource", return_value=MagicMock()):
@@ -39,7 +42,8 @@ def _bind_database_access():
 
 def _load_service():
     """The handler loaded by path with ``handlers.auth`` / ``handlers.authz`` stubbed for the duration of
-    the load; other suites' conftests re-register those names, so the stubs are installed per load."""
+    the load; other suites' conftests re-register those names, so the stubs are installed per load. The
+    real ``common.databaseAccess`` is bound under the same stubs, since it imports ``CasbinEnforcer`` too."""
     saved = {name: sys.modules.get(name) for name in ("handlers.auth", "handlers.authz")}
     auth_stub = types.ModuleType("handlers.auth")
     auth_stub.request_to_claims = MagicMock(return_value={"tokens": ["t"], "roles": []})
@@ -47,6 +51,7 @@ def _load_service():
     authz_stub.CasbinEnforcer = MagicMock()
     sys.modules["handlers.auth"], sys.modules["handlers.authz"] = auth_stub, authz_stub
     try:
+        _bind_database_access()
         return support.load_handler("vectorSearchService")
     finally:
         for name, module in saved.items():
@@ -57,7 +62,6 @@ def _load_service():
 @pytest.fixture
 def svc(monkeypatch):
     monkeypatch.setenv("OPENSEARCH_DISABLED", "true")
-    _bind_database_access()
     module = _load_service()
     module.request_to_claims = MagicMock(return_value={"tokens": ["t"], "roles": []})
     enforcer = MagicMock()
@@ -163,13 +167,63 @@ class TestAuthorization:
         store = FakeStore([item(isArchived="true")])
         status, body = call(svc, store, {"query": "tractor", "includeArchived": True})
         assert status == 200
-        assert svc.access.get_accessible_databases_with_count.call_args.kwargs["show_deleted"] is True
+        # Database scoping is over the live database rows whatever includeArchived says, as /search does.
+        assert svc.access.get_accessible_databases_with_count.call_args.kwargs["show_deleted"] is False
         assert len(store.calls) >= 1
         assert all("isArchived" not in c for c in store.calls)
         assert len(body["hits"]["hits"]) == 1
         assert body["hits"]["hits"][0]["_source"]["bool_archived"] is True
         assert body["hits"]["hits"][0]["_source"]["str_assetname"] == "gone"
         assert svc.dynamodb.batch_get_item.call_count <= 2
+
+    def test_include_archived_scopes_to_the_live_databases_the_caller_may_read(self, svc, monkeypatch):
+        """Through the REAL ``DatabaseAccessManager`` over a database table holding two live rows and one
+        ``#deleted`` row, with Casbin granting the database ``db1`` only: ``includeArchived`` still scans
+        the live rows, so the plan targets ``db1`` alone (never the unpartitioned ``None`` an all-access
+        caller gets), the archived ``db1`` item is a hit, and ``db2``'s item is never searched."""
+        database_access = sys.modules["common.databaseAccess"]
+        table_rows = [
+            {"databaseId": {"S": "db1"}, "description": {"S": "live"}},
+            {"databaseId": {"S": "db2"}, "description": {"S": "live"}},
+            {"databaseId": {"S": "db3#deleted"}, "description": {"S": "deleted"}},
+        ]
+        scans = []
+
+        def paginate(**kwargs):
+            scans.append(kwargs)
+            operator = kwargs["ScanFilter"]["databaseId"]["ComparisonOperator"]
+            deleted = [row for row in table_rows if "#deleted" in row["databaseId"]["S"]]
+            live = [row for row in table_rows if "#deleted" not in row["databaseId"]["S"]]
+            yield {"Items": deleted if operator == "CONTAINS" else live}
+
+        paginator = MagicMock()
+        paginator.paginate.side_effect = paginate
+        monkeypatch.setattr(database_access.dynamodb_client, "get_paginator", MagicMock(return_value=paginator))
+
+        def enforce(obj, action):
+            if obj["object__type"] == "database":
+                return obj["databaseId"] == "db1"
+            return obj["object__type"] == "asset"
+
+        access_enforcer = MagicMock()
+        access_enforcer.enforce.side_effect = enforce
+        monkeypatch.setattr(database_access, "CasbinEnforcer", MagicMock(return_value=access_enforcer))
+        svc.DatabaseAccessManager = database_access.DatabaseAccessManager
+        svc.enforcer.enforce.side_effect = enforce
+        rows(svc, ("db1", "a1"), ("db2", "a2"))
+        store = FakeStore([item(db="db1", asset="a1", isArchived="true", distance=0.1),
+                           item(db="db2", asset="a2", path="other.glb", distance=0.2)])
+
+        status, body = call(svc, store, {"query": "tractor", "includeArchived": True})
+
+        assert status == 200
+        assert [s["ScanFilter"]["databaseId"]["ComparisonOperator"] for s in scans] == ["NOT_CONTAINS"]
+        assert [h["_source"]["str_databaseid"] for h in body["hits"]["hits"]] == ["db1"]
+        assert body["hits"]["hits"][0]["_source"]["bool_archived"] is True
+        assert body["nlp"]["databasesSearched"] == 1
+        assert store.calls
+        assert {c.get("databaseId") for c in store.calls} == {"db1"}
+        assert not any("#deleted" in str(c) for c in store.calls)
 
 
 class TestPlanning:

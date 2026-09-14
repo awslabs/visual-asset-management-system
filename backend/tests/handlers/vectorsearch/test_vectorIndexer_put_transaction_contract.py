@@ -1,8 +1,8 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A latest whole-file write reaches DynamoDB as Query + TransactWriteItems (spec §7.2, row 1) followed by
-the stale-segment sweep Query; every other document is one PutItem.
+"""A latest whole-file write reaches DynamoDB as Query + TransactWriteItems followed by the stale-segment
+sweep Query; every other document is one PutItem.
 
 The indexer hands `DynamoDbVectorStore.put_latest_item` a whole-file item whose `isLatest` is `True`; the
 store must read the file's latest items OF OTHER VERSIONS and demote them to `isLatest="false"` in the
@@ -20,7 +20,7 @@ issued. The store's expression TEXT belongs to its own tests; what this file pin
 a `before-parameter-build` hook captures every request, the sibling filter is resolved placeholder by
 placeholder to `versionId <> <the document's versionId>`, the sweep's prefix value is
 `{keyPath}#{versionId}#`, and on every written item the two flags are the strings `{"S": "true"}` /
-`{"S": "false"}` the bools serialise to (spec §3.1: never BOOL). The flags are read from the captured
+`{"S": "false"}` the bools serialise to (never BOOL). The flags are read from the captured
 request rather than passed as Stubber `expected_params`: `expected_params` is an exact whole-parameter
 match, so asserting two attributes inside `Item` would mean restating every attribute name `VectorItem`
 defines.
@@ -28,6 +28,7 @@ defines.
 
 import io
 import json
+import os
 import re
 from unittest.mock import MagicMock
 
@@ -44,7 +45,7 @@ DETAIL = {
     "embeddingDimensions": 4, "sourceModalities": ["text"], "pipelineExecutionId": "pe-1",
     "segmentKey": "", "segmentKind": "none", "segmentLabel": "",
     "segmentStartMs": None, "segmentEndMs": None, "segmentCount": 0,
-    "documentS3Location": "s3://test-aux-bucket/doc.json",
+    "documentS3Location": f"s3://{os.environ['S3_ASSET_AUXILIARY_BUCKET']}/doc.json",
 }
 DOCUMENT = {**DETAIL, "embedding": [0.1, 0.2, 0.3, 0.4], "sourceText": "text"}
 VIDEO_SEGMENT = {"segmentKey": "t0000083456", "segmentKind": "videoTime",
@@ -112,7 +113,7 @@ def _values(params):
     return [value for entry in params["ExpressionAttributeValues"].values() for value in entry.values()]
 
 
-# The wire form each bool flag serialises to: a string attribute, never BOOL (spec §3.1).
+# The wire form each bool flag serialises to: a string attribute, never BOOL.
 FLAG_WIRE = {True: {"S": "true"}, False: {"S": "false"}}
 
 
@@ -135,7 +136,7 @@ def test_latest_whole_file_write_is_query_transact_then_the_segment_sweep_query(
     assert outcome.ok and outcome.action == "put"
     m.s3_client.delete_object.assert_called_once()
     siblings_query, sweep_query = _requests(captured, "Query")
-    # The sibling read is scoped to the file and excludes the document's own version (spec §7.2 row 1).
+    # The sibling read is scoped to the file and excludes the document's own version.
     assert "/model.glb#" in _values(siblings_query)
     assert ("versionId", "v2") in _inequalities(siblings_query)
     # One sibling: the Put and one demotion ride in a single transaction.

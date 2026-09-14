@@ -70,6 +70,7 @@ opensearch_disabled = os.environ.get("OPENSEARCH_DISABLED", "true") == "true"
 SEARCH_WORKERS = 16
 MAX_TARGETS = 200
 BATCH_GET_MAX_KEYS = 100
+# Document ids per OpenSearch query of the constrain/enrich step; each query is sized to its own window.
 OPENSEARCH_ENRICH_WINDOW = 100
 DELETED_PARTITION_SUFFIX = "#deleted"
 INDEX_BUILDING_MESSAGE = "Vector index is being built"
@@ -384,7 +385,10 @@ def _opensearch_constraints(request: NlpSearchRequestModel, search_module, datab
 def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, Any]], warnings: List[Dict[str, str]]) -> List[Dict[str, Any]]:
     """Constrain by the OpenSearch-only fields and merge ``_source`` from the file index. Imports the
     /search module here, once OPENSEARCH_DISABLED has been ruled out, so an OpenSearch-less deployment
-    never loads opensearch-py. Any failure degrades to a warning and the hits stay as they were."""
+    never loads opensearch-py. The hits go to OpenSearch in windows of OPENSEARCH_ENRICH_WINDOW ids, each
+    query sized to its own window, so every hit is answered: an ``ids`` filter scores every document the
+    same, and one query over more ids than its size would keep an arbitrary subset. Any failure degrades
+    to a warning and the hits stay as they were."""
     if not file_hits:
         return file_hits
     try:
@@ -395,27 +399,31 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
         manager = opensearch_search.DualIndexSearchManager()
         ids = [build_file_document_id(h["_source"]["str_databaseid"], h["_source"]["str_assetid"], h["_source"]["str_key"]) for h in file_hits]
         constrained = bool(request.opensearch_only_fields())
-        clauses: List[Dict[str, Any]] = [{"ids": {"values": ids}}]
+        shared_clauses: List[Dict[str, Any]] = []
         if constrained:
             databases = list(dict.fromkeys(h["_source"]["str_databaseid"] for h in file_hits))
-            clauses.extend(_opensearch_constraints(request, opensearch_search, databases))
+            shared_clauses.extend(_opensearch_constraints(request, opensearch_search, databases))
         if not request.includeArchived:
-            clauses.append({"term": {"bool_archived": False}})
-        response = manager.client.search(
-            index=manager.file_index, body={"size": OPENSEARCH_ENRICH_WINDOW, "query": {"bool": {"filter": clauses}}}
-        )
-        by_id = {hit["_id"]: hit.get("_source", {}) for hit in response.get("hits", {}).get("hits", [])}
+            shared_clauses.append({"term": {"bool_archived": False}})
         kept = []
-        for doc_id, hit in zip(ids, file_hits):
-            source = by_id.get(doc_id)
-            if source is None:
-                if not constrained:
-                    kept.append(hit)
-                continue
-            merged = dict(source)
-            merged.update(hit["_source"])
-            hit["_source"] = merged
-            kept.append(hit)
+        for start in range(0, len(file_hits), OPENSEARCH_ENRICH_WINDOW):
+            window_ids = ids[start:start + OPENSEARCH_ENRICH_WINDOW]
+            window_hits = file_hits[start:start + OPENSEARCH_ENRICH_WINDOW]
+            clauses = [{"ids": {"values": window_ids}}] + shared_clauses
+            response = manager.client.search(
+                index=manager.file_index, body={"size": len(window_ids), "query": {"bool": {"filter": clauses}}}
+            )
+            by_id = {hit["_id"]: hit.get("_source", {}) for hit in response.get("hits", {}).get("hits", [])}
+            for doc_id, hit in zip(window_ids, window_hits):
+                source = by_id.get(doc_id)
+                if source is None:
+                    if not constrained:
+                        kept.append(hit)
+                    continue
+                merged = dict(source)
+                merged.update(hit["_source"])
+                hit["_source"] = merged
+                kept.append(hit)
         return kept
     except Exception:
         logger.exception("OpenSearch enrichment failed")
@@ -438,8 +446,12 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
     ignored = request.opensearch_only_fields()
     if opensearch_disabled and ignored:
         warnings.append(_warning("opensearch:fields_ignored", f"OpenSearch is not enabled; ignored: {', '.join(ignored)}"))
+    # includeArchived controls archived assets and files, not deleted databases: the scan is always over
+    # the live database rows (show_deleted=True would return ONLY the `#deleted` rows), as /search does.
+    # Archived items of a live database are reached through the isArchived filter and the `#deleted`
+    # asset partition below.
     accessible, live_count = DatabaseAccessManager().get_accessible_databases_with_count(
-        claims_and_roles, show_deleted=request.includeArchived
+        claims_and_roles, show_deleted=False
     )
     plan = _plan(request, accessible, live_count)
     class_intent = fileClassIntent.detect(request.query) if not request.fileClasses else []

@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""S3 lifecycle records -> `isLatest` / `isArchived` flips and deletes (spec §7.2, rows 2-5).
+"""S3 lifecycle records -> `isLatest` / `isArchived` flips and deletes.
 
 Created: every other item of the file becomes not-latest and the file is un-archived (a new live version
 is not archived by definition). DeleteMarkerCreated: archived. Delete with versions remaining and no
@@ -130,7 +130,7 @@ class TestObjectRemoved:
 
 @pytest.mark.unit
 class TestSegmentItemsFollowTheirFile:
-    """Spec §7.2 closing sentence: every per-file rule operates on `begins_with(SK, key_path + "#")`, so
+    """Every per-file rule operates on `begins_with(SK, key_path + "#")`, so
     the segment item `…#v1#t0000083456` moves with its whole-file item and another file's item does not."""
 
     def _seed(self, indexer, is_latest=True, is_archived=False):

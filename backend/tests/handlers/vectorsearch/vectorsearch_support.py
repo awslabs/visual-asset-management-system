@@ -32,7 +32,8 @@ os.environ.setdefault("WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME", "test-workflow-tri
 os.environ.setdefault("VECTOR_INDEX_NAME", "vec-test-4")
 os.environ.setdefault("EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v2:0")
 os.environ.setdefault("EMBEDDING_DIMENSIONS", "4")
-os.environ.setdefault("AUX_BUCKET_NAME", "test-aux-bucket")
+# The auxiliary bucket resolves through common.resourceNames, whose env override the root conftest sets
+# (S3_ASSET_AUXILIARY_BUCKET); tests read the same name back from the environment.
 os.environ.setdefault("VECTOR_INDEXER_QUEUE_URL",
                       "https://sqs.us-east-1.amazonaws.com/123456789012/indexer-queue")
 os.environ.setdefault("WORKFLOW_LAUNCH_QUEUE_URL",
@@ -85,18 +86,17 @@ def load_handler(module_name, boto_client_factory=None):
     return module
 
 
-# A video-window segment key (spec §3.4: `t` + a 10-digit start millisecond); the segment fixtures of the
-# lifecycle tests hang one of these under the whole-file item.
+# A video-window segment key (`t` + a 10-digit start millisecond); the segment fixtures of the lifecycle
+# tests hang one of these under the whole-file item.
 SEGMENT_KEY = "t0000083456"
 
 
 def seeded_item(pk, file_version_key, version_id, is_latest=True, is_archived=False,
                 segment_kind="none", pipeline_execution_id="pe-1"):
-    """A stored vector item reduced to the attributes the lifecycle rules read (registry §3.2 names).
+    """A stored vector item reduced to the attributes the lifecycle rules read.
 
-    The two flags are the bools `VectorItem` carries (registry §3.3); their `"true"`/`"false"` wire form is
-    the store's to write and the Stubber contract tests assert it, so nothing in this fake spells a flag as
-    a string.
+    The two flags are the bools `VectorItem` carries; their `"true"`/`"false"` wire form is the store's to
+    write and the Stubber contract tests assert it, so nothing in this fake spells a flag as a string.
     """
     return {
         "databaseId:assetId": pk,
@@ -109,21 +109,30 @@ def seeded_item(pk, file_version_key, version_id, is_latest=True, is_archived=Fa
     }
 
 
+def _seeded_from(item):
+    """The `seeded_item` view of a `VectorItem` the indexer put, so the fake's table holds it too."""
+    return seeded_item(item.pk, item.fileVersionKey, item.versionId, is_latest=item.isLatest,
+                       is_archived=item.isArchived, segment_kind=item.segmentKind,
+                       pipeline_execution_id=item.pipelineExecutionId)
+
+
 class FakeVectorStore:
-    """Records every store call; the store contract itself is WP00's to test.
+    """Records every store call; the store contract itself has its own tests under tests/common/vectorsearch.
 
-    `seed` is an optional list of stored items (`seeded_item`). The per-file and per-asset methods apply
-    the registry §3.3 reach to it — `begins_with(fileVersionKey, key_path + "#")` for a file, the whole
-    partition for an asset — and return the number of items they changed, so a test can show WHICH items
-    a call reaches (a segment item `…#v1#t0000083456` sits under its file's prefix) without asserting the
-    store's expression text. Unseeded, the methods record the call and return 0.
+    `seed` is an optional list of stored items (`seeded_item`); every put adds its item to the same table
+    view. The per-file and per-asset methods apply the store's reach to it — `begins_with(fileVersionKey,
+    key_path + "#")` for a file, the whole partition for an asset — and return the number of items they
+    changed, so a test can show WHICH items a call reaches (a segment item `…#v1#t0000083456` sits under
+    its file's prefix) without asserting the store's expression text. Unseeded, the methods record the
+    call and return 0. `put_latest_item` demotes the file's latest items of other versions as the store's
+    transaction does, and `set_latest_for_file_version` aligns the file's marks to one version.
 
-    The asset- and file-wide methods take the registry §3.3 keywords (`start_key`, `time_remaining_fn`,
-    `min_remaining_ms`) and return `(count, next_key)`. `hand_off` maps a method name to the `next_key` it
-    returns on its FIRST page (a call with `start_key=None`); the entry is consumed, so the resumed call
-    completes. Every paging call is recorded in `paging` as `(method, start_key, time_remaining_fn)` beside
-    the positional `calls` tuple, so a test can show a rule resumed from the key it was handed and passed
-    the invocation's time budget through.
+    The asset- and file-wide methods take the store's continuation keywords (`start_key`,
+    `time_remaining_fn`, `min_remaining_ms`) and return `(count, next_key)`. `hand_off` maps a method name
+    to the `next_key` it returns on its FIRST page (a call with `start_key=None`); the entry is consumed,
+    so the resumed call completes. Every paging call is recorded in `paging` as `(method, start_key,
+    time_remaining_fn)` beside the positional `calls` tuple, so a test can show a rule resumed from the key
+    it was handed and passed the invocation's time budget through.
 
     `scan_pages` maps a start key (None for the first page) to `(keys, next_key)`, given as a list of
     `(start_key, (keys, next_key))` pairs since a DynamoDB key is a dict and cannot itself key a dict;
@@ -168,11 +177,32 @@ class FakeVectorStore:
     def put_item(self, item):
         self.calls.append(("put_item", item))
         self.items.append(item)
+        self._store(item)
 
     def put_latest_item(self, item):
+        from common.indexing.documentIds import vector_file_key_path  # bound to the real module by load_handler
+
         self.calls.append(("put_latest_item", item))
         self.items.append(item)
-        return 1
+        self._store(item)
+        others = [seeded for seeded in self._file_items(item.pk, vector_file_key_path(item.filePath))
+                  if seeded["versionId"] != item.versionId]
+        return self._flip(others, "isLatest", False)
+
+    def _store(self, item):
+        """Replace the table view's row at the item's key, as a PutItem does."""
+        row = _seeded_from(item)
+        key = (row["databaseId:assetId"], row["fileVersionKey"])
+        self.seeded = [seeded for seeded in self.seeded
+                       if (seeded["databaseId:assetId"], seeded["fileVersionKey"]) != key]
+        self.seeded.append(row)
+
+    def set_latest_for_file_version(self, pk, key_path, version_id):
+        self.calls.append(("set_latest_for_file_version", pk, key_path, version_id))
+        file_items = self._file_items(pk, key_path)
+        current = [seeded for seeded in file_items if seeded["versionId"] == version_id]
+        others = [seeded for seeded in file_items if seeded["versionId"] != version_id]
+        return self._flip(current, "isLatest", True) + self._flip(others, "isLatest", False)
 
     def delete_other_run_segments(self, pk, key_path, version_id, pipeline_execution_id):
         self.calls.append(("delete_other_run_segments", pk, key_path, version_id, pipeline_execution_id))

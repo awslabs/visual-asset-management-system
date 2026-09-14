@@ -35,9 +35,11 @@ CONCURRENCY_PER_INPUT_FILE_VERSION = "perInputFileVersion"
 # "conflicting execution".
 LOCK_CONFLICT_MESSAGE = "A conflicting execution of this workflow is already running for this file version."
 
-# Floor for a lock's lifetime: the Step Functions task-token default (one day) — a pipeline that declares
-# no taskTimeout can legitimately run this long. The margin covers the launch and terminal handlers' own
-# windows on either side of the run.
+# Bound on one pipeline's run when it declares no taskTimeout (or a malformed one): the Step Functions
+# task-token default of one day. The workflow's pipelines run one after another, so a lock lives for the
+# sum of its pipelines' bounds; the floor keeps a workflow of short declared timeouts at one day, and the
+# margin covers the launch and terminal handlers' own windows on either side of the run.
+PIPELINE_DEFAULT_TIMEOUT_SECONDS = 86400
 LOCK_TTL_FLOOR_SECONDS = 86400
 LOCK_TTL_MARGIN_SECONDS = 1800
 
@@ -65,18 +67,23 @@ def build_lock_key(workflow_database_id, workflow_id, database_id, asset_id,
             f"|{version_id or ''}")
 
 
+def pipeline_timeout_seconds(pipeline_record) -> int:
+    """One pipeline's bound: its executionConfig.taskTimeout in seconds, or PIPELINE_DEFAULT_TIMEOUT_SECONDS
+    when it declares none, an empty one, a malformed one, or a non-positive one."""
+    raw = ((pipeline_record or {}).get("executionConfig") or {}).get("taskTimeout")
+    try:
+        seconds = int(raw) if raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        seconds = 0
+    return seconds if seconds > 0 else PIPELINE_DEFAULT_TIMEOUT_SECONDS
+
+
 def lock_ttl_seconds(pipeline_records) -> int:
-    """Lifetime of a lock row: max(longest taskTimeout among the workflow's pipelines, one day) plus the
-    margin. A missing or malformed taskTimeout counts as zero and so as the floor."""
-    longest = 0
-    for record in pipeline_records or []:
-        raw = ((record or {}).get("executionConfig") or {}).get("taskTimeout")
-        try:
-            seconds = int(raw) if raw not in (None, "") else 0
-        except (TypeError, ValueError):
-            seconds = 0
-        longest = max(longest, seconds)
-    return max(longest, LOCK_TTL_FLOOR_SECONDS) + LOCK_TTL_MARGIN_SECONDS
+    """Lifetime of a lock row: the sum of the workflow's per-pipeline bounds (the pipelines run in
+    sequence, so the run can last as long as all of them together), lifted to LOCK_TTL_FLOOR_SECONDS when
+    shorter, plus the margin."""
+    total = sum(pipeline_timeout_seconds(record) for record in pipeline_records or [])
+    return max(total, LOCK_TTL_FLOOR_SECONDS) + LOCK_TTL_MARGIN_SECONDS
 
 
 def lock_keys_for_execution(workflow_record, input_rows) -> List[str]:

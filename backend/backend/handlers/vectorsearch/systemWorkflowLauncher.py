@@ -55,7 +55,7 @@ try:
     workflow_triggers_table_name = get_table_name(ResourceKeys.WORKFLOW_TRIGGERS_STORAGE_TABLE)
     execute_workflow_v2_function = os.environ["EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME"]
     system_workflow_id = os.environ["GENAI_METADATA_WORKFLOW_ID"]
-    system_workflow_database_id = os.environ.get("GENAI_METADATA_WORKFLOW_DATABASE_ID", "GLOBAL")
+    system_workflow_database_id = os.environ["GENAI_METADATA_WORKFLOW_DATABASE_ID"]
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
