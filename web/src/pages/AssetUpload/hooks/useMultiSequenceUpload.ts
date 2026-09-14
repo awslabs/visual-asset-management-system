@@ -164,6 +164,9 @@ export function useMultiSequenceUpload() {
                 const errorMessage = extractErrorMessage(error);
                 const statusCode = extractStatusCode(error);
                 console.error(
+                    // Console logging only: a % specifier in the interpolated value can at most
+                    // garble this one log line; nothing is executed, stored or returned from it.
+                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     `Error initializing sequence ${sequence.sequenceId}:`,
                     `Status: ${statusCode}, Message: ${errorMessage}`
                 );
@@ -310,6 +313,9 @@ export function useMultiSequenceUpload() {
                 const errorMessage = extractErrorMessage(error);
                 const statusCode = extractStatusCode(error);
                 console.error(
+                    // Console logging only: a % specifier in the interpolated value can at most
+                    // garble this one log line; nothing is executed, stored or returned from it.
+                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     `Error completing sequence ${sequence.sequenceId}:`,
                     `Status: ${statusCode}, Message: ${errorMessage}`
                 );

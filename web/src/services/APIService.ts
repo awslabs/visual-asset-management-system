@@ -2227,6 +2227,9 @@ export const fetchAssetS3FilesPage = async ({
         });
 
         console.log(
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             `fetchAssetS3FilesPage (basic=${basic}, page=${startingToken ? "next" : "first"}):`,
             response?.items?.length || 0,
             "items"

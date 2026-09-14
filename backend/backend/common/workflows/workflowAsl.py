@@ -140,6 +140,9 @@ def _state_machine_exists(sf_client, workflow_arn):
 
 def _generate_state_machine_name(workflow_id):
     """Build a unique, <=80-char, 'vams-'-prefixed state machine name."""
+    # uuid1 only makes a state-machine or job name unique; the value is neither a secret nor a
+    # capability token, so predictability has no security consequence.
+    # nosemgrep: python.lang.security.insecure-uuid-version.insecure-uuid-version
     suffix = uuid.uuid1().hex[:8]
     name = workflow_id[:80 - len("vams-") - len(suffix)]
     return "vams-" + name + suffix

@@ -6,6 +6,22 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
+### ⚠ BREAKING CHANGES
+
+### Features
+
+### Bug Fixes
+
+### Chores
+
+### Known Outstanding Issues
+
+### Troubleshooting
+
+## [2.6.1] (2026-09-13)
+
+### Major Change Summary:
+
 -   Workflow Orchestration Refinements - Triggers can be defined while creating a workflow, the execute-workflow flow is a single stepped dialog with the workflow picker as its first step, and execution details report each pipeline step's registered sub-processes with per-stage status and every log source known for the step — readable one source at a time through the logs API, the CLI, the MCP server, and the web log viewer. Built-in AWS Batch pipelines register their container logs per stage
 
 ### ⚠ BREAKING CHANGES

@@ -141,6 +141,10 @@ export const useMetadataSchemas = (
 
                         if (hasConflict) {
                             console.warn(
+                                // Console logging only: a % specifier in the interpolated value can
+                                // at most garble this one log line; nothing is executed, stored or
+                                // returned from it.
+                                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                 `[useMetadataSchemas] Schema conflict detected for field "${fieldKey}":`,
                                 {
                                     existing: existing,

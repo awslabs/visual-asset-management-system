@@ -814,6 +814,10 @@ export class SplatToolboxConstruct extends Construct {
                         }
                         const files = fs.readdirSync(src);
                         for (const file of files) {
+                            // Synth-time copy of the repo's own pipeline sources: the joined
+                            // segment is a readdirSync entry of a repo directory, not external
+                            // input.
+                            // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
                             copyRecursive(path.join(src, file), path.join(dest, file));
                         }
                     } else {
