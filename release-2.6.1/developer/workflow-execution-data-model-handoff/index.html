@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Workflow Execution Data Model | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.1/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.1/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.1/developer/workflow-execution-data-model-handoff"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Workflow Execution Data Model | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="The storage data model behind workflow executions, which records populate when, and the conventions a new read or write path must follow."><meta data-rh="true" property="og:description" content="The storage data model behind workflow executions, which records populate when, and the conventions a new read or write path must follow."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.1/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.1/developer/workflow-execution-data-model-handoff"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.1/developer/workflow-execution-data-model-handoff" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.1/developer/workflow-execution-data-model-handoff" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Workflow Execution Data Model","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.1/developer/workflow-execution-data-model-handoff"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.1/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.1/assets/js/runtime~main.918469b4.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.1/assets/js/runtime~main.3c964062.js" defer="defer"></script>
 <script src="/visual-asset-management-system/release-2.6.1/assets/js/main.6cf7a502.js" defer="defer"></script>
 </head>
 <body>
@@ -239,7 +239,12 @@ CloudWatch log locations — by putting an event on the orchestration event bus 
 <code>{eventSourcePrefix}.execution.{executionId}.pipeline.{pipelineExecutionId}</code> with the detail type
 <code>pipeline.execution.register</code>. A standing Amazon EventBridge rule routes the event to
 <code>registerPipelineExecution</code>, which appends the reported resources to the targeted pipeline row&#x27;s
-<code>registeredSubExecutions</code> and <code>registeredLogs</code> lists.</p>
+<code>registeredSubExecutions</code> and <code>registeredLogs</code> lists. The handler accepts an event only when its <code>Source</code>
+ends in <code>.pipeline.{pipelineExecutionId}</code> for the <code>pipelineExecutionId</code> the detail names, so a pipeline
+can attach resources to its own execution alone. Log entries are deduplicated by location — the log group
+(ARN without a trailing <code>:*</code>, or name), stream name, and stream prefix — and a redelivery that carries a
+<code>stageName</code>, <code>label</code>, or <code>sourceType</code> the stored entry lacks merges them in; at most 50 log entries and 50
+sub-executions are stored per row.</p>
 <p>Registration is optional and additive — it does not replace the task-token callback a pipeline already
 uses — but it is what makes two capabilities work:</p>
 <ul>
@@ -249,8 +254,26 @@ in-flight steps of a run that fails. Each entry is typed by <code>resourceType</
 AWS Batch jobs and AWS Deadline Cloud farm jobs are stopped, and any other type is registered but
 returns a non-fatal warning so the caller knows the sub-process was left running.</li>
 <li class=""><strong>Full-mode log retrieval finds the right log group.</strong> Each <code>registeredLogs</code> entry carries
-<code>logGroupArn</code>, <code>logGroupName</code>, <code>logStreamName</code> and <code>logStreamPrefix</code>, so a full-mode log read pulls from
-the pipeline&#x27;s own CloudWatch location rather than only the workflow log group.</li>
+<code>logGroupArn</code>, <code>logGroupName</code>, <code>logStreamName</code>, <code>logStreamPrefix</code>, <code>stageName</code>, <code>label</code>, and
+<code>sourceType</code> (the last three are <code>&quot;&quot;</code> when the producer did not send them; <code>sourceType</code> is one of
+<code>stateMachine</code>, <code>lambda</code>, <code>batch</code>, <code>ecs</code>, <code>container</code>, <code>custom</code>), so a full-mode log read pulls from the
+pipeline&#x27;s own CloudWatch location rather than only the workflow log group. The details route lists every
+entry — together with the step&#x27;s derived invocation log and a registered sub-state-machine&#x27;s logging
+destination — as <code>availableLogs</code>, each with a <code>logId</code> (the first 16 hex characters of the SHA-256 of
+the UTF-8 JSON array <code>[kind, logGroupArn without a trailing &quot;:*&quot;, logStreamName, logStreamPrefix]</code>,
+with <code>&quot;&quot;</code> for an absent stream or prefix — <code>log_id()</code> in <code>common/workflows/availableLogs.py</code>, the only
+place the encoding lives), and the logs route reports the same list with a read status as <code>logSources</code> and
+reads one entry alone when given <code>logId</code>. An entry with an exact stream is read without
+the execution-scope terms only when the stream starts with a prefix registered on the same pipeline
+execution or was itself registered with that stream.</li>
+<li class=""><strong>Stage status is derived, never stored.</strong> <code>registeredSubExecutions</code> holds locators only. When a details
+request carries <code>includeSubExecutions=true</code>, <code>executionService</code> describes the registered state machine
+(memoised per invocation), walks its definition into an ordered stage frame, and attributes the execution
+history&#x27;s events to those stages to produce <code>subExecutions[].stages</code> with a status per stage. The reads
+are bounded (definition ≤ 256 KiB, ≤ 50 stages, depth ≤ 3, ≤ 5 history pages per sub-execution and 20
+per request) and best-effort — a Step Functions or AWS Batch error yields <code>UNKNOWN</code> plus a
+<code>subExecutionWarnings</code> entry, never a failed request — and the CloudWatch <code>nextToken</code> of a logs request is
+never passed to <code>get_execution_history</code>.</li>
 </ul>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="adding-a-read-or-write-path">Adding a read or write path<a href="#adding-a-read-or-write-path" class="hash-link" aria-label="Direct link to Adding a read or write path" title="Direct link to Adding a read or write path" translate="no">​</a></h2>
 <ol>
