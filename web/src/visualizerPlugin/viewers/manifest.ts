@@ -22,6 +22,8 @@ export const VIEWER_COMPONENTS = {
     "./viewers/CesiumViewerPlugin/CesiumViewerComponent":
         "CesiumViewerPlugin/CesiumViewerComponent",
     "./viewers/TextViewerPlugin/TextViewerComponent": "TextViewerPlugin/TextViewerComponent",
+    "./viewers/TextDiffViewerPlugin/TextDiffViewerComponent":
+        "TextDiffViewerPlugin/TextDiffViewerComponent",
     "./viewers/BabylonJSGaussianSplatViewerPlugin/BabylonJSGaussianSplatViewerComponent":
         "BabylonJSGaussianSplatViewerPlugin/BabylonJSGaussianSplatViewerComponent",
     "./viewers/PlayCanvasGaussianSplatViewerPlugin/PlayCanvasGaussianSplatViewerComponent":
@@ -56,6 +58,7 @@ export const DEPENDENCY_MANAGERS = {
     "./viewers/NeedleUSDViewerPlugin/dependencies": "NeedleUSDViewerPlugin/dependencies",
     "./viewers/ThreeJSViewerPlugin/dependencies": "ThreeJSViewerPlugin/dependencies",
     "./viewers/ThatOpenWebIfcViewerPlugin/dependencies": "ThatOpenWebIfcViewerPlugin/dependencies",
+    "./viewers/TextDiffViewerPlugin/dependencies": "TextDiffViewerPlugin/dependencies",
     // Add new dependency managers here as needed:
     // './viewers/MyViewerPlugin/dependencies': 'MyViewerPlugin/dependencies',
 } as const;
