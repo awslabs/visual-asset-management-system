@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **`execution.status.json` is a reserved results file name.** A pipeline that writes `execution.status.json` with `{"status": "FAILED", ...}` to its results prefix has its execution recorded FAILED by the process-output step. Custom pipelines that used that name for other purposes must rename the file.
 -   **The `perInputFileVersion` concurrency restriction locks per workflow, file, and S3 version.** A second execute of the same workflow over the same file version while one is running returns `400`; a newer file version runs concurrently, and a stale lock expires through the lock table's TTL.
 -   **The `enabled` toggles of system pipelines, workflows, and triggers are pause switches.** A deployment re-asserts the shipped values on every registration run, so a system trigger disabled in the web interface fires again after the next deploy that changes its bundle; disable it durably through `autoRegisterAutoTriggerOnFileUpload` (and `vectorSearch.enabled=false`, which otherwise requires the trigger).
+
 **Recommended Upgrade Path:** edit `config.json` (remove the two retired pipeline keys; add `app.vectorSearch` and `app.pipelines.useSystemGenAiMetadata`), deploy, then run the v2.6 → v2.7 migration: `infra\deploymentDataMigration\v2.6_to_v2.7\upgrade`. See the [v2.6 to v2.7 migration guide](https://awslabs.github.io/visual-asset-management-system/deployment/update-the-solution#v26-to-v27).
 
 ### Features
