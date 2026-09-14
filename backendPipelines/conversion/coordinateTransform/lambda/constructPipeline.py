@@ -212,7 +212,7 @@ def lambda_handler(event, context):
     Builds pipeline definition for the Batch container job.
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     try:
         return _build_execution_params(event)

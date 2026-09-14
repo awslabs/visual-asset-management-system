@@ -5,12 +5,16 @@
 
 import React, { useMemo, useState } from "react";
 import Dialog from "../components/Dialog";
-import SearchableSelect from "../components/SearchableSelect";
-import ExecuteWizard, { validateInputSelection } from "../wizard/ExecuteWizard";
-import RestrictionSummary from "../wizard/RestrictionSummary";
-import { resolveRestrictions, stepsFromWorkflow } from "../wizard/resolveRestrictions";
+import Callout from "../components/Callout";
+import { ExecuteWizardBody } from "../wizard/ExecuteWizard";
+import WizardRail, { RailStep } from "../wizard/WizardRail";
+import WorkflowPicker, {
+    pipelineKeyFor,
+    selectionErrorsFor,
+    workflowKey,
+} from "../wizard/WorkflowPicker";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
-import { useAllWorkflows, useAllPipelines } from "../api/queries";
+import { useAllWorkflows, useAllPipelines, useWorkflow } from "../api/queries";
 import type { ExecuteInputFile, Pipeline, Workflow } from "../types";
 
 interface ExecuteWorkflowModalProps {
@@ -22,19 +26,22 @@ interface ExecuteWorkflowModalProps {
     assetId?: string;
     /**
      * Files the launch should run on, when the caller already knows them (the asset file manager's
-     * Automation action). Supplying these lets the picker validate the selection against the chosen
+     * Automation action). Supplying these lets the picker validate the selection against each
      * workflow immediately, and the wizard opens with the files already filled in.
      */
     presetInputFiles?: ExecuteInputFile[];
+    /**
+     * The workflow to run, when the caller already knows it (a workflow card's Execute action, a
+     * workflow-scoped Executions board). The Workflow step is omitted. Fetched directly rather than
+     * looked up in the enabled-only list, so a disabled workflow still opens and says why it cannot run.
+     */
+    presetWorkflow?: { databaseId: string; workflowId: string };
 }
 
 /**
- * Workflow picker, then the execute wizard.
- *
- * Shared by the Executions board toolbar and the asset file manager's Automation group. When the
- * caller supplies `presetInputFiles`, the picker checks them against the chosen workflow's arity,
- * asset scope, and file filters up front — so an incompatible workflow is rejected here rather than
- * two steps later, which is the point of launching from a known selection.
+ * The execute dialog: the workflow picker as its first step, then the wizard's steps, all in one
+ * dialog with one step rail. Shared by the Executions board toolbar, the asset file manager's
+ * Automation group and the Workflows page.
  */
 const ExecuteWorkflowModal: React.FC<ExecuteWorkflowModalProps> = ({
     open,
@@ -42,192 +49,186 @@ const ExecuteWorkflowModal: React.FC<ExecuteWorkflowModalProps> = ({
     databaseId,
     assetId,
     presetInputFiles,
+    presetWorkflow,
 }) => {
-    const [selected, setSelected] = useState("");
-    const [wizardOpen, setWizardOpen] = useState(false);
+    const [selectedKey, setSelectedKey] = useState("");
+    // The workflow at the moment Continue was pressed. Changing the selection afterwards leaves the
+    // started body mounted (hidden) until Continue is pressed again.
+    const [started, setStarted] = useState<Workflow | null>(null);
+    const [stage, setStage] = useState<"workflow" | "wizard">(
+        presetWorkflow ? "wizard" : "workflow"
+    );
 
-    const { data: dbWorkflows = [] } = useAllWorkflows(databaseId);
+    const listsEnabled = !presetWorkflow;
+    const { data: dbWorkflows = [] } = useAllWorkflows(databaseId, undefined, listsEnabled);
     // The GLOBAL catalog is fetched separately ONLY when scoped to a database: the unscoped list
     // (`/workflows`) already returns every workflow the caller can see, GLOBAL included. Fetching it
     // again there produced a list with each GLOBAL workflow twice — and duplicate option keys break
     // the picker's list reconciliation, which is why typing in its search appeared to do nothing.
-    const { data: globalWorkflows = [] } = useAllWorkflows("GLOBAL", undefined, !!databaseId);
+    const { data: globalWorkflows = [] } = useAllWorkflows(
+        "GLOBAL",
+        undefined,
+        !!databaseId && listsEnabled
+    );
     const allWorkflows = useMemo(() => {
         // Deduplicated defensively as well: a workflow must never appear twice even if both scopes
         // return it.
         const seen = new Set<string>();
         return [...dbWorkflows, ...globalWorkflows].filter((wf) => {
-            const key = `${wf.databaseId}:${wf.workflowId}`;
+            const key = workflowKey(wf);
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
         });
     }, [dbWorkflows, globalWorkflows]);
 
-    // Referenced pipelines' systemConfig, needed to resolve what each workflow accepts. Both scopes
-    // load because a database workflow may reference GLOBAL pipelines as well as its own.
-    const { data: dbPipelines = [] } = useAllPipelines(databaseId, false, !!databaseId);
-    const { data: globalPipelines = [] } = useAllPipelines("GLOBAL");
+    // Referenced pipelines' systemConfig, needed to resolve what each workflow accepts. The same
+    // read the wizard body makes — unscoped, so a database workflow's own steps resolve as well as
+    // GLOBAL ones, and archived-inclusive, so a reference to an archived step still names it — and
+    // on the same query key, so the body mounts on a cache hit rather than a second request.
+    const { data: allPipelines = [] } = useAllPipelines(undefined, true, listsEnabled);
     const pipelinesByKey = useMemo(() => {
         const map: Record<string, Pipeline> = {};
-        [...dbPipelines, ...globalPipelines].forEach((p: Pipeline) => {
+        allPipelines.forEach((p: Pipeline) => {
             map[`${p.databaseId}:${p.pipelineId}`] = p;
         });
         return map;
-    }, [dbPipelines, globalPipelines]);
+    }, [allPipelines]);
 
-    const options = useMemo(
-        () =>
-            allWorkflows
-                .filter((wf) => wf.enabled && !wf.archived)
-                .map((wf) => ({
-                    value: `${wf.databaseId}:${wf.workflowId}`,
-                    label: wf.workflowName || wf.workflowId,
-                    detail: wf.databaseId,
-                })),
+    const workflowsOffered = useMemo(
+        () => allWorkflows.filter((wf) => wf.enabled && !wf.archived),
         [allWorkflows]
     );
-
-    const selectedWorkflow: Workflow | null = useMemo(() => {
-        if (!selected) return null;
-        const [dbId, wfId] = selected.split(":");
-        return allWorkflows.find((wf) => wf.databaseId === dbId && wf.workflowId === wfId) || null;
-    }, [selected, allWorkflows]);
-
-    const steps = useMemo(
-        () => (selectedWorkflow ? stepsFromWorkflow(selectedWorkflow, pipelinesByKey) : []),
-        [selectedWorkflow, pipelinesByKey]
+    const selectedWorkflow = useMemo(
+        () => workflowsOffered.find((wf) => workflowKey(wf) === selectedKey) || null,
+        [workflowsOffered, selectedKey]
     );
-
-    const restrictions = useMemo(
-        () => (selectedWorkflow ? resolveRestrictions(selectedWorkflow.systemConfig, steps) : null),
-        [selectedWorkflow, steps]
-    );
-
-    // Validate a supplied selection against the chosen workflow. Reuses the wizard's own check, so
-    // the verdict here and on the wizard's input step cannot disagree.
-    const presetErrors = useMemo(() => {
-        if (!selectedWorkflow || !presetInputFiles?.length) return [];
-        return validateInputSelection(
-            selectedWorkflow.systemConfig,
-            steps.map((step, index) => ({
-                label: `Pipeline "${
-                    selectedWorkflow.specifiedPipelines?.[index]?.pipelineId || index + 1
-                }"`,
-                systemConfig: step.systemConfig,
-                templateOverrides: step.templateOverrides,
-            })),
-            presetInputFiles
-        );
-    }, [selectedWorkflow, steps, presetInputFiles]);
-
     // A workflow that cannot accept the selection must not be carried into the wizard.
-    const canContinue = !!selectedWorkflow && presetErrors.length === 0;
+    const canContinue =
+        !!selectedWorkflow &&
+        selectionErrorsFor(selectedWorkflow, pipelinesByKey, presetInputFiles).length === 0;
+
+    const { data: presetWorkflowData, isError: presetFailed } = useWorkflow(
+        presetWorkflow?.databaseId || "",
+        presetWorkflow?.workflowId || ""
+    );
+
+    const startedWorkflow: Workflow | null = presetWorkflow ? presetWorkflowData || null : started;
+    const startedKey = startedWorkflow ? workflowKey(startedWorkflow) : "";
 
     const handleClose = () => {
-        setSelected("");
+        setSelectedKey("");
+        setStarted(null);
+        setStage(presetWorkflow ? "wizard" : "workflow");
         onClose();
     };
 
+    const handleContinue = () => {
+        if (!selectedWorkflow) return;
+        setStarted(selectedWorkflow);
+        setStage("wizard");
+    };
+
+    const title =
+        stage === "workflow" || !startedWorkflow
+            ? "Execute a workflow"
+            : `Execute ${startedWorkflow.workflowName || startedWorkflow.workflowId}`;
+
+    // The picker owns the footer on its step; the body renders its own once it is showing. While a
+    // preset workflow is still loading (or failed) the only action is Cancel.
+    const footer =
+        stage === "workflow" ? (
+            <>
+                <button onClick={handleClose} className={btnSecondary}>
+                    Cancel
+                </button>
+                <button onClick={handleContinue} disabled={!canContinue} className={btnPrimary}>
+                    Continue
+                </button>
+            </>
+        ) : startedWorkflow ? undefined : (
+            <button onClick={handleClose} className={btnSecondary}>
+                Cancel
+            </button>
+        );
+
+    // The rail on the Workflow step previews the journey for the selected workflow; every row after
+    // Workflow is still ahead, so none is clickable.
+    const previewRail: RailStep[] = [
+        { id: "workflow", label: "Workflow" },
+        { id: "input", label: "Inputs" },
+        ...(selectedWorkflow?.specifiedPipelines || []).map((ref, idx) => ({
+            id: `pipeline-${idx}`,
+            label:
+                pipelinesByKey[pipelineKeyFor(selectedWorkflow!, ref)]?.pipelineName ||
+                `Pipeline ${idx + 1}`,
+        })),
+        { id: "review", label: "Review" },
+    ];
+
     return (
-        <>
-            <Dialog
-                open={open && !wizardOpen}
-                onOpenChange={(next) => !next && handleClose()}
-                title="Execute a workflow"
-                footer={
-                    <>
-                        <button onClick={handleClose} className={btnSecondary}>
-                            Cancel
-                        </button>
-                        <button
-                            onClick={() => setWizardOpen(true)}
-                            disabled={!canContinue}
-                            className={btnPrimary}
-                        >
-                            Continue
-                        </button>
-                    </>
-                }
-            >
-                {/* Reserve vertical room so the search dropdown opens within the dialog instead of
-                    forcing the whole modal to scroll. */}
-                <div className="min-h-[22rem]">
-                    {presetInputFiles && presetInputFiles.length > 0 && (
-                        <div className="mb-3 text-sm">
-                            <span className="text-text-secondary">
-                                Running on {presetInputFiles.length}{" "}
-                                {presetInputFiles.length === 1 ? "selection" : "selections"}:
-                            </span>{" "}
-                            <span className="font-mono text-xs text-text-primary">
-                                {presetInputFiles
-                                    .slice(0, 3)
-                                    .map((f) => f.relativeFileKey)
-                                    .join(", ")}
-                                {presetInputFiles.length > 3 &&
-                                    ` +${presetInputFiles.length - 3} more`}
-                            </span>
-                        </div>
-                    )}
-
-                    <label className="block">
-                        <span className="block text-sm font-medium mb-1 text-text-primary">
-                            Workflow
-                        </span>
-                        <SearchableSelect
-                            ariaLabel="Workflow"
-                            value={selected}
-                            onChange={setSelected}
-                            placeholder="Search workflows…"
-                            options={options}
+        <Dialog
+            open={open}
+            onOpenChange={(next) => !next && handleClose()}
+            title={title}
+            size="lg"
+            footer={footer}
+        >
+            {stage === "workflow" && (
+                <div className="flex flex-col gap-4 md:flex-row md:gap-6">
+                    <WizardRail steps={previewRail} currentId="workflow" />
+                    <div className="min-w-0 flex-1">
+                        <WorkflowPicker
+                            workflows={workflowsOffered}
+                            pipelinesByKey={pipelinesByKey}
+                            selectedKey={selectedKey}
+                            onSelect={setSelectedKey}
+                            presetInputFiles={presetInputFiles}
                         />
-                    </label>
-
-                    {/* What the chosen workflow accepts, so the user learns it here rather than after
-                        picking files. Compact: the full breakdown is on the wizard's input step. */}
-                    {selectedWorkflow && restrictions && (
-                        <div className="mt-3 space-y-1">
-                            {selectedWorkflow.description && (
-                                <p className="text-sm text-text-secondary">
-                                    {selectedWorkflow.description}
-                                </p>
-                            )}
-                            <RestrictionSummary compact restrictions={restrictions} />
-                        </div>
-                    )}
-
-                    {presetErrors.length > 0 && (
-                        <div
-                            role="alert"
-                            className="mt-3 rounded border border-red-400 bg-red-50 p-2 text-sm text-red-900 dark:border-red-700 dark:bg-red-900/20 dark:text-red-200"
-                        >
-                            <p className="font-semibold">
-                                This workflow cannot run on the current selection:
-                            </p>
-                            <ul className="list-disc list-inside mt-1">
-                                {presetErrors.map((err, i) => (
-                                    <li key={i}>{err}</li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
+                    </div>
                 </div>
-            </Dialog>
-
-            {wizardOpen && selectedWorkflow && (
-                <ExecuteWizard
-                    open={wizardOpen}
-                    onClose={() => {
-                        setWizardOpen(false);
-                        handleClose();
-                    }}
-                    workflow={selectedWorkflow}
-                    databaseId={selectedWorkflow.databaseId}
-                    presetAsset={databaseId && assetId ? { databaseId, assetId } : undefined}
-                    presetInputFiles={presetInputFiles}
-                />
             )}
-        </>
+
+            {stage === "wizard" &&
+                !startedWorkflow &&
+                (presetFailed ? (
+                    <Callout tone="error" title="This workflow could not be loaded.">
+                        Check that it still exists and that your role can read it.
+                    </Callout>
+                ) : (
+                    <div className="flex items-center justify-center min-h-[240px]">
+                        <div className="text-center">
+                            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 dark:border-blue-400 mb-3" />
+                            <p className="text-text-secondary">Loading workflow…</p>
+                        </div>
+                    </div>
+                ))}
+
+            {/* Mounted once started and kept mounted while the picker shows again, so a jump back to
+                the Workflow step and forward loses nothing. A Continue on a different workflow
+                replaces it (the key changes). */}
+            {startedWorkflow && (
+                <div hidden={stage === "workflow"}>
+                    <ExecuteWizardBody
+                        key={startedKey}
+                        onClose={handleClose}
+                        workflow={startedWorkflow}
+                        databaseId={startedWorkflow.databaseId}
+                        presetAsset={databaseId && assetId ? { databaseId, assetId } : undefined}
+                        presetInputFiles={presetInputFiles}
+                        hidden={stage === "workflow"}
+                        leadingSteps={
+                            presetWorkflow
+                                ? undefined
+                                : [{ id: "workflow", label: "Workflow", done: true }]
+                        }
+                        onJumpTo={(stepId) => {
+                            if (stepId === "workflow") setStage("workflow");
+                        }}
+                    />
+                </div>
+            )}
+        </Dialog>
     );
 };
 

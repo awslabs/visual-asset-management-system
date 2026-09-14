@@ -2191,6 +2191,7 @@ export const fetchAssetS3FilesPage = async ({
     startingToken = null,
     pageSize = null,
     assetVersionId = null,
+    prefix = null,
 }: any) => {
     try {
         if (!databaseId || !assetId) {
@@ -2220,11 +2221,19 @@ export const fetchAssetS3FilesPage = async ({
             queryParams.assetVersionId = assetVersionId;
         }
 
+        // Server-side folder scope: only keys under this asset-relative prefix are listed.
+        if (prefix) {
+            queryParams.prefix = prefix;
+        }
+
         const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/listFiles`, {
             queryStringParameters: queryParams,
         });
 
         console.log(
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             `fetchAssetS3FilesPage (basic=${basic}, page=${startingToken ? "next" : "first"}):`,
             response?.items?.length || 0,
             "items"

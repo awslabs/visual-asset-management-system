@@ -37,6 +37,7 @@ os.environ.setdefault("WORKFLOW_STORAGE_TABLE_NAME", "t-workflows")
 os.environ.setdefault("PIPELINE_STORAGE_TABLE_NAME", "t-pipelines")
 
 from backend.backend.handlers.workflows.executionService import step_invocation_log_group_arn
+from backend.backend.handlers.workflows import executionService as le
 
 REFERENCE = ("arn:aws:logs:us-west-2:123456789012:log-group:"
              "/aws/vendedlogs/vamsPipelineWorkflowsabc:*")
@@ -112,3 +113,19 @@ class TestStepInvocationLogGroupArn:
     @pytest.mark.parametrize("row", [None, {}])
     def test_tolerates_an_empty_row(self, row):
         assert step_invocation_log_group_arn(row, REFERENCE) == ""
+
+
+@pytest.mark.unit
+class TestInvocationLogIsAnAvailableLog:
+    def test_the_derived_invocation_log_is_listed_with_kind_invocation(self):
+        entries = le._available_logs_for_pipeline(
+            {"pipelineExecutionType": "Lambda", "pipelineResourceArn": "vams-vamsExecuteY",
+             "registeredLogs": [], "registeredSubExecutions": []}, REFERENCE)
+        assert [(e["kind"], e["logGroupName"], e["sourceType"]) for e in entries] == [
+            ("invocation", "/aws/lambda/vams-vamsExecuteY", "lambda")]
+        assert entries[0]["_logGroupArn"].endswith("/aws/lambda/vams-vamsExecuteY:*")
+
+    def test_a_step_without_an_invocation_log_lists_none(self):
+        assert le._available_logs_for_pipeline(
+            {"pipelineExecutionType": "SQS", "pipelineResourceArn": "https://sqs.us-west-2.amazonaws.com/1/q",
+             "registeredLogs": [], "registeredSubExecutions": []}, REFERENCE) == []

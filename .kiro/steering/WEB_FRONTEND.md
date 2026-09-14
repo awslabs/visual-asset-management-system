@@ -56,23 +56,32 @@ web/
     features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
-                            #   client.ts queries.ts
+                            #   client.ts queries.ts triggerCache.ts
       permissions/useAllowedRoutes.ts  # Tier-1 permission gating
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, ...)
+                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
+                            #   Callout, VirtualList (fixed-row-height windowed list), ...)
                             #   ToastProvider.tsx — notifications for the whole module
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
                             #   TemplateEditor.tsx TemplateForm.tsx TagSchemaBuilder.tsx
                             #   TemplateOverridesEditor.tsx pipelineValidation.ts
+                            #   templateBodyValidation.ts (tag placeholder quoting + the json
+                            #   body shape check mirrored from the backend)
       workflows/            # WorkflowsPage.tsx WorkflowBuilder.tsx PipelineOrderList.tsx
-                            #   TriggersEditor.tsx WorkflowSystemConfigFields.tsx DagPreview.tsx
+                            #   TriggersEditor.tsx (live) TriggerDraftsEditor.tsx (create) over
+                            #   TriggerList.tsx TriggerForm.tsx triggerDraft.ts triggerStyles.ts
+                            #   WorkflowSystemConfigFields.tsx DagPreview.tsx
                             #   WorkflowValidationPanel.tsx workflowValidation.ts
       executions/           # ExecutionsBoard.tsx ExecutionDetailPage.tsx ExecutionLogViewer.tsx
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
-      wizard/               # ExecuteWizard.tsx + WizardPipelineStage/WizardInputStage/
-                            #   WizardReviewStage, InputFileSelector, MetadataSourceSelector,
+                            #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+      wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
+                            #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
+                            #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
+                            #   SelectedInputFilesList + BulkFilePicker + selectedInputFiles.ts (the
+                            #   multi-file selection: windowed list, bulk/paste picker, dedupe, 1000 cap),
                             #   RestrictionSummary, resolveRestrictions.ts resolveTemplate.ts
       types.ts reservedTagKeys.ts
 
@@ -110,10 +119,13 @@ web/
           hooks/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
       createupdate/         # CreateDatabase.tsx, UpdateAsset.tsx + form definitions
-      filemanager/          # File tree and file operations
+      filemanager/          # File tree and file operations; EnhancedFileManager lazy-loads the
+                            #   orchestration execution quick view for a file's "View execution" link
         components/         # FileDetailsPanel, AutomationActions (lazy-loads the execute modal),
                             #   tree views, preview thumbnails, splitters
-        utils/              # automationSelection.ts maps a selection to workflow input files
+        utils/              # automationSelection.ts maps a selection to workflow input files;
+                            #   executionLinks.ts maps workflow-execution provenance to the execution
+                            #   detail route and the Tier-1 route the link is gated on
       form/
       list/
       loading/              # Loading screens and spinners

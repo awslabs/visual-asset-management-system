@@ -96,6 +96,16 @@ describe("executions service", () => {
             expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details");
             expect(r).toEqual([true, { workflowExecutionId: "e1" }]);
         });
+
+        it("sends includeSubExecutions as a query parameter when asked", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { workflowExecutionId: "e1", pipelines: [] },
+            });
+            await getExecutionDetails("e1", { includeSubExecutions: "true" });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details", {
+                queryStringParameters: { includeSubExecutions: "true" },
+            });
+        });
     });
 
     describe("getExecutionDetailsMetadata", () => {

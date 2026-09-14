@@ -245,6 +245,9 @@ export default function UploadManager({
                 setRetryMessage(null);
                 console.log(`Sequence ${sequenceId} completed successfully`);
             } catch (error: any) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Failed to complete sequence ${sequenceId}:`, error);
                 setRetryMessage(null);
                 // Remove from in-flight set so the user can retry this sequence
@@ -439,6 +442,10 @@ export default function UploadManager({
                             setRetryMessage(null); // Clear retry message on success
                         } catch (error: any) {
                             console.error(
+                                // Console logging only: a % specifier in the interpolated value can
+                                // at most garble this one log line; nothing is executed, stored or
+                                // returned from it.
+                                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                 `Failed to initialize sequence ${sequence.sequenceId}:`,
                                 error
                             );
@@ -1042,6 +1049,9 @@ export default function UploadManager({
                     setCompletedInitSequences((prev) => prev + 1);
                     setRetryMessage(null);
                 } catch (error: any) {
+                    // Console logging only: a % specifier in the interpolated value can at most
+                    // garble this one log line; nothing is executed, stored or returned from it.
+                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     console.error(`Failed to initialize sequence ${sequence.sequenceId}:`, error);
                     setRetryMessage(null);
                     setUploadState((prev) => ({

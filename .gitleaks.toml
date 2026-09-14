@@ -110,4 +110,57 @@ regexes = [
     '''tok-rapid-123''',
     '''tok-fix053''',
     '''tok-123''',
+
+    # ---- release/2.6.1 scan (gitleaks 8.30.1, dir + git-history on origin/release/2.6.1 @ e5c43449) ----
+
+    # Documentation placeholders for VAMS API keys, in the docusaurus CLI/user-guide pages
+    # (docs/cli/commands/users-and-keys.md, docs/cli/troubleshooting/permissions.md,
+    # docs/user-guide/api-keys.md) and the retired tools/VamsCLI/docs/ pages still present in history.
+    # A real key is `"vams_" + secrets.token_urlsafe(48)` (backend/handlers/auth/apiKeyService.py), i.e.
+    # 69 characters of random url-safe base64. These are `vams_` followed by either the alphabet in
+    # order and a literal ellipsis, or the words "your-api-key-here" — neither can be a minted key.
+    # The alphabet form is anchored on `vams_AbCdEf` + `...`: the shortest sample is `vams_AbCdEf...`,
+    # so the class covers every longer truncation of the same sequence.
+    '''vams_AbCdEf[A-Za-z]*\.\.\.''',
+    '''vams_your-api-key-here''',
+
+    # Fixture keys returned by mocked create-key responses in tools/VamsCLI/tests/test_api_key.py and
+    # test_api_key_user_commands.py. 15 characters that spell "testkey"/"selfkey" — a minted key is 69
+    # characters of random base64 (see above), so neither literal can be one. Anchored on the closing
+    # quote so a longer value with the same prefix would still be reported.
+    '''vams_testkey123[']''',
+    '''vams_selfkey123[']''',
+
+    # Base64 pagination-cursor and JWT samples in the API docs (docs/api/overview.md, assets.md,
+    # addon.md, documentation/VAMS_API.yaml, and the retired tools/VamsCLI/docs/ pages). Each is either
+    # a bare `{"alg":"HS256","typ":"JWT"}` / `{"typ":"JWT","alg":"HS256"}` header cut off with a literal
+    # ellipsis and no payload or signature, or base64 of a self-describing JSON cursor cut off the same
+    # way. Anchored on the trailing `...` so a complete token never matches.
+    '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.\.\.''',
+    '''eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9\.\.\.''',
+    '''eyJkYXRhYmFzZUlkOmFzc2V0SWQiOiAi\.\.\.''',
+    '''eyJsYXN0QXNzZXRJbmRleCI6NDk5\.\.\.''',
+    '''eyJtZXRhZGF0YVNjaGVtYUlkIjoi\.\.\.''',
+
+    # The one complete cursor sample, docs/api/overview.md. Decodes to
+    # {"databaseId":"my-db", "assetId":"my-asset"} — a pagination cursor built from placeholder ids, not
+    # a credential. Listed in full so nothing else can match.
+    '''eyJkYXRhYmFzZUlkIjoibXktZGIiLCAiYXNzZXRJZCI6Im15LWFzc2V0In0=''',
+
+    # Example key ID in the retired tools/VamsCLI/docs/commands/api-key-management.md (history only).
+    # The hex runs a1b2c3d4-e5f6-7890-abcd-ef1234567890 in sequence: a hand-typed UUID, not a generated
+    # one, and a key *id* rather than a key in any case.
+    '''a1b2c3d4-e5f6-7890-abcd-ef1234567890''',
+
+    # Not credentials at all — generic-api-key matched identifiers because the word "key" or "prefix"
+    # sits next to an assignment. `s3_bucket_prefix` is a Python variable in
+    # backend/handlers/assets/createAsset.py; `COSMOS3_*` are metadata tag KEY NAMES (not values) in a
+    # retired analysis JSON; the `_sortKey*`/`_indices0`/`gpuSorter` hits are minified identifiers in
+    # the vendored PlayCanvas bundle (history only). Each is anchored on the surrounding code so it
+    # matches the identifier, not a value assigned to it.
+    '''s3_key = s3_bucket_prefix ''',
+    '''tagKey:'COSMOS3_(GUIDANCE|NEGATIVE_PROMPT)[']''',
+    '''(t|e)\._sortKey(Forward|Shadow),i=e\._sortKey(Forward|Shadow);''',
+    '''this\._keys0,r=this\._indices0;''',
+    '''this\.keyGenerator,s=this\.gpuSorter;''',
 ]

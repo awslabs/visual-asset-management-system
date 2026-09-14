@@ -156,6 +156,9 @@ export const createMetadata = async (
 
         const response = await apiClient.post(endpoint, { body });
 
+        // Console logging only: a % specifier in the interpolated value can at most garble this one
+        // log line; nothing is executed, stored or returned from it.
+        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
         console.log(`[apiHelpers] createMetadata response for ${entityType}:`, response);
 
         return response;
@@ -214,6 +217,9 @@ export const updateMetadata = async (
 
         const response = await apiClient.put(endpoint, { body });
 
+        // Console logging only: a % specifier in the interpolated value can at most garble this one
+        // log line; nothing is executed, stored or returned from it.
+        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
         console.log(`[apiHelpers] updateMetadata response for ${entityType}:`, response);
 
         return response;
@@ -271,6 +277,9 @@ export const deleteMetadata = async (
 
         const response = await apiClient.del(endpoint, { body });
 
+        // Console logging only: a % specifier in the interpolated value can at most garble this one
+        // log line; nothing is executed, stored or returned from it.
+        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
         console.log(`[apiHelpers] deleteMetadata response for ${entityType}:`, response);
 
         return response;

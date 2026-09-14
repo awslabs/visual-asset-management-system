@@ -16,11 +16,17 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 
 VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 22.x (Lambda). React 18.3 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
 
-**Rolling the VAMS version** — the version string is duplicated across three files; update all of them together in the same change:
+**Rolling the VAMS version** — the version string is duplicated across seven files; update all of them together in the same change:
 
 1. Root `package.json` (`"version"` field)
-2. `tools/VamsCLI/vamscli/version.py` (both `__version__` and `CLI_VERSION`)
+2. Root `package-lock.json` (both `project-root` `"version"` fields: top-level and `packages[""]`)
 3. `infra/config/config.ts` (`VAMS_VERSION` constant)
+4. `tools/VamsCLI/vamscli/version.py` (both `__version__` and `CLI_VERSION`)
+5. `tools/VamsCLI/tests/test_log_redaction.py` (the `vamscli/X.Y.Z` User-Agent fixture value and its assertion)
+6. `tools/VamsMCP/pyproject.toml` (`[project]` `version`)
+7. `tools/VamsMCP/vams_mcp/__init__.py` (`__version__` — what the running MCP server reports; Pattern 7 rule 6)
+
+The sub-package `package.json`/`package-lock.json` files under `infra/`, `web/`, and `documentation/docusaurus-site/` carry their own versions and are not part of the roll, nor are third-party pins that happen to share the digits (`urllib3`, `pdal`, `cadquery`). Each release also gets a new `## [X.Y.Z] (YYYY-MM-DD)` section at the top of `CHANGELOG.md` and a matching row plus `### X.Y.Z` section in `documentation/docusaurus-site/docs/additional/revisions.md`.
 
 ---
 
@@ -630,7 +636,7 @@ The same three-way constants update applies to new audit CloudWatch log groups. 
 
 ### **Adding a New Processing Pipeline**
 
-See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to all three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
+See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to all three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, register the step's sub-process and log sources on the orchestration bus (the `pipeline.execution.register` event with stage-aware log entries; a Batch pipeline's lambda gets its log-group env from `infra/lib/helper/batchJobLogGroup.ts`), update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
 
 ---
 

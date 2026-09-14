@@ -12,7 +12,7 @@ import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterB
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
-import ExecuteWizard from "../wizard/ExecuteWizard";
+import ExecuteWorkflowModal from "../executions/ExecuteWorkflowModal";
 import { btnPrimary, btnSecondary, control } from "../components/controlStyles";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import type { Workflow } from "../types";
@@ -400,11 +400,13 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
             )}
 
             {executeWorkflow && (
-                <ExecuteWizard
+                <ExecuteWorkflowModal
                     open={!!executeWorkflow}
                     onClose={() => setExecuteWorkflow(null)}
-                    workflow={executeWorkflow}
-                    databaseId={executeWorkflow.databaseId}
+                    presetWorkflow={{
+                        databaseId: executeWorkflow.databaseId,
+                        workflowId: executeWorkflow.workflowId,
+                    }}
                 />
             )}
 

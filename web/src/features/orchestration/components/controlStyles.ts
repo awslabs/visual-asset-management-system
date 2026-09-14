@@ -27,3 +27,8 @@ export const btnSecondary =
 export const control =
     "px-3 py-1.5 text-sm border border-border-input rounded-lg bg-surface-input text-text-primary " +
     "focus:outline-none focus:ring-2 focus:ring-blue-500";
+
+// Confirming action that starts something (Launch). Same geometry as btnPrimary, green fill.
+export const btnSuccess =
+    "inline-flex items-center justify-center gap-1.5 px-4 py-1.5 text-sm font-bold rounded-lg " +
+    "bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed";

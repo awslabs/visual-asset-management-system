@@ -157,6 +157,9 @@ const RenderSettings: React.FC<RenderSettingsProps> = ({ app, camera, splatEntit
                 setFlipped((prev) => ({ ...prev, [axis]: !prev[axis] }));
                 console.log(`PlayCanvas Splat: Flipped ${axis.toUpperCase()} axis`);
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error flipping ${axis} axis:`, error);
             }
         },

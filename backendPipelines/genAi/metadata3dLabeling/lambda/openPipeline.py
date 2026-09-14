@@ -35,6 +35,17 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# The Blender job's vended container log group (the group its Fargate job definition writes to through
+# the awslogs driver) + its job definition name, and the metadata-generation function's log group;
+# each stage's log source is registered only when configured.
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
+BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
+METADATA_GENERATION_LOG_GROUP_NAME = os.environ.get("METADATA_GENERATION_LOG_GROUP_NAME", "")
+METADATA_GENERATION_LOG_GROUP_ARN = os.environ.get("METADATA_GENERATION_LOG_GROUP_ARN", "")
+# The Batch and Lambda states of this pipeline's state machine (their CDK construct ids).
+BATCH_STATE_NAME = "BlenderRendererBatchJob"
+METADATA_GENERATION_STATE_NAME = "MetadataGenerationLambdaFunctionTask"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
@@ -47,9 +58,40 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def batch_container_log_entry(job_definition_name, state_name):
+    """The log source for one Batch state's container: the job's vended group, streamed under
+    `<jobDefinitionName>/default/`. None when the group or the job definition is not configured."""
+    if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name:
+        return None
+    return {
+        "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+        "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": f"{job_definition_name}/default/",
+        "stageName": state_name,
+        "sourceType": "batch",
+        "label": f"{state_name} container",
+    }
+
+
+def lambda_log_entry(log_group_name, log_group_arn, state_name):
+    """The log source for the Lambda function one state invokes. None when the group is not configured."""
+    if not (log_group_name or log_group_arn):
+        return None
+    return {
+        "logGroupArn": log_group_arn,
+        "logGroupName": log_group_name,
+        "logStreamName": "",
+        "logStreamPrefix": "",
+        "stageName": state_name,
+        "sourceType": "lambda",
+        "label": f"{state_name} function",
+    }
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    # Best-effort: report this sub-SFN execution to the orchestration bus; failures are swallowed
+    # Best-effort: report this sub-SFN execution + its log sources to the orchestration bus; failures are swallowed
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -63,14 +105,26 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "3D metadata labeling processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "3D metadata labeling state machine",
+        })
+    for entry in (
+            batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME),
+            lambda_log_entry(METADATA_GENERATION_LOG_GROUP_NAME, METADATA_GENERATION_LOG_GROUP_ARN,
+                             METADATA_GENERATION_STATE_NAME)):
+        if entry:
+            logs.append(entry)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,
@@ -89,7 +143,7 @@ def lambda_handler(event, context):
     Starts StepFunctions State Machine for processing 
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     responses = []

@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -1178,5 +1178,175 @@ describe("ExecutionDetailPage tab strip", () => {
         expect(await screen.findByRole("table", { name: /input files/i })).toBeInTheDocument();
         // Control: an unnamed table would match neither of these, and the miss must be specific.
         expect(screen.queryByRole("table", { name: /output files/i })).not.toBeInTheDocument();
+    });
+});
+
+/**
+ * The Pipelines tab's Sub-processes section. Sub-executions are resolved only on request — this page
+ * is the one view that renders them — and the server states every way the data can be incomplete,
+ * each of which must be shown beside what it qualifies.
+ */
+describe("ExecutionDetailPage sub-processes", () => {
+    let queryClient: QueryClient;
+
+    /**
+     * Renders the page for a one-step run whose step carries `pipelineExtra` on top of its identity,
+     * with permissive permissions and no metadata escalation.
+     */
+    const renderSubProcesses = (
+        pipelineExtra: Record<string, any>,
+        truncatedCollections: string[] = []
+    ) => {
+        const { useExecutionDetails, useExecutionDetailMetadata } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionDetailMetadata.mockReturnValue({
+            data: undefined,
+            isLoading: false,
+            isError: false,
+            error: null,
+            hasNextPage: false,
+            isFetchingNextPage: false,
+            fetchNextPage: jest.fn(),
+        });
+        useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-sub",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                truncatedCollections,
+                pipelines: [
+                    {
+                        pipelineId: "p1",
+                        pipelineExecutionId: "pe1",
+                        name: "Thumbnail step",
+                        executionStatus: "SUCCEEDED",
+                        ...pipelineExtra,
+                    },
+                ],
+            },
+            isLoading: false,
+            error: null,
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+        return render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-sub" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    beforeEach(() => {
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        jest.clearAllMocks();
+    });
+
+    it("requests the details with sub-executions, which only this page renders", () => {
+        renderSubProcesses({});
+        const { useExecutionDetails } = require("../api/queries");
+        expect(useExecutionDetails).toHaveBeenCalledWith("e-sub", { includeSubExecutions: true });
+    });
+
+    it("renders each step's sub-processes with their stage timeline on the Pipelines tab", async () => {
+        renderSubProcesses({
+            subExecutions: [
+                {
+                    resourceType: "stepFunctionsExecution",
+                    label: "3D thumbnail processing",
+                    resourceName: "Preview3dThumbnailStateMachine",
+                    status: "SUCCEEDED",
+                    startDate: "2026-09-11T10:00:00Z",
+                    stopDate: "2026-09-11T10:01:00Z",
+                    stageSource: "definition",
+                    stages: [
+                        { stageName: "PipelineStartTask", stateType: "Task", status: "SUCCEEDED" },
+                        {
+                            stageName: "Preview3dThumbnailBatchJob",
+                            stateType: "Task",
+                            status: "FAILED",
+                            caught: true,
+                            error: "States.TaskFailed",
+                        },
+                        { stageName: "PipelineEndTask", stateType: "Task", status: "SUCCEEDED" },
+                    ],
+                },
+            ],
+        });
+        await userEvent.click(screen.getByRole("tab", { name: /Pipelines/i }));
+
+        expect(screen.getByText("Sub-processes (1)")).toBeInTheDocument();
+        expect(screen.getByText("3D thumbnail processing")).toBeInTheDocument();
+        const rows = within(screen.getByTestId("stage-timeline")).getAllByRole("listitem");
+        expect(rows).toHaveLength(3);
+        expect(rows[1]).toHaveTextContent("Preview3dThumbnailBatchJob");
+        expect(rows[1]).toHaveTextContent("Failed");
+        expect(rows[1]).toHaveTextContent("caught");
+    });
+
+    it("omits the section for a details response that carries no sub-executions key", async () => {
+        renderSubProcesses({});
+        await userEvent.click(screen.getByRole("tab", { name: /Pipelines/i }));
+        expect(screen.getByText("Thumbnail step")).toBeInTheDocument();
+        expect(screen.queryByTestId("sub-processes")).not.toBeInTheDocument();
+    });
+
+    it("shows the truncation notes and warnings the server reported", async () => {
+        renderSubProcesses({
+            subExecutions: [
+                {
+                    resourceType: "stepFunctionsExecution",
+                    label: "3D thumbnail processing",
+                    status: "RUNNING",
+                    stageSource: "definition",
+                    stagesTruncated: true,
+                    historyTruncated: true,
+                    stages: [
+                        { stageName: "PipelineStartTask", stateType: "Task", status: "RUNNING" },
+                    ],
+                },
+            ],
+            subExecutionsTruncated: true,
+            subExecutionWarnings: ["GetExecutionHistory throttled"],
+        });
+        await userEvent.click(screen.getByRole("tab", { name: /Pipelines/i }));
+
+        expect(
+            screen.getByText("The state machine defines more stages than are listed here.")
+        ).toBeInTheDocument();
+        expect(screen.getByText(/partial execution history/)).toBeInTheDocument();
+        expect(
+            screen.getByText("More sub-processes were registered than this view reports.")
+        ).toBeInTheDocument();
+        expect(screen.getByText("GetExecutionHistory throttled")).toBeInTheDocument();
+    });
+
+    it("keeps the sub-process summary and explains the missing stages when the server dropped them", async () => {
+        // The wire shape of a drop: the stage list is emptied and flagged, and the collection is named.
+        renderSubProcesses(
+            {
+                subExecutions: [
+                    {
+                        resourceType: "stepFunctionsExecution",
+                        label: "3D thumbnail processing",
+                        status: "SUCCEEDED",
+                        stageSource: "definition",
+                        stages: [],
+                        stagesTruncated: true,
+                    },
+                ],
+            },
+            ["pipelines.subExecutions"]
+        );
+        await userEvent.click(screen.getByRole("tab", { name: /Pipelines/i }));
+
+        expect(screen.getByText("3D thumbnail processing")).toBeInTheDocument();
+        expect(screen.queryByTestId("stage-timeline")).not.toBeInTheDocument();
+        expect(screen.getByText(/Stage details were left out/)).toBeInTheDocument();
+        // The flag the drop set does not read as a definition-frame cap on top of it.
+        expect(
+            screen.queryByText("The state machine defines more stages than are listed here.")
+        ).not.toBeInTheDocument();
     });
 });

@@ -29,6 +29,9 @@ export function getByPath(cfg: ConfigShape, path: string): any {
     let cursor: any = cfg;
     for (const segment of segments) {
         if (cursor == null) return undefined;
+        // Read-only traversal: the dotted paths are the ConfigBuilder's own field definitions, not
+        // visitor input, and this runs only in the reader's browser on the static docs site.
+        // nosemgrep: javascript.lang.security.audit.prototype-pollution.prototype-pollution-loop.prototype-pollution-loop
         cursor = cursor[segment];
     }
     return cursor;

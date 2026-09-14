@@ -70,6 +70,9 @@ export class VeerumDependencyManager {
 
             return this.veerumInstance;
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`[${this.PLUGIN_ID}] Failed to load VEERUM viewer:`, error);
 
             // Reset state on failure
@@ -196,6 +199,9 @@ export class VeerumDependencyManager {
 
             console.log(`[${this.PLUGIN_ID}] VEERUM viewer cleanup completed`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`[${this.PLUGIN_ID}] Error during cleanup:`, error);
         }
     }

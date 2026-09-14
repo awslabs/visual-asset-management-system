@@ -175,13 +175,23 @@ a metadata collection in `truncatedCollections`.
 `renderedConfig` inline (pre-system-tag, and size-bounded) and
 `renderedConfigLocation` whenever that S3 object exists — the fully substituted
 body the pipeline read. Read the location to see what actually ran, not only when
-`renderedConfigTruncated` is set.
+`renderedConfigTruncated` is set. Every step also lists its log sources in
+`availableLogs`, each with the `logId` that `get_execution_logs` reads one source
+by, and `include_sub_executions=True` adds `subExecutions` — each registered
+sub-process (a nested state machine or a container job) with per-stage status
+derived from its own execution history. The flag is off by default because that
+derivation reads Step Functions history.
 
 `get_execution_logs` full mode takes `limit` (default 100, server cap 1000),
 `next_token`, `filter_pattern`, `start_time`, and `end_time` (epoch
-milliseconds). A pipeline container emits thousands of lines, so raise `limit` and
-walk the returned `nextToken` with the same parameters rather than concluding
-anything from the first page.
+milliseconds), plus — with `pipeline_execution_id` — `log_id` and `stage_name`.
+A pipeline container emits thousands of lines, so raise `limit` and walk the
+returned `nextToken` with the same parameters rather than concluding anything from
+the first page. A step-scoped full-mode result carries `logSources` (each known
+source with a read status: `read` with an event count, `denied`, `notFound`,
+`error`, `empty`, `skipped`, or `unscoped`) and every `subProcessEvents` item names its
+source by `logId`; `log_id` reads one source alone, and `stage_name` keeps only the
+sources and history of one sub-state-machine stage.
 
 `list_workflow_executions` covers ONE asset's history; `list_executions` is the
 global, cross-asset list. A workflow id is unique across every database including

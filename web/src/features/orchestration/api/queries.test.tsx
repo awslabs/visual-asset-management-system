@@ -133,6 +133,14 @@ describe("qk (query key factory)", () => {
         expect(qk.execution("exec1")).toEqual(["execution", "exec1"]);
     });
 
+    it("keys the details read under the execution prefix with its request shape", () => {
+        expect(qk.executionDetails("exec1", true)).toEqual([
+            ...qk.execution("exec1"),
+            { includeSubExecutions: true },
+        ]);
+        expect(qk.executionDetails("exec1", false)).not.toEqual(qk.executionDetails("exec1", true));
+    });
+
     it("generates stable keys for allowedRoutes", () => {
         expect(qk.allowedRoutes()).toEqual(["allowedRoutes"]);
     });
@@ -291,7 +299,7 @@ describe("useExecutionDetails polling", () => {
         await waitFor(() => expect(result.current.data).toBeDefined());
 
         // Read the resolved interval the same way React Query would.
-        const query: any = qc.getQueryCache().find({ queryKey: qk.execution("e1") });
+        const query: any = qc.getQueryCache().find({ queryKey: qk.executionDetails("e1", false) });
         const interval = query.options.refetchInterval;
         expect(typeof interval === "function" ? interval(query) : interval).toBe(5000);
     });
@@ -307,7 +315,7 @@ describe("useExecutionDetails polling", () => {
         const { result } = renderHook(() => useExecutionDetails("e2"), { wrapper: wrapper(qc) });
         await waitFor(() => expect(result.current.data).toBeDefined());
 
-        const query: any = qc.getQueryCache().find({ queryKey: qk.execution("e2") });
+        const query: any = qc.getQueryCache().find({ queryKey: qk.executionDetails("e2", false) });
         const interval = query.options.refetchInterval;
         expect(typeof interval === "function" ? interval(query) : interval).toBe(false);
     });
@@ -318,7 +326,7 @@ describe("useExecutionDetails polling", () => {
         const qc = client();
         renderHook(() => useExecutionDetails("e3"), { wrapper: wrapper(qc) });
 
-        const query: any = qc.getQueryCache().find({ queryKey: qk.execution("e3") });
+        const query: any = qc.getQueryCache().find({ queryKey: qk.executionDetails("e3", false) });
         const interval = query.options.refetchInterval;
         expect(typeof interval === "function" ? interval(query) : interval).toBe(false);
     });
@@ -438,5 +446,81 @@ describe("useExecutionDetailMetadata", () => {
         expect(qk.executionDetailMetadata("e1", "output")).not.toEqual(
             qk.executionDetailMetadata("e1", "input")
         );
+    });
+});
+
+/**
+ * The details read has two request shapes — with and without sub-executions — that return different
+ * payloads. They are cached separately, under the plain execution key as a prefix, so the QuickView
+ * (no flag) and the detail page (flag) neither answer each other's read nor escape an invalidation.
+ */
+describe("useExecutionDetails request shape", () => {
+    const client = () =>
+        new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    const wrapper = (qc: QueryClient) => {
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        return Wrapper;
+    };
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it("sends includeSubExecutions=true and caches under the flagged key", async () => {
+        const { useExecutionDetails } = require("./queries");
+        (executionService.getExecutionDetails as jest.Mock).mockResolvedValue([
+            true,
+            { workflowExecutionId: "e1", executionStatus: "SUCCEEDED", pipelines: [] },
+        ]);
+        const qc = client();
+        const { result } = renderHook(
+            () => useExecutionDetails("e1", { includeSubExecutions: true }),
+            { wrapper: wrapper(qc) }
+        );
+        await waitFor(() => expect(result.current.data).toBeDefined());
+
+        expect(executionService.getExecutionDetails).toHaveBeenCalledWith("e1", {
+            includeSubExecutions: "true",
+        });
+        expect(
+            qc.getQueryCache().find({ queryKey: qk.executionDetails("e1", true) })
+        ).toBeDefined();
+        // Control: the unflagged key holds nothing, so the two reads are not one cache entry.
+        expect(
+            qc.getQueryCache().find({ queryKey: qk.executionDetails("e1", false) })
+        ).toBeUndefined();
+    });
+
+    it("sends no parameter without the flag, so a caller such as the QuickView is unchanged", async () => {
+        const { useExecutionDetails } = require("./queries");
+        (executionService.getExecutionDetails as jest.Mock).mockResolvedValue([
+            true,
+            { workflowExecutionId: "e1", executionStatus: "SUCCEEDED" },
+        ]);
+        const qc = client();
+        const { result } = renderHook(() => useExecutionDetails("e1"), { wrapper: wrapper(qc) });
+        await waitFor(() => expect(result.current.data).toBeDefined());
+
+        const [, params] = (executionService.getExecutionDetails as jest.Mock).mock.calls[0];
+        expect(params).toBeUndefined();
+        expect(
+            qc.getQueryCache().find({ queryKey: qk.executionDetails("e1", false) })
+        ).toBeDefined();
+    });
+
+    it("invalidates both variants from the qk.execution prefix the mutations use", async () => {
+        const qc = client();
+        qc.setQueryData(qk.executionDetails("e1", false), { workflowExecutionId: "e1" });
+        qc.setQueryData(qk.executionDetails("e1", true), {
+            workflowExecutionId: "e1",
+            pipelines: [],
+        });
+
+        await qc.invalidateQueries({ queryKey: qk.execution("e1") });
+
+        const queries = qc.getQueryCache().findAll({ queryKey: qk.execution("e1") });
+        expect(queries).toHaveLength(2);
+        queries.forEach((q) => expect(q.state.isInvalidated).toBe(true));
     });
 });

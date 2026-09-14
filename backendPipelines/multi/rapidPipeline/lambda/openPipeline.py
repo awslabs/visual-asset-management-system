@@ -35,6 +35,13 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# The ECS container's own log group; its log source is registered only when configured.
+CONTAINER_LOG_GROUP_NAME = os.environ.get("CONTAINER_LOG_GROUP_NAME", "")
+CONTAINER_LOG_GROUP_ARN = os.environ.get("CONTAINER_LOG_GROUP_ARN", "")
+# The ECS run-task state of this pipeline's state machine (its CDK construct id); the container
+# writes under the `ecs/` stream prefix of the group above.
+CONTAINER_STATE_NAME = "RapidPipelineRunFargate"
+CONTAINER_LOG_STREAM_PREFIX = "ecs/"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
@@ -46,9 +53,24 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def container_log_entry():
+    """The log source for the ECS run-task state's container. None when the group is not configured."""
+    if not (CONTAINER_LOG_GROUP_NAME or CONTAINER_LOG_GROUP_ARN):
+        return None
+    return {
+        "logGroupArn": CONTAINER_LOG_GROUP_ARN,
+        "logGroupName": CONTAINER_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": CONTAINER_LOG_STREAM_PREFIX,
+        "stageName": CONTAINER_STATE_NAME,
+        "sourceType": "container",
+        "label": f"{CONTAINER_STATE_NAME} container",
+    }
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    """Best-effort report of this sub-SFN execution to the VAMS orchestration bus; failures are swallowed."""
+    """Best-effort report of this sub-SFN execution + its log sources to the VAMS orchestration bus; failures are swallowed."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -62,14 +84,23 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "RapidPipeline processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "RapidPipeline state machine",
+        })
+    container_log = container_log_entry()
+    if container_log:
+        logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,
@@ -87,7 +118,7 @@ def lambda_handler(event, context):
     Starts StepFunctions State Machine for processing 
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     responses = []

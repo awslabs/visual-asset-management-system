@@ -25,6 +25,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../../helper/security";
 import { grantReadPermissionsToAllAssetBuckets } from "../../../../../../helper/security";
+import { batchJobLogGroupEnvironment } from "../../../../../../helper/batchJobLogGroup";
 
 export function buildVamsExecuteCosmosTransferPipelineFunction(
     scope: Construct,
@@ -127,6 +128,14 @@ export function buildConstructTransferPipelineFunction(
     return fun;
 }
 
+/** The model's Batch state whose container log stream prefix openPipeline registers. */
+export interface OpenPipelineBatchLogProps {
+    /** Job definition name, derived from the model's CfnJobDefinition Ref (an ARN with a revision). */
+    jobDefinitionName: string;
+    /** The model's BatchSubmitJob state name (`CosmosBatchJob-<modelKey>`). */
+    batchStateName: string;
+}
+
 export function buildOpenTransferPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -138,6 +147,7 @@ export function buildOpenTransferPipelineFunction(
     subnets: ec2.ISubnet[],
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
+    batchLogs: OpenPipelineBatchLogProps,
     kmsKey?: kms.IKey,
     modelKey?: string
 ): lambda.Function {
@@ -169,6 +179,11 @@ export function buildOpenTransferPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // Batch default container log group + this model's job definition name and Batch state,
+            // registered as that state's log source (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...batchJobLogGroupEnvironment(),
+            BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
+            COSMOS_BATCH_STATE_NAME: batchLogs.batchStateName,
         },
     });
 

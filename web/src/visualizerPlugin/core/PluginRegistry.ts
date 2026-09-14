@@ -203,6 +203,9 @@ export class PluginRegistry {
 
             return allFeaturesEnabled;
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Error checking feature restrictions for plugin ${config.id}:`, error);
             return false;
         }
@@ -233,6 +236,9 @@ export class PluginRegistry {
             this.pluginMetadata.set(config.id, metadata);
             console.log(`Registered plugin metadata: ${config.name} (${config.id})`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Failed to register plugin metadata ${config.id}:`, error);
             // Don't throw here - continue with other plugins
         }
@@ -271,6 +277,9 @@ export class PluginRegistry {
                 try {
                     dependencyManager = await this.loadDependencyManager(config.dependencyManager);
                 } catch (error) {
+                    // Console logging only: a % specifier in the interpolated value can at most
+                    // garble this one log line; nothing is executed, stored or returned from it.
+                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     console.warn(`Failed to load dependency manager for ${config.id}:`, error);
                 }
             }
@@ -289,6 +298,9 @@ export class PluginRegistry {
             console.log(`Successfully loaded plugin: ${config.name} (${pluginId})`);
             return plugin;
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Failed to load plugin ${pluginId}:`, error);
             throw error;
         }
@@ -327,6 +339,9 @@ export class PluginRegistry {
 
             console.log(`Successfully unloaded plugin: ${pluginId}`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Error unloading plugin ${pluginId}:`, error);
             throw error;
         }
@@ -495,6 +510,9 @@ export class PluginRegistry {
                     this.unloadPluginSync(plugin.config.id);
                 }
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error cleaning up plugin ${plugin.config.id}:`, error);
             }
         });
@@ -541,6 +559,9 @@ export class PluginRegistry {
 
             console.log(`Successfully unloaded plugin (sync): ${pluginId}`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Error unloading plugin ${pluginId}:`, error);
         }
     }
