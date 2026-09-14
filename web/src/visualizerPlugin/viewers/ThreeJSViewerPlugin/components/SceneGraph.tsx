@@ -315,6 +315,10 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
                         (obj) => !uuidsToRemove.has(obj.uuid)
                     );
                     console.log(
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         `Scene Graph: Removing ${objectsToSelect.length} object(s) from selection`,
                         node.name
                     );
@@ -326,6 +330,10 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
                         (obj) => !existingUuids.has(obj.uuid)
                     );
                     console.log(
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         `Scene Graph: Adding ${newObjects.length} object(s) to selection`,
                         node.name
                     );
@@ -349,6 +357,10 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
                     } else {
                         // Select this object/group only
                         console.log(
+                            // Console logging only: a % specifier in the interpolated value can at
+                            // most garble this one log line; nothing is executed, stored or
+                            // returned from it.
+                            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                             `Scene Graph: Selecting ${objectsToSelect.length} object(s)`,
                             node.name
                         );
@@ -358,6 +370,10 @@ const SceneGraph: React.FC<SceneGraphProps> = ({
                 } else {
                     // Select this object/group only
                     console.log(
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         `Scene Graph: Selecting ${objectsToSelect.length} object(s)`,
                         node.name
                     );

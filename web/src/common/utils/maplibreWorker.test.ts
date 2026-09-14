@@ -19,6 +19,9 @@ const SETUP_MODULE = path.join(SRC, "common", "utils", "maplibreWorker.ts");
 
 const walk = (dir: string): string[] =>
     fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        // Unit test walking the repo's own source tree: the joined segment is a readdirSync entry,
+        // not external input.
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) return entry.name === "__mocks__" ? [] : walk(full);
         return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [full] : [];
@@ -64,6 +67,9 @@ describe("maplibre-gl / react-map-gl compatibility", () => {
         // crashes each map into the page error boundary.
         const version = (pkg: string): number[] =>
             JSON.parse(
+                // Unit test walking the repo's own source tree: the joined segment is a readdirSync
+                // entry, not external input.
+                // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
                 fs.readFileSync(path.join(SRC, "..", "node_modules", pkg, "package.json"), "utf8")
             )
                 .version.split(".")

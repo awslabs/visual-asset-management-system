@@ -232,6 +232,10 @@ export function useFilePartsUpload() {
                         this.updateFileProgress(part.fileIndex);
                     } catch (error: any) {
                         console.error(
+                            // Console logging only: a % specifier in the interpolated value can at
+                            // most garble this one log line; nothing is executed, stored or
+                            // returned from it.
+                            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                             `Error uploading part ${part.partNumber} for file ${part.fileIndex} after ${MAX_RETRY_ATTEMPTS} attempts:`,
                             error
                         );

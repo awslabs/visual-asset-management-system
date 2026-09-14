@@ -42,6 +42,10 @@ const readFcsFile = (
         if (fcs.dataAsStrings && Array.isArray(fcs.dataAsStrings) && fcs.text) {
             const newRows: Row[] = [];
             const newColumns: Column[] = [];
+            // Parsing, not sanitizing: each FCS row string is one bracketed list, so stripping the
+            // single leading '[' and trailing ']' is the intended transform, and nothing is
+            // rendered as HTML or executed from it.
+            // nosemgrep: javascript.lang.security.audit.incomplete-sanitization.incomplete-sanitization
             const columnCount = fcs.dataAsStrings[0]
                 ?.replace("[", "")
                 .replace("]", "")
@@ -55,6 +59,10 @@ const readFcsFile = (
                 });
             }
             for (let i = 0; i < columnCount; i++) {
+                // Parsing, not sanitizing: each FCS row string is one bracketed list, so stripping
+                // the single leading '[' and trailing ']' is the intended transform, and nothing is
+                // rendered as HTML or executed from it.
+                // nosemgrep: javascript.lang.security.audit.incomplete-sanitization.incomplete-sanitization
                 const newRow = fcs.dataAsStrings[i]
                     .replace("[", "")
                     .replace("]", "")

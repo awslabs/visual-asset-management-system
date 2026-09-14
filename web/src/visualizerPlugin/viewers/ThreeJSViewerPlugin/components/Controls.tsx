@@ -110,6 +110,9 @@ const Controls: React.FC<ControlsProps> = ({
 
                 console.log(`Camera set to ${view} view`);
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error setting camera to ${view} view:`, error);
             }
         },
