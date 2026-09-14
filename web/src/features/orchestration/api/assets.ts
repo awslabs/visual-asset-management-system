@@ -7,6 +7,7 @@ import {
     fetchDatabaseAssets,
     fetchAllAssets,
     fetchAssetS3Files,
+    fetchAssetS3FilesPage,
     fetchFileInfo,
     searchAssets,
 } from "../../../services/APIService";
@@ -140,6 +141,7 @@ export async function searchAssetsPaged(
                 includeHighlights: false,
                 explainResults: false,
                 includeArchived: false,
+                sort: [{ field: "str_assetname", order: "asc" }],
             })) as [boolean, any];
             if (ok && result?.hits?.hits) {
                 return [
@@ -215,6 +217,72 @@ export async function listAssetFiles(
     }
 }
 
+/** One page of an asset's file LISTING, with the token that continues it. */
+export interface AssetFileListPage {
+    items: AssetFileSummary[];
+    nextToken?: string;
+}
+
+/**
+ * Files per page of the bulk picker's listing. The listing runs in basic mode (no per-object
+ * lookups), so a large page costs one request and lets a whole-asset walk reach the execution cap
+ * in a couple of pages.
+ */
+export const BULK_FILE_PAGE_SIZE = 500;
+
+/**
+ * One page of an asset's files in listing order, continued by `startingToken`, optionally scoped to
+ * an asset-relative folder `prefix` on the server.
+ *
+ * The bulk picker walks THIS rather than the search index: a search page is capped and unordered,
+ * whereas the listing paginates the asset's whole file set deterministically, which is what "select
+ * every file under this folder" needs. Folders and archived or deleted entries are dropped — none of
+ * them is a selectable input.
+ */
+export async function listAssetFilesPage(
+    databaseId: string,
+    assetId: string,
+    options: { startingToken?: string; prefix?: string; pageSize?: number } = {}
+): Promise<[boolean, AssetFileListPage | string]> {
+    try {
+        const result = await fetchAssetS3FilesPage({
+            databaseId,
+            assetId,
+            includeArchived: false,
+            basic: true,
+            startingToken: options.startingToken || null,
+            pageSize: options.pageSize || BULK_FILE_PAGE_SIZE,
+            prefix: options.prefix || null,
+        });
+        if (!result?.success) {
+            return [false, result?.error || "Failed to load files."];
+        }
+        const items = (result.items || [])
+            .filter((f: any) => f && !f.isFolder && !f.isArchived && !f.isPermanentlyDeleted)
+            .map((f: any) => {
+                // A prefix-scoped listing reports relativePath relative to the PREFIX; the full key
+                // always carries the asset id, so the asset-relative path is taken from it first.
+                const fullKey: string = f.key || "";
+                const fromKey = fullKey.startsWith(`${assetId}/`)
+                    ? fullKey.slice(assetId.length)
+                    : "";
+                const raw: string = fromKey || f.relativePath || fullKey;
+                const relativePath = raw.startsWith("/") ? raw : `/${raw}`;
+                return {
+                    fileName: f.fileName || relativePath.split("/").pop() || relativePath,
+                    key: f.key || relativePath,
+                    relativePath,
+                    isFolder: false,
+                    versionId: f.versionId || undefined,
+                } as AssetFileSummary;
+            })
+            .filter((f: AssetFileSummary) => f.relativePath !== "/");
+        return [true, { items, nextToken: result.nextToken || undefined }];
+    } catch (e: any) {
+        return [false, e?.message || "Failed to load files."];
+    }
+}
+
 /** One page of file results, shaped like AssetSearchPage so the pickers read the same. */
 export interface AssetFilePage {
     items: AssetFileSummary[];
@@ -256,6 +324,10 @@ export async function searchAssetFilesPaged(
                 includeHighlights: false,
                 explainResults: false,
                 includeArchived: false,
+                // Every wildcard hit scores alike, so unsorted the page comes back in index order and
+                // a file can sit past the page cap however the term is refined. Key order makes the
+                // first page deterministic and lists the shallow paths first.
+                sort: [{ field: "str_key", order: "asc" }],
             })) as [boolean, any];
             if (ok && result?.hits?.hits) {
                 const items = result.hits.hits

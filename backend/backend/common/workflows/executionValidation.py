@@ -433,6 +433,16 @@ def _validate_workflow_level(workflow_system_config, selected_inputs, output_tar
             )
 
 
+def workflow_selection_errors(workflow_system_config, selected_inputs, output_target=None):
+    """The workflow-level hard checks alone (arity, asset span, whole-asset and folder selections,
+    input filters, a required output asset), as a list of messages. The execute handler reports these
+    before it reasons about the output target, so a selection the workflow rejects is named as the
+    cause rather than the output asset it consequently fails to resolve."""
+    errors = []
+    _validate_workflow_level(workflow_system_config, selected_inputs, output_target, errors)
+    return errors
+
+
 def _evaluate(workflow_system_config, pipeline_effective_configs, selected_inputs, output_target):
     """Core evaluation shared by execute-time and save-time. Returns (errors, warnings, filtered).
 

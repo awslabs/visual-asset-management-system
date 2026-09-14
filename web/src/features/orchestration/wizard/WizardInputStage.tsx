@@ -8,11 +8,20 @@ import type { Workflow, ExecuteInputFile, MetadataSourceAsset } from "../types";
 import { useDatabases, useAssetSearch } from "../api/queries";
 import InputFileSelector from "./InputFileSelector";
 import MetadataSourceSelector from "./MetadataSourceSelector";
+import SelectedInputFilesList from "./SelectedInputFilesList";
+import BulkFilePicker from "./BulkFilePicker";
 import InfoTooltip from "../components/InfoTooltip";
 import SearchableSelect from "../components/SearchableSelect";
-import RestrictionSummary from "./RestrictionSummary";
+import Callout from "../components/Callout";
+import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { resolveRestrictions } from "./resolveRestrictions";
 import { isAllDatabases } from "../api/assets";
+import {
+    appendInputFiles,
+    inputFileKey,
+    isCompleteInputFile,
+    pluralize,
+} from "./selectedInputFiles";
 import type { PipelineInputConstraints } from "./ExecuteWizard";
 
 interface WizardInputStageProps {
@@ -37,6 +46,8 @@ interface WizardInputStageProps {
     /** Per-step effective config (pipeline systemConfig + the chosen template's overrides), so the
      *  restriction summary reflects the templates actually selected. */
     pipelineConstraints?: PipelineInputConstraints[];
+    /** Show the "Launched from db / asset" hint — a preset asset with no preset files. */
+    showPresetHint?: boolean;
 }
 
 /**
@@ -76,6 +87,14 @@ const OUTPUT_PATH_PREFIX_HELP = (
  */
 const EAGER_VERSION_ROW_LIMIT = 5;
 
+/** One titled group of the step. `orch-outline` opts the border into painting (preflight is off). */
+const Card: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+    <div className="orch-outline rounded-lg border border-border-default bg-surface-container p-4 space-y-3">
+        <h3 className="text-base font-semibold text-text-primary">{title}</h3>
+        {children}
+    </div>
+);
+
 const WizardInputStage: React.FC<WizardInputStageProps> = ({
     workflow,
     databaseId,
@@ -94,6 +113,7 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
     onOutputPathPrefixChange,
     offendingPipelines = [],
     pipelineConstraints = [],
+    showPresetHint = false,
 }) => {
     const inputFileArity = workflow.systemConfig?.inputFileArity || "one";
     const allowOutputOverride = workflow.systemConfig?.outputTarget?.allowOverride || false;
@@ -199,6 +219,27 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
     const seedDatabaseId = isAllDatabases(databaseId) ? "" : databaseId;
     const deferRowVersions = (inputFiles || []).length > EAGER_VERSION_ROW_LIMIT;
 
+    // Multi-file selection. Complete entries sit in the compact list; an incomplete entry (a row
+    // still being picked) and at most one complete entry opened with Edit render as picker rows. The
+    // picker dialog and the last bulk result are step-local too.
+    const [editingIndex, setEditingIndex] = React.useState<number | null>(null);
+    const [pickerOpen, setPickerOpen] = React.useState(false);
+    const [bulkNote, setBulkNote] = React.useState("");
+    const editing =
+        editingIndex !== null && editingIndex < (inputFiles || []).length ? editingIndex : null;
+    const pickerRowIndexes = React.useMemo(() => {
+        const set = new Set<number>();
+        (inputFiles || []).forEach((file, index) => {
+            if (!isCompleteInputFile(file) || index === editing) set.add(index);
+        });
+        return set;
+    }, [inputFiles, editing]);
+    const selectedKeys = React.useMemo(
+        () => new Set((inputFiles || []).map(inputFileKey)),
+        [inputFiles]
+    );
+    const hasListedFiles = (inputFiles || []).some((_, index) => !pickerRowIndexes.has(index));
+
     // Metadata-source pickers, offered only for a run with no input files: with input files the
     // sources are the files' own assets and databases, so there is nothing to name.
     const wantsAssetMetadata = restrictions.metadataInputKeys.includes("assetMetadata");
@@ -222,17 +263,17 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
     // Requirements banner
     if (!workflow.enabled || workflow.archived) {
         return (
-            <div className="p-4 bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-400 dark:border-yellow-700 rounded text-yellow-900 dark:text-yellow-200">
+            <Callout tone="warning">
                 <strong>Cannot Execute:</strong>{" "}
                 {!workflow.enabled ? "This workflow is disabled." : "This workflow is archived."}
-            </div>
+            </Callout>
         );
     }
 
     // Offending pipelines banner
     if (offendingPipelines.length > 0) {
         return (
-            <div className="p-4 bg-red-100 dark:bg-red-900/20 border border-red-400 dark:border-red-700 rounded text-red-900 dark:text-red-200">
+            <Callout tone="error">
                 <strong>Cannot Execute:</strong> The following pipelines are disabled or archived:
                 <ul className="list-disc list-inside mt-2">
                     {offendingPipelines.map((off, idx) => (
@@ -241,26 +282,59 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                         </li>
                     ))}
                 </ul>
-            </div>
+            </Callout>
         );
     }
 
     const handleAddInputFile = () => {
         // Seed a new row with the preset asset when launched from one (so the common case is one
         // click to add another file from the same asset), else an empty row for cross-asset search.
+        // The file starts empty so the row asks for an explicit pick; the whole asset stays one
+        // option of the File picker rather than the default.
+        setEditingIndex(null);
+        setBulkNote("");
         onInputFilesChange([
             ...inputFiles,
             {
                 databaseId: presetAsset?.databaseId || seedDatabaseId,
                 assetId: presetAsset?.assetId || "",
-                relativeFileKey: allowWholeAsset ? "/" : "",
+                relativeFileKey: "",
             },
         ]);
     };
 
     const handleRemoveInputFile = (index: number) => {
         const updated = inputFiles.filter((_, i) => i !== index);
+        if (editing !== null) {
+            if (editing === index) setEditingIndex(null);
+            else if (editing > index) setEditingIndex(editing - 1);
+        }
         onInputFilesChange(updated);
+    };
+
+    const handleRowChange = (index: number, updated: ExecuteInputFile) => {
+        const next = [...inputFiles];
+        next[index] = updated;
+        // A row that just became complete stays open, so its version can be pinned before it folds
+        // into the list.
+        if (isCompleteInputFile(updated)) setEditingIndex(index);
+        onInputFilesChange(next);
+    };
+
+    const handleBulkAdd = (incoming: ExecuteInputFile[]) => {
+        const result = appendInputFiles(inputFiles, incoming);
+        onInputFilesChange(result.files);
+        setBulkNote(
+            result.skipped > 0
+                ? `Added ${pluralize(result.added, "file")}; ${result.skipped} already selected.`
+                : `Added ${pluralize(result.added, "file")}.`
+        );
+    };
+
+    const handleClearAll = () => {
+        setEditingIndex(null);
+        setBulkNote("");
+        onInputFilesChange([]);
     };
 
     const handleAddMetadataSourceAsset = () => {
@@ -280,32 +354,264 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
         onMetadataSourceAssetsChange?.(next);
     };
 
+    // Output target only for asset-output workflows (results-only writes no asset); metadata sources
+    // only for a run with no input files.
+    const showOutput = !isResultsOnly;
+    const showMetadata = showMetadataSources;
+
     return (
+        // Stacked full-width sections: the files first, where the work is, then where the output
+        // lands, then the metadata sources.
         <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-text-primary">Input Files</h3>
+            <Card title={inputFileArity === "one" ? "Input File" : "Input Files"}>
+                {inputFileArity === "none" && (
+                    <p className="text-sm text-text-secondary">
+                        This workflow takes no input files (results-only execution).
+                    </p>
+                )}
 
-            <RestrictionSummary restrictions={restrictions} />
+                {inputFileArity === "one" && (
+                    <>
+                        {showPresetHint && presetAsset && (
+                            <p className="text-xs text-text-secondary">
+                                Launched from {presetAsset.databaseId} / {presetAsset.assetId}. The
+                                asset is pre-filled — choose the file to run
+                                {allowWholeAsset ? " (or the whole asset)" : ""}. You can also pick
+                                a different database/asset.
+                            </p>
+                        )}
+                        <InputFileSelector
+                            databaseOptions={databaseOptions}
+                            allowWholeAsset={allowWholeAsset}
+                            allowFolder={allowFolder}
+                            inputFileFilters={fileFilters}
+                            value={
+                                inputFiles[0] || {
+                                    databaseId: presetAsset?.databaseId || seedDatabaseId,
+                                    assetId: presetAsset?.assetId || "",
+                                    relativeFileKey: allowWholeAsset ? "/" : "",
+                                }
+                            }
+                            onChange={(file) => onInputFilesChange([file])}
+                        />
+                    </>
+                )}
 
-            {inputFileArity === "none" && (
-                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-blue-900 dark:text-blue-200 text-sm">
-                    This workflow does not require input files (results-only execution).
-                </div>
+                {inputFileArity === "multi" && (
+                    <>
+                        {showPresetHint && presetAsset && (
+                            <p className="text-xs text-text-secondary">
+                                Launched from {presetAsset.databaseId} / {presetAsset.assetId}. Add
+                                one or more files; a selection can combine files from several
+                                databases and assets.
+                            </p>
+                        )}
+                        {inputFiles.length === 0 && (
+                            <p className="text-sm text-text-secondary">No input files added yet.</p>
+                        )}
+
+                        {/* Every complete entry, windowed, whatever the count. */}
+                        {hasListedFiles && (
+                            <SelectedInputFilesList
+                                files={inputFiles}
+                                restrictions={restrictions}
+                                skipIndexes={pickerRowIndexes}
+                                onRemove={handleRemoveInputFile}
+                                onEdit={setEditingIndex}
+                                onClearAll={handleClearAll}
+                            />
+                        )}
+                        {bulkNote && (
+                            <p className="text-xs text-text-secondary" aria-live="polite">
+                                {bulkNote}
+                            </p>
+                        )}
+
+                        {/* Rows still being picked, and the one opened with Edit. */}
+                        {inputFiles.map((file, index) =>
+                            pickerRowIndexes.has(index) ? (
+                                <div
+                                    key={index}
+                                    className="orch-outline rounded border border-border-default p-3"
+                                >
+                                    <InputFileSelector
+                                        databaseOptions={databaseOptions}
+                                        allowWholeAsset={allowWholeAsset}
+                                        allowFolder={allowFolder}
+                                        inputFileFilters={fileFilters}
+                                        deferVersions={deferRowVersions}
+                                        value={file}
+                                        onChange={(updated) => handleRowChange(index, updated)}
+                                    />
+                                    <div className="mt-2 flex gap-4 text-sm">
+                                        {isCompleteInputFile(file) && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setEditingIndex(null)}
+                                                className="text-blue-600 dark:text-blue-400 hover:underline"
+                                            >
+                                                Done
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => handleRemoveInputFile(index)}
+                                            className="text-red-600 dark:text-red-400 hover:underline"
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : null
+                        )}
+
+                        <div className="flex flex-wrap gap-2">
+                            {/* Many files at once from one asset through the bulk picker; one file
+                                through the row selector, which also offers the whole asset and
+                                folders. */}
+                            <button
+                                type="button"
+                                onClick={() => setPickerOpen(true)}
+                                className={btnPrimary}
+                            >
+                                Add files…
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleAddInputFile}
+                                className={btnSecondary}
+                            >
+                                Add Input File
+                            </button>
+                        </div>
+                        {pickerOpen && (
+                            <BulkFilePicker
+                                onClose={() => setPickerOpen(false)}
+                                databaseOptions={databaseOptions}
+                                initialDatabaseId={presetAsset?.databaseId || seedDatabaseId}
+                                initialAssetId={presetAsset?.assetId || ""}
+                                restrictions={restrictions}
+                                selectedKeys={selectedKeys}
+                                existingCount={inputFiles.length}
+                                onAdd={handleBulkAdd}
+                            />
+                        )}
+                    </>
+                )}
+            </Card>
+
+            {showOutput && (
+                <Card title="Output Target">
+                    {/* When inputs span multiple assets, the output asset cannot be inferred and MUST
+                        be chosen explicitly. */}
+                    {allowOutputOverride && distinctInputAssets.length > 1 && !outputAssetId && (
+                        <Callout tone="warning" className="text-xs">
+                            The selected input files span multiple assets — choose an output asset
+                            below.
+                        </Callout>
+                    )}
+                    {/* One row: database, asset, path prefix. Without an override the note takes the
+                        first two columns so the prefix keeps its place. */}
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                        {allowOutputOverride ? (
+                            <>
+                                <label className="block">
+                                    <span className="block text-xs text-text-secondary mb-1">
+                                        Output Database
+                                    </span>
+                                    <select
+                                        aria-label="Output Database"
+                                        value={outputDatabaseId || ""}
+                                        onChange={(e) => {
+                                            onOutputDatabaseIdChange(e.target.value || undefined);
+                                            // Changing the database invalidates the chosen asset.
+                                            onOutputAssetIdChange(undefined);
+                                        }}
+                                        className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                    >
+                                        <option value="">Use workflow default</option>
+                                        {databaseOptions.map((d) => (
+                                            <option key={d.databaseId} value={d.databaseId}>
+                                                {d.databaseId}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="block">
+                                    <span className="block text-xs text-text-secondary mb-1">
+                                        Output Asset
+                                    </span>
+                                    <SearchableSelect
+                                        ariaLabel="Output Asset"
+                                        value={outputAssetId || ""}
+                                        disabled={!outputDbForAssets}
+                                        loading={outputAssetsLoading}
+                                        onQueryChange={setOutputAssetQuery}
+                                        footerNote={outputAssetFooter}
+                                        placeholder={
+                                            outputDbForAssets
+                                                ? "Search output assets…"
+                                                : "Select a database first"
+                                        }
+                                        onChange={(v) => onOutputAssetIdChange(v || undefined)}
+                                        leadingOption={{
+                                            value: "",
+                                            label: "Use workflow default",
+                                        }}
+                                        options={(outputAssets || []).map((a: any) => ({
+                                            value: a.assetId,
+                                            label: a.assetName || a.assetId,
+                                            detail: a.assetName ? a.assetId : undefined,
+                                        }))}
+                                    />
+                                </label>
+                            </>
+                        ) : (
+                            <p className="self-end text-xs text-text-secondary md:col-span-2">
+                                Output is written to the input asset (this workflow does not allow
+                                choosing a different output asset).
+                            </p>
+                        )}
+
+                        {/* Output path prefix applies to any asset output, override or not. */}
+                        <label className="block">
+                            <span className="flex items-center gap-1.5 text-xs text-text-secondary mb-1">
+                                Output path prefix (optional)
+                                {/* The full explanation is a tooltip rather than a paragraph: it is
+                                    reference material for a single optional field. */}
+                                <InfoTooltip
+                                    label="Output path prefix help"
+                                    text={OUTPUT_PATH_PREFIX_HELP}
+                                />
+                            </span>
+                            <input
+                                type="text"
+                                aria-label="Output path prefix"
+                                placeholder="No prefix"
+                                value={outputPathPrefix || ""}
+                                // Pass "" through rather than collapsing it to undefined: clearing
+                                // the field means "no prefix", whereas undefined means "untouched"
+                                // and lets the workflow default apply.
+                                onChange={(e) => onOutputPathPrefixChange(e.target.value)}
+                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                            />
+                        </label>
+                    </div>
+                </Card>
             )}
 
             {/* Metadata sources. A run with no input files has no assets or databases to derive the
                 metadata from, so the entities are named here — as METADATA sources, not as inputs:
                 they carry no file key and travel in their own request fields. */}
-            {showMetadataSources && (
-                <div className="space-y-3">
-                    <h4 className="text-md font-semibold text-text-primary">Metadata Sources</h4>
-
+            {showMetadata && (
+                <Card title="Metadata Sources">
                     {/* The wording the section exists for: a source is never required, and never an
                         input file. Named as a status region so it is announced when the section
-                        appears, rather than only being found by someone reading down the step. */}
+                        appears. */}
                     <div
                         role="status"
                         aria-label="Metadata source selection is optional"
-                        className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-blue-900 dark:text-blue-200 text-sm"
+                        className="orch-outline p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-blue-900 dark:text-blue-200 text-sm"
                     >
                         The{" "}
                         {wantsDatabaseMetadata && wantsAssetMetadata
@@ -317,31 +623,37 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                         workflow runs whether or not you select any.
                     </div>
 
+                    {/* The database select takes the first column of the same three-column row as
+                        the output target, so the two cards line up. */}
                     {wantsDatabaseMetadata && (
-                        <label className="block">
-                            <span className="flex items-center gap-1.5 text-xs text-text-secondary mb-1">
-                                Metadata source database (optional)
-                                <InfoTooltip
-                                    label="Metadata source database help"
-                                    text="The one database whose own metadata is read and passed to the steps. Only a concrete database can be named — there is no metadata to read for an all-databases selection."
-                                />
-                            </span>
-                            <select
-                                aria-label="Metadata source database"
-                                value={metadataSourceDatabaseId || ""}
-                                onChange={(e) =>
-                                    onMetadataSourceDatabaseIdChange?.(e.target.value || undefined)
-                                }
-                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                            >
-                                <option value="">No database metadata</option>
-                                {metadataSourceDatabaseOptions.map((d) => (
-                                    <option key={d.databaseId} value={d.databaseId}>
-                                        {d.databaseId}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                            <label className="block">
+                                <span className="flex items-center gap-1.5 text-xs text-text-secondary mb-1">
+                                    Metadata source database (optional)
+                                    <InfoTooltip
+                                        label="Metadata source database help"
+                                        text="The one database whose own metadata is read and passed to the steps. Only a concrete database can be named — there is no metadata to read for an all-databases selection."
+                                    />
+                                </span>
+                                <select
+                                    aria-label="Metadata source database"
+                                    value={metadataSourceDatabaseId || ""}
+                                    onChange={(e) =>
+                                        onMetadataSourceDatabaseIdChange?.(
+                                            e.target.value || undefined
+                                        )
+                                    }
+                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                >
+                                    <option value="">No database metadata</option>
+                                    {metadataSourceDatabaseOptions.map((d) => (
+                                        <option key={d.databaseId} value={d.databaseId}>
+                                            {d.databaseId}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        </div>
                     )}
 
                     {wantsAssetMetadata && (
@@ -363,7 +675,7 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                             {metadataSourceAssets.map((source, index) => (
                                 <div
                                     key={index}
-                                    className="mb-2 p-3 border border-border-default rounded"
+                                    className="orch-outline mb-2 p-3 border border-border-default rounded"
                                 >
                                     <MetadataSourceSelector
                                         databaseOptions={databaseOptions}
@@ -385,192 +697,14 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                             {(allowMultipleSourceAssets || metadataSourceAssets.length === 0) && (
                                 <button
                                     onClick={handleAddMetadataSourceAsset}
-                                    className="mt-2 px-3 py-2 text-sm text-blue-600 dark:text-blue-400 border border-blue-600 dark:border-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                                    className="orch-outline mt-2 px-3 py-2 text-sm text-blue-600 dark:text-blue-400 border border-blue-600 dark:border-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20"
                                 >
                                     Add Metadata Source Asset
                                 </button>
                             )}
                         </div>
                     )}
-                </div>
-            )}
-
-            {inputFileArity === "one" && (
-                <div>
-                    <label className="block text-sm font-medium text-text-primary mb-2">
-                        Input File
-                    </label>
-                    {presetAsset && (
-                        <p className="text-xs text-text-secondary mb-2">
-                            Launched from {presetAsset.databaseId} / {presetAsset.assetId}. The
-                            asset is pre-filled — choose the file to run
-                            {allowWholeAsset ? " (or the whole asset)" : ""}. You can also pick a
-                            different database/asset.
-                        </p>
-                    )}
-                    <div className="p-3 border border-border-default rounded">
-                        <InputFileSelector
-                            databaseOptions={databaseOptions}
-                            allowWholeAsset={allowWholeAsset}
-                            allowFolder={allowFolder}
-                            inputFileFilters={fileFilters}
-                            value={
-                                inputFiles[0] || {
-                                    databaseId: presetAsset?.databaseId || seedDatabaseId,
-                                    assetId: presetAsset?.assetId || "",
-                                    relativeFileKey: allowWholeAsset ? "/" : "",
-                                }
-                            }
-                            onChange={(file) => onInputFilesChange([file])}
-                        />
-                    </div>
-                </div>
-            )}
-
-            {inputFileArity === "multi" && (
-                <div>
-                    <label className="block text-sm font-medium text-text-primary mb-2">
-                        Input Files
-                    </label>
-                    {presetAsset && (
-                        <p className="text-xs text-text-secondary mb-2">
-                            Launched from {presetAsset.databaseId} / {presetAsset.assetId}. Add one
-                            or more files; each row can search a different database/asset, so you
-                            can combine files from multiple assets.
-                        </p>
-                    )}
-                    {inputFiles.length === 0 && (
-                        <p className="text-sm text-text-secondary mb-2">
-                            No input files added yet.
-                        </p>
-                    )}
-                    {inputFiles.map((file, index) => (
-                        <div key={index} className="mb-2 p-3 border border-border-default rounded">
-                            <InputFileSelector
-                                databaseOptions={databaseOptions}
-                                allowWholeAsset={allowWholeAsset}
-                                allowFolder={allowFolder}
-                                inputFileFilters={fileFilters}
-                                deferVersions={deferRowVersions}
-                                value={file}
-                                onChange={(updated) => {
-                                    const next = [...inputFiles];
-                                    next[index] = updated;
-                                    onInputFilesChange(next);
-                                }}
-                            />
-                            <button
-                                onClick={() => handleRemoveInputFile(index)}
-                                className="mt-2 text-sm text-red-600 dark:text-red-400 hover:underline"
-                            >
-                                Remove
-                            </button>
-                        </div>
-                    ))}
-                    <button
-                        onClick={handleAddInputFile}
-                        className="mt-2 px-3 py-2 text-sm text-blue-600 dark:text-blue-400 border border-blue-600 dark:border-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20"
-                    >
-                        Add Input File
-                    </button>
-                </div>
-            )}
-
-            {/* Output target — only for asset-output workflows (results-only writes no asset). */}
-            {!isResultsOnly && (
-                <div className="mt-4 space-y-2">
-                    <h4 className="text-md font-semibold text-text-primary">Output Target</h4>
-
-                    {allowOutputOverride ? (
-                        <>
-                            {/* When inputs span multiple assets, the output asset cannot be inferred
-                                and MUST be chosen explicitly. */}
-                            {distinctInputAssets.length > 1 && !outputAssetId && (
-                                <div className="p-2 text-xs rounded bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300">
-                                    The selected input files span multiple assets — choose an output
-                                    asset below.
-                                </div>
-                            )}
-                            <label className="block">
-                                <span className="block text-xs text-text-secondary mb-1">
-                                    Output Database
-                                </span>
-                                <select
-                                    aria-label="Output Database"
-                                    value={outputDatabaseId || ""}
-                                    onChange={(e) => {
-                                        onOutputDatabaseIdChange(e.target.value || undefined);
-                                        // Changing the database invalidates the chosen asset.
-                                        onOutputAssetIdChange(undefined);
-                                    }}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                                >
-                                    <option value="">Use workflow default</option>
-                                    {databaseOptions.map((d) => (
-                                        <option key={d.databaseId} value={d.databaseId}>
-                                            {d.databaseId}
-                                        </option>
-                                    ))}
-                                </select>
-                            </label>
-                            <label className="block">
-                                <span className="block text-xs text-text-secondary mb-1">
-                                    Output Asset
-                                </span>
-                                <SearchableSelect
-                                    ariaLabel="Output Asset"
-                                    value={outputAssetId || ""}
-                                    disabled={!outputDbForAssets}
-                                    loading={outputAssetsLoading}
-                                    onQueryChange={setOutputAssetQuery}
-                                    footerNote={outputAssetFooter}
-                                    placeholder={
-                                        outputDbForAssets
-                                            ? "Search output assets…"
-                                            : "Select a database first"
-                                    }
-                                    onChange={(v) => onOutputAssetIdChange(v || undefined)}
-                                    leadingOption={{ value: "", label: "Use workflow default" }}
-                                    options={(outputAssets || []).map((a: any) => ({
-                                        value: a.assetId,
-                                        label: a.assetName || a.assetId,
-                                        detail: a.assetName ? a.assetId : undefined,
-                                    }))}
-                                />
-                            </label>
-                        </>
-                    ) : (
-                        <p className="text-xs text-text-secondary">
-                            Output is written to the input asset (this workflow does not allow
-                            choosing a different output asset).
-                        </p>
-                    )}
-
-                    {/* Output path prefix applies to any asset output, override or not. */}
-                    <label className="block">
-                        <span className="flex items-center gap-1.5 text-xs text-text-secondary mb-1">
-                            Output path prefix (optional)
-                            {/* The full explanation is a tooltip rather than a paragraph: it is
-                                reference material for a single optional field, and inline it dominated
-                                the Output section. */}
-                            <InfoTooltip
-                                label="Output path prefix help"
-                                text={OUTPUT_PATH_PREFIX_HELP}
-                            />
-                        </span>
-                        <input
-                            type="text"
-                            aria-label="Output path prefix"
-                            placeholder="No prefix"
-                            value={outputPathPrefix || ""}
-                            // Pass "" through rather than collapsing it to undefined: clearing
-                            // the field means "no prefix", whereas undefined means "untouched" and
-                            // lets the workflow default apply.
-                            onChange={(e) => onOutputPathPrefixChange(e.target.value)}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                        />
-                    </label>
-                </div>
+                </Card>
             )}
         </div>
     );

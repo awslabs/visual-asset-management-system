@@ -405,7 +405,9 @@ class TestFileListCommand:
                         'size': 2048,
                         'isArchived': False,
                         'changeSource': 'workflowExecution',
-                        'changeUserId': 'SYSTEM_USER'
+                        'changeUserId': 'SYSTEM_USER',
+                        'changeWorkflowId': 'wf-1',
+                        'changeWorkflowExecutionId': 'exec-1'
                     }
                 ]
             }
@@ -421,6 +423,10 @@ class TestFileListCommand:
             assert 'alice' in result.output
             assert 'workflowExecution' in result.output
             assert 'SYSTEM_USER' in result.output
+            assert 'Change Workflow: wf-1' in result.output
+            assert 'Change Execution: exec-1' in result.output
+            # The upload row carries no workflow ids, so the sub-lines appear exactly once.
+            assert result.output.count('Change Execution:') == 1
 
     def test_list_shows_file_detail_fields(self, cli_runner, file_command_mocks):
         """Test file list shows detail sub-lines for fields returned by the API."""
@@ -1004,6 +1010,10 @@ class TestFileInfoCommand:
                 'relativePath': '/model.gltf',
                 'isFolder': False,
                 'size': 1024,
+                'changeSource': 'workflowExecution',
+                'changeUserId': 'SYSTEM_USER',
+                'changeWorkflowId': 'wf-1',
+                'changeWorkflowExecutionId': 'exec-1',
                 'versions': [
                     {
                         'versionId': 'v1',
@@ -1039,10 +1049,11 @@ class TestFileInfoCommand:
             ])
 
             assert result.exit_code == 0
+            # Once for the file's current version, once for the matching version row.
+            assert result.output.count('Change Workflow: wf-1') == 2
+            assert result.output.count('Change Execution: exec-1') == 2
             assert 'Change Source: workflowExecution' in result.output
             assert 'Changed By: SYSTEM' in result.output
-            assert 'Change Workflow: wf-1' in result.output
-            assert 'Change Execution: exec-1' in result.output
             assert 'Change Source: copy' in result.output
             assert 'Changed By: alice' in result.output
             assert 'Changed From: db-source/asset-source//source/file.gltf' in result.output

@@ -138,10 +138,10 @@ describe("AssetExecutionsTab", () => {
         await waitFor(() => {
             expect(screen.getByText("Execute a workflow")).toBeInTheDocument();
         });
-        // The workflow picker (a SearchableSelect labeled "Workflow") is present,
-        // collapsed to its placeholder label.
+        // The workflow picker's search input, labelled "Workflow", is present with its
+        // placeholder.
         expect(screen.getByLabelText("Workflow")).toBeInTheDocument();
-        expect(screen.getByText("Search workflows…")).toBeInTheDocument();
+        expect(screen.getByPlaceholderText("Type to search…")).toBeInTheDocument();
     });
 
     it("does not render ExecutionsBoard when tab is not active", () => {

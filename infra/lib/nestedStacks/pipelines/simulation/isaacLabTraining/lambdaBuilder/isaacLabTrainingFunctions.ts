@@ -16,6 +16,7 @@ import * as path from "path";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagLambda } from "../../../../../helper/security";
+import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 
 export interface IsaacLabTrainingFunctionsProps {
     config: Config.Config;
@@ -98,6 +99,9 @@ export class IsaacLabTrainingFunctions extends Construct {
                 // sub-process
                 ORCHESTRATION_BUS_NAME:
                     props.storageResources.eventBridge.orchestrationBus.eventBusName,
+                // Batch default container log group, registered with the job as the
+                // ExecuteBatchJobState log source (streams are `<jobDefinitionName>/default/<task-id>`).
+                ...batchJobLogGroupEnvironment(),
             },
         });
 

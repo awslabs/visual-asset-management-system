@@ -51,6 +51,7 @@ describe("searchAssetsPaged", () => {
         const body = api().searchAssets.mock.calls[0][0];
         expect(JSON.stringify(body.filters)).toContain("db-scoped");
         expect(body.entityTypes).toEqual(["asset"]);
+        expect(body.sort).toEqual([{ field: "str_assetname", order: "asc" }]);
         expect(body.includeArchived).toBe(false);
     });
 
@@ -329,6 +330,9 @@ describe("search boundary", () => {
 
         const walk = (dir: string) => {
             for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                // Unit test walking the repo's own source tree: the joined segment is a readdirSync
+                // entry, not external input.
+                // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
                 const p = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
                     walk(p);

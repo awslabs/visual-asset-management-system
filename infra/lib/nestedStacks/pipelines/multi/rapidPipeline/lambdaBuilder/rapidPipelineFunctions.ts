@@ -92,6 +92,7 @@ export function buildOpenPipelineFunction(
     subnets: ec2.ISubnet[],
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
+    containerLogGroup: logs.ILogGroup,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -122,6 +123,10 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // The ECS container's own log group, registered as the run-task state's log source
+            // (streams are `ecs/<container>/<task-id>`).
+            CONTAINER_LOG_GROUP_NAME: containerLogGroup.logGroupName,
+            CONTAINER_LOG_GROUP_ARN: containerLogGroup.logGroupArn,
         },
     });
 

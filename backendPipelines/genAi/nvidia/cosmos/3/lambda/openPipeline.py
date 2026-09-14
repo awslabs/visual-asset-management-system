@@ -28,6 +28,13 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get("ALLOWED_INPUT_FILEEXTENSIONS", ".
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# AWS Batch's default container log group + this model's job definition name and Batch state
+# (`CosmosBatchJob-<modelKey>`; one openPipeline function exists per model). The container log
+# source is registered only when all three are configured.
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
+BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
+BATCH_STATE_NAME = os.environ.get("COSMOS_BATCH_STATE_NAME", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 # Task modes / variants that require an input file
@@ -131,7 +138,7 @@ def run_setting_error(event, model_variant, task_mode):
 
 def abort_external_workflow(error, task_token):
     if task_token and task_token != "":
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
@@ -139,9 +146,26 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def batch_container_log_entry(job_definition_name, state_name):
+    """The log source for one Batch state's container: AWS Batch's default group, streamed under
+    `<jobDefinitionName>/default/`. None when the group, the job definition or the state is not configured."""
+    if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name \
+            or not state_name:
+        return None
+    return {
+        "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+        "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": f"{job_definition_name}/default/",
+        "stageName": state_name,
+        "sourceType": "batch",
+        "label": f"{state_name} container",
+    }
+
+
 def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
-    """Best-effort: report this sub-SFN execution + log group to the orchestration bus so VAMS can
-    track it, attempt sub-aborts, and pull sub-logs. Never fails the pipeline."""
+    """Best-effort: report this sub-SFN execution + its log sources to the orchestration bus so VAMS
+    can track it, attempt sub-aborts, and pull sub-logs. Never fails the pipeline."""
     if not ORCHESTRATION_BUS_NAME or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -155,14 +179,23 @@ def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
         "subExecution": {
             "stateMachineArn": STATE_MACHINE_ARN,
             "executionArn": sub_execution_arn or "",
+            "label": "Cosmos 3 processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "Cosmos 3 state machine",
+        })
+    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)
+    if container_log:
+        logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": ORCHESTRATION_BUS_NAME,
@@ -200,7 +233,7 @@ def lambda_handler(event, context):
     Starts the StepFunctions State Machine for a Cosmos 3 pipeline.
     Validates input based on task mode (input-file modes require a valid file).
     """
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     model_variant = event.get('modelVariant', 'nano')
     task_mode = event.get('taskMode', '')

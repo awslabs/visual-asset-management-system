@@ -57,6 +57,9 @@ describe("search components", () => {
         const files: string[] = [];
         const walk = (dir: string) => {
             for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                // Unit test walking the repo's own source tree: the joined segment is a readdirSync
+                // entry, not external input.
+                // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
                 const full = path.join(dir, entry.name);
                 if (entry.isDirectory()) walk(full);
                 else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name))

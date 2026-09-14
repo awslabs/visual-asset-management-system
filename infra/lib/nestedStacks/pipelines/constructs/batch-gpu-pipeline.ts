@@ -185,7 +185,11 @@ chmod 775 /mnt/workspace
                   props.codeBuildImage.repository,
                   props.codeBuildImage.tag
               )
-            : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
+            : // Synth-time asset path built from __dirname and a construct prop that the calling
+              // construct hard-codes; CDK resolves it on the operator's machine, never from request
+              // input.
+              // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+              ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
                   file: props.dockerfileName,
                   platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
               });

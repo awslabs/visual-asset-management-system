@@ -15,7 +15,7 @@ def lambda_handler(event, context):
     Includes controlType and controlPath in the definition for the container.
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     model_type = event.get("modelType", "transfer")

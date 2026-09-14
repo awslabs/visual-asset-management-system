@@ -37,6 +37,11 @@ export function tableRows(page: Page): Locator {
     return page.locator("table tbody tr");
 }
 
+/** The execute dialog's step rail — one navigation landmark, present on every step of the dialog. */
+export function wizardRail(page: Page): Locator {
+    return page.getByRole("navigation", { name: "Execution steps" });
+}
+
 /**
  * Navigate to an orchestration page and wait for it to finish its first load. Waits on the page's
  * own heading — never on specific data — so an empty environment is a valid state.
@@ -259,9 +264,11 @@ export async function openAssetFile(
  */
 export function treeNode(page: Page, name: string): Locator {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // e2e test helper: the tree-node name is escaped with the standard metacharacter escape before
+    // it is interpolated into the RegExp below.
     return page
         .locator(".directory-tree .tree-item-name")
-        .filter({ hasText: new RegExp(`^${escaped}(\\(\\d+\\))?$`) })
+        .filter({ hasText: new RegExp(`^${escaped}(\\(\\d+\\))?$`) }) // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
         .first();
 }
 

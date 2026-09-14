@@ -196,6 +196,9 @@ export function useAssetOperations() {
                 }
 
                 console.log(
+                    // Console logging only: a % specifier in the interpolated value can at most
+                    // garble this one log line; nothing is executed, stored or returned from it.
+                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     `[useAssetOperations] Metadata for link ${link.assetLinkId} (${link.relationshipType}, assetId: ${link.assetId}):`,
                     metadataForLink
                 );
@@ -209,6 +212,10 @@ export function useAssetOperations() {
                     }));
 
                     console.log(
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         `[useAssetOperations] Creating metadata for link ${link.assetLinkId}:`,
                         metadataArray
                     );

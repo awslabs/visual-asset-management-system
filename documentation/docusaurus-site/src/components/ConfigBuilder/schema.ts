@@ -311,7 +311,7 @@ export const FIELDS: FieldMeta[] = [
         label: "Use FIPS endpoints",
         input: "boolean",
         section: "security",
-        help: "Also requires the AWS_USE_FIPS_ENDPOINT=true environment variable at deploy time.",
+        help: "Hostnames VAMS composes at synthesis use their FIPS variants, and a KMS FIPS VPC endpoint is added when the VPC and a KMS CMK are enabled. SDK clients in Lambdas and containers are not affected. AWS_USE_FIPS_ENDPOINT=true in the synth environment also turns this on.",
     },
     {
         path: "app.addStackCloudTrailLogs",

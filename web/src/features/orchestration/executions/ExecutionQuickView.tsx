@@ -113,6 +113,12 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                         <div className="flex items-center gap-2 mb-2">
                             <StatusBadge status={details.executionStatus} />
                         </div>
+                        {/* The panel is also opened from a file's provenance link, where nothing
+                            else on screen names the run. */}
+                        <Row
+                            label="Execution ID"
+                            value={<span className="font-mono">{executionId}</span>}
+                        />
                         <Row label="Started" value={formatDate(details.executionStartDate)} />
                         <Row label="Stopped" value={formatDate(details.executionStopDate)} />
                         <Row

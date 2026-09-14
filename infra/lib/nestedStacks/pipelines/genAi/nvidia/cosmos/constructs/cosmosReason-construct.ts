@@ -29,6 +29,7 @@ import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as ServiceHelper from "../../../../../../helper/service-helper";
 import { Service } from "../../../../../../helper/service-helper";
+import { jobDefinitionNameFromRef } from "../../../../../../helper/batchJobLogGroup";
 import * as s3AssetBuckets from "../../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../../config/config";
 import {
@@ -740,6 +741,10 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 props.pipelineSubnets,
                 props.storageResources.eventBridge.orchestrationBus,
                 stateMachineLogGroup,
+                {
+                    jobDefinitionName: jobDefinitionNameFromRef(batchJobDefinition.ref),
+                    batchStateName: batchJob.startState.stateId,
+                },
                 props.storageResources.encryption.kmsKey,
                 modelKey
             );
@@ -783,6 +788,10 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         "cosmos",
                         "reason",
                         "vamsSchema",
+                        // Synth-time path built from __dirname and the deployment config's typed
+                        // model selection; CDK resolves it on the operator's machine, never from
+                        // request input.
+                        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
                         `reason-${modelSize.toLowerCase()}`
                     ),
                     resourceOverrides: {

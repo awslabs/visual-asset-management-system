@@ -76,6 +76,10 @@ export class Gr00tCodeBuildConstruct extends Construct {
 
             // S3 Asset: upload container source directory
             const sourceAsset = new s3assets.Asset(this, `Source-${pipelineKey}`, {
+                // Synth-time asset path built from __dirname and a construct prop that the calling
+                // construct hard-codes; CDK resolves it on the operator's machine, never from
+                // request input.
+                // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
                 path: path.join(__dirname, containerDir),
                 exclude: [".git", "*.pyc", "__pycache__", ".venv", "node_modules", ".env"],
             });

@@ -65,10 +65,16 @@ export class CesiumDependencyManager {
             // Debug: Check what's available
             console.log(`[${this.PLUGIN_ID}] Cesium loaded successfully from bundle`);
             console.log(
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 `[${this.PLUGIN_ID}] Cesium.CesiumWidget available:`,
                 typeof this.cesiumInstance.CesiumWidget
             );
             console.log(
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 `[${this.PLUGIN_ID}] Cesium keys:`,
                 Object.keys(this.cesiumInstance).slice(0, 10)
             );
@@ -82,6 +88,9 @@ export class CesiumDependencyManager {
 
             return this.cesiumInstance;
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`[${this.PLUGIN_ID}] Failed to load Cesium:`, error);
 
             // Reset state on failure
@@ -104,6 +113,9 @@ export class CesiumDependencyManager {
             try {
                 await StylesheetManager.loadStylesheet(this.PLUGIN_ID, stylesheet);
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.warn(`[${this.PLUGIN_ID}] Failed to load stylesheet ${stylesheet}:`, error);
                 // Continue loading even if stylesheet fails
             }
@@ -147,6 +159,9 @@ export class CesiumDependencyManager {
 
             console.log(`[${this.PLUGIN_ID}] Cesium cleanup completed`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`[${this.PLUGIN_ID}] Error during cleanup:`, error);
         }
     }

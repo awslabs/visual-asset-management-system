@@ -25,6 +25,7 @@ const Drawer: React.FC<DrawerProps> = ({
     maxWidthClass = "max-w-md",
 }) => {
     const sideClasses = side === "left" ? "left-0 top-0 h-full" : "right-0 top-0 h-full";
+    const contentRef = React.useRef<HTMLDivElement>(null);
 
     return (
         <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
@@ -33,7 +34,18 @@ const Drawer: React.FC<DrawerProps> = ({
                     header.scss); at a lower z the drawer rendered UNDER the header bar. */}
                 <RadixDialog.Overlay className="fixed inset-0 bg-black/50 dark:bg-black/70 z-[3000]" />
                 <RadixDialog.Content
-                    className={`orchestration-root fixed ${sideClasses} bg-surface-container shadow-xl w-full ${maxWidthClass} overflow-auto z-[3001] p-6`}
+                    ref={contentRef}
+                    tabIndex={-1}
+                    // Radix would focus the panel's first tabbable element. In these read-only
+                    // panels that is often an info-tooltip trigger, and a tooltip opens on focus —
+                    // as the topmost dismissable layer it would then take the first Escape, leaving
+                    // the panel open until a second press. Focusing the panel itself keeps focus
+                    // inside the dialog without opening anything.
+                    onOpenAutoFocus={(event) => {
+                        event.preventDefault();
+                        contentRef.current?.focus();
+                    }}
+                    className={`orchestration-root fixed ${sideClasses} bg-surface-container shadow-xl w-full ${maxWidthClass} overflow-auto z-[3001] p-6 focus:outline-none`}
                 >
                     <RadixDialog.Title className="text-xl font-semibold text-text-primary mb-4">
                         {title}
