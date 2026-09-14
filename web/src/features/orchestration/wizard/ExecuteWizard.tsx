@@ -133,6 +133,10 @@ const globToRegExp = (pattern: string): RegExp => {
             out += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         }
     }
+    // Glob-to-regex for the execute form's own file filter: every metacharacter except the glob
+    // wildcards is escaped, and the test runs only in the submitting user's browser against file
+    // keys.
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
     return new RegExp(`^${out}$`);
 };
 

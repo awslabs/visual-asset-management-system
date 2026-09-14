@@ -691,6 +691,10 @@ def get_cognito_keys(region: str, user_pool_id: str, force_refresh: bool = False
     logger.info(f"Downloading Cognito public keys from: {keys_url}")
 
     try:
+        # keys_url is built only from the COGNITO_BASE_URL and USER_POOL_ID deployment environment
+        # variables (callers pass the module constant, never a token claim), so scheme and host are
+        # operator-controlled: no file:// or SSRF surface.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(keys_url, timeout=JWKS_FETCH_TIMEOUT_SECONDS) as response:
             if response.getcode() != 200:
                 raise Exception(f"Failed to fetch JWKS. Status code: {response.getcode()}")

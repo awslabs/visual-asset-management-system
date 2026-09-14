@@ -293,6 +293,10 @@ export function EnhancedFileManager({
 
                 for await (const page of stream) {
                     if (!page.success) {
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         console.error(`Error in ${phase}:`, page.error);
                         dispatch({
                             type: "SET_ERROR",
@@ -333,6 +337,9 @@ export function EnhancedFileManager({
                     },
                 });
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error in ${phase}:`, error);
                 dispatch({
                     type: "SET_ERROR",

@@ -71,10 +71,16 @@ export class PlayCanvasGaussianSplatDependencyManager {
             this.loaded = true;
 
             console.log(`[${this.PLUGIN_ID}] PlayCanvas engine loaded successfully`);
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.log(`[${this.PLUGIN_ID}] PlayCanvas version:`, pc.version || "Unknown");
 
             return pc;
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`[${this.PLUGIN_ID}] Failed to load PlayCanvas:`, error);
 
             // Reset state on failure
@@ -148,6 +154,9 @@ export class PlayCanvasGaussianSplatDependencyManager {
 
             console.log(`[${this.PLUGIN_ID}] PlayCanvas cleanup completed`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`[${this.PLUGIN_ID}] Error during cleanup:`, error);
         }
     }

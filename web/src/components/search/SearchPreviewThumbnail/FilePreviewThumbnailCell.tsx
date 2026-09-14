@@ -275,6 +275,9 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                     setError(true);
                 }
             } catch (err) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error loading preview for file ${fileName}:`, err);
                 setError(true);
             } finally {

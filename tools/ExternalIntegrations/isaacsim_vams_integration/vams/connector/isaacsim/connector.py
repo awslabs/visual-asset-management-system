@@ -108,9 +108,15 @@ class IsaacVAMSConnector:
         try:
             self._cli.login_with_token(user_id, token, expires_at)
             self._authenticated = True
+            # Logs only the user id; the token itself is passed to the CLI over stdin and never
+            # appears in this message.
+            # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             logger.info("Authenticated with token for user %s", user_id)
             return True
         except VamsCliError as e:
+            # Logs the CLI's error text, which is a fixed message plus exit status; the token is
+            # passed over stdin and the CLI never echoes it.
+            # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             logger.error("Token authentication failed: %s", e)
             self._authenticated = False
             return False

@@ -112,6 +112,9 @@ function sqsUrlPattern(cfg: ConfigShape): RegExp {
     const alternation = [...new Set(suffixes)]
         .map((entry) => entry.replace(/\./g, "\\."))
         .join("|");
+    // The alternation is built from the constant partition DNS suffixes with dots escaped; no user
+    // input reaches the pattern.
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
     return new RegExp(`^https://sqs\\.[a-z0-9-]+\\.(?:${alternation})/\\d+/[a-zA-Z0-9_-]+$`);
 }
 

@@ -20,12 +20,18 @@ describe("escapeRegExp", () => {
 
     it.each(THROWS_UNESCAPED)("makes %p a constructible pattern", (input) => {
         // Positive control: unescaped really does throw, so the assertion below is not vacuous.
+        // Unit test for escapeRegExp: the pattern input is the test's own fixture string.
+        // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
         expect(() => new RegExp(input, "ig")).toThrow();
+        // Unit test for escapeRegExp: the pattern input is the test's own fixture string.
+        // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
         expect(() => new RegExp(escapeRegExp(input), "ig")).not.toThrow();
     });
 
     it.each(METACHARACTERS)("matches %p literally once escaped", (input) => {
         const haystack = `before${input}after`;
+        // Unit test for escapeRegExp: the pattern input is the test's own fixture string.
+        // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
         expect(new RegExp(escapeRegExp(input), "ig").test(haystack)).toBe(true);
     });
 

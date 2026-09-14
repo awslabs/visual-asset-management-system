@@ -115,6 +115,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                 // Reset highlight after animation
                 setTimeout(() => setCurrentView("perspective"), 1000);
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error setting camera view to ${view}:`, error);
             }
         },
@@ -472,6 +475,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                     [index]: newVisibility,
                 }));
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error toggling model ${index} visibility:`, error);
             }
         },
