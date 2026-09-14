@@ -38,6 +38,63 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
     </div>
 );
 
+/** The parts of the pattern detail, in the order the hover shows them. */
+const patternHelpParts = (r: ResolvedRestrictions) => ({
+    accepted: r.allow.length === 0 ? "any file type" : r.allow.join(", "),
+    excluded: r.exclude.length > 0 ? r.exclude.join(", ") : undefined,
+    shape:
+        (r.arity === "none"
+            ? "Takes no input files."
+            : r.arity === "one"
+            ? "Takes exactly one input file."
+            : "Takes one or more input files.") +
+        " " +
+        (r.outputType === "none" ? "Records results only." : "Writes files to an asset."),
+    source:
+        r.allow.length > 0
+            ? `From the ${
+                  r.source === "workflow" ? "workflow's own filters" : "workflow's pipelines"
+              }.`
+            : undefined,
+    templates: r.templatesResolved
+        ? undefined
+        : "A step's template may narrow this further once chosen.",
+});
+
+/** The pattern detail as one plain-text line, for a surface that cannot hold the hover. */
+export function patternHelpText(r: ResolvedRestrictions): string {
+    const p = patternHelpParts(r);
+    return [
+        `Accepted: ${p.accepted}`,
+        p.excluded && `Excluded: ${p.excluded}`,
+        p.shape,
+        p.source,
+        p.templates,
+    ]
+        .filter(Boolean)
+        .join(" · ");
+}
+
+/** The accepted/excluded pattern LISTS, for the compact summary's hover. */
+export const PatternHelp: React.FC<{ r: ResolvedRestrictions }> = ({ r }) => {
+    const p = patternHelpParts(r);
+    return (
+        <>
+            <p className="mb-1">
+                <strong>Accepted:</strong> {p.accepted}
+            </p>
+            {p.excluded && (
+                <p className="mb-1">
+                    <strong>Excluded:</strong> {p.excluded}
+                </p>
+            )}
+            <p className="mb-1">{p.shape}</p>
+            {p.source && <p className="mb-1 text-text-secondary">{p.source}</p>}
+            {p.templates && <p>{p.templates}</p>}
+        </>
+    );
+};
+
 /**
  * What a workflow accepts, resolved down the workflow -> pipeline -> template chain.
  *
@@ -45,39 +102,15 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
  * full breakdown would crowd the dialog. The full form is for the wizard's input step, where the
  * user is about to choose files and needs the actual patterns.
  */
-/** The accepted/excluded pattern LISTS, for the compact summary's hover. */
-const PatternHelp: React.FC<{ r: ResolvedRestrictions }> = ({ r }) => (
-    <>
-        <p className="mb-1">
-            <strong>Accepted:</strong> {r.allow.length === 0 ? "any file type" : r.allow.join(", ")}
-        </p>
-        {r.exclude.length > 0 && (
-            <p className="mb-1">
-                <strong>Excluded:</strong> {r.exclude.join(", ")}
-            </p>
-        )}
-        <p className="mb-1">
-            {r.arity === "none"
-                ? "Takes no input files."
-                : r.arity === "one"
-                ? "Takes exactly one input file."
-                : "Takes one or more input files."}{" "}
-            {r.outputType === "none" ? "Records results only." : "Writes files to an asset."}
-        </p>
-        {r.allow.length > 0 && (
-            <p className="mb-1 text-text-secondary">
-                From the{" "}
-                {r.source === "workflow" ? "workflow's own filters" : "workflow's pipelines"}.
-            </p>
-        )}
-        {!r.templatesResolved && <p>A step&apos;s template may narrow this further once chosen.</p>}
-    </>
-);
-
 const RestrictionSummary: React.FC<{
     restrictions: ResolvedRestrictions;
     compact?: boolean;
-}> = ({ restrictions: r, compact = false }) => {
+    /**
+     * Whether the compact line carries its own info icon. Off for a surface that may hold no control
+     * of its own (a listbox option), which then exposes the pattern detail itself.
+     */
+    tooltip?: boolean;
+}> = ({ restrictions: r, compact = false, tooltip = true }) => {
     if (compact) {
         // Counts alone ("2 file types") do not tell the user WHICH files to go and find, so the actual
         // patterns are one hover away rather than absent. Kept out of the line itself so the picker
@@ -88,10 +121,12 @@ const RestrictionSummary: React.FC<{
                     {summarizeRestrictions(r)}
                     {!r.templatesResolved && " · may narrow once a template is chosen"}
                 </span>
-                <InfoTooltip
-                    label="Which files this workflow accepts"
-                    text={<PatternHelp r={r} />}
-                />
+                {tooltip && (
+                    <InfoTooltip
+                        label="Which files this workflow accepts"
+                        text={<PatternHelp r={r} />}
+                    />
+                )}
             </p>
         );
     }

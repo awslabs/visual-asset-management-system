@@ -22,6 +22,8 @@ import {
     downloadFile,
 } from "../utils/FileManagerUtils";
 import { getChangeSourceLabel } from "../utils/changeSourceLabels";
+import { EXECUTION_DETAILS_API_ROUTE, linkedExecutionId } from "../utils/executionLinks";
+import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
 import { CreateFolderModal } from "../modals/CreateFolderModal";
 import AssetDeleteModal from "../../modals/AssetDeleteModal";
 import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
@@ -55,7 +57,7 @@ import { FileManagerContext } from "./FileTreeView";
 
 // File Info Panel Component
 export function FileDetailsPanel({}: FileInfoPanelProps) {
-    const { state, dispatch } = useContext(FileManagerContext)!;
+    const { state, dispatch, onViewExecution } = useContext(FileManagerContext)!;
     const navigate = useNavigate();
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
@@ -74,6 +76,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // appear on this page: nothing else initializes the registry before they render, so every
     // viewability check reported "no viewer" (only the search page's container initializes it).
     const viewerRegistryReady = useViewerRegistryReady();
+    // The "View execution" provenance link is hidden when the caller may not read execution
+    // details, the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
 
     // Clear fetched files cache when refresh happens
     useEffect(() => {
@@ -180,6 +186,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     previewFile: fileInfo.previewFile,
                                     changeSource: fileInfo.changeSource,
                                     changeUserId: fileInfo.changeUserId,
+                                    changeWorkflowId: fileInfo.changeWorkflowId,
+                                    changeWorkflowExecutionId: fileInfo.changeWorkflowExecutionId,
                                 },
                             ],
                             loadingPhase: state.loadingPhase,
@@ -1492,7 +1500,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                             </div>
                         )}
 
-                        {/* Show Change Source (with modifying user in parentheses) for files only */}
+                        {/* Show Change Source (with modifying user in parentheses) for files only.
+                            A version written by a workflow execution links to that run's quick view. */}
                         {!isFolder && selectedItem.level > 0 && (
                             <div className="file-info-item">
                                 <div className="file-info-label">Change Source:</div>
@@ -1506,6 +1515,22 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         if (source) return source;
                                         if (user) return `(${user})`;
                                         return "—";
+                                    })()}
+                                    {(() => {
+                                        const executionId = linkedExecutionId(selectedItem);
+                                        if (!executionId || !canViewExecution || !onViewExecution) {
+                                            return null;
+                                        }
+                                        return (
+                                            <span style={{ marginLeft: "8px" }}>
+                                                <Link
+                                                    onFollow={() => onViewExecution(executionId)}
+                                                    fontSize="body-s"
+                                                >
+                                                    View execution
+                                                </Link>
+                                            </span>
+                                        );
                                     })()}
                                 </div>
                             </div>

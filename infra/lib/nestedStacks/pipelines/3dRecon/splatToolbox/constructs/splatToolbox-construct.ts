@@ -194,6 +194,11 @@ export class SplatToolboxConstruct extends Construct {
         /**
          * AWS Batch Job Definition & Compute Env for Splat Toolbox Container
          */
+        // Also the prefix of the container log streams openPipeline registers
+        // (`<jobDefinitionName>/default/<ecs-task-id>` under /aws/batch/job).
+        const splatToolboxJobDefinitionName = `SplatToolboxGpuJob-${
+            props.config.name + "_" + props.config.app.baseStackName
+        }`;
         const splatToolboxBatchPipeline = new BatchGpuPipelineConstruct(
             this,
             "BatchPipeline_SplatToolbox",
@@ -217,9 +222,7 @@ export class SplatToolboxConstruct extends Construct {
                 dockerfileName: "Dockerfile",
                 codeBuildImage: props.codeBuildImage,
                 containerExecutionCommand: ["python", "__main__.py"],
-                batchJobDefinitionName: `SplatToolboxGpuJob-${
-                    props.config.name + "_" + props.config.app.baseStackName
-                }`,
+                batchJobDefinitionName: splatToolboxJobDefinitionName,
 
                 // Enable GPU-optimized settings for Splat Toolbox
                 enableGpuDeviceMappings: true,
@@ -411,6 +414,7 @@ export class SplatToolboxConstruct extends Construct {
             props.pipelineSubnets,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            { jobDefinitionName: splatToolboxJobDefinitionName },
             props.storageResources.encryption.kmsKey
         );
 

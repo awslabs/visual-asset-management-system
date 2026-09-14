@@ -20,6 +20,11 @@ interface InstructionsPanelProps {
     inlineLineLimit?: number;
     /** Character count that also forces tooltip mode — a few very long lines are as bad as many. */
     inlineCharLimit?: number;
+    /**
+     * Render long text as an inline fold ("Show all") instead of a hover tooltip. For surfaces where
+     * the instructions sit next to the controls they explain and a tooltip would hide them.
+     */
+    inline?: boolean;
 }
 
 /** Whether the text is short enough to show inline without dominating the surface. */
@@ -46,11 +51,14 @@ const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
     title = "Instructions",
     inlineLineLimit = 6,
     inlineCharLimit = 400,
+    inline = false,
 }) => {
+    // Declared before the early return: a hook after it would run on some renders and not others.
+    const [expanded, setExpanded] = React.useState(false);
     const value = (text || "").trim();
     if (!value) return null;
 
-    // Shared by both modes so the two never drift apart visually.
+    // Shared by every mode so they never drift apart visually.
     const body = <div className="whitespace-pre-wrap break-words font-sans">{value}</div>;
 
     if (fitsInline(value, inlineLineLimit, inlineCharLimit)) {
@@ -66,6 +74,33 @@ const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
     }
 
     const lineCount = value.split("\n").length;
+
+    if (inline) {
+        return (
+            <div
+                className="orch-outline rounded border border-border-default bg-surface-secondary px-3 py-2 text-sm text-text-secondary"
+                data-testid="instructions-collapsible"
+            >
+                <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-text-primary">
+                        {title}{" "}
+                        <span className="font-normal text-text-secondary">({lineCount} lines)</span>
+                    </span>
+                    <button
+                        type="button"
+                        aria-expanded={expanded}
+                        onClick={() => setExpanded((o) => !o)}
+                        className="shrink-0 text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+                    >
+                        {expanded ? "Show less" : "Show all"}
+                    </button>
+                </div>
+                {/* Bounded and scrollable when open, so a very long list still leaves the form visible. */}
+                {expanded && <div className="mt-2 max-h-[40vh] overflow-y-auto">{body}</div>}
+            </div>
+        );
+    }
+
     return (
         <Tooltip.Provider delayDuration={150}>
             <Tooltip.Root>

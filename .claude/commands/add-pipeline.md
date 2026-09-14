@@ -118,6 +118,7 @@ backendPipelines/
 -   The container reads `assetId` from the PipelineDefinition and preserves relative subdirectories in output S3 keys.
 -   Standard container utilities (S3 download/upload, Step Functions task token helpers, logging) are copied from a reference pipeline's container support package. **Do not name that package `utils`** if the container also vendors upstream third-party source — a top-level `utils` collides with an upstream `utils.py` on the same import name and one side's imports break. Use a distinct name (the Splat Toolbox container uses `vams_utils`).
 -   `manifestHelper.py` is vendored per pipeline and must be byte-identical across pipelines; copy it, do not re-implement it.
+-   `openPipeline` (or the lambda that submits a Batch job itself) **registers its sub-process and log sources** with one `pipeline.execution.register` event on the orchestration bus — `Source` = the payload's `orchestrationEventPrefix` (already ends in `.pipeline.<pipelineExecutionId>`), `EventBusName` = `ORCHESTRATION_BUS_NAME`, `Detail` = `{pipelineExecutionId, subExecution, logs}`. `subExecution` is `{resourceType: "stepFunctionsExecution", stateMachineArn, executionArn, label}` or, for a job the lambda submits itself, `{resourceType: "batchJob", jobId, stageName, label}` so abort terminates it and its container stream resolves through `batch:DescribeJobs`. `logs[]` is the state-machine log group (`sourceType: "stateMachine"`, `label`) plus one container entry per Batch state, emitted only when the env vars are set: `{logGroupArn: BATCH_JOB_LOG_GROUP_ARN, logGroupName: BATCH_JOB_LOG_GROUP_NAME, logStreamName: "", logStreamPrefix: f"{BATCH_JOB_DEFINITION_NAME}/default/", stageName: <Batch state name>, sourceType: "batch", label: f"{state} container"}`. `stageName` must equal the ASL state name — the CDK construct id of the Batch task — and be declared as a module-level `*_STATE_NAME = "..."` literal (the infra tests read it); a copied `BATCH_STATE_NAME` still names the reference pipeline's construct, so rename it together with the construct. An entry carrying only the four location keys (`logGroupArn`, `logGroupName`, `logStreamName`, `logStreamPrefix`) stays valid. Copy `batch_container_log_entry` / `register_sub_execution` from `backendPipelines/preview/3dThumbnail/lambda/openPipeline.py` and keep `put_events` best-effort. Reference: `backendPipelines/CLAUDE.md` "Registering Sub-Processes and Logs".
 
 Full field-by-field reference: [The pipeline input contract](../../documentation/docusaurus-site/docs/pipelines/custom-pipelines.md#the-pipeline-input-contract).
 
@@ -301,6 +302,7 @@ Create `lambdaBuilder/{pipelineName}Functions.ts` following existing pipeline la
 -   Standard signature with scope, layer, storageResources, config, vpc, subnets
 -   Code path pointing to `backendPipelines/{category}/{pipelineName}/lambda`
 -   The security helper calls, including `suppressCdkNagLambda(fun)` on every Lambda
+-   The registering lambda's environment carries `ORCHESTRATION_BUS_NAME` (plus `orchestrationBus.grantPutEventsTo(fun)`), the nested state machine's `STATE_MACHINE_LOG_GROUP_NAME` / `STATE_MACHINE_LOG_GROUP_ARN`, the container log group env from `infra/lib/helper/batchJobLogGroup.ts` (`BATCH_JOB_LOG_GROUP_NAME` / `BATCH_JOB_LOG_GROUP_ARN`) — a **Fargate** pipeline spreads `...vendedBatchJobLogGroupEnvironment(containerLogGroup)` with the VAMS-owned `/aws/vendedlogs/Pipelines/<Name><hash>` group it passed to `BatchFargatePipelineConstruct` as `logGroup`; a **GPU** pipeline whose `CfnJobDefinition` sets no log configuration spreads `...batchJobLogGroupEnvironment()` (AWS Batch's default `/aws/batch/job`) — and `BATCH_JOB_DEFINITION_NAME` — the job definition **name**: Fargate `batchPipeline.batchJobDefinition.jobDefinitionName`; a GPU `CfnJobDefinition` with a `jobDefinitionName` prop → that prop; an unnamed `CfnJobDefinition` → `jobDefinitionNameFromRef(jobDef.ref)`. Never `.ref` (the ARN with revision) and never `formatArn(..., SLASH_RESOURCE_NAME)` for the group ARN — both fail the backend validators and leave the container source `unscoped`. Registering a group the job definition does not write to is not caught at synth; `batchLogRegistrationEnvFargate.test.ts` asserts the registered group IS the job definition's `awslogs-group`.
 -   Note: pipeline Lambdas use **legacy table-name environment variables** (they are excluded from SSM resource-name resolution)
 
 #### Pipeline Nested Stack
@@ -398,6 +400,10 @@ After creating all files, verify:
 -   [ ] Pipeline nested stack is imported and registered in pipelineBuilder-nestedStack.ts
 -   [ ] `pipelineVamsLambdaFunctionName` is pushed to the array for pipeline registration
 -   [ ] VPC builder updated in all three condition blocks (Batch/ECS/Fargate pipelines)
+-   [ ] `openPipeline.py` (or `executeBatchJob.py`) registers the sub-execution and its log sources — the state-machine entry plus one container entry per Batch state naming the group that job definition writes to (the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration) with `stageName` a module-level `*_STATE_NAME` literal — the builder spreads `...vendedBatchJobLogGroupEnvironment(containerLogGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and sets `BATCH_JOB_DEFINITION_NAME`, and the pipeline is added to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` / `containerLogRegistrationEnvEcs.test.ts` with the entries asserted in `lambda/tests/test_manifest_refactor.py`
+-   [ ] Sub-process and log sources registered from `openPipeline` (state-machine entry with `sourceType`/`label`; one container entry per Batch state naming the group the job definition writes to — vended `/aws/vendedlogs/Pipelines/<Name><hash>` for Fargate, `/aws/batch/job` for GPU — with `logStreamPrefix "<jobDefinitionName>/default/"` and `stageName` = the ASL state name)
+-   [ ] Registering lambda env: `ORCHESTRATION_BUS_NAME`, `vendedBatchJobLogGroupEnvironment(containerLogGroup)` (Fargate) or `batchJobLogGroupEnvironment()` (GPU), `BATCH_JOB_DEFINITION_NAME`; `grantPutEventsTo`
+-   [ ] Pipeline added to `infra/test/pipelines/batchLogRegistrationEnvFargate.test.ts` / `batchLogRegistrationEnvGpu.test.ts` / `containerLogRegistrationEnvEcs.test.ts` (env present; every `*_STATE_NAME` literal is a key of the synthesized ASL `States`), and `lambda/tests/test_manifest_refactor.py` asserts the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes `LOG_STREAM_NAME`
 -   [ ] `suppressCdkNagLambda` and CDK Nag suppressions with justified reasons on all resources
 -   [ ] Documentation updated: configuration-reference.md, pipelines page, overview table, features.md, sidebars.ts, root CLAUDE.md
 
@@ -414,12 +420,13 @@ vamscli pipeline template list -d GLOBAL -p {pipelineId}
 1. Gather requirements from the user (or parse from $ARGUMENTS)
 2. Determine pipeline category and processing type; pick a reference pipeline to copy from
 3. Create all backend pipeline files (lambda + container)
-4. Author the `vamsSchema/` registration bundle (pipeline.json, optional workflow.json + templates) — including a `tagSchema` per template for the per-run execution options the operator should control
-5. Create CDK infrastructure (construct, nested stack, lambda builder) and wire `VamsSchemaRegistration`
-6. Register in pipelineBuilder-nestedStack.ts and update the VPC builder
-7. Add config flag (interface, getConfig defaults/validation, ALL templates, config.json)
-8. Update documentation and steering docs
-9. Summarize created files and next steps
+4. Wire sub-process/log registration (producer helper, env, tests)
+5. Author the `vamsSchema/` registration bundle (pipeline.json, optional workflow.json + templates) — including a `tagSchema` per template for the per-run execution options the operator should control
+6. Create CDK infrastructure (construct, nested stack, lambda builder) and wire `VamsSchemaRegistration`
+7. Register in pipelineBuilder-nestedStack.ts and update the VPC builder
+8. Add config flag (interface, getConfig defaults/validation, ALL templates, config.json)
+9. Update documentation and steering docs
+10. Summarize created files and next steps
 
 ## User Request
 

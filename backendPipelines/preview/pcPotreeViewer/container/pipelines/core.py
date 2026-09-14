@@ -28,7 +28,9 @@ def run(params: dict) -> PipelineExecutionParams:
     """
     # convert input to data type
     definition = PipelineDefinition(**params)
-    logger.info(f"Pipeline Definition: {definition}")
+    # Log the job name only: the definition carries externalSfnTaskToken, and this container's
+    # plain-logging output is not redacted on its way to CloudWatch.
+    logger.info(f"Pipeline Definition: {definition.jobName}")
 
     # set pipeline current stage
     if definition.currentStage is None:

@@ -39,6 +39,11 @@ module.exports = {
         // @monaco-editor/react separately, so the editor never actually renders in unit tests.
         "\\?worker$": "<rootDir>/src/__mocks__/emptyModule.js",
         "^monaco-editor$": "<rootDir>/src/__mocks__/emptyModule.js",
+        // maplibre-gl 6 is ESM-only (its `exports` map carries no `require` condition, so jest cannot
+        // resolve it) and the worker setup module's `?worker&url` import is Vite-only. Stub both; the
+        // component tests that reach a map component never mount a real map.
+        "\\?worker&url$": "<rootDir>/src/__mocks__/emptyModule.js",
+        "^maplibre-gl$": "<rootDir>/src/__mocks__/emptyModule.js",
     },
     // Thresholds reflect the current sparse test coverage (~2% of a large
     // codebase). Raise them as coverage grows.

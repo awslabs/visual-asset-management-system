@@ -12,7 +12,7 @@ logger = safeLogger(service="ClosePipelineIsaacLabTraining")
 
 
 def lambda_handler(event, context):
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     job_name = event.get("jobName")
     status = event.get("status", "COMPLETED")

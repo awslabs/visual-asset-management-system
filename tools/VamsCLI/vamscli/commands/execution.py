@@ -274,15 +274,23 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
 
 @execution.command('details')
 @click.argument('execution_id')
+@click.option('--include-sub-executions', is_flag=True,
+              help="Also report each step's registered sub-processes with per-stage status "
+                   "(reads the sub-process execution history)")
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def details(ctx: click.Context, execution_id: str, json_output: bool):
+def details(ctx: click.Context, execution_id: str, include_sub_executions: bool, json_output: bool):
     """Get an execution's full detail and traceability (pipelines, inputs, outputs, metadata).
 
     Asset/file metadata (inputMetadata) and database metadata (inputDatabaseMetadata) are separate
     collections, and each is reported as a row count here — use --json-output for the rows themselves.
     The metadata sources the run read from are listed alongside them.
+
+    Every pipeline step lists the log sources known for it (Logs available) with the logId that
+    'vamscli execution logs --log-id' reads. With --include-sub-executions a step that runs its own
+    nested state machine or container job also reports each registered sub-process and every stage
+    of it with its status; a failure the sub-process caught and reported is marked (caught).
 
     Large collections are bounded server-side. Any section that came back partial is named in
     truncatedCollections and marked in the output; a pipeline whose configuration body was truncated
@@ -291,11 +299,13 @@ def details(ctx: click.Context, execution_id: str, json_output: bool):
 
     Examples:
         vamscli execution details my-execution-id
+        vamscli execution details my-execution-id --include-sub-executions
     """
     api_client = _api(ctx)
     output_status(f"Retrieving details for execution '{execution_id}'...", json_output)
     try:
-        result = api_client.get_execution_details(execution_id)
+        params = {'includeSubExecutions': 'true'} if include_sub_executions else None
+        result = api_client.get_execution_details(execution_id, params=params)
         message = _message(result)
 
         def _fmt(_r):
@@ -305,6 +315,18 @@ def details(ctx: click.Context, execution_id: str, json_output: bool):
 
             def _mark(collection_name):
                 return " [PARTIAL - more rows exist]" if collection_name in truncated else ""
+
+            def _span(entry):
+                start, stop = entry.get('startDate') or '', entry.get('stopDate') or ''
+                return f" {start} → {stop}" if (start or stop) else ""
+
+            def _error(entry):
+                return f"  {entry['error']}" if entry.get('error') else ""
+
+            def _sub_label(sub):
+                label = sub.get('label') or sub.get('resourceType', '?')
+                name = sub.get('resourceName')
+                return f"{label} ({name})" if name else label
 
             out = [
                 f"Execution ID: {message.get('workflowExecutionId', 'N/A')}",
@@ -330,6 +352,38 @@ def details(ctx: click.Context, execution_id: str, json_output: bool):
                     if location.get('key'):
                         out.append(f"    Full config body: s3://{location.get('bucket', '?')}/"
                                    f"{location['key']}")
+                    # Registered sub-processes (a nested state machine, a container job) with the
+                    # stage status derived from their own execution history; present only with
+                    # --include-sub-executions.
+                    subs = p.get('subExecutions') or []
+                    if subs:
+                        out.append(f"    Sub-processes ({len(subs)}):")
+                        for sub in subs:
+                            out.append(f"      {_sub_label(sub)} [{sub.get('status', 'UNKNOWN')}]"
+                                       f"{_span(sub)}{_error(sub)}")
+                            for stage in sub.get('stages') or []:
+                                status = stage.get('status', 'UNKNOWN')
+                                if stage.get('caught'):
+                                    status += ' (caught)'
+                                out.append(f"        {stage.get('stageName', '?')} [{status}]"
+                                           f"{_span(stage)}{_error(stage)}")
+                            if sub.get('stagesTruncated'):
+                                out.append("        (stages truncated in this response)")
+                            if sub.get('historyTruncated'):
+                                out.append("        (history truncated: later stages may be missing)")
+                    if p.get('subExecutionsTruncated'):
+                        out.append("    (Sub-processes truncated in this response)")
+                    for warning in p.get('subExecutionWarnings') or []:
+                        out.append(f"    Sub-process warning: {warning}")
+                    # Every log source known for the step, keyed by the logId that
+                    # 'execution logs --log-id' accepts.
+                    logs_available = p.get('availableLogs') or []
+                    if logs_available:
+                        out.append(f"    Logs available ({len(logs_available)}):")
+                        for log in logs_available:
+                            out.append(f"      {log.get('logId', '?')}  {log.get('kind', '')}  "
+                                       f"{log.get('sourceType', '')}  {log.get('stageName') or '-'}  "
+                                       f"{log.get('logGroupName', '')}")
             inputs = message.get('inputFiles', [])
             if inputs:
                 out.append(f"\nInput files ({len(inputs)}){_mark('inputFiles')}:")
@@ -539,21 +593,31 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
 @click.option('--start-time', type=int, help='(full mode) start time, epoch milliseconds')
 @click.option('--end-time', type=int, help='(full mode) end time, epoch milliseconds')
 @click.option('--next-token', help='(full mode) CloudWatch pagination token')
+@click.option('--log-id', help='(full mode, with --pipeline-execution-id) read one log source by the '
+                               'logId "execution details" lists under Logs available')
+@click.option('--stage-name', help='(full mode, with --pipeline-execution-id) only the log sources and '
+                                   'sub-execution history of one sub-state-machine stage')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id: Optional[str],
          filter_pattern: Optional[str], limit: Optional[int], start_time: Optional[int],
-         end_time: Optional[int], next_token: Optional[str], json_output: bool):
+         end_time: Optional[int], next_token: Optional[str], log_id: Optional[str],
+         stage_name: Optional[str], json_output: bool):
     """Retrieve an execution's logs (truncated stored text or full live CloudWatch search).
 
-    --filter-pattern, --limit, --start-time, --end-time and --next-token act on the live CloudWatch
-    search only, so they require --mode full; supplying one without it is rejected rather than
-    ignored.
+    --filter-pattern, --limit, --start-time, --end-time, --next-token, --log-id and --stage-name act
+    on the live CloudWatch search only, so they require --mode full; supplying one without it is
+    rejected rather than ignored. --log-id and --stage-name read a single step's sources, so they
+    also require --pipeline-execution-id. With a step scoped, full mode lists every log source the
+    step has (Log sources) and whether each could be read; each Sub-Process Logs line ends with the
+    logId of its source.
 
     Examples:
         vamscli execution logs my-execution-id
         vamscli execution logs my-execution-id --mode full --limit 200
+        vamscli execution logs my-execution-id --mode full --pipeline-execution-id my-pipeline-exec
+        vamscli execution logs my-execution-id --mode full --pipeline-execution-id my-pipeline-exec --log-id 3f9a0c1d2e4b5a67
     """
     api_client = _api(ctx)
     params: Dict[str, Any] = {'mode': mode}
@@ -566,7 +630,8 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
     full_mode_only = [
         name for name, value in (('--filter-pattern', filter_pattern), ('--limit', limit),
                                  ('--start-time', start_time), ('--end-time', end_time),
-                                 ('--next-token', next_token))
+                                 ('--next-token', next_token), ('--log-id', log_id),
+                                 ('--stage-name', stage_name))
         if value is not None
     ]
     if mode != 'full':
@@ -587,6 +652,18 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
             params['endTime'] = end_time
         if next_token:
             params['nextToken'] = next_token
+        # Both read one step's sources, so neither has a meaning without the step; the server
+        # answers 400, and the CLI names the missing option before the call.
+        source_scoped = [name for name, value in (('--log-id', log_id), ('--stage-name', stage_name))
+                         if value is not None]
+        if source_scoped and not pipeline_execution_id:
+            raise click.ClickException(
+                f"{', '.join(source_scoped)} require{'s' if len(source_scoped) == 1 else ''} "
+                f"--pipeline-execution-id.")
+        if log_id:
+            params['logId'] = log_id
+        if stage_name:
+            params['stageName'] = stage_name
 
     output_status(f"Retrieving {mode} logs for execution '{execution_id}'...", json_output)
     try:
@@ -614,8 +691,10 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
                     line = f"  [{ev.get('timestamp', '')}] {ev.get('message', '')}".rstrip()
                     # subProcessEvents mix several log groups; name the source so a step's own
                     # invocation log is distinguishable from the pipeline's registered logs.
-                    if ev.get('logGroupArn'):
-                        line += f"  ({ev['logGroupArn'].rsplit(':log-group:', 1)[-1]})"
+                    if ev.get('logGroupName'):
+                        line += f"  ({ev['logGroupName']})"
+                    if ev.get('logId'):
+                        line += f"  [{ev['logId']}]"
                     out.append(line)
 
             _events('events', 'Events')
@@ -625,6 +704,17 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
             # pipeline's registered logs, any sub-execution history) were reachable only via
             # --json-output before; they are the logs that explain a failed launch.
             _events('sfnHistoryEvents', 'State Machine History')
+            # Every log source known for the step and whether it could be read. The logId column is
+            # what --log-id takes and what each Sub-Process Logs line ends with.
+            sources = message.get('logSources')
+            if sources:
+                out.append(f"\n== Log sources ({len(sources)}) ==")
+                for s in sources:
+                    status = s.get('status', '')
+                    if status == 'read' and s.get('eventCount') is not None:
+                        status = f"read {s['eventCount']}"
+                    out.append(f"  {s.get('logId', '?')}  {s.get('kind', '')}  {s.get('sourceType', '')}  "
+                               f"{s.get('stageName') or '-'}  {s.get('logGroupName', '')}  [{status}]")
             _events('subProcessEvents', 'Sub-Process Logs')
             warnings = message.get('warnings')
             if warnings:

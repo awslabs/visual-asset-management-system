@@ -26,7 +26,7 @@
  * prevent recurring: a fix that is real in the code and absent in the deployment.
  */
 
-import { synthTemplate } from "../support/templateSynth";
+import { synthTemplate, SynthResult } from "../support/templateSynth";
 
 // Deadline Cloud is commercial-only and off by default in every shipped template, so the rule does
 // not exist unless the execution type is enabled.
@@ -133,6 +133,125 @@ describe("Deadline Cloud job-status EventBridge rule", () => {
 
         it("is absent when the DeadlineCloud execution type is disabled", () => {
             expect(deadlineActionsOnExecutionService(false)).toEqual([]);
+        });
+    });
+
+    /**
+     * The execution details and logs APIs report a registered Deadline job through two reads the
+     * abort path does not need: `deadline:ListSessions`, and CloudWatch Logs on the queue's session
+     * log group.
+     *
+     * A session log lives in `/aws/deadline/{farmId}/{queueId}`, one stream per session named by the
+     * session id, and the group is shared by every job of the queue. The lines carry no VAMS id, so
+     * the only correct read is FilterLogEvents by the exact stream names ListSessions returned for the
+     * job — which is why both grants travel together: the logs grant alone reads nothing (no stream
+     * names), and ListSessions alone lists streams the role is then denied.
+     *
+     * Farm and queue ids are recorded on pipeline records rather than known at deploy time, so the
+     * group is granted as `/aws/deadline/*`. That is standing read access to every Deadline session
+     * log in the account, which is why it follows the same flag as the rest of the surface: with the
+     * type disabled no execution can hold a Deadline job to report on. Asserted as a pair; the
+     * disabled half alone is satisfied by a grant that was never emitted in either state.
+     */
+    describe("the execution details and logs read grants", () => {
+        const DEADLINE_LOG_GROUP = /log-group:\/aws\/deadline\/\*/;
+        const LOGS_READ_ACTIONS = [
+            "logs:FilterLogEvents",
+            "logs:GetLogEvents",
+            "logs:DescribeLogStreams",
+        ];
+
+        const synthFor = (enabled: boolean) =>
+            enabled
+                ? synth()
+                : synthTemplate("commercial", {
+                      // Same key as the blocks above: identical mutation, so this is a cache hit.
+                      mutateKey: "deadlineCloudDisabled",
+                      mutate: (c: any) => {
+                          c.app.pipelines.deadlineCloudExecutionTypeEnabled = false;
+                      },
+                  });
+
+        /** One IAM policy statement as the synthesized template carries it. */
+        type Statement = { Action?: string | string[]; Resource?: unknown };
+
+        // CDK spills an over-long inline policy into an AWS::IAM::ManagedPolicy, so scanning only
+        // AWS::IAM::Policy reports a grant that IS present as missing.
+        const executionServiceStatements = (s: SynthResult): Statement[] => {
+            const found: Statement[] = [];
+            for (const type of ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"]) {
+                for (const pol of s.ofType(type)) {
+                    // The policy's own logical id names the role it defaults for.
+                    if (!/executionService/i.test(pol.logicalId)) continue;
+                    found.push(...(pol.properties?.PolicyDocument?.Statement ?? []));
+                }
+            }
+            return found;
+        };
+
+        // Statements whose flattened resources name the Deadline session log-group namespace. The
+        // resource is a partition-aware string built at synth, but flattening guards against a future
+        // Fn::Join rendering that a raw JSON substring match would pass while checking nothing.
+        const deadlineLogStatements = (s: SynthResult): Statement[] =>
+            executionServiceStatements(s).filter((stmt) =>
+                ([] as unknown[])
+                    .concat(stmt.Resource ?? [])
+                    .some((r) => DEADLINE_LOG_GROUP.test(SynthResult.flatten(r)))
+            );
+
+        // Statements scoped to the farm namespace, where the abort path's Deadline grant sits; a
+        // ListSessions that moved onto a `Resource: "*"` statement would otherwise still pass.
+        const DEADLINE_FARM = /:deadline:.*:farm\/\*$/;
+        const deadlineFarmStatements = (s: SynthResult): Statement[] =>
+            executionServiceStatements(s).filter((stmt) =>
+                ([] as unknown[])
+                    .concat(stmt.Resource ?? [])
+                    .some((r) => DEADLINE_FARM.test(SynthResult.flatten(r)))
+            );
+
+        it("grants deadline:ListSessions on farm/* when the type is enabled", () => {
+            const statements = deadlineFarmStatements(synthFor(true));
+            expect(statements.length).toBeGreaterThan(0);
+            const actions = statements.flatMap((stmt) =>
+                ([] as string[]).concat(stmt.Action ?? [])
+            );
+            expect(actions).toContain("deadline:ListSessions");
+        });
+
+        it("grants the three CloudWatch Logs reads on /aws/deadline/* when the type is enabled", () => {
+            const statements = deadlineLogStatements(synthFor(true));
+            expect(statements.length).toBeGreaterThan(0);
+            const actions = statements.flatMap((stmt) =>
+                ([] as string[]).concat(stmt.Action ?? [])
+            );
+            expect(actions).toEqual(expect.arrayContaining(LOGS_READ_ACTIONS));
+            // Both the group and its stream form, as the role's other log-group grants carry.
+            const resources = statements.flatMap((stmt) =>
+                ([] as unknown[]).concat(stmt.Resource ?? []).map((r) => SynthResult.flatten(r))
+            );
+            expect(resources).toEqual(
+                expect.arrayContaining([
+                    expect.stringMatching(/:log-group:\/aws\/deadline\/\*$/),
+                    expect.stringMatching(/:log-group:\/aws\/deadline\/\*:\*$/),
+                ])
+            );
+            // Region and account are pinned to the deployment rather than wildcarded (the commercial
+            // template synthesizes as aws / us-east-1 / 123456789012).
+            for (const r of resources.filter((r) => DEADLINE_LOG_GROUP.test(r))) {
+                expect(r).toMatch(/^arn:aws:logs:us-east-1:123456789012:log-group:/);
+            }
+        });
+
+        it("emits neither grant anywhere in the template when the type is disabled", () => {
+            const s = synthFor(false);
+            // Whole-assembly scan, not only the execution service: the assertion is that no role at
+            // all holds these while the type is off. Positive control: the same scan finds them on the
+            // enabled synth, so an empty result here is the gate and not a scan that matches nothing.
+            const enabled = synthFor(true);
+            expect(enabled.grep(/deadline:ListSessions/).length).toBeGreaterThan(0);
+            expect(enabled.grep(DEADLINE_LOG_GROUP).length).toBeGreaterThan(0);
+            expect(s.grep(/deadline:ListSessions/)).toEqual([]);
+            expect(s.grep(DEADLINE_LOG_GROUP)).toEqual([]);
         });
     });
 

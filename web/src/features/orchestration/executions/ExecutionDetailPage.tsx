@@ -16,6 +16,7 @@ import DataTable from "../components/DataTable";
 import InfoTooltip from "../components/InfoTooltip";
 import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
 import ExecutionLogViewer from "./ExecutionLogViewer";
+import SubProcessesSection from "./SubProcessesSection";
 import type { ExecutionStatus } from "../types";
 import { type ColumnDef } from "@tanstack/react-table";
 import { PREVIEW_FILE_PATTERN } from "../../../common/constants/fileFormats";
@@ -498,7 +499,15 @@ const Field: React.FC<{ label: string; children: React.ReactNode; mono?: boolean
 );
 
 const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }) => {
-    const { data: execution, isLoading, error } = useExecutionDetails(executionId);
+    // Sub-processes and their stages are resolved only on request; this page is the one view that
+    // renders them. The poll cadence is the hook's own.
+    const {
+        data: execution,
+        isLoading,
+        error,
+    } = useExecutionDetails(executionId, {
+        includeSubExecutions: true,
+    });
     const { can } = useAllowedRoutes();
     const location = useLocation();
 
@@ -894,6 +903,13 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                             </Field>
                                         )}
                                     </div>
+
+                                    <SubProcessesSection
+                                        subExecutions={pipeline.subExecutions}
+                                        subExecutionsTruncated={pipeline.subExecutionsTruncated}
+                                        warnings={pipeline.subExecutionWarnings}
+                                        stagesDropped={isTruncated("pipelines.subExecutions")}
+                                    />
 
                                     {/* Template Snapshot */}
                                     {(pipeline.templateId ||

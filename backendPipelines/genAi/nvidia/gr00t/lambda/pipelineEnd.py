@@ -29,7 +29,7 @@ def lambda_handler(event, context):
     Sends task success or failure to external workflow if task token is present.
     """
 
-    logger.info(f"Event Input: {event}")
+    logger.info("Event Input", event=event)
     logger.info(f"Context Input: {context}")
 
     externalSfnTaskToken = event.get('externalSfnTaskToken', "")
@@ -47,8 +47,6 @@ def lambda_handler(event, context):
         logger.info("Pipeline Success")
 
     if externalSfnTaskToken and externalSfnTaskToken != "":
-        logger.info(f"External Sfn Task Token: {externalSfnTaskToken}")
-
         if not has_error:
             sfn.send_task_success(
                 taskToken=externalSfnTaskToken,
