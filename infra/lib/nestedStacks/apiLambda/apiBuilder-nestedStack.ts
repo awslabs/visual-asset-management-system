@@ -1047,7 +1047,6 @@ export class ApiBuilderNestedStack extends NestedStack {
             registry: registry,
         });
 
-
         // Metadata Schema Defaults - Auto-load default schemas if configured
         if (
             config.app.metadataSchema.autoLoadDefaultAssetLinksSchema ||

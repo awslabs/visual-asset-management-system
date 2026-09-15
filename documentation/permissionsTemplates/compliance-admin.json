@@ -90,9 +90,7 @@
                 { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
             "criteriaOr": [],
-            "groupPermissions": [
-                { "action": "GET", "type": "allow" }
-            ]
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
         {
             "name": "{{ROLE_NAME}}-database-readonly",
@@ -102,9 +100,7 @@
                 { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
             "criteriaOr": [],
-            "groupPermissions": [
-                { "action": "GET", "type": "allow" }
-            ]
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }
     ]
 }

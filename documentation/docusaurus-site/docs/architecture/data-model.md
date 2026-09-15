@@ -453,25 +453,25 @@ Compliance deploys unconditionally. Schemas are versioned (`internalVersion`); a
 asset's latest verdict; evaluations are per run; cascades gate downstream re-evaluation on approval; the
 audit table is the compliance event trail.
 
-| Table                            | Partition Key                | Sort Key          |
-| -------------------------------- | ---------------------------- | ----------------- |
-| ComplianceSchemaStorageTable     | `schemaName`                 | `internalVersion` |
-| ComplianceAssetStateStorageTable | `databaseId`                 | `assetId`         |
-| ComplianceEvaluationStorageTable | `evaluationId`               | --                |
-| ComplianceCascadeStorageTable    | `cascadeId`                  | --                |
-| ComplianceAuditStorageTable      | `entryId`                    | --                |
+| Table                            | Partition Key  | Sort Key          |
+| -------------------------------- | -------------- | ----------------- |
+| ComplianceSchemaStorageTable     | `schemaName`   | `internalVersion` |
+| ComplianceAssetStateStorageTable | `databaseId`   | `assetId`         |
+| ComplianceEvaluationStorageTable | `evaluationId` | --                |
+| ComplianceCascadeStorageTable    | `cascadeId`    | --                |
+| ComplianceAuditStorageTable      | `entryId`      | --                |
 
 **Global Secondary Indexes:**
 
-| Table                            | GSI Name           | Partition Key        | Sort Key          | Purpose                                                     |
-| -------------------------------- | ------------------ | -------------------- | ----------------- | ----------------------------------------------------------- |
-| ComplianceSchemaStorageTable     | `DatabaseIdIndex`  | `databaseId`         | `schemaName`      | List a database's schemas                                   |
-| ComplianceAssetStateStorageTable | `SchemaNameIndex`  | `schemaName`         | `complianceState` | List a schema's assets by state (quarantine list, sweep)    |
-| ComplianceEvaluationStorageTable | `AssetIndex`       | `databaseId:assetId` | `evaluatedAt`     | An asset's evaluations, newest first                        |
+| Table                            | GSI Name           | Partition Key        | Sort Key          | Purpose                                                                                       |
+| -------------------------------- | ------------------ | -------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
+| ComplianceSchemaStorageTable     | `DatabaseIdIndex`  | `databaseId`         | `schemaName`      | List a database's schemas                                                                     |
+| ComplianceAssetStateStorageTable | `SchemaNameIndex`  | `schemaName`         | `complianceState` | List a schema's assets by state (quarantine list, sweep)                                      |
+| ComplianceEvaluationStorageTable | `AssetIndex`       | `databaseId:assetId` | `evaluatedAt`     | An asset's evaluations, newest first                                                          |
 | ComplianceEvaluationStorageTable | `ExecutionIdIndex` | `executionId`        | --                | Resolve the evaluation a pipeline-rule workflow run belongs to (workflow-completion callback) |
-| ComplianceCascadeStorageTable    | `StateIndex`       | `state`              | `createdAt`       | Pending / completed cascades by state                       |
-| ComplianceAuditStorageTable      | `AssetIndex`       | `databaseId:assetId` | `timestamp`       | An asset's audit trail                                      |
-| ComplianceAuditStorageTable      | `EventTypeIndex`   | `eventType`          | `timestamp`       | Audit entries by event type                                 |
+| ComplianceCascadeStorageTable    | `StateIndex`       | `state`              | `createdAt`       | Pending / completed cascades by state                                                         |
+| ComplianceAuditStorageTable      | `AssetIndex`       | `databaseId:assetId` | `timestamp`       | An asset's audit trail                                                                        |
+| ComplianceAuditStorageTable      | `EventTypeIndex`   | `eventType`          | `timestamp`       | Audit entries by event type                                                                   |
 
 ### Authorization Tables
 
