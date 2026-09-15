@@ -373,6 +373,10 @@ const COMMERCIAL: ConfigShape = {
             autoLoadDefaultAssetSchema: true,
             autoLoadDefaultAssetFileSchema: true,
         },
+        compliance: {
+            autoLoadDefaultSchema: true,
+            quarantineBlocksDownload: false,
+        },
     },
 };
 

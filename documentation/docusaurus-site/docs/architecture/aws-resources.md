@@ -4,7 +4,7 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 ## Amazon DynamoDB Tables
 
-VAMS deploys 53 Amazon DynamoDB tables for persistent data storage — 46 read by Lambda handlers and 7 migration source tables. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
+VAMS deploys 58 Amazon DynamoDB tables for persistent data storage — 51 read by Lambda handlers and 7 migration source tables. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
 All tables use a `RETAIN` removal policy, so they and their data survive `cdk destroy` and require manual deletion. Because every table is auto-named by AWS CloudFormation (no explicit `tableName`), a retained orphan never collides with the freshly named table a redeploy creates. See [Uninstall the solution — Step 3: Delete DynamoDB tables](../deployment/uninstall.md#step-3-delete-dynamodb-tables) for cleanup steps.
 
@@ -90,6 +90,18 @@ Executions are workflow-keyed; asset and database linkage lives in the workflow/
 | UserStorageTable         | `userId`           | --            | --                                                                                                                                                               | User profile records                     |
 | ApiKeyStorageTable       | `apiKeyId`         | --            | `apiKeyHashIndex` (PK: apiKeyHash), `userIdIndex` (PK: userId, SK: apiKeyId)                                                                                     | API key records                          |
 
+### Compliance Tables
+
+The compliance feature deploys unconditionally. `ComplianceEvaluationStorageTable`'s `ExecutionIdIndex` lets the workflow-completion callback find the evaluation a pipeline-rule execution belongs to.
+
+| Table                            | Partition Key (PK) | Sort Key (SK)     | GSIs                                                                                                   | Purpose                                            |
+| -------------------------------- | ------------------ | ----------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| ComplianceSchemaStorageTable     | `schemaName`       | `internalVersion` | `DatabaseIdIndex` (PK: databaseId, SK: schemaName)                                                    | Compliance schema definitions (versioned)          |
+| ComplianceAssetStateStorageTable | `databaseId`       | `assetId`         | `SchemaNameIndex` (PK: schemaName, SK: complianceState)                                               | Per-asset compliance state and bindings            |
+| ComplianceEvaluationStorageTable | `evaluationId`     | --                | `AssetIndex` (PK: databaseId:assetId, SK: evaluatedAt), `ExecutionIdIndex` (PK: executionId)          | Evaluation result records                          |
+| ComplianceCascadeStorageTable    | `cascadeId`        | --                | `StateIndex` (PK: state, SK: createdAt)                                                                | Downstream re-evaluation cascades (approval-gated) |
+| ComplianceAuditStorageTable      | `entryId`          | --                | `AssetIndex` (PK: databaseId:assetId, SK: timestamp), `EventTypeIndex` (PK: eventType, SK: timestamp) | Compliance audit trail                             |
+
 ### Migration Source Tables
 
 These tables are read only by the data-migration tooling, never by a Lambda handler. Their names are published under the `dynamoTables/legacy/` SSM parameter prefix.
@@ -167,6 +179,7 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 | `tagTypeFunctions.ts`        | createTagType                                                                                                                                                                                                                                                         | Tag type CRUD                     |
 | `userRoleFunctions.ts`       | userRolesService                                                                                                                                                                                                                                                      | User-role assignment              |
 | `workflowFunctions.ts`       | workflowService, workflowTriggerService, executionService, executeWorkflow, workflowTriggerDispatch, processWorkflowExecutionOutput, interimPipelineTracking, handleExecutionError, registerPipelineExecution, deadlineCloudJobCallback, importGlobalPipelineWorkflow | Workflow management and execution |
+| `complianceFunctions.ts`     | complianceSchemaService, complianceSchemaBindingService, complianceEvaluateService, complianceQuarantineService, complianceCascadeService, complianceAuditService, complianceTrigger (SNS-invoked), complianceWorkflowCallback (EventBridge-invoked)                    | Compliance schemas, evaluation, quarantine, cascades, audit |
 
 ### Search and Indexing Functions
 
@@ -394,7 +407,7 @@ VAMS publishes deployment configuration values as explicitly named SSM `String` 
 
 | Parameter Group                                               | Count  | Purpose                                                                                                                                                                                                                              |
 | ------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/<name>-<baseStackName>/resourceNames/dynamoTables/*`        | 46     | DynamoDB table names resolved by Lambda functions at cold start                                                                                                                                                                      |
+| `/<name>-<baseStackName>/resourceNames/dynamoTables/*`        | 51     | DynamoDB table names resolved by Lambda functions at cold start                                                                                                                                                                      |
 | `/<name>-<baseStackName>/resourceNames/dynamoTables/legacy/*` | 7      | Migration source table names, read by the data-migration tooling only                                                                                                                                                                |
 | `/<name>-<baseStackName>/resourceNames/s3Buckets/*`           | 2      | Asset auxiliary and artefacts bucket names                                                                                                                                                                                           |
 | `/<name>-<baseStackName>/resourceNames/cloudwatchLogGroups/*` | 9      | Audit log group names                                                                                                                                                                                                                |

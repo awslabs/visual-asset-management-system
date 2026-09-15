@@ -343,12 +343,10 @@ export function buildDownloadAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
-            ...(config.app.compliance?.enabled &&
-                config.app.compliance?.quarantineBlocksDownload && {
-                    COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
-                    COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME:
-                        storageResources.dynamo.complianceAssetStateStorageTable.tableName,
-                }),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
 
@@ -357,10 +355,7 @@ export function buildDownloadAssetFunction(
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
 
-    if (
-        config.app.compliance?.enabled &&
-        config.app.compliance?.quarantineBlocksDownload
-    ) {
+    if (config.app.compliance.quarantineBlocksDownload) {
         storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
     }
 
@@ -454,12 +449,10 @@ export function buildStreamAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
-            ...(config.app.compliance?.enabled &&
-                config.app.compliance?.quarantineBlocksDownload && {
-                    COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
-                    COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME:
-                        storageResources.dynamo.complianceAssetStateStorageTable.tableName,
-                }),
+            // Compliance asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
 
@@ -468,8 +461,7 @@ export function buildStreamAssetFunction(
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
 
-    if (config.app.compliance?.enabled &&
-        config.app.compliance?.quarantineBlocksDownload) {
+    if (config.app.compliance.quarantineBlocksDownload) {
         storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
     }
 

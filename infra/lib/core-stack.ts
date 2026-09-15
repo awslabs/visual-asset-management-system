@@ -27,7 +27,6 @@ import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBui
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
 import { AddonBuilderNestedStack } from "./nestedStacks/addon/addonBuilder-nestedStack";
-import { ComplianceBuilderNestedStack } from "./nestedStacks/compliance/complianceBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
 import { LogRetentionAspect } from "./aspects/log-retention.aspect";
 import * as s3AssetBuckets from "./helper/s3AssetBuckets";
@@ -333,34 +332,6 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.DEADLINECLOUD_PIPELINES);
             }
 
-            let complianceBuilderNestedStack: ComplianceBuilderNestedStack | undefined;
-            if (props.config.app.compliance.enabled) {
-                this.enabledFeatures.push(VAMS_APP_FEATURES.COMPLIANCE);
-
-                complianceBuilderNestedStack = new ComplianceBuilderNestedStack(
-                    this,
-                    "ComplianceBuilder",
-                    {
-                        config: props.config,
-                        storageResources: storageResourcesNestedStack.storageResources,
-                        lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
-                        vpc: this.vpc,
-                        subnets: this.subnetsIsolated,
-                        registry: apiRouteRegistry,
-                        executeWorkflowFunction: apiBuilder2NestedStack.executeWorkflowV2Function,
-                    }
-                );
-                complianceBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
-                complianceBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
-                complianceBuilderNestedStack.addStackDependency(apiBuilder2NestedStack);
-            }
-
-            // Deadline Cloud pipeline execution-type support (createJob workflow task
-            // states + the job-callback lambda deployed in the API builder stack).
-            if (props.config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
-                this.enabledFeatures.push(VAMS_APP_FEATURES.DEADLINECLOUD_PIPELINES);
-            }
-
             // Build the API stack last (after all registrars have contributed routes).
             const apiNestedStack = new ApiNestedStack(this, "RestApi", {
                 ...props,
@@ -380,9 +351,6 @@ export class CoreVAMSStack extends cdk.Stack {
             apiNestedStack.addStackDependency(apiBuilder2NestedStack);
             apiNestedStack.addStackDependency(searchBuilderNestedStack);
             apiNestedStack.addStackDependency(addonBuilderNestedStack);
-            if (complianceBuilderNestedStack) {
-                apiNestedStack.addStackDependency(complianceBuilderNestedStack);
-            }
 
             //Deploy Static Website and any API proxies (nested stack; after REST API for apiUrl)
             if (props.config.app.useAlb.enabled || props.config.app.useCloudFront.enabled) {

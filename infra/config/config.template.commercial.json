@@ -341,8 +341,8 @@
             "autoLoadDefaultAssetFileSchema": true
         },
         "compliance": {
-            "enabled": false,
-            "autoLoadDefaultSchema": true
+            "autoLoadDefaultSchema": true,
+            "quarantineBlocksDownload": false
         }
     }
 }

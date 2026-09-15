@@ -1131,10 +1131,9 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
-    // Initialize Compliance configuration if undefined (backward compatibility)
+    // Initialize compliance configuration if undefined (backward compatibility)
     if (config.app.compliance == undefined) {
         config.app.compliance = {
-            enabled: false,
             autoLoadDefaultSchema: true,
             quarantineBlocksDownload: false,
         };
@@ -3482,7 +3481,6 @@ export interface ConfigPublic {
             autoLoadDefaultAssetFileSchema: boolean;
         };
         compliance: {
-            enabled: boolean;
             autoLoadDefaultSchema: boolean;
             quarantineBlocksDownload: boolean;
         };

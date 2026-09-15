@@ -2207,9 +2207,9 @@ export function storageResourcesBuilder(
     });
 
     complianceEvaluationStorageTable.addGlobalSecondaryIndex({
-        indexName: "ExecutionArnIndex",
+        indexName: "ExecutionIdIndex",
         partitionKey: {
-            name: "executionArn",
+            name: "executionId",
             type: dynamodb.AttributeType.STRING,
         },
         projectionType: dynamodb.ProjectionType.ALL,

@@ -575,15 +575,14 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`Api
 
 ## Compliance (`app.compliance`)
 
-Controls the Compliance compliance feature. When enabled, VAMS deploys compliance schema management, automated evaluation, quarantine management, cascade execution, and audit logging capabilities under the `/compliance/*` API routes.
+Compliance deploys with every VAMS deployment: five Amazon DynamoDB tables, eight AWS Lambda functions, and the `/compliance/*` API routes for schema management, automated evaluation, quarantine management, cascade execution, and audit logging. There is no enable switch; access to the routes is governed by permissions like every other page. These two fields tune its behavior.
 
 | Field            | Type    | Default | Description                                                                                                         |
 | ---------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `app.compliance.enabled` | boolean | `false` | Enables Compliance compliance management. Deploys five Amazon DynamoDB tables, six AWS Lambda functions, and the compliance API routes. |
-| `app.compliance.autoLoadDefaultSchema` | boolean | `true` | When Compliance is enabled, deploys a default compliance schema (`default-compliance-schema`) requiring name, owner, and classification fields. Set to `false` to skip. |
+| `app.compliance.autoLoadDefaultSchema` | boolean | `true` | Deploys a default global compliance schema (`default-compliance-schema`) that validates a bound asset's metadata against the default asset metadata schema at the `warn` level. Set to `false` to skip. |
 | `app.compliance.quarantineBlocksDownload` | boolean | `false` | When `true`, quarantined assets cannot be downloaded unless the asset has an active exception or the requesting user holds the `compliance_admin` role. When `false` (default), quarantine is informational only — the UI displays a warning but downloads proceed normally. |
 
-**Authorization:** When Compliance is enabled, the default admin role is automatically granted full access to all compliance operations. For non-admin users, use the `compliance-admin` or `compliance-readonly` permission templates (in `documentation/permissionsTemplates/`) to grant scoped access. Compliance uses three dedicated Casbin object types: `complianceSchema`, `complianceEvaluation`, and `complianceCascade`. See [Permissions Model: Compliance Routes](../concepts/permissions-model.md#compliance-routes-compliance) for details.
+**Authorization:** The default admin role is granted full access to all compliance operations. For non-admin users, use the `compliance-admin` or `compliance-readonly` permission templates (in `documentation/permissionsTemplates/`) to grant scoped access. Compliance uses three dedicated Casbin object types: `complianceSchema`, `complianceEvaluation`, and `complianceCascade`. See [Permissions Model: Compliance Routes](../concepts/permissions-model.md#compliance-routes-compliance) for details.
 
 ## Processing pipelines (`app.pipelines`)
 

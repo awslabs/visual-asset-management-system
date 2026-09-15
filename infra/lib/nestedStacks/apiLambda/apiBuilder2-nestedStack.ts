@@ -43,6 +43,17 @@ import {
     buildPipelineServiceV2Function,
     buildPipelineTemplateServiceFunction,
 } from "../../lambdaBuilder/pipelineFunctions";
+import {
+    buildComplianceSchemaServiceFunction,
+    buildComplianceSchemaBindingServiceFunction,
+    buildComplianceEvaluateServiceFunction,
+    buildComplianceQuarantineServiceFunction,
+    buildComplianceCascadeServiceFunction,
+    buildComplianceAuditServiceFunction,
+    buildComplianceTriggerFunction,
+    buildComplianceWorkflowCallbackFunction,
+} from "../../lambdaBuilder/complianceFunctions";
+import { DynamoDbComplianceSchemaDefaultsConstruct } from "./constructs/dynamodb-complianceschema-defaults-construct";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 import * as Config from "../../../config/config";
 
@@ -82,8 +93,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
     // Name of the V2 vamsSchema import custom-resource lambda. Consumed by pipeline nested stacks to
     // register their built-in pipeline/workflow into the V2 tables at deploy (via VamsSchemaRegistration).
     public importGlobalPipelineWorkflowV2FunctionName = "";
-    // V2 execute workflow Lambda, exposed for cross-stack invoke (e.g. Compliance compliance engine).
-    public executeWorkflowV2Function!: lambda.Function;
 
     constructor(parent: Construct, name: string, props: ApiBuilder2NestedStackProps) {
         super(parent, name);
@@ -491,7 +500,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
-        this.executeWorkflowV2Function = executeWorkflowV2;
         attachFunctionToApi(this, executeWorkflowV2, {
             routePath: "/workflows/{workflowDatabaseId}/{workflowId}/execute",
             method: apigateway.HttpMethod.POST,
@@ -583,6 +591,202 @@ export class ApiBuilder2NestedStack extends NestedStack {
                 vpc,
                 subnets
             );
+        }
+
+        // ---------------------------------------------------------------------------
+        // Compliance: schema management, bindings, evaluation, quarantine, cascades, audit.
+        // Route table: backend/backend/common/apiRoutes.py COMPLIANCE_ROUTES.
+        // ---------------------------------------------------------------------------
+        const complianceSchemaService = buildComplianceSchemaServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        for (const method of [apigateway.HttpMethod.GET, apigateway.HttpMethod.POST]) {
+            attachFunctionToApi(this, complianceSchemaService, {
+                routePath: "/compliance/schemas",
+                method,
+                registry: registry,
+            });
+        }
+        // Single schema: details (GET) + new version (PUT) + remove an unbound schema (DELETE).
+        for (const method of [
+            apigateway.HttpMethod.GET,
+            apigateway.HttpMethod.PUT,
+            apigateway.HttpMethod.DELETE,
+        ]) {
+            attachFunctionToApi(this, complianceSchemaService, {
+                routePath: "/compliance/schemas/{schemaName}",
+                method,
+                registry: registry,
+            });
+        }
+
+        const complianceSchemaBindingService = buildComplianceSchemaBindingServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        for (const method of [
+            apigateway.HttpMethod.GET,
+            apigateway.HttpMethod.PUT,
+            apigateway.HttpMethod.DELETE,
+        ]) {
+            attachFunctionToApi(this, complianceSchemaBindingService, {
+                routePath: "/compliance/bind/{databaseId}",
+                method,
+                registry: registry,
+            });
+        }
+        for (const method of [apigateway.HttpMethod.PUT, apigateway.HttpMethod.DELETE]) {
+            attachFunctionToApi(this, complianceSchemaBindingService, {
+                routePath: "/compliance/bind/{databaseId}/{assetId}",
+                method,
+                registry: registry,
+            });
+        }
+
+        // Evaluate on demand, sweep a schema's bound assets, and read evaluations + state.
+        const complianceEvaluateService = buildComplianceEvaluateServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            executeWorkflowV2,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/evaluate/{databaseId}/{assetId}",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/sweep/{schemaName}",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/evaluations/{databaseId}/{assetId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/state/{databaseId}/{assetId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/state/{databaseId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+
+        const complianceQuarantineService = buildComplianceQuarantineServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, complianceQuarantineService, {
+            routePath: "/compliance/quarantine",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceQuarantineService, {
+            routePath: "/compliance/quarantine/{databaseId}/{assetId}/release",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceQuarantineService, {
+            routePath: "/compliance/quarantine/{databaseId}/{assetId}/exception",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+
+        const complianceCascadeService = buildComplianceCascadeServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        for (const method of [apigateway.HttpMethod.GET, apigateway.HttpMethod.POST]) {
+            attachFunctionToApi(this, complianceCascadeService, {
+                routePath: "/compliance/cascades",
+                method,
+                registry: registry,
+            });
+        }
+        attachFunctionToApi(this, complianceCascadeService, {
+            routePath: "/compliance/cascades/{cascadeId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceCascadeService, {
+            routePath: "/compliance/cascades/{cascadeId}/approve",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceCascadeService, {
+            routePath: "/compliance/cascades/{cascadeId}/reject",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+
+        const complianceAuditService = buildComplianceAuditServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, complianceAuditService, {
+            routePath: "/compliance/audit",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceAuditService, {
+            routePath: "/compliance/audit/{databaseId}/{assetId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+
+        // Event-driven: the asset/file indexer SNS topics feed the trigger; the orchestration bus
+        // workflow-completion event feeds the callback. Neither has an API route.
+        buildComplianceTriggerFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            executeWorkflowV2,
+            config,
+            vpc,
+            subnets
+        );
+        buildComplianceWorkflowCallbackFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+
+        if (config.app.compliance.autoLoadDefaultSchema) {
+            new DynamoDbComplianceSchemaDefaultsConstruct(this, "ComplianceSchemaDefaults", {
+                storageResources: storageResources,
+                config: config,
+            });
         }
 
         // Nag suppressions. Scoped with appliesTo so this does NOT blanket-waive every IAM5 wildcard
