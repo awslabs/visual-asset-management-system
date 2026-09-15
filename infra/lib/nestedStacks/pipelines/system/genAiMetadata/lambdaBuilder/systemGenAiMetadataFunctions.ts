@@ -158,8 +158,8 @@ function lambdasInVpc(config: Config.Config): boolean {
 }
 
 /**
- * The guardrail pair the analysis handlers read (`bedrockGuardrail.py`: both variables or neither).
- * Two empty strings when the pipeline runs without a guardrail, so the handler logs its
+ * The guardrail pair the analysis and embedding handlers read (`bedrockGuardrail.py`: both variables or
+ * neither). Two empty strings when the pipeline runs without a guardrail, so the handler logs its
  * unconfigured warning rather than failing on an absent variable.
  */
 function guardrailEnvironment(
@@ -171,7 +171,10 @@ function guardrailEnvironment(
     };
 }
 
-/** `bedrock:ApplyGuardrail` on the exact guardrail ARN the function's Converse calls name; nothing without one. */
+/**
+ * `bedrock:ApplyGuardrail` on the exact guardrail ARN the function names — on its Converse calls, or on the
+ * standalone ApplyGuardrail calls that screen the text it embeds; nothing without one.
+ */
 function grantApplyGuardrail(
     fun: lambda.Function,
     guardrail: SystemGenAiGuardrailReference | undefined
@@ -414,6 +417,7 @@ export function buildGenerateEmbeddingFunction(
     subnets: ec2.ISubnet[],
     pipelineSecurityGroups: ec2.ISecurityGroup[],
     orchestrationBus: events.IEventBus,
+    guardrail: SystemGenAiGuardrailReference | undefined,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "generateEmbedding";
@@ -431,6 +435,7 @@ export function buildGenerateEmbeddingFunction(
             EMBEDDING_MODEL_ID: embeddingModelId,
             EMBEDDING_DIMENSIONS: String(config.app.vectorSearch.embeddingDimensions),
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            ...guardrailEnvironment(guardrail),
         },
     });
 
@@ -445,6 +450,9 @@ export function buildGenerateEmbeddingFunction(
 
     // The embedding model, whether a plain id or a cross-Region inference profile.
     grantBedrockInvokeModel(fun, config, [embeddingModelId]);
+    // The one guardrail the composed text and the content chunks are screened with (ApplyGuardrail)
+    // before the embedding model receives them.
+    grantApplyGuardrail(fun, guardrail);
 
     suppressCdkNagLambda(fun);
     return fun;

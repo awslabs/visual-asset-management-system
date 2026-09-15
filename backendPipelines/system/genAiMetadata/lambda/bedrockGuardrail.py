@@ -1,17 +1,21 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""The Bedrock guardrail every Converse call of this pipeline applies: its configuration from the environment
+"""The Bedrock guardrail every model call of this pipeline applies: its configuration from the environment
 (``BEDROCK_GUARDRAIL_IDENTIFIER`` and ``BEDROCK_GUARDRAIL_VERSION``, both or neither), the ``guardContent``
-blocks that carry the untrusted parts of a prompt (text and images) so the guardrail's input filters evaluate
-them, the verdict on a response — blocked (an intervention the caught failure records) or masked (a success
-whose text carries the sensitive-information filter's mask tokens) — and the account of an intervention.
+blocks that carry the untrusted parts of a Converse prompt (text and images) so the guardrail's input filters
+evaluate them, the verdict on a Converse response — blocked (an intervention the caught failure records) or
+masked (a success whose text carries the sensitive-information filter's mask tokens) — the account of an
+intervention, and the standalone ``ApplyGuardrail`` evaluation of the text an embeddings ``InvokeModel`` receives,
+which carries no guardrail of its own: the masked output is what is embedded and stored, and a blocked text is not
+embedded at all.
 
 The media branch image carries a byte-identical copy of this module (a container build context cannot reach
 ``lambda/``), so it imports only the standard library.
 """
 
 import json
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 GUARDRAIL_IDENTIFIER_VAR = "BEDROCK_GUARDRAIL_IDENTIFIER"
@@ -26,11 +30,23 @@ FILTER_ACTION_BLOCKED = "BLOCKED"
 FILTER_ACTION_ANONYMIZED = "ANONYMIZED"
 GUARD_CONTENT_QUALIFIERS = ["guard_content"]
 # The one cold-start line a caller logs when no guardrail is configured: the Converse calls of that process run
-# without prompt-attack filters, and this line is the operator's signal of it.
+# without prompt-attack filters, the text it embeds is embedded and stored as composed, and this line is the
+# operator's signal of it.
 GUARDRAIL_UNCONFIGURED_WARNING = (
     f"No Bedrock guardrail is configured ({GUARDRAIL_IDENTIFIER_VAR} and {GUARDRAIL_VERSION_VAR} are unset): "
-    "Converse calls run without prompt-attack filters"
+    "Converse calls run without prompt-attack filters and embedded text is not masked"
 )
+# ApplyGuardrail evaluates text on its own, for the text an embeddings model receives: the source is INPUT (file
+# content and metadata on their way to a model), and the response's action is NONE or GUARDRAIL_INTERVENED — the
+# latter for a filter that blocked and for the sensitive-information filter that only masked, told apart by the
+# assessments as on a Converse response.
+APPLY_GUARDRAIL_SOURCE = "INPUT"
+APPLY_GUARDRAIL_ACTION_INTERVENED = "GUARDRAIL_INTERVENED"
+# One ApplyGuardrail call carries several text blocks. A guardrail text unit is 1,000 characters and the service
+# quota for ApplyGuardrail is counted in text units per second (25 by default), so a batch stays under 20 text
+# units and ten blocks; a single text longer than the character budget travels in a call of its own.
+APPLY_GUARDRAIL_BATCH_MAX_CHARS = 20_000
+APPLY_GUARDRAIL_BATCH_MAX_BLOCKS = 10
 # The policy sections of a guardrail assessment and the filter list each carries.
 _ASSESSMENT_FILTER_LISTS = (
     ("topicPolicy", "topics"),
@@ -163,5 +179,133 @@ def guardrail_cause(response: dict) -> str:
     cause = f"guardrail intervened: {text}".strip()
     summary = assessment_summary((response or {}).get("trace"))
     if summary:
-        cause += " " + json.dumps(summary, default=str, separators=(",", ":"))
+        cause += " " + _summary_json(summary)
     return cause
+
+
+def _summary_json(summary: dict) -> str:
+    return json.dumps(summary, default=str, separators=(",", ":"), sort_keys=True)
+
+
+def assessment_line(response: dict) -> str:
+    """The per-side filter summary of a Converse response's trace as one compact JSON line — the INFO line a
+    caller logs on a success, so which policies acted on the prompt and on the reply is readable from the log by
+    policy, type and action, never by the text. ``{}`` when no filter fired."""
+    return _summary_json(assessment_summary((response or {}).get("trace")))
+
+
+@dataclass
+class GuardedText:
+    """The ApplyGuardrail verdict on one text. ``text`` is what may be embedded and stored — the text as given when
+    no filter acted, the guardrail's masked output when the sensitive-information filter anonymized; ``None`` when
+    ``blocked``. ``masked_types`` are the entity types anonymized (types only), ``filters`` the summaries of every
+    filter the call reported, and ``cause`` the account of a blocked text for the failure record."""
+
+    text: Optional[str]
+    blocked: bool = False
+    masked_types: List[str] = field(default_factory=list)
+    filters: List[dict] = field(default_factory=list)
+    cause: str = ""
+
+
+def apply_guardrail_batches(texts: List[str]) -> List[List[int]]:
+    """The indexes of ``texts`` grouped into the batches one ApplyGuardrail call carries, in order: at most
+    APPLY_GUARDRAIL_BATCH_MAX_BLOCKS texts and APPLY_GUARDRAIL_BATCH_MAX_CHARS characters per batch, a text longer
+    than the budget forming a batch of its own."""
+    batches: List[List[int]] = []
+    batch: List[int] = []
+    chars = 0
+    for index, text in enumerate(texts):
+        size = len(text or "")
+        if batch and (len(batch) >= APPLY_GUARDRAIL_BATCH_MAX_BLOCKS
+                      or chars + size > APPLY_GUARDRAIL_BATCH_MAX_CHARS):
+            batches.append(batch)
+            batch, chars = [], 0
+        batch.append(index)
+        chars += size
+    if batch:
+        batches.append(batch)
+    return batches
+
+
+def apply_guardrail_filters(response: dict) -> List[dict]:
+    """One ``{policy, type, action, confidence}`` entry (the fields present) per filter of an ApplyGuardrail
+    response's assessments."""
+    return [entry for assessment in (response or {}).get("assessments") or [] for entry in _filter_summaries(assessment)]
+
+
+def apply_guardrail_cause(response: dict) -> str:
+    """A short account of an ApplyGuardrail block: the guardrail's output text — its configured blocked message —
+    then the policy, type, action and confidence of every filter; never the text a filter matched."""
+    text = " ".join(str(output.get("text") or "") for output in (response or {}).get("outputs") or []
+                    if isinstance(output, dict)).strip()
+    cause = f"guardrail intervened: {text}".strip()
+    filters = apply_guardrail_filters(response)
+    if filters:
+        cause += " " + _summary_json({"input": filters})
+    return cause
+
+
+def guarded_filters(verdicts: List[GuardedText]) -> dict:
+    """The distinct filter entries behind ``verdicts`` as an assessment summary keyed by side (``{"input": [...]}``,
+    the shape of assessment_summary), or ``{}`` when no filter fired."""
+    distinct: List[dict] = []
+    for verdict in verdicts:
+        for entry in verdict.filters:
+            if entry not in distinct:
+                distinct.append(entry)
+    return {"input": distinct} if distinct else {}
+
+
+def _apply_guardrail(client, guardrail_config: dict, texts: List[str]) -> dict:
+    return client.apply_guardrail(
+        guardrailIdentifier=guardrail_config["guardrailIdentifier"],
+        guardrailVersion=guardrail_config["guardrailVersion"],
+        source=APPLY_GUARDRAIL_SOURCE,
+        content=[guard_content_block(text)["guardContent"] for text in texts],
+    )
+
+
+def _verdicts(response: dict, texts: List[str]) -> Optional[List[GuardedText]]:
+    """The verdict on each text of one call, or ``None`` when the call's outcome cannot be attributed to the texts
+    of a batch — a block, or masked output that does not come one per text — and the batch is re-evaluated one
+    text at a time. Blocked when a filter BLOCKED, when the guardrail intervened without a filter saying how, or
+    when it reports masking but returns no usable masked text: the text as given is never embedded then."""
+    filters = apply_guardrail_filters(response)
+    actions = [entry.get("action") for entry in filters]
+    intervened = ((response or {}).get("action") == APPLY_GUARDRAIL_ACTION_INTERVENED
+                  or FILTER_ACTION_BLOCKED in actions or FILTER_ACTION_ANONYMIZED in actions)
+    if not intervened:
+        return [GuardedText(text=text, filters=filters) for text in texts]
+    masked_types = sorted({str(entry.get("type") or "") for entry in filters
+                           if entry.get("action") == FILTER_ACTION_ANONYMIZED} - {""})
+    outputs = [str(output.get("text") or "") for output in (response or {}).get("outputs") or []
+               if isinstance(output, dict)]
+    blocked = not actions or FILTER_ACTION_BLOCKED in actions or FILTER_ACTION_ANONYMIZED not in actions
+    if not blocked and len(outputs) == len(texts):
+        return [GuardedText(text=output, masked_types=masked_types, filters=filters) for output in outputs]
+    if len(texts) > 1:
+        return None
+    if blocked:
+        cause = apply_guardrail_cause(response)
+    else:
+        cause = "guardrail intervened: masked text unavailable " + _summary_json({"input": filters})
+    return [GuardedText(text=None, blocked=True, masked_types=masked_types, filters=filters, cause=cause)]
+
+
+def apply_guardrail_to_texts(client, guardrail_config: dict, texts: List[str]) -> List[GuardedText]:
+    """One GuardedText per text of ``texts``, in order, from ApplyGuardrail calls of apply_guardrail_batches. A
+    call whose filters took no action passes its texts as given; one whose filters only anonymized returns the
+    masked text of each block, one output per text; one whose outcome cannot be attributed to the texts of its
+    batch — a block, or masked output that is not one per text — is re-evaluated one text at a time, so a block
+    names the one text it applies to. The client's errors propagate."""
+    verdicts: List[Optional[GuardedText]] = [None] * len(texts)
+    for batch in apply_guardrail_batches(texts):
+        batch_texts = [texts[index] for index in batch]
+        results = _verdicts(_apply_guardrail(client, guardrail_config, batch_texts), batch_texts)
+        if results is None:
+            results = [_verdicts(_apply_guardrail(client, guardrail_config, [text]), [text])[0]
+                       for text in batch_texts]
+        for index, verdict in zip(batch, results):
+            verdicts[index] = verdict
+    return verdicts

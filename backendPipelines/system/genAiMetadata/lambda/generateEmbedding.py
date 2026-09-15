@@ -13,6 +13,15 @@ contract any pipeline may fulfil. The whole-file document is one vector per file
 the segment fields at their whole-file defaults. A caught Bedrock failure is recorded through
 ``execution.status.json`` and the handler returns normally.
 
+When a Bedrock guardrail is configured (``BEDROCK_GUARDRAIL_IDENTIFIER`` and ``BEDROCK_GUARDRAIL_VERSION``,
+both or neither), the composed text and every content chunk are screened with ``ApplyGuardrail`` before the
+embeddings model receives them — an embeddings ``InvokeModel`` carries no guardrail of its own — and the
+guardrail's masked output is what is embedded and stored as ``sourceText``, so the vector table never holds
+an entity the analysis prompt was masked for. A text a filter blocks is not embedded: the whole-file text is a
+caught ``BedrockGuardrailIntervened`` failure like a blocked analysis prompt, a blocked chunk is skipped and
+recorded the way a chunk embedding failure is, and the embedding summary records ``guardrailMasked`` with the
+masked entity types (types only).
+
 The event carries the manifest's ``bucketId`` as given. A manifest built from an earlier workflow step's
 outputs carries an empty one, and the indexer then resolves the file's bucket from the asset row, so the
 embedding is produced and published regardless.
@@ -28,6 +37,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from customLogging.logger import safeLogger
 import manifestHelper
 import analysisCommon as common
+import bedrockGuardrail
 import contentChunks
 import fileClassifier
 import metadataCatalog
@@ -48,6 +58,12 @@ bedrock_runtime = boto3.client('bedrock-runtime', config=retry_config)
 EMBEDDING_MODEL_ID = os.environ["EMBEDDING_MODEL_ID"]
 EMBEDDING_DIMENSIONS = int(os.environ["EMBEDDING_DIMENSIONS"])
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
+# The guardrail every composed text is screened with before it is embedded and stored (bedrockGuardrail: both
+# variables or neither). Without one the text is embedded and stored as composed; the one warning at cold start
+# is the operator's signal.
+GUARDRAIL_CONFIG = bedrockGuardrail.guardrail_config_from_env(os.environ)
+if GUARDRAIL_CONFIG is None:
+    logger.warning(bedrockGuardrail.GUARDRAIL_UNCONFIGURED_WARNING)
 
 EMBEDDING_READY_DETAIL_TYPE = "vector.embedding.ready"
 EMBEDDING_DOCUMENT_PREFIX = "embedding/"
@@ -150,9 +166,9 @@ def read_text_object(uri):
     return s3_client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
 
 
-def chunk_failure_code(exc):
-    """The execution error code for a caught chunk embedding failure, mapped as the whole-file path maps its
-    own: BedrockAccessDenied for AccessDeniedException, BedrockThrottled for a throttle code,
+def embedding_failure_code(exc):
+    """The execution error code for a caught embedding-side failure — an embedding call or an ApplyGuardrail
+    call: BedrockAccessDenied for AccessDeniedException, BedrockThrottled for a throttle code,
     BedrockEmbeddingError for every other cause. The adapter carries the Bedrock code on
     EmbeddingModelError.code and lets throttling ClientErrors propagate."""
     code = getattr(exc, "code", "") or (
@@ -162,6 +178,14 @@ def chunk_failure_code(exc):
     if code in common.THROTTLE_ERROR_CODES:
         return common.ERROR_BEDROCK_THROTTLED
     return common.ERROR_BEDROCK_EMBEDDING
+
+
+def screen_texts(texts):
+    """One ``bedrockGuardrail.GuardedText`` per text, in order: with a guardrail configured, the ApplyGuardrail
+    verdict — the masked text to embed and store, or ``blocked``; without one, each text as given."""
+    if GUARDRAIL_CONFIG is None:
+        return [bedrockGuardrail.GuardedText(text=text) for text in texts]
+    return bedrockGuardrail.apply_guardrail_to_texts(bedrock_runtime, GUARDRAIL_CONFIG, texts)
 
 
 def load_chunks(manifest, config):
@@ -405,27 +429,32 @@ def lambda_handler(event, context):
         logger.warning(f"Content chunks over the cap of {contentChunks.CONTENT_CHUNK_MAX}: {len(chunks)} kept, "
                        f"{chunks_dropped} dropped")
 
+    def record_failure(error, cause):
+        """The caught failure of the whole-file text: nothing is embedded or published for the version."""
+        logger.error(f"Embedding failed ({error}): {cause}")
+        common.write_execution_status(s3_client, event["outputS3AssetResultsPath"], error, cause)
+        event["embeddingStatus"] = common.STATUS_FAILED
+        event["contentChunks"] = {"count": 0, "dropped": chunks_dropped, "skipped": chunks_skipped}
+        return event
+
+    # The text the model receives, cut to its window first so the guardrail screens exactly what is embedded; with
+    # a guardrail the masked output replaces it and is what is stored as sourceText.
     try:
-        prepared = embeddings.truncate_for_model(source_text, EMBEDDING_MODEL_ID)
+        [screened] = screen_texts([embeddings.truncate_for_model(source_text, EMBEDDING_MODEL_ID)])
+    except ClientError as e:
+        return record_failure(embedding_failure_code(e), str(e))
+    if screened.blocked:
+        return record_failure(common.ERROR_BEDROCK_GUARDRAIL_INTERVENED, screened.cause)
+    masked_types = set(screened.masked_types)
+    guardrail_verdicts = [screened]
+    try:
         vector = embeddings.round_vector(embeddings.embed_text(
-            prepared, model_id=EMBEDDING_MODEL_ID, dimensions=EMBEDDING_DIMENSIONS, purpose="index",
+            screened.text, model_id=EMBEDDING_MODEL_ID, dimensions=EMBEDDING_DIMENSIONS, purpose="index",
             client=bedrock_runtime))
     except (ClientError, embeddings.EmbeddingModelError) as e:
         # The adapter carries the Bedrock code on EmbeddingModelError.code and lets throttling
         # ClientErrors propagate; the recorded code names the cause an operator can act on.
-        bedrock_code = getattr(e, "code", "") or (
-            ((getattr(e, "response", None) or {}).get("Error") or {}).get("Code", ""))
-        if bedrock_code == "AccessDeniedException":
-            error = common.ERROR_BEDROCK_ACCESS_DENIED
-        elif bedrock_code in common.THROTTLE_ERROR_CODES:
-            error = common.ERROR_BEDROCK_THROTTLED
-        else:
-            error = common.ERROR_BEDROCK_EMBEDDING
-        logger.error(f"Embedding failed ({error}): {e}")
-        common.write_execution_status(s3_client, event["outputS3AssetResultsPath"], error, str(e))
-        event["embeddingStatus"] = common.STATUS_FAILED
-        event["contentChunks"] = {"count": 0, "dropped": chunks_dropped, "skipped": chunks_skipped}
-        return event
+        return record_failure(embedding_failure_code(e), str(e))
 
     aux_bucket, aux_prefix = manifestHelper.parse_s3_uri(event["inputOutputS3AssetAuxiliaryFilesPath"])
     document_key = embedding_document_key(aux_prefix, relative_path, version_id)
@@ -447,7 +476,8 @@ def lambda_handler(event, context):
         "embeddingDimensions": EMBEDDING_DIMENSIONS,
         "analysisModelId": genai.get("genai_model", "") or "",
         "embedding": vector,
-        "sourceText": source_text[:SOURCE_TEXT_STORED_MAX_CHARS],
+        # The embedded text — the guardrail's masked output when one is configured — cut to the stored cap.
+        "sourceText": screened.text[:SOURCE_TEXT_STORED_MAX_CHARS],
         "sourceModalities": modalities,
         "pipelineExecutionId": event.get("pipelineExecutionId", "") or "",
         "workflowExecutionId": event.get("workflowExecutionId", "") or "",
@@ -468,35 +498,58 @@ def lambda_handler(event, context):
 
     published_chunks = 0
     chunk_error = None
+    blocked_chunks = 0
     if chunks:
         phrase = fileClassifier.FILE_CLASS_PHRASES.get(file_class, fileClassifier.FILE_CLASS_PHRASES[fileClassifier.CLASS_OTHER])
+        # Every chunk's key, label, text (cut to the model window, so the guardrail screens what is embedded) and
+        # modalities, composed up front so the texts can be screened several per ApplyGuardrail call.
+        composed = []
+        for chunk in chunks:
+            label = contentChunks.chunk_label(chunk.index, len(chunks), chunk.page)
+            chunk_text, chunk_modalities = compose_chunk_source_text(
+                asset_data.get("assetName"), phrase, relative_path, genai.get("genai_title"), label, chunk.text)
+            composed.append((contentChunks.build_text_chunk_key(chunk.index), label,
+                             embeddings.truncate_for_model(chunk_text, EMBEDDING_MODEL_ID), chunk_modalities))
         details = []
         segment_key = ""
         try:
             try:
-                for chunk in chunks:
-                    segment_key = contentChunks.build_text_chunk_key(chunk.index)
-                    label = contentChunks.chunk_label(chunk.index, len(chunks), chunk.page)
-                    chunk_text, chunk_modalities = compose_chunk_source_text(
-                        asset_data.get("assetName"), phrase, relative_path, genai.get("genai_title"), label, chunk.text)
-                    chunk_vector = embeddings.round_vector(embeddings.embed_text(
-                        embeddings.truncate_for_model(chunk_text, EMBEDDING_MODEL_ID), model_id=EMBEDDING_MODEL_ID,
-                        dimensions=EMBEDDING_DIMENSIONS, purpose="index", client=bedrock_runtime))
-                    chunk_document = segment_document(
-                        document, embedding=chunk_vector, source_text=chunk_text, modalities=chunk_modalities,
-                        segment_key=segment_key, segment_kind=contentChunks.SEGMENT_KIND, segment_label=label,
-                        segment_start_ms=None, segment_end_ms=None, segment_count=len(chunks))
-                    chunk_key = embedding_document_key(aux_prefix, relative_path, version_id, segment_key)
-                    chunk_uri = common.write_json(s3_client, f"s3://{aux_bucket}/{chunk_key}", chunk_document)
-                    chunk_detail = {field: value for field, value in chunk_document.items()
-                                    if field not in ("embedding", "sourceText")}
-                    chunk_detail["documentS3Location"] = chunk_uri
-                    details.append(chunk_detail)
-                    if len(details) == PUT_EVENTS_BATCH_SIZE:
-                        published_chunks += _publish_entries(details, source)
-                        details = []
+                for batch in bedrockGuardrail.apply_guardrail_batches([text for _key, _label, text, _mods in composed]):
+                    # A screening failure is recorded against the first chunk of its batch: none of them was embedded.
+                    segment_key = composed[batch[0]][0]
+                    verdicts = screen_texts([composed[index][2] for index in batch])
+                    for index, verdict in zip(batch, verdicts):
+                        segment_key, label, _text, chunk_modalities = composed[index]
+                        if verdict.blocked:
+                            # The blocked chunk is not embedded; the run is recorded FAILED under the guardrail code
+                            # like a blocked analysis prompt, and the other chunks are still embedded.
+                            blocked_chunks += 1
+                            if chunk_error is None:
+                                chunk_error = f"chunk {segment_key}: {verdict.cause}"
+                                logger.error(f"Content chunk blocked ({common.ERROR_BEDROCK_GUARDRAIL_INTERVENED}): {chunk_error}")
+                                common.write_execution_status(s3_client, event["outputS3AssetResultsPath"],
+                                                              common.ERROR_BEDROCK_GUARDRAIL_INTERVENED, chunk_error)
+                            continue
+                        masked_types.update(verdict.masked_types)
+                        guardrail_verdicts.append(verdict)
+                        chunk_vector = embeddings.round_vector(embeddings.embed_text(
+                            verdict.text, model_id=EMBEDDING_MODEL_ID, dimensions=EMBEDDING_DIMENSIONS, purpose="index",
+                            client=bedrock_runtime))
+                        chunk_document = segment_document(
+                            document, embedding=chunk_vector, source_text=verdict.text, modalities=chunk_modalities,
+                            segment_key=segment_key, segment_kind=contentChunks.SEGMENT_KIND, segment_label=label,
+                            segment_start_ms=None, segment_end_ms=None, segment_count=len(chunks))
+                        chunk_key = embedding_document_key(aux_prefix, relative_path, version_id, segment_key)
+                        chunk_uri = common.write_json(s3_client, f"s3://{aux_bucket}/{chunk_key}", chunk_document)
+                        chunk_detail = {field: value for field, value in chunk_document.items()
+                                        if field not in ("embedding", "sourceText")}
+                        chunk_detail["documentS3Location"] = chunk_uri
+                        details.append(chunk_detail)
+                        if len(details) == PUT_EVENTS_BATCH_SIZE:
+                            published_chunks += _publish_entries(details, source)
+                            details = []
             except (ClientError, embeddings.EmbeddingModelError) as e:
-                error = chunk_failure_code(e)
+                error = embedding_failure_code(e)
                 chunk_error = f"chunk {segment_key}: {e}"
                 logger.error(f"Content chunk embedding failed ({error}): {chunk_error}")
                 common.write_execution_status(s3_client, event["outputS3AssetResultsPath"], error, chunk_error)
@@ -509,8 +562,14 @@ def lambda_handler(event, context):
             chunk_error = f"chunk {e.segment_key}: {e}"
             logger.error(f"Content chunk events not published ({ERROR_SEGMENT_PUBLISH}): {chunk_error}")
             common.write_execution_status(s3_client, event["outputS3AssetResultsPath"], ERROR_SEGMENT_PUBLISH, chunk_error)
-        logger.info(f"Content chunks: {published_chunks} published, {chunks_dropped} dropped")
+        logger.info(f"Content chunks: {published_chunks} published, {blocked_chunks} blocked, {chunks_dropped} dropped")
 
+    masked_types = sorted(masked_types)
+    if GUARDRAIL_CONFIG is not None:
+        # The one line that makes the screening auditable: which filters acted on the embedded text, by policy,
+        # type and action — never the text.
+        logger.info(f"Guardrail assessment of the embedded text: "
+                    f"{json.dumps(bedrockGuardrail.guarded_filters(guardrail_verdicts), separators=(',', ':'), sort_keys=True)}")
     event["contentChunks"] = {"count": published_chunks, "dropped": chunks_dropped, "skipped": chunks_skipped}
     write_embedding_summary(aux_bucket, aux_prefix, {
         "schemaVersion": common.EMBEDDING_DOCUMENT_SCHEMA_VERSION,
@@ -518,6 +577,10 @@ def lambda_handler(event, context):
         "contentChunks": event["contentChunks"],
         "videoSegmentCount": int(event.get("videoSegmentCount") or 0),
         "embeddingModelId": EMBEDDING_MODEL_ID,
+        # Whether the guardrail's sensitive-information filter masked entities in the embedded text, and the types
+        # it masked (never the values); the vectors and the stored sourceText then carry the filter's type tokens.
+        "guardrailMasked": bool(masked_types),
+        "guardrailMaskedTypes": masked_types,
         "generatedAt": generated_at,
     })
     if published_chunks:

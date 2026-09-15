@@ -7,10 +7,10 @@
  * The Amazon Bedrock guardrail the SYSTEM GenAI metadata pipeline creates, synthesized on a plain stack.
  * Pins the guardrail and its published version, the PROMPT_ATTACK filter at the configured strength
  * (output NONE), the PII policy per `piiFilter`, the deployment-key encryption, the deterministic name,
- * and the wiring into both analysis functions: the environment pair reads the created guardrail's id and
- * version, and `bedrock:ApplyGuardrail` is granted on its ARN and on nothing else. The bring-your-own
- * branch (creation off, identifier set) still emits no guardrail and grants the composed literal ARN,
- * and configuration validation rejects both at once.
+ * and the wiring into the two analysis functions and the embedding function: the environment pair reads
+ * the created guardrail's id and version, and `bedrock:ApplyGuardrail` is granted on its ARN and on nothing
+ * else. The bring-your-own branch (creation off, identifier set) still emits no guardrail and grants the
+ * composed literal ARN, and configuration validation rejects both at once.
  */
 
 import * as cdk from "aws-cdk-lib";
@@ -156,6 +156,12 @@ const analysisEnvironments = (t: Template): Record<string, string>[] => [
     functionByHandler(t, "generateMetadata.lambda_handler").Properties.Environment.Variables,
     functionByIdPrefix(t, "SystemGenAiMetadataSegmentAnalyze").Properties.Environment.Variables,
 ];
+/** The functions that name the guardrail: the two analysis functions and the embedding function. */
+const guardedEnvironments = (t: Template): Record<string, string>[] => [
+    ...analysisEnvironments(t),
+    functionByHandler(t, "generateEmbedding.lambda_handler").Properties.Environment.Variables,
+];
+const GUARDED_ROLE_FRAGMENTS = ["GenerateMetadata", "SegmentAnalyze", "GenerateEmbedding"];
 
 const allStatements = (t: Template): any[] =>
     Object.values(t.findResources("AWS::IAM::Policy")).flatMap(
@@ -300,8 +306,9 @@ describe("the created guardrail", () => {
         expect(versionOf(stronger)[1].Properties.Description).not.toBe(description);
     });
 
-    test("both analysis functions read the created guardrail's id and published version", () => {
-        for (const env of analysisEnvironments(created)) {
+    test("both analysis functions and the embedding function read the created guardrail's id and published version", () => {
+        expect(guardedEnvironments(created)).toHaveLength(3);
+        for (const env of guardedEnvironments(created)) {
             expect(flatten(env.BEDROCK_GUARDRAIL_IDENTIFIER)).toBe(
                 `GetAtt(${guardrailId}.GuardrailId)`
             );
@@ -309,13 +316,13 @@ describe("the created guardrail", () => {
         }
     });
 
-    test("bedrock:ApplyGuardrail is granted on the created guardrail's ARN to both analysis functions and to no one else", () => {
-        for (const fragment of ["GenerateMetadata", "SegmentAnalyze"]) {
+    test("bedrock:ApplyGuardrail is granted on the created guardrail's ARN to the two analysis functions and the embedding function, and to no one else", () => {
+        for (const fragment of GUARDED_ROLE_FRAGMENTS) {
             const grant = only(applyGuardrail(statementsOf(created, fragment)));
             expect(grant.Effect).toBe("Allow");
             expect(grant.Resource).toEqual({ "Fn::GetAtt": [guardrailId, "GuardrailArn"] });
         }
-        expect(applyGuardrail(allStatements(created))).toHaveLength(2);
+        expect(applyGuardrail(allStatements(created))).toHaveLength(3);
     });
 });
 
@@ -334,19 +341,23 @@ describe("the bring-your-own branch (creation off, identifier set)", () => {
     });
 
     test("the environment pair is the configured literals", () => {
-        for (const env of analysisEnvironments(own)) {
+        expect(guardedEnvironments(own)).toHaveLength(3);
+        for (const env of guardedEnvironments(own)) {
             expect(env.BEDROCK_GUARDRAIL_IDENTIFIER).toBe("kb4v3hkqvi6f");
             expect(env.BEDROCK_GUARDRAIL_VERSION).toBe("1");
         }
     });
 
-    test("bedrock:ApplyGuardrail is granted on the composed guardrail ARN, once per analysis function", () => {
+    test("bedrock:ApplyGuardrail is granted on the composed guardrail ARN, once per analysis function and once for the embedding function", () => {
         const grants = applyGuardrail(allStatements(own));
-        expect(grants).toHaveLength(2);
+        expect(grants).toHaveLength(3);
         for (const grant of grants) {
             expect(grant.Resource).toBe(
                 `arn:aws:bedrock:${REGION}:${ACCOUNT}:guardrail/kb4v3hkqvi6f`
             );
+        }
+        for (const fragment of GUARDED_ROLE_FRAGMENTS) {
+            expect(applyGuardrail(statementsOf(own, fragment))).toHaveLength(1);
         }
     });
 });
@@ -361,7 +372,8 @@ describe("no guardrail (creation off, no identifier)", () => {
     test("emits no guardrail, grants nothing, and leaves the pair empty for the handlers' warning", () => {
         expect(none.findResources("AWS::Bedrock::Guardrail")).toEqual({});
         expect(applyGuardrail(allStatements(none))).toEqual([]);
-        for (const env of analysisEnvironments(none)) {
+        expect(guardedEnvironments(none)).toHaveLength(3);
+        for (const env of guardedEnvironments(none)) {
             expect(env.BEDROCK_GUARDRAIL_IDENTIFIER).toBe("");
             expect(env.BEDROCK_GUARDRAIL_VERSION).toBe("");
         }

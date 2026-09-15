@@ -162,7 +162,7 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         );
     });
 
-    it("grants bedrock:ApplyGuardrail on the exact guardrail iff configured, once per analysis function", () => {
+    it("grants bedrock:ApplyGuardrail on the exact guardrail iff configured, once per analysis function and once for the embedding function", () => {
         const withGuardrail = synthTemplate(name, {
             mutate: (c) => {
                 enable(c);
@@ -178,9 +178,10 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             },
             mutateKey: "sysgenai-guardrail",
         });
-        // The whole-file analysis Lambda and the per-segment analysis Lambda, each on the exact ARN.
+        // The whole-file analysis Lambda, the per-segment analysis Lambda and the embedding Lambda (which
+        // screens the text it embeds), each on the exact ARN.
         const grants = statementsWith(withGuardrail, "bedrock:ApplyGuardrail");
-        expect(grants).toHaveLength(2);
+        expect(grants).toHaveLength(3);
         for (const grant of grants) {
             expect(SynthResult.flatten(grant.Resource)).toContain(":guardrail/kb4v3hkqvi6f");
             expect(SynthResult.flatten(grant.Resource)).not.toContain("*");
@@ -199,7 +200,7 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             expect(guardrail).toHaveLength(1);
             expect(shipped.countOfType("AWS::Bedrock::GuardrailVersion")).toBe(1);
             const created = statementsWith(shipped, "bedrock:ApplyGuardrail");
-            expect(created).toHaveLength(2);
+            expect(created).toHaveLength(3);
             for (const grant of created) {
                 expect(grant.Resource).toEqual({
                     "Fn::GetAtt": [guardrail[0].logicalId, "GuardrailArn"],

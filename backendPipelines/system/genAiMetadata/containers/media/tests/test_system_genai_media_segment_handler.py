@@ -7,7 +7,8 @@ document beside the whole-file document, one vector.embedding.ready event, and a
 caught Bedrock failure (a guardrail intervention included), and a PutEvents failure, are recorded through
 execution.status.json and the window's .failed.json and the child returns normally; a window without a readable
 frame is skipped without an execution failure. With a guardrail configured, every Converse call carries
-guardrailConfig and the file-derived prompt parts travel in a guardContent block.
+guardrailConfig and the file-derived prompt parts travel in a guardContent block, and the window's composed text
+is screened with ApplyGuardrail before it is embedded and stored.
 
 The handler is loaded by file path under a suite-private name with boto3.client patched, so its three
 module-level clients are the fakes for every test."""
@@ -22,7 +23,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from system_genai_media_fixtures import FakeBedrockRuntime, FakeEvents, FakeFfmpeg, FakeS3, client_error, converse_response
+from system_genai_media_fixtures import (FakeBedrockRuntime, FakeEvents, FakeFfmpeg, FakeS3, apply_guardrail_response,
+                                         client_error, converse_response)
 
 _CONTAINER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *([".."] * 6)))
@@ -428,6 +430,102 @@ class TestGuardrail:
         module = _load(monkeypatch, FakeS3(), FakeBedrockRuntime([_reply()]), FakeEvents())
         assert os.path.dirname(os.path.abspath(module.bedrockGuardrail.__file__)) == _CONTAINER_DIR
         assert module.ERROR_BEDROCK_GUARDRAIL_INTERVENED == "BedrockGuardrailIntervened"
+
+
+@pytest.mark.unit
+class TestEmbeddedTextScreening:
+    """The window's composed text — the asset name and the file path come from the file and its metadata — goes
+    through ApplyGuardrail before the embeddings model receives it, and the masked output is what is embedded and
+    stored as sourceText."""
+
+    def _masked(self, output, *types):
+        return apply_guardrail_response(outputs=[output], assessments=[{"sensitiveInformationPolicy": {"piiEntities": [
+            {"match": "Jane Q. Public", "type": item, "action": "ANONYMIZED", "detected": True} for item in types]}}])
+
+    def test_the_masked_text_is_embedded_and_stored_and_the_raw_text_never_is(self, monkeypatch):
+        s3 = _seed(FakeS3(), asset_name="Jane Q. Public site tour")
+        masked_text = "{NAME} site tour\nvideo (footage)\n/clips/tour.mp4\nA worker inspects a red hat on a conveyor."
+        bedrock = FakeBedrockRuntime([_reply()], guardrail_script=[self._masked(masked_text, "NAME")])
+        events = FakeEvents()
+        module = _load(monkeypatch, s3, bedrock, events, env=GUARDRAIL_ENV)
+        response = _run(module)
+        assert response["status"] == "SUCCEEDED"
+        assert len(bedrock.guardrail_calls) == 1
+        call = bedrock.guardrail_calls[0]
+        assert (call["guardrailIdentifier"], call["guardrailVersion"], call["source"]) == ("gr-abc123", "2", "INPUT")
+        assert [list(block) for block in call["content"]] == [["text"]]
+        assert call["content"][0]["text"]["qualifiers"] == ["guard_content"]
+        assert call["content"][0]["text"]["text"].startswith("Jane Q. Public site tour\n")  # the composed text as given
+        module.embeddings.embed_text.assert_called_once()
+        assert module.embeddings.embed_text.call_args.args[0] == masked_text
+        _key, document = _document(s3)
+        assert document["sourceText"] == masked_text
+        record = json.loads(s3.objects[(_RUN, _RESULTS + "segments/t0000010000.json")])
+        assert record["guardrailMasked"] is True and record["guardrailMaskedTypes"] == ["NAME"]
+        written = json.dumps([document, record, events.entries])
+        logged = " ".join(str(call) for call in module.logger.info.call_args_list + module.logger.error.call_args_list)
+        assert "Jane" not in written and "Jane" not in logged
+
+    def test_the_analysis_and_the_embedding_masks_are_recorded_together(self, monkeypatch):
+        s3 = _seed(FakeS3())
+        reply = _reply(description="{EMAIL} was shown on the screen.")
+        reply["stopReason"] = "guardrail_intervened"
+        reply["trace"] = {"guardrail": {"outputAssessments": {"gr-abc123": [{"sensitiveInformationPolicy": {"piiEntities": [
+            {"match": "jane@example.com", "type": "EMAIL", "action": "ANONYMIZED", "detected": True}]}}]}}}
+        bedrock = FakeBedrockRuntime([reply], guardrail_script=[self._masked("Factory Tour\n{NAME}", "NAME")])
+        module = _load(monkeypatch, s3, bedrock, FakeEvents(), env=GUARDRAIL_ENV)
+        assert _run(module)["status"] == "SUCCEEDED"
+        record = json.loads(s3.objects[(_RUN, _RESULTS + "segments/t0000010000.json")])
+        assert record["guardrailMasked"] is True and record["guardrailMaskedTypes"] == ["EMAIL", "NAME"]
+
+    def test_a_clean_text_is_embedded_as_composed(self, monkeypatch):
+        s3 = _seed(FakeS3())
+        bedrock = FakeBedrockRuntime([_reply()])  # the default guardrail script passes every text
+        module = _load(monkeypatch, s3, bedrock, FakeEvents(), env=GUARDRAIL_ENV)
+        assert _run(module)["status"] == "SUCCEEDED"
+        assert len(bedrock.guardrail_calls) == 1
+        _key, document = _document(s3)
+        assert document["sourceText"] == module.embeddings.embed_text.call_args.args[0]
+        assert document["sourceText"].startswith("Factory Tour\nvideo (footage)\n/clips/tour.mp4\n")
+        record = json.loads(s3.objects[(_RUN, _RESULTS + "segments/t0000010000.json")])
+        assert record["guardrailMasked"] is False and record["guardrailMaskedTypes"] == []
+
+    def test_a_blocked_text_fails_the_window_under_the_guardrail_code_and_embeds_nothing(self, monkeypatch):
+        s3 = _seed(FakeS3())
+        events = FakeEvents()
+        blocked = apply_guardrail_response(outputs=["Blocked by the guardrail."], assessments=[{"contentPolicy": {"filters": [
+            {"type": "PROMPT_ATTACK", "confidence": "HIGH", "action": "BLOCKED", "detected": True}]}}])
+        bedrock = FakeBedrockRuntime([_reply()], guardrail_script=[blocked])
+        module = _load(monkeypatch, s3, bedrock, events, env=GUARDRAIL_ENV)
+        response = _run(module)
+        assert response == {"segmentKey": "t0000010000", "status": "FAILED", "error": "BedrockGuardrailIntervened",
+                            "documentS3Location": None}
+        module.embeddings.embed_text.assert_not_called()
+        assert events.entries == [] and _embedding_puts(s3) == []
+        status = _status(s3)
+        assert status["error"] == "BedrockGuardrailIntervened"
+        assert status["cause"].startswith("segment t0000010000: guardrail intervened: Blocked by the guardrail. ")
+        assert "PROMPT_ATTACK" in status["cause"] and len(status["cause"]) <= 1024
+        assert _failed_record(s3)["error"] == "BedrockGuardrailIntervened"
+
+    def test_an_apply_guardrail_client_error_is_a_caught_segment_error(self, monkeypatch):
+        s3 = _seed(FakeS3())
+        bedrock = FakeBedrockRuntime([_reply()], guardrail_script=[client_error("AccessDeniedException", "no access", "ApplyGuardrail")])
+        module = _load(monkeypatch, s3, bedrock, FakeEvents(), env=GUARDRAIL_ENV)
+        response = _run(module)
+        assert response["status"] == "FAILED" and response["error"] == "BedrockSegmentError"
+        assert "ApplyGuardrail" in _status(s3)["cause"]
+        module.embeddings.embed_text.assert_not_called()
+
+    def test_without_a_guardrail_the_text_is_embedded_as_composed_and_no_call_is_made(self, monkeypatch):
+        s3 = _seed(FakeS3())
+        bedrock = FakeBedrockRuntime([_reply()])
+        module = _load(monkeypatch, s3, bedrock, FakeEvents())
+        assert _run(module)["status"] == "SUCCEEDED"
+        assert bedrock.guardrail_calls == []
+        _key, document = _document(s3)
+        assert document["sourceText"] == module.embeddings.embed_text.call_args.args[0]
+        assert "embedded text is not masked" in module.bedrockGuardrail.GUARDRAIL_UNCONFIGURED_WARNING
 
 
 @pytest.mark.unit

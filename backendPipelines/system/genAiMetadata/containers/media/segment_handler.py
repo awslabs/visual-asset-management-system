@@ -15,7 +15,10 @@ When a Bedrock guardrail is configured (``BEDROCK_GUARDRAIL_IDENTIFIER`` and ``B
 or neither), every Converse call carries it and the parts of the prompt that come from the file and its metadata
 travel in a ``guardContent`` block so the guardrail's input filters evaluate them. A filter that blocks is the
 intervention above; a reply the sensitive-information filter only masked is a success whose description carries
-the filter's type tokens, and the window's record notes ``guardrailMasked`` with the masked entity types."""
+the filter's type tokens, and the window's record notes ``guardrailMasked`` with the masked entity types. The
+window's composed text is then screened with ``ApplyGuardrail`` before the embeddings model receives it — the
+asset name and the file path it carries come from the file and its metadata — and the masked output is what is
+embedded and stored as ``sourceText``; a text the guardrail blocks fails the window under the same code."""
 
 import datetime
 import hashlib
@@ -426,6 +429,14 @@ def compose_source_text(asset_name: str, phrase: str, relative_path: str, segmen
     return "\n".join(parts), modalities
 
 
+def screen_text(text: str) -> bedrockGuardrail.GuardedText:
+    """The ApplyGuardrail verdict on the window's composed text when a guardrail is configured — the masked text
+    to embed and store, or ``blocked``; the text as given without one."""
+    if GUARDRAIL_CONFIG is None:
+        return bedrockGuardrail.GuardedText(text=text)
+    return bedrockGuardrail.apply_guardrail_to_texts(bedrock_runtime, GUARDRAIL_CONFIG, [text])[0]
+
+
 def file_version_key(relative_path: str, version_id: str) -> str:
     return f"{relative_path}#{version_id or 'null'}"
 
@@ -525,9 +536,14 @@ def lambda_handler(event, context):
     try:
         result, usage, masked_types = analyze_window(user_blocks, image_blocks)
         source_text, modalities = compose_source_text(asset_name, phrase, relative_path, segment_sentence, result, genai)
-        prepared = embeddings.truncate_for_model(source_text, EMBEDDING_MODEL_ID)
+        # The text the model receives, cut to its window first so the guardrail screens exactly what is embedded;
+        # with a guardrail the masked output replaces it and is what is stored as sourceText.
+        screened = screen_text(embeddings.truncate_for_model(source_text, EMBEDDING_MODEL_ID))
+        if screened.blocked:
+            raise SegmentAnalysisFailure(screened.cause, ERROR_BEDROCK_GUARDRAIL_INTERVENED)
+        masked_types = sorted(set(masked_types) | set(screened.masked_types))
         vector = embeddings.round_vector(embeddings.embed_text(
-            prepared, model_id=EMBEDDING_MODEL_ID, dimensions=EMBEDDING_DIMENSIONS, purpose="index",
+            screened.text, model_id=EMBEDDING_MODEL_ID, dimensions=EMBEDDING_DIMENSIONS, purpose="index",
             client=bedrock_runtime))
     except (SegmentAnalysisFailure, ClientError, embeddings.EmbeddingModelError) as exc:
         error = getattr(exc, "code", None) if isinstance(exc, SegmentAnalysisFailure) else ERROR_BEDROCK_SEGMENT
@@ -554,7 +570,8 @@ def lambda_handler(event, context):
         "embeddingDimensions": EMBEDDING_DIMENSIONS,
         "analysisModelId": BEDROCK_ANALYSIS_MODEL_ID,
         "embedding": vector,
-        "sourceText": source_text[:SOURCE_TEXT_STORED_MAX_CHARS],
+        # The embedded text — the guardrail's masked output when one is configured — cut to the stored cap.
+        "sourceText": screened.text[:SOURCE_TEXT_STORED_MAX_CHARS],
         "sourceModalities": modalities,
         "pipelineExecutionId": state.get("pipelineExecutionId", "") or "",
         "workflowExecutionId": state.get("workflowExecutionId", "") or "",

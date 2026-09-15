@@ -237,11 +237,15 @@ class FakeS3:
 
 class FakeBedrock:
     """Scripted ``converse``: each script entry is a response dict or an exception, in call order.
-    An exhausted script repeats its last entry."""
+    An exhausted script repeats its last entry. ``apply_guardrail`` is scripted the same way from
+    ``guardrail_script`` and records its calls in ``guardrail_calls``; the default script passes every
+    text (action NONE)."""
 
-    def __init__(self, script):
-        self.script = list(script)
+    def __init__(self, script=None, guardrail_script=None):
+        self.script = list(script or [])
         self.calls = []
+        self.guardrail_script = list(guardrail_script or [apply_guardrail_response()])
+        self.guardrail_calls = []
 
     def converse(self, **kwargs):
         self.calls.append(kwargs)
@@ -249,6 +253,37 @@ class FakeBedrock:
         if isinstance(item, Exception):
             raise item
         return item
+
+    def apply_guardrail(self, **kwargs):
+        self.guardrail_calls.append(kwargs)
+        item = self.guardrail_script.pop(0) if len(self.guardrail_script) > 1 else self.guardrail_script[0]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+def apply_guardrail_response(outputs=None, assessments=None, action=None):
+    """An ApplyGuardrail response: action NONE with no outputs by default; GUARDRAIL_INTERVENED when outputs
+    or assessments are given."""
+    intervened = action == "GUARDRAIL_INTERVENED" or (action is None and (outputs or assessments))
+    return {
+        "usage": {"contentPolicyUnits": 1, "sensitiveInformationPolicyUnits": 1},
+        "action": "GUARDRAIL_INTERVENED" if intervened else "NONE",
+        "outputs": [{"text": text} for text in (outputs or [])],
+        "assessments": list(assessments or []),
+    }
+
+
+def pii_assessment(*types, action="ANONYMIZED", match="Jane Q. Public"):
+    """One assessment whose sensitive-information filter reports ``types`` with ``action`` (and a match text
+    that must never reach a record)."""
+    return {"sensitiveInformationPolicy": {"piiEntities": [
+        {"match": match, "type": item, "action": action, "detected": True} for item in types]}}
+
+
+def prompt_attack_assessment(confidence="HIGH"):
+    return {"contentPolicy": {"filters": [{"type": "PROMPT_ATTACK", "confidence": confidence, "action": "BLOCKED",
+                                           "detected": True}]}}
 
 
 def converse_response(text, input_tokens=100, output_tokens=50):

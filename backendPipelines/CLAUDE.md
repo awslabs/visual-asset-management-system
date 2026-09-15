@@ -166,10 +166,18 @@ write, including the latest/archived lifecycle of the item.
     (the created guardrail's `GuardrailId` and published `Version` attributes when
     `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled`, else the operator's
     `bedrockGuardrail.{guardrailIdentifier,guardrailVersion}` pair, set both or neither — `config.ts` refuses
-    one without the other and refuses the pair together with `create.enabled`) are set on `generateMetadata` and
-    `segmentAnalyze` and read through `bedrockGuardrail.py` (byte-identical copy in the media image):
-    when unset, the process logs `GUARDRAIL_UNCONFIGURED_WARNING` once at cold start and every Converse
-    call runs without prompt-attack filters. `VIDEO_SEGMENT_SECONDS` and `CONTENT_CHUNKING` are **not**
+    one without the other and refuses the pair together with `create.enabled`) are set on `generateMetadata`,
+    `segmentAnalyze` and `generateEmbedding` and read through `bedrockGuardrail.py` (byte-identical copy in the
+    media image): when unset, the process logs `GUARDRAIL_UNCONFIGURED_WARNING` once at cold start, every
+    Converse call runs without prompt-attack filters, and the embedded text is embedded and stored as composed.
+    An embeddings `InvokeModel` carries no guardrail of its own, so a producer that embeds file-derived text
+    screens it first with `bedrockGuardrail.apply_guardrail_to_texts` (`ApplyGuardrail`, source `INPUT`, texts
+    batched ten blocks / 20,000 characters per call) and embeds and stores the returned `GuardedText.text` — the
+    masked output — never the composed text; a `blocked` verdict is not embedded and is recorded as
+    `BedrockGuardrailIntervened` the way the analysis side records one. The builder grants
+    `bedrock:ApplyGuardrail` on the guardrail ARN to every function that names it (`grantApplyGuardrail`), and
+    `infra/test/pipelines/systemGenAiMetadataGuardrail.test.ts` pins the three grantees and no others.
+    `VIDEO_SEGMENT_SECONDS` and `CONTENT_CHUNKING` are **not**
     environment variables: they are `{{tag}}` keys of the default template
     (`vamsSchema/templates/system-genai-metadata-default.json`) that `constructPipeline.py` resolves into
     the state's `videoSegmentSeconds` (0 = whole-file analysis only) / `contentChunking` (default `true`),

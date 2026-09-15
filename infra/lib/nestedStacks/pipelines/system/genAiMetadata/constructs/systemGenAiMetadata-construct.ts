@@ -120,8 +120,8 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
         );
 
         /**
-         * The guardrail every analysis prompt is sent with: created here when configured to be, or
-         * the operator-owned one; undefined when the pipeline runs without one.
+         * The guardrail every analysis prompt is sent with and every embedded text is screened with: created
+         * here when configured to be, or the operator-owned one; undefined when the pipeline runs without one.
          */
         const guardrail = resolveSystemGenAiGuardrail(this, props.config, kmsKey);
 
@@ -158,6 +158,7 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             props.pipelineSubnets,
             props.pipelineSecurityGroups,
             props.storageResources.eventBridge.orchestrationBus,
+            guardrail,
             kmsKey
         );
         const pipelineEndFunction = buildPipelineEndFunction(

@@ -838,30 +838,36 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         );
     });
 
-    test("bedrock:ApplyGuardrail is granted on the exact guardrail only when configured, to both analysis functions", () => {
+    test("bedrock:ApplyGuardrail is granted on the exact guardrail only when configured, to the two analysis functions and the embedding function", () => {
         const all = (t: Template) =>
             Object.values(t.findResources("AWS::IAM::Policy")).flatMap(
                 (p: any) => p.Properties.PolicyDocument.Statement
             );
         expect(withActions(all(lambdaOnly), "bedrock:ApplyGuardrail")).toEqual([]);
-        for (const fragment of ["GenerateMetadata", "SegmentAnalyze"]) {
+        for (const fragment of ["GenerateMetadata", "SegmentAnalyze", "GenerateEmbedding"]) {
             const grants = withActions(statementsOf(guarded, fragment), "bedrock:ApplyGuardrail");
             expect(grants).toHaveLength(1);
             expect(JSON.stringify(grants[0].Resource)).toMatch(
                 /:bedrock:us-east-1:123456789012:guardrail\/kb4v3hkqvi6f/
             );
         }
-        // The whole-file analysis and the per-segment analysis each carry one, and no one else does.
-        expect(withActions(all(guarded), "bedrock:ApplyGuardrail")).toHaveLength(2);
-        const env = (
-            Object.values(guarded.findResources("AWS::Lambda::Function")).find(
-                (f: any) => f.Properties.Handler === "generateMetadata.lambda_handler"
-            ) as any
-        ).Properties.Environment.Variables;
-        expect(env).toMatchObject({
-            BEDROCK_GUARDRAIL_IDENTIFIER: "kb4v3hkqvi6f",
-            BEDROCK_GUARDRAIL_VERSION: "1",
-        });
+        // The whole-file analysis, the per-segment analysis and the embedding step (which screens the text it
+        // embeds) each carry one, and no one else does.
+        expect(withActions(all(guarded), "bedrock:ApplyGuardrail")).toHaveLength(3);
+        for (const handler of [
+            "generateMetadata.lambda_handler",
+            "generateEmbedding.lambda_handler",
+        ]) {
+            const env = (
+                Object.values(guarded.findResources("AWS::Lambda::Function")).find(
+                    (f: any) => f.Properties.Handler === handler
+                ) as any
+            ).Properties.Environment.Variables;
+            expect(env).toMatchObject({
+                BEDROCK_GUARDRAIL_IDENTIFIER: "kb4v3hkqvi6f",
+                BEDROCK_GUARDRAIL_VERSION: "1",
+            });
+        }
         const segmentEnv = (
             Object.entries(guarded.findResources("AWS::Lambda::Function")).find(([id]) =>
                 id.startsWith("SystemGenAiMetadataSegmentAnalyze")
