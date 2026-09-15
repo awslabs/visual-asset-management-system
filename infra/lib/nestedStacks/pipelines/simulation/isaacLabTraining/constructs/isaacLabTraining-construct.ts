@@ -28,7 +28,7 @@ import {
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import { NagSuppressions } from "cdk-nag";
-import { GPU_CONTAINER_UID, GPU_CONTAINER_GID } from "../../genAi/nvidia/cosmos/constructs/gpuContainerUser";
+import { GPU_CONTAINER_UID, GPU_CONTAINER_GID } from "../../../genAi/nvidia/cosmos/constructs/gpuContainerUser";
 import * as path from "path";
 
 export interface IsaacLabTrainingConstructProps {
