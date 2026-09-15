@@ -104,9 +104,9 @@ describe("Fargate Batch container user", () => {
         const source = fs.readFileSync(
             path.resolve(
                 __dirname,
-                "../../lib/nestedStacks/pipelines/constructs/batch-fargate-pipeline.ts"
+                "../../lib/nestedStacks/pipelines/constructs/batch-fargate-pipeline.ts",
             ),
-            "utf-8"
+            "utf-8",
         );
         // Control on the read: the container definition this assertion is about must be in the file.
         expect(source).toContain("new batch.EcsFargateContainerDefinition(");
