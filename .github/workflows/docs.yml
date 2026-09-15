@@ -37,7 +37,7 @@ jobs:
                   cache-dependency-path: documentation/docusaurus-site/package-lock.json
 
             - name: Pin npm version
-              run: npm install -g npm@11.0.0
+              run: npm install -g npm@11.19.1
 
             - name: Determine deploy path
               id: paths

@@ -26,7 +26,7 @@ pages:
     variables:
         DOCS_URL: "https://aws-spatial-prototyping.pages.aws.dev"
     before_script:
-        - npm install -g npm@11.0.0
+        - npm install -g npm@11.19.1
         - cd documentation/docusaurus-site
         - npm ci
     script:

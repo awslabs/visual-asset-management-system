@@ -47,6 +47,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Other changes:**
 
 -   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs.
+-   All `.npmrc` files set `min-release-age = 7` (days) and all `package.json` files require npm >= 11.10.0 (the first version implementing min-release-age). CI workflows and build sites pin npm 11.19.1 to enforce the 7-day minimum release age for all npm dependencies.
 
 **Known issues:**
 
