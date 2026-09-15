@@ -124,7 +124,8 @@ def _install_fake_ocp(monkeypatch, read_status=1, kinds=None):
     module("OCP.BRepTools", BRepTools=_BRepTools)
     module("OCP.BRep", BRep_Builder=lambda: "builder",
            BRep_Tool=SimpleNamespace(Triangulation_s=lambda face, location: _FakeTriangulation()))
-    module("OCP.TopoDS", TopoDS_Shape=lambda: "empty-shape")
+    module("OCP.TopoDS", TopoDS_Shape=lambda: "empty-shape",
+           TopoDS=SimpleNamespace(Face=lambda shape: ("face", shape)))
     module("OCP.BRepMesh", BRepMesh_IncrementalMesh=_IncrementalMesh)
     module("OCP.TopExp", TopExp_Explorer=_FakeExplorer)
     module("OCP.TopAbs", **{f"TopAbs_{k}": f"TopAbs_{k}" for k in

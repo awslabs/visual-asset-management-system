@@ -135,6 +135,13 @@ def load_shape(file_path: str):
     raise ValueError(f"Unsupported CAD format: {ext}")
 
 
+def face_downcast(topods):
+    """The ``TopoDS`` static cast from a ``TopoDS_Shape`` to a ``TopoDS_Face``: ``Face`` in OCP 7.8+,
+    ``Face_s`` in earlier OCP releases."""
+    cast = getattr(topods, "Face", None)
+    return cast if cast is not None else topods.Face_s
+
+
 def tessellate_shape(shape, tolerance: float = 0.1) -> pv.PolyData:
     """Triangulate every face of the shape at ``tolerance`` and assemble one PolyData."""
     from OCP.BRep import BRep_Tool
@@ -142,6 +149,7 @@ def tessellate_shape(shape, tolerance: float = 0.1) -> pv.PolyData:
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopAbs import TopAbs_FACE
     from OCP.TopLoc import TopLoc_Location
+    from OCP.TopoDS import TopoDS
 
     mesh = BRepMesh_IncrementalMesh(shape, tolerance)
     mesh.Perform()
@@ -150,9 +158,11 @@ def tessellate_shape(shape, tolerance: float = 0.1) -> pv.PolyData:
     faces_list = []
     vertex_offset = 0
 
+    # TopExp_Explorer.Current() yields a TopoDS_Shape; BRep_Tool.Triangulation_s accepts only a TopoDS_Face.
+    to_face = face_downcast(TopoDS)
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
     while explorer.More():
-        face = explorer.Current()
+        face = to_face(explorer.Current())
         location = TopLoc_Location()
         triangulation = BRep_Tool.Triangulation_s(face, location)
 
