@@ -158,16 +158,20 @@ relationship rules, each enforced at quarantine / warn / inform) bound to a
 database, or to one asset as an override; `get_compliance_bindings` shows both
 for a database. `get_asset_compliance_state` answers `unknown` for an asset with
 no binding rather than an error, and `get_database_compliance_overview` counts
-only assets that have a compliance record. `list_compliance_schemas`,
-`list_quarantined_assets` and `list_compliance_cascades` (pending approval only)
-return their whole list in one response under `Items` and take no paging
-parameters. `list_compliance_evaluations` is a real page (`max_items`,
-`starting_token`, `NextToken`) and carries the `executionId` of the workflow
-execution behind a pipeline rule. The two audit tools are bounded by `limit`
-(the handler's default when omitted) and return **no** continuation token: a result
-that reached the bound is marked `truncated` and the way past it is a narrower
-`start_date` / `end_date` window or a larger `limit`. `event_type` exists on the
-global trail only — the per-asset route ignores it, so the tool does not offer it.
+only assets that have a compliance record. `list_compliance_schemas` and
+`list_compliance_cascades` (pending approval only) return their whole list in one
+response under `Items` and take no paging parameters. `list_compliance_evaluations`,
+`list_quarantined_assets`, `query_compliance_audit` and `get_asset_compliance_audit`
+are real pages (`max_items`, `starting_token`, `NextToken`), auto-paginated and
+marked `truncated` when a bound stopped the walk; the evaluation rows carry the
+`executionId` of the workflow execution behind a pipeline rule, and a quarantine
+page is filtered to the caller's databases after it is read, so the walk follows
+an empty page's token. `get_database_compliance_overview` and
+`get_compliance_bindings` take `max_items` / `starting_token` too but return the
+route's own page: `summary` / `totalAssets` and `assetOverrideCount` describe the
+full set while `assets` / `assetOverrides` are one page, with `NextToken` when more
+exist. `event_type` exists on the global audit trail only — the per-asset route
+ignores it, so the tool does not offer it.
 
 The two comment listings take `max_items` and `page_size` but **no**
 `starting_token`: the routes apply those bounds and then discard the pagination
@@ -313,8 +317,8 @@ execution's group membership rather than selecting a group to re-run. The
 compliance tools that evaluate assets start compute the same way — a pipeline
 rule runs one workflow execution per evaluated asset — so `evaluate_asset_compliance`,
 `sweep_compliance_schema` (every asset bound to the schema), `create_compliance_cascade`
-(executes at once with `require_approval=False`) and `approve_compliance_cascade`
-(executes inside the call) stay out of `autoApprove` as well.
+(starts at once with `require_approval=False`) and `approve_compliance_cascade`
+(starts the run) stay out of `autoApprove` as well.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
@@ -386,11 +390,15 @@ that database can be bound, and `auto_eval` is sent on the database binding only
 because the asset route does not read it. `unbind_compliance_schema` on a database
 deletes the compliance record of every asset that inherited the binding
 (`removedComplianceRecords`) — evaluation history and the audit trail stay.
-`release_quarantine` returns an asset to compliant until its next evaluation;
-`grant_quarantine_exception` records a deliberate waiver with its required `reason`.
-A cascade waits in `pending_approval` unless created with `require_approval=False`;
-`approve_compliance_cascade` executes it inside the call and returns `result`, and
-`reject_compliance_cascade` aborts it.
+`sweep_compliance_schema` returns `assetsTriggered` plus `skipped` (bound assets the
+caller may not evaluate, counted but never listed) and `assetsRemaining` (beyond the
+per-call cap). `release_quarantine` returns an asset to compliant until its next
+evaluation; `grant_quarantine_exception` records a deliberate waiver with its required
+`reason`. A cascade waits in `pending_approval` unless created with
+`require_approval=False`; `approve_compliance_cascade` (and a create without approval)
+returns at once with `state` `executing` and no `result` — the run continues in the
+background, so poll `get_compliance_cascade` until `state` is `completed` or `aborted`
+(`abortReason`) — and `reject_compliance_cascade` aborts it.
 
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 

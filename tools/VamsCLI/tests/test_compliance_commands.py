@@ -9,7 +9,10 @@ then cover each command's happy path, its `--json-output` purity, and an API err
 Two shapes are easy to get wrong and are asserted explicitly: a POST to a route that takes no
 fields still carries an empty JSON object (the handlers parse the body unconditionally), and the
 `complianceAutoEval` flag is sent on the database binding only, because the asset route never
-reads it.
+reads it. The paged routes (audit, evaluations, the database overview, the quarantine listing and
+the bindings) all read their page size from `maxItems` and resume on `startingToken`, so those are
+the query-parameter names asserted; the audit command's `--limit` is asserted to be an alias that
+is sent as `maxItems` too.
 """
 
 import json
@@ -152,6 +155,12 @@ class TestComplianceRequestPathsAndMethods:
         client.get_compliance_bindings('my-database')
         assert calls[0]['method'] == 'GET'
         assert calls[0]['endpoint'] == '/compliance/bind/my-database'
+        assert 'params' not in calls[0]['kwargs']
+
+    def test_bindings_forwards_the_page_size_as_max_items_and_the_token(self):
+        client, calls = _recording_client({'databaseId': 'my-database'})
+        client.get_compliance_bindings('my-database', max_items=20, starting_token='tok')
+        assert calls[0]['kwargs']['params'] == {'maxItems': 20, 'startingToken': 'tok'}
 
     def test_bind_database_puts_the_schema_and_the_auto_eval_flag(self):
         client, calls = _recording_client({'schemaName': 'cad-quality'})
@@ -211,13 +220,19 @@ class TestComplianceRequestPathsAndMethods:
             '/compliance/state/my-database',
         ]
         assert all(c['method'] == 'GET' for c in calls)
-        assert 'params' not in calls[0]['kwargs']
+        assert all('params' not in c['kwargs'] for c in calls)
 
     def test_evaluations_forwards_the_page_size_as_max_items_and_the_token(self):
         # The route reads its page size from `maxItems` (not `pageSize`) and resumes on `startingToken`.
         client, calls = _recording_client({'evaluations': []})
         client.list_compliance_evaluations('my-database', 'my-asset', max_items=10, starting_token='tok')
         assert calls[0]['kwargs']['params'] == {'maxItems': 10, 'startingToken': 'tok'}
+
+    def test_database_overview_forwards_the_page_size_as_max_items_and_the_token(self):
+        client, calls = _recording_client({'assets': []})
+        client.get_database_compliance_state('my-database', max_items=25, starting_token='tok')
+        assert calls[0]['endpoint'] == '/compliance/state/my-database'
+        assert calls[0]['kwargs']['params'] == {'maxItems': 25, 'startingToken': 'tok'}
 
     def test_quarantine_routes_and_bodies(self):
         client, calls = _recording_client({})
@@ -232,6 +247,11 @@ class TestComplianceRequestPathsAndMethods:
         assert calls[2]['kwargs']['json'] == {'reason': 'fixed'}
         assert calls[3]['endpoint'] == '/compliance/quarantine/my-database/my-asset/exception'
         assert calls[3]['kwargs']['json'] == {'reason': 'waived'}
+
+    def test_quarantine_list_forwards_the_page_size_as_max_items_and_the_token(self):
+        client, calls = _recording_client({'quarantinedAssets': []})
+        client.list_quarantined_assets(max_items=10, starting_token='tok')
+        assert calls[0]['kwargs']['params'] == {'maxItems': 10, 'startingToken': 'tok'}
 
     def test_cascade_routes_and_bodies(self):
         client, calls = _recording_client({})
@@ -258,25 +278,28 @@ class TestComplianceRequestPathsAndMethods:
         assert calls[5]['kwargs']['json'] == {}
 
     def test_audit_query_forwards_every_filter_it_is_given(self):
+        # The page size is sent as `maxItems`, the name the route reads ahead of its `limit` alias.
         client, calls = _recording_client({'entries': []})
         client.query_compliance_audit(event_type='compliance_check', start_date='2026-09-01',
-                                      end_date='2026-09-30', limit=10)
+                                      end_date='2026-09-30', max_items=10, starting_token='tok')
         assert calls[0]['method'] == 'GET'
         assert calls[0]['endpoint'] == '/compliance/audit'
         assert calls[0]['kwargs']['params'] == {
             'eventType': 'compliance_check', 'startDate': '2026-09-01', 'endDate': '2026-09-30',
-            'limit': 10}
+            'maxItems': 10, 'startingToken': 'tok'}
 
     def test_audit_query_sends_no_params_when_nothing_is_narrowed(self):
         client, calls = _recording_client({'entries': []})
         client.query_compliance_audit()
         assert 'params' not in calls[0]['kwargs']
 
-    def test_asset_audit_gets_the_asset_route_with_the_date_window(self):
+    def test_asset_audit_gets_the_asset_route_with_the_date_window_and_the_page(self):
         client, calls = _recording_client({'entries': []})
-        client.get_asset_compliance_audit('my-database', 'my-asset', start_date='2026-09-01', limit=5)
+        client.get_asset_compliance_audit('my-database', 'my-asset', start_date='2026-09-01',
+                                          max_items=5, starting_token='tok')
         assert calls[0]['endpoint'] == '/compliance/audit/my-database/my-asset'
-        assert calls[0]['kwargs']['params'] == {'startDate': '2026-09-01', 'limit': 5}
+        assert calls[0]['kwargs']['params'] == {
+            'startDate': '2026-09-01', 'maxItems': 5, 'startingToken': 'tok'}
 
 
 class _ErrorResponse:
@@ -668,14 +691,45 @@ class TestComplianceBindingCommands:
             assert result.exit_code == 0
             assert 'Database Schema: cad-quality' in result.output
             assert 'my-asset: strict-cad' in result.output
+            assert 'Next token' not in result.output
+            mocks['api_client'].get_compliance_bindings.assert_called_once_with(
+                'my-database', max_items=None, starting_token=None)
 
-    def test_bindings_json_output(self, cli_runner, generic_command_mocks):
+    def test_bindings_forwards_the_paging_options_and_shows_the_token(self, cli_runner,
+                                                                       generic_command_mocks):
+        # assetOverrideCount is the total; assetOverrides is one page of it.
         with generic_command_mocks('compliance') as mocks:
-            mocks['api_client'].get_compliance_bindings.return_value = {'databaseId': 'my-database'}
+            mocks['api_client'].get_compliance_bindings.return_value = {
+                'databaseId': 'my-database', 'databaseSchema': 'cad-quality',
+                'complianceAutoEval': True,
+                'assetOverrides': [{'assetId': 'my-asset', 'schemaName': 'strict-cad',
+                                    'complianceState': 'compliant'}],
+                'assetOverrideCount': 7, 'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bindings', '-d', 'my-database', '--max-items', '1',
+                '--starting-token', 'page-1'])
+            assert result.exit_code == 0
+            assert 'Asset Overrides: 7 (1 on this page)' in result.output
+            assert 'Next token: page-2' in result.output
+            assert '--starting-token' in result.output
+            mocks['api_client'].get_compliance_bindings.assert_called_once_with(
+                'my-database', max_items=1, starting_token='page-1')
+
+    def test_bindings_rejects_a_page_size_over_the_cap(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bindings', '-d', 'my-database', '--max-items', '501'])
+            assert result.exit_code != 0
+            mocks['api_client'].get_compliance_bindings.assert_not_called()
+
+    def test_bindings_json_output_carries_the_token(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_bindings.return_value = {
+                'databaseId': 'my-database', 'NextToken': 'page-2'}
             result = cli_runner.invoke(cli, [
                 'compliance', 'bindings', '-d', 'my-database', '--json-output'])
             assert result.exit_code == 0
-            assert json.loads(result.output) == {'databaseId': 'my-database'}
+            assert json.loads(result.output) == {'databaseId': 'my-database', 'NextToken': 'page-2'}
 
     def test_bindings_database_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -735,19 +789,35 @@ class TestComplianceEvaluationCommands:
             mocks['api_client'].sweep_compliance_schema.return_value = {
                 'message': 'Sweep triggered for 2 assets', 'schemaName': 'cad-quality',
                 'assetsTriggered': [{'databaseId': 'my-database', 'assetId': 'a1'},
-                                    {'databaseId': 'my-database', 'assetId': 'a2'}]}
+                                    {'databaseId': 'my-database', 'assetId': 'a2'}],
+                'skipped': 0, 'assetsRemaining': 0}
             result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality'])
             assert result.exit_code == 0
             assert 'Assets Triggered: 2' in result.output
             assert 'my-database:a2' in result.output
+            assert 'Skipped' not in result.output
+            assert 'Remaining' not in result.output
             mocks['api_client'].sweep_compliance_schema.assert_called_once_with('cad-quality')
+
+    def test_sweep_reports_the_assets_it_skipped_and_those_remaining(self, cli_runner,
+                                                                     generic_command_mocks):
+        # Denied assets are counted, never listed; assets past the per-call cap are counted too.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].sweep_compliance_schema.return_value = {
+                'message': 'Sweep triggered for 1 assets', 'schemaName': 'cad-quality',
+                'assetsTriggered': [{'databaseId': 'my-database', 'assetId': 'a1'}],
+                'skipped': 3, 'assetsRemaining': 12}
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality'])
+            assert result.exit_code == 0
+            assert 'Skipped (not authorized to evaluate): 3' in result.output
+            assert 'Remaining (beyond this call\'s cap): 12' in result.output
 
     def test_sweep_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
-            mocks['api_client'].sweep_compliance_schema.return_value = {'assetsTriggered': []}
+            mocks['api_client'].sweep_compliance_schema.return_value = {'assetsTriggered': [], 'skipped': 2}
             result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality', '--json-output'])
             assert result.exit_code == 0
-            assert json.loads(result.output) == {'assetsTriggered': []}
+            assert json.loads(result.output) == {'assetsTriggered': [], 'skipped': 2}
 
     def test_sweep_schema_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -776,11 +846,48 @@ class TestComplianceEvaluationCommands:
                            {'assetId': 'a2', 'complianceState': 'compliant', 'schemaName': 'cad-quality'}]}
             result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database'])
             assert result.exit_code == 0
-            assert 'Tracked Assets: 2' in result.output
+            assert 'Tracked Assets: 2 (2 on this page)' in result.output
             assert 'quarantined=1' in result.output
             assert 'my-asset (Bracket): quarantined [cad-quality]' in result.output
-            mocks['api_client'].get_database_compliance_state.assert_called_once_with('my-database')
+            assert 'Next token' not in result.output
+            mocks['api_client'].get_database_compliance_state.assert_called_once_with(
+                'my-database', max_items=None, starting_token=None)
             mocks['api_client'].get_compliance_state.assert_not_called()
+
+    def test_state_for_a_database_forwards_the_paging_options_and_shows_the_token(
+            self, cli_runner, generic_command_mocks):
+        # totalAssets and summary cover the whole database; assets is one page of it.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_database_compliance_state.return_value = {
+                'databaseId': 'my-database', 'totalAssets': 40, 'summary': {'compliant': 40},
+                'assets': [{'assetId': 'a1', 'complianceState': 'compliant'}],
+                'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, [
+                'compliance', 'state', '-d', 'my-database', '--max-items', '1',
+                '--starting-token', 'page-1'])
+            assert result.exit_code == 0
+            assert 'Tracked Assets: 40 (1 on this page)' in result.output
+            assert 'Next token: page-2' in result.output
+            assert '--starting-token' in result.output
+            mocks['api_client'].get_database_compliance_state.assert_called_once_with(
+                'my-database', max_items=1, starting_token='page-1')
+
+    def test_state_for_an_asset_refuses_the_paging_options(self, cli_runner, generic_command_mocks):
+        # The single-asset route is not paged; a knob it ignores would look honoured.
+        with generic_command_mocks('compliance') as mocks:
+            for extra in (['--max-items', '5'], ['--starting-token', 'tok']):
+                result = cli_runner.invoke(cli, [
+                    'compliance', 'state', '-d', 'my-database', '-a', 'my-asset', *extra])
+                assert result.exit_code != 0
+                assert 'database overview' in result.output
+            mocks['api_client'].get_compliance_state.assert_not_called()
+            mocks['api_client'].get_database_compliance_state.assert_not_called()
+
+    def test_state_rejects_a_page_size_over_the_cap(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database', '--max-items', '501'])
+            assert result.exit_code != 0
+            mocks['api_client'].get_database_compliance_state.assert_not_called()
 
     def test_state_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -789,6 +896,15 @@ class TestComplianceEvaluationCommands:
                 'compliance', 'state', '-d', 'my-database', '-a', 'my-asset', '--json-output'])
             assert result.exit_code == 0
             assert json.loads(result.output) == STATE_RECORD
+
+    def test_state_overview_json_output_carries_the_token(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_database_compliance_state.return_value = {
+                'databaseId': 'my-database', 'totalAssets': 1, 'summary': {}, 'assets': [],
+                'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['NextToken'] == 'page-2'
 
     def test_state_database_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -855,22 +971,57 @@ class TestComplianceQuarantineCommands:
                 'quarantinedAssets': [dict(STATE_RECORD, assetName='Bracket')]}
             result = cli_runner.invoke(cli, ['compliance', 'quarantine', 'list'])
             assert result.exit_code == 0
-            assert 'Found 1 quarantined asset(s)' in result.output
+            assert 'Found 1 quarantined asset(s) on this page' in result.output
             assert 'Asset Name: Bracket' in result.output
+            assert 'Next token' not in result.output
+            mocks['api_client'].list_quarantined_assets.assert_called_once_with(
+                max_items=None, starting_token=None)
+
+    def test_list_forwards_the_paging_options_and_shows_the_token(self, cli_runner,
+                                                                   generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_quarantined_assets.return_value = {
+                'quarantinedAssets': [STATE_RECORD], 'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, [
+                'compliance', 'quarantine', 'list', '--max-items', '1', '--starting-token', 'page-1'])
+            assert result.exit_code == 0
+            assert 'Next token: page-2' in result.output
+            assert '--starting-token' in result.output
+            mocks['api_client'].list_quarantined_assets.assert_called_once_with(
+                max_items=1, starting_token='page-1')
+
+    def test_list_rejects_a_page_size_over_the_cap(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, ['compliance', 'quarantine', 'list', '--max-items', '501'])
+            assert result.exit_code != 0
+            mocks['api_client'].list_quarantined_assets.assert_not_called()
 
     def test_list_empty(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].list_quarantined_assets.return_value = {'quarantinedAssets': []}
             result = cli_runner.invoke(cli, ['compliance', 'quarantine', 'list'])
             assert result.exit_code == 0
-            assert 'No quarantined assets' in result.output
+            assert 'No quarantined assets.' in result.output
+            assert 'Next token' not in result.output
+
+    def test_an_empty_page_with_a_token_still_points_at_the_next_page(self, cli_runner,
+                                                                      generic_command_mocks):
+        # The page is authorization-filtered after it is read, so it can be empty with more to come.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_quarantined_assets.return_value = {
+                'quarantinedAssets': [], 'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, ['compliance', 'quarantine', 'list'])
+            assert result.exit_code == 0
+            assert 'No quarantined assets on this page.' in result.output
+            assert 'Next token: page-2' in result.output
 
     def test_list_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
-            mocks['api_client'].list_quarantined_assets.return_value = {'quarantinedAssets': [STATE_RECORD]}
+            mocks['api_client'].list_quarantined_assets.return_value = {
+                'quarantinedAssets': [STATE_RECORD], 'NextToken': 'page-2'}
             result = cli_runner.invoke(cli, ['compliance', 'quarantine', 'list', '--json-output'])
             assert result.exit_code == 0
-            assert json.loads(result.output) == {'quarantinedAssets': [STATE_RECORD]}
+            assert json.loads(result.output) == {'quarantinedAssets': [STATE_RECORD], 'NextToken': 'page-2'}
 
     def test_list_error(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -978,6 +1129,15 @@ class TestComplianceCascadeCommands:
             assert 'State: pending_approval' in result.output
             mocks['api_client'].get_compliance_cascade.assert_called_once_with('casc-1')
 
+    def test_get_shows_why_an_aborted_cascade_stopped(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_cascade.return_value = dict(
+                CASCADE_RECORD, state='aborted', abortReason='Cascade execution failed')
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '-c', 'casc-1'])
+            assert result.exit_code == 0
+            assert 'State: aborted' in result.output
+            assert 'Abort Reason: Cascade execution failed' in result.output
+
     def test_get_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].get_compliance_cascade.return_value = CASCADE_RECORD
@@ -1000,21 +1160,38 @@ class TestComplianceCascadeCommands:
             result = cli_runner.invoke(cli, [
                 'compliance', 'cascade', 'create', '-d', 'my-database', '-a', 'my-asset'])
             assert result.exit_code == 0
+            assert 'Cascade ID: casc-1' in result.output
             assert 'State: pending_approval' in result.output
+            # A pending cascade is not running, so there is nothing to poll for yet.
+            assert 'cascade get' not in result.output
             mocks['api_client'].create_compliance_cascade.assert_called_once_with(
                 'my-database', 'my-asset', reason=None, require_approval=True)
 
-    def test_create_without_approval_and_json_output(self, cli_runner, generic_command_mocks):
+    def test_create_without_approval_points_at_the_poll_command(self, cli_runner, generic_command_mocks):
+        # The route answers 202 with the cascade executing in the background; no result is returned.
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].create_compliance_cascade.return_value = {
-                'cascadeId': 'casc-1', 'state': 'executing'}
+                'message': 'Cascade created', 'cascadeId': 'casc-1', 'state': 'executing'}
             result = cli_runner.invoke(cli, [
                 'compliance', 'cascade', 'create', '-d', 'my-database', '-a', 'my-asset',
-                '--reason', 'Geometry revised', '--no-approval', '--json-output'])
+                '--reason', 'Geometry revised', '--no-approval'])
             assert result.exit_code == 0
-            assert json.loads(result.output)['state'] == 'executing'
+            assert 'State: executing' in result.output
+            assert 'vamscli compliance cascade get -c casc-1' in result.output
+            assert 'completed or aborted' in result.output
             mocks['api_client'].create_compliance_cascade.assert_called_once_with(
                 'my-database', 'my-asset', reason='Geometry revised', require_approval=False)
+
+    def test_create_without_approval_json_output(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].create_compliance_cascade.return_value = {
+                'message': 'Cascade created', 'cascadeId': 'casc-1', 'state': 'executing'}
+            result = cli_runner.invoke(cli, [
+                'compliance', 'cascade', 'create', '-d', 'my-database', '-a', 'my-asset',
+                '--no-approval', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output) == {
+                'message': 'Cascade created', 'cascadeId': 'casc-1', 'state': 'executing'}
 
     def test_create_rejected(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -1024,23 +1201,39 @@ class TestComplianceCascadeCommands:
                 'compliance', 'cascade', 'create', '-d', 'my-database', '-a', 'my-asset'])
             assert result.exit_code != 0
 
+    def test_create_that_could_not_be_started_is_reported(self, cli_runner, generic_command_mocks):
+        # The handler records the cascade as aborted and answers 400 when the executor invoke fails.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].create_compliance_cascade.side_effect = InvalidComplianceDataError(
+                'Compliance cascade creation failed: Cascade could not be started')
+            result = cli_runner.invoke(cli, [
+                'compliance', 'cascade', 'create', '-d', 'my-database', '-a', 'my-asset', '--no-approval'])
+            assert result.exit_code != 0
+            assert 'could not be started' in result.output
+
     def test_approve(self, cli_runner, generic_command_mocks):
+        # Approval starts the execution and returns at once: cascadeId + state, no result body.
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].approve_compliance_cascade.return_value = {
-                'message': 'Cascade approved and executed', 'cascadeId': 'casc-1',
-                'result': {'nodesExecuted': 2}}
+                'message': 'Cascade approved', 'cascadeId': 'casc-1', 'state': 'executing'}
             result = cli_runner.invoke(cli, [
                 'compliance', 'cascade', 'approve', '-c', 'casc-1', '--reason', 'Reviewed'])
             assert result.exit_code == 0
-            assert 'nodesExecuted' in result.output
+            assert 'Cascade approved.' in result.output
+            assert 'Cascade ID: casc-1' in result.output
+            assert 'State: executing' in result.output
+            assert 'vamscli compliance cascade get -c casc-1' in result.output
+            assert 'Result' not in result.output
             mocks['api_client'].approve_compliance_cascade.assert_called_once_with('casc-1', reason='Reviewed')
 
     def test_approve_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
-            mocks['api_client'].approve_compliance_cascade.return_value = {'cascadeId': 'casc-1'}
+            mocks['api_client'].approve_compliance_cascade.return_value = {
+                'message': 'Cascade approved', 'cascadeId': 'casc-1', 'state': 'executing'}
             result = cli_runner.invoke(cli, ['compliance', 'cascade', 'approve', '-c', 'casc-1', '--json-output'])
             assert result.exit_code == 0
-            assert json.loads(result.output) == {'cascadeId': 'casc-1'}
+            assert json.loads(result.output) == {
+                'message': 'Cascade approved', 'cascadeId': 'casc-1', 'state': 'executing'}
             mocks['api_client'].approve_compliance_cascade.assert_called_once_with('casc-1', reason=None)
 
     def test_approve_not_pending(self, cli_runner, generic_command_mocks):
@@ -1084,8 +1277,9 @@ class TestComplianceAuditCommand:
             assert result.exit_code == 0
             assert 'quarantine_released' in result.output
             assert 'Actor: user-1' in result.output
+            assert 'Next token' not in result.output
             mocks['api_client'].query_compliance_audit.assert_called_once_with(
-                event_type=None, start_date=None, end_date=None, limit=None)
+                event_type=None, start_date=None, end_date=None, max_items=None, starting_token=None)
             mocks['api_client'].get_asset_compliance_audit.assert_not_called()
 
     def test_global_listing_forwards_every_filter(self, cli_runner, generic_command_mocks):
@@ -1094,20 +1288,54 @@ class TestComplianceAuditCommand:
             result = cli_runner.invoke(cli, [
                 'compliance', 'audit', '--event-type', 'compliance_check',
                 '--start-date', '2026-09-01T00:00:00Z', '--end-date', '2026-09-30T00:00:00Z',
-                '--limit', '100'])
+                '--max-items', '100', '--starting-token', 'page-2'])
             assert result.exit_code == 0
             mocks['api_client'].query_compliance_audit.assert_called_once_with(
                 event_type='compliance_check', start_date='2026-09-01T00:00:00Z',
-                end_date='2026-09-30T00:00:00Z', limit=100)
+                end_date='2026-09-30T00:00:00Z', max_items=100, starting_token='page-2')
+
+    def test_limit_is_an_alias_of_max_items(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].query_compliance_audit.return_value = {'entries': []}
+            result = cli_runner.invoke(cli, ['compliance', 'audit', '--limit', '25'])
+            assert result.exit_code == 0
+            mocks['api_client'].query_compliance_audit.assert_called_once_with(
+                event_type=None, start_date=None, end_date=None, max_items=25, starting_token=None)
+
+    def test_limit_and_max_items_may_agree_but_not_disagree(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].query_compliance_audit.return_value = {'entries': []}
+            result = cli_runner.invoke(cli, ['compliance', 'audit', '--limit', '25', '--max-items', '25'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].query_compliance_audit.call_args.kwargs['max_items'] == 25
+
+            mocks['api_client'].query_compliance_audit.reset_mock()
+            result = cli_runner.invoke(cli, ['compliance', 'audit', '--limit', '25', '--max-items', '30'])
+            assert result.exit_code != 0
+            assert 'alias' in result.output
+            mocks['api_client'].query_compliance_audit.assert_not_called()
+
+    @pytest.mark.parametrize('option', ['--max-items', '--limit'])
+    @pytest.mark.parametrize('value', ['0', '501'])
+    def test_a_page_size_outside_the_route_cap_is_rejected(self, cli_runner, generic_command_mocks,
+                                                           option, value):
+        # The handler clamps silently; the CLI refuses instead so the caller learns the cap.
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, ['compliance', 'audit', option, value])
+            assert result.exit_code != 0
+            assert '500' in result.output
+            mocks['api_client'].query_compliance_audit.assert_not_called()
 
     def test_asset_history(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].get_asset_compliance_audit.return_value = {'entries': [AUDIT_ENTRY]}
             result = cli_runner.invoke(cli, [
-                'compliance', 'audit', '-d', 'my-database', '-a', 'my-asset', '--limit', '5'])
+                'compliance', 'audit', '-d', 'my-database', '-a', 'my-asset', '--max-items', '5',
+                '--starting-token', 'page-2'])
             assert result.exit_code == 0
             mocks['api_client'].get_asset_compliance_audit.assert_called_once_with(
-                'my-database', 'my-asset', start_date=None, end_date=None, limit=5)
+                'my-database', 'my-asset', start_date=None, end_date=None, max_items=5,
+                starting_token='page-2')
             mocks['api_client'].query_compliance_audit.assert_not_called()
 
     def test_asset_history_needs_both_ids(self, cli_runner, generic_command_mocks):
@@ -1125,33 +1353,47 @@ class TestComplianceAuditCommand:
             assert result.exit_code != 0
             mocks['api_client'].get_asset_compliance_audit.assert_not_called()
 
-    def test_a_full_page_is_flagged_as_possibly_incomplete(self, cli_runner, generic_command_mocks):
+    def test_a_page_with_a_token_points_at_the_next_page(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].query_compliance_audit.return_value = {
+                'entries': [dict(AUDIT_ENTRY, entryId=f'e-{i}') for i in range(3)],
+                'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, ['compliance', 'audit', '--max-items', '3'])
+            assert result.exit_code == 0
+            assert 'Found 3 audit entries on this page' in result.output
+            assert 'Next token: page-2' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+
+    def test_the_last_page_carries_no_hint(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].query_compliance_audit.return_value = {
                 'entries': [dict(AUDIT_ENTRY, entryId=f'e-{i}') for i in range(3)]}
-            result = cli_runner.invoke(cli, ['compliance', 'audit', '--limit', '3'])
+            result = cli_runner.invoke(cli, ['compliance', 'audit', '--max-items', '3'])
             assert result.exit_code == 0
-            assert 'limit in force (3)' in result.output
-
-    def test_a_short_page_is_not_flagged(self, cli_runner, generic_command_mocks):
-        with generic_command_mocks('compliance') as mocks:
-            mocks['api_client'].query_compliance_audit.return_value = {'entries': [AUDIT_ENTRY]}
-            result = cli_runner.invoke(cli, ['compliance', 'audit', '--limit', '3'])
-            assert result.exit_code == 0
+            assert 'Next token' not in result.output
             assert 'limit in force' not in result.output
 
-    def test_json_output(self, cli_runner, generic_command_mocks):
+    def test_json_output_carries_the_token(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
-            mocks['api_client'].query_compliance_audit.return_value = {'entries': [AUDIT_ENTRY]}
+            mocks['api_client'].query_compliance_audit.return_value = {
+                'entries': [AUDIT_ENTRY], 'NextToken': 'page-2'}
             result = cli_runner.invoke(cli, ['compliance', 'audit', '--json-output'])
             assert result.exit_code == 0
-            assert json.loads(result.output) == {'entries': [AUDIT_ENTRY]}
+            assert json.loads(result.output) == {'entries': [AUDIT_ENTRY], 'NextToken': 'page-2'}
 
     def test_error(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].query_compliance_audit.side_effect = InvalidComplianceDataError('rejected')
             result = cli_runner.invoke(cli, ['compliance', 'audit'])
             assert result.exit_code != 0
+
+    def test_a_malformed_token_is_reported(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].query_compliance_audit.side_effect = InvalidComplianceDataError(
+                'Failed to query the compliance audit trail failed: Invalid pagination token')
+            result = cli_runner.invoke(cli, ['compliance', 'audit', '--starting-token', 'not-a-token'])
+            assert result.exit_code != 0
+            assert 'Invalid pagination token' in result.output
 
 
 class TestSchemaBodyLoading:

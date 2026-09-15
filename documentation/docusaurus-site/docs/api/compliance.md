@@ -5,7 +5,7 @@ The Compliance API registers compliance schemas, binds them to databases and ass
 All compliance endpoints live under the `/compliance` prefix. Identifiers follow the VAMS conventions: a `databaseId` or `schemaName` is 3-63 characters of letters, digits, hyphens and underscores (`GLOBAL` is accepted wherever a database is named), and an `assetId` follows the asset identifier rules.
 
 :::info[Authorization]
-All compliance endpoints require a valid credential in the `Authorization` header and are subject to two-tier authorization: API-level access to the `/compliance/*` route is checked first, followed by object-level Casbin enforcement on one of three object types. Schema, binding and sweep operations are enforced on a `complianceSchema` object (`complianceSchemaName`); evaluation, state, quarantine and audit operations on a `complianceEvaluation` object (`databaseId`, `complianceState`); cascade operations on a `complianceCascade` object (`cascadeId`). The object action mirrors the HTTP method. Listings return only the items the caller may `GET`.
+All compliance endpoints require a valid credential in the `Authorization` header and are subject to two-tier authorization: API-level access to the `/compliance/*` route is checked first, followed by object-level Casbin enforcement on one of three object types. Schema, binding and sweep operations are enforced on a `complianceSchema` object (`complianceSchemaName`); evaluation, state, quarantine and audit operations on a `complianceEvaluation` object (`databaseId`, `complianceState`); cascade operations on a `complianceCascade` object (`cascadeId`). Operations that reach into a database or asset are additionally enforced on that target: binding, unbinding and reading a database's bindings on the `database` object, binding and unbinding an asset override on the `asset` object, a sweep on the `complianceEvaluation` object of each bound database (assets in databases the caller may not evaluate are skipped and counted), and creating, approving, rejecting or reading a cascade on the `complianceEvaluation` object of the triggering asset's database. The object action mirrors the HTTP method. Listings return only the items the caller may `GET`.
 :::
 
 :::note[Error responses]
@@ -239,6 +239,13 @@ GET /compliance/bind/{databaseId}
 | ------------ | ------ | -------- | ------------------- |
 | `databaseId` | string | Yes      | Database identifier |
 
+### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                                    |
+| --------------- | ------ | -------- | ------- | ---------------------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `100`   | Asset overrides per page. A larger value is reduced to 500; the remainder follows `NextToken`. |
+| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                     |
+
 ### Response
 
 ```json
@@ -257,15 +264,15 @@ GET /compliance/bind/{databaseId}
 }
 ```
 
-`databaseSchema` is `null` when the database has no binding. The request is authorized on the bound schema's name (an empty name when there is none).
+`databaseSchema` is `null` when the database has no binding. `assetOverrideCount` counts every asset-level override of the database; `assetOverrides` is one page of them in `assetId` order, and `NextToken` is present while more remain. The request is authorized on the database and on the bound schema's name (an empty name when there is none).
 
 ### Error responses
 
-| Status | Description                                          |
-| ------ | ---------------------------------------------------- |
-| `400`  | Invalid `databaseId`, or the database does not exist |
-| `403`  | Not authorized                                       |
-| `500`  | Internal server error                                |
+| Status | Description                                                              |
+| ------ | ------------------------------------------------------------------------ |
+| `400`  | Invalid `databaseId` or pagination token, or the database does not exist |
+| `403`  | Not authorized                                                           |
+| `500`  | Internal server error                                                    |
 
 ---
 
@@ -460,7 +467,7 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 
 ## Sweep the assets bound to a schema
 
-Evaluates every asset whose compliance record is bound to the schema. One call evaluates at most 200 assets; `assetsRemaining` reports how many bound assets were not reached, and repeated calls work through them.
+Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate. One call evaluates at most 200 assets; `assetsRemaining` reports how many bound assets were not reached, and repeated calls work through them. Bound assets the caller is not authorized to evaluate are counted in `skipped` and never listed.
 
 ```
 POST /compliance/sweep/{schemaName}
@@ -486,6 +493,7 @@ POST /compliance/sweep/{schemaName}
             "verdict": "quarantined"
         }
     ],
+    "skipped": 0,
     "assetsRemaining": 0
 }
 ```
@@ -598,11 +606,18 @@ An asset with no compliance record is reported with `complianceState` `unknown` 
 
 ## Get the compliance overview of a database
 
-Retrieves per-state counts and every tracked asset of a database. Only assets with a compliance record are counted.
+Retrieves per-state counts covering every tracked asset of a database, and one page of the tracked assets. Only assets with a compliance record are counted.
 
 ```
 GET /compliance/state/{databaseId}
 ```
+
+### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                                  |
+| --------------- | ------ | -------- | ------- | -------------------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `100`   | Asset records per page. A larger value is reduced to 500; the remainder follows `NextToken`. |
+| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                   |
 
 ### Response
 
@@ -627,29 +642,37 @@ GET /compliance/state/{databaseId}
             "schemaSource": "database",
             "lastEvaluatedAt": "2026-03-15T10:30:00+00:00"
         }
-    ]
+    ],
+    "NextToken": "eyJvZmZzZXQiOiAxfQ=="
 }
 ```
 
-Each entry of `assets` is a compliance record as returned by [Get the compliance state of an asset](#get-the-compliance-state-of-an-asset), plus the asset's display name as `assetName`.
+`totalAssets` and `summary` cover every tracked asset of the database regardless of the page. `assets` is one page of their records in `assetId` order — each a compliance record as returned by [Get the compliance state of an asset](#get-the-compliance-state-of-an-asset), plus the asset's display name as `assetName` — and `NextToken` is absent on the last page.
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `400`  | Invalid `databaseId`  |
-| `403`  | Not authorized        |
-| `500`  | Internal server error |
+| Status | Description                              |
+| ------ | ---------------------------------------- |
+| `400`  | Invalid `databaseId` or pagination token |
+| `403`  | Not authorized                           |
+| `500`  | Internal server error                    |
 
 ---
 
 ## List quarantined assets
 
-Retrieves every quarantined asset across databases that the caller may read, each with its `assetName`.
+Retrieves one page of quarantined assets across databases, each with its `assetName`. The page is filtered to the databases the caller may read after it is read, so a page can be empty while `NextToken` is present — keep following the token until none is returned.
 
 ```
 GET /compliance/quarantine
 ```
+
+### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                                  |
+| --------------- | ------ | -------- | ------- | -------------------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `100`   | Asset records per page. A larger value is reduced to 500; the remainder follows `NextToken`. |
+| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                   |
 
 ### Response
 
@@ -667,18 +690,20 @@ GET /compliance/quarantine
             "lastEvaluationId": "8a1d2c3b-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
             "lastEvaluatedAt": "2026-03-15T10:30:00+00:00"
         }
-    ]
+    ],
+    "NextToken": "eyJjb21wbGlhbmNlU3RhdGUiOiAicXVhcmFudGluZWQiLCAiZGF0YWJhc2VJZCI6ICIuLi4ifQ=="
 }
 ```
 
-The listing is not paged.
+`NextToken` is absent on the last page.
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `403`  | Not authorized        |
-| `500`  | Internal server error |
+| Status | Description              |
+| ------ | ------------------------ |
+| `400`  | Invalid pagination token |
+| `403`  | Not authorized           |
+| `500`  | Internal server error    |
 
 ---
 
@@ -789,7 +814,7 @@ The listing is not paged.
 
 ## Create a cascade
 
-Creates a cascade that re-evaluates the downstream assets of an asset — every descendant reachable through `parentChild` asset links, in dependency order. With `requireApproval` (the default) the cascade waits in `pending_approval` for [approval](#approve-a-pending-cascade); with `requireApproval: false` it executes within the request and the response carries the result.
+Creates a cascade that re-evaluates the downstream assets of an asset — every descendant reachable through `parentChild` asset links, in dependency order. With `requireApproval` (the default) the cascade waits in `pending_approval` for [approval](#approve-a-pending-cascade) and the response is `200`. With `requireApproval: false` the cascade is written in the `executing` state, its execution is started in the background and the response is `202`; the evaluations do not run inside the request.
 
 ```
 POST /compliance/cascades
@@ -814,21 +839,21 @@ POST /compliance/cascades
 }
 ```
 
-When `requireApproval` is `false`, `state` is `executing` and a `result` object is added with the same shape as the `result` of [Approve a pending cascade](#approve-a-pending-cascade). Each entry of `result.results` names a node (`databaseId:assetId`), its `status` (the evaluation verdict, `skipped`, or `error`) and, when an evaluation ran, its `evaluationId`.
+When `requireApproval` is `false`, the status is `202` and `state` is `executing`. The response carries no execution result: follow the cascade with [Get a cascade](#get-a-cascade) until `state` is `completed` or `aborted`.
 
 ### Error responses
 
-| Status | Description                                     |
-| ------ | ----------------------------------------------- |
-| `400`  | Invalid parameters, or the asset does not exist |
-| `403`  | Not authorized                                  |
-| `500`  | Internal server error                           |
+| Status | Description                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, the asset does not exist, or the cascade could not be started (recorded `aborted`) |
+| `403`  | Not authorized                                                                                         |
+| `500`  | Internal server error                                                                                  |
 
 ---
 
 ## Get a cascade
 
-Retrieves one cascade with its state and per-node progress.
+Retrieves one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`.
 
 ```
 GET /compliance/cascades/{cascadeId}
@@ -857,7 +882,7 @@ GET /compliance/cascades/{cascadeId}
 }
 ```
 
-`state` is `pending_approval`, `executing`, `completed` or `aborted`. `nodes` is a JSON-encoded map of `databaseId:assetId` to the node's status — `pending`, `evaluating`, the verdict the evaluation produced (`compliant`, `non_compliant`, `quarantined`, `pending_pipeline`, `error`), or `skipped` for a descendant with no bound schema — and `executionOrder` the JSON-encoded evaluation order. A rejected cascade carries `rejectedBy`, `rejectedAt` and `rejectionReason` instead of the approval fields.
+`state` is `pending_approval`, `executing`, `completed` or `aborted`. `nodes` is a JSON-encoded map of `databaseId:assetId` to the node's status — `pending`, `evaluating`, the verdict the evaluation produced (`compliant`, `non_compliant`, `quarantined`, `pending_pipeline`, `error`), or `skipped` for a descendant with no bound schema — and `executionOrder` the JSON-encoded evaluation order. A rejected cascade carries `rejectedBy`, `rejectedAt` and `rejectionReason` instead of the approval fields. An `aborted` cascade carries `abortReason`: the rejection, or the failure that ended the run.
 
 ### Error responses
 
@@ -871,7 +896,7 @@ GET /compliance/cascades/{cascadeId}
 
 ## Approve a pending cascade
 
-Moves a `pending_approval` cascade to `executing`, evaluates its downstream assets in dependency order within the request, records `cascade_approved` and `cascade_completed` audit entries, and returns the execution result.
+Moves a `pending_approval` cascade to `executing`, starts its execution in the background and records a `cascade_approved` audit entry. The response is `202`; the evaluations do not run inside the request. Follow the cascade with [Get a cascade](#get-a-cascade) until `state` is `completed` or `aborted`, and a `cascade_completed` audit entry is written when it finishes.
 
 ```
 POST /compliance/cascades/{cascadeId}/approve
@@ -887,35 +912,19 @@ POST /compliance/cascades/{cascadeId}/approve
 
 ```json
 {
-    "message": "Cascade approved and executed",
+    "message": "Cascade approved",
     "cascadeId": "7b2e4d6f-8a1c-4e3b-9f5d-2c4a6e8b0d1f",
-    "result": {
-        "cascadeId": "7b2e4d6f-8a1c-4e3b-9f5d-2c4a6e8b0d1f",
-        "status": "completed",
-        "evaluated": 2,
-        "results": [
-            {
-                "node": "survey-project:x1a2b3c4-scan-0042",
-                "status": "compliant",
-                "evaluationId": "3f6c1a2e-0b7d-4f7e-9d1c-5a2b8c9d0e1f"
-            },
-            {
-                "node": "survey-project:x1a2b3c4-scan-0043",
-                "status": "quarantined",
-                "evaluationId": "8a1d2c3b-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
-            }
-        ]
-    }
+    "state": "executing"
 }
 ```
 
 ### Error responses
 
-| Status | Description                                                                        |
-| ------ | ---------------------------------------------------------------------------------- |
-| `400`  | Invalid `cascadeId`, or the cascade does not exist or is not in `pending_approval` |
-| `403`  | Not authorized                                                                     |
-| `500`  | Internal server error                                                              |
+| Status | Description                                                                                                                               |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `cascadeId`, the cascade does not exist or is not in `pending_approval`, or the cascade could not be started (recorded `aborted`) |
+| `403`  | Not authorized                                                                                                                            |
+| `500`  | Internal server error                                                                                                                     |
 
 ---
 
@@ -967,8 +976,8 @@ GET /compliance/audit
 | `eventType`     | string | No       | `null`  | Restrict the page to one event type — see [Event types](#event-types).                                                |
 | `startDate`     | string | No       | `null`  | ISO-8601 timestamp; only entries at or after it are returned.                                                         |
 | `endDate`       | string | No       | `null`  | ISO-8601 timestamp; only entries at or before it are returned.                                                        |
-| `maxItems`      | number | No       | `50`    | Entries per page. A larger value is reduced to 500; the remainder follows `NextToken`. Takes precedence over `limit`. |
-| `limit`         | number | No       | `50`    | Alias of `maxItems`, read when `maxItems` is absent.                                                                  |
+| `maxItems`      | number | No       | `100`   | Entries per page. A larger value is reduced to 500; the remainder follows `NextToken`. Takes precedence over `limit`. |
+| `limit`         | number | No       | `100`   | Alias of `maxItems`, read when `maxItems` is absent.                                                                  |
 | `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                            |
 
 ### Response

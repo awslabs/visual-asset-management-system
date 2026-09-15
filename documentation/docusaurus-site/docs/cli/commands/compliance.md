@@ -233,21 +233,26 @@ Unbinding a database deletes the compliance record (state, last evaluation, quar
 
 ## compliance bindings
 
-Show a database's schema binding and its asset-level overrides.
+Show a database's schema binding and one page of its asset-level overrides.
 
 ```bash
 vamscli compliance bindings [OPTIONS]
 ```
 
-| Option                | Type | Required | Description              |
-| --------------------- | ---- | -------- | ------------------------ |
-| `-d`, `--database-id` | TEXT | Yes      | Database ID              |
-| `--json-output`       | FLAG | No       | Output raw JSON response |
+| Option                | Type    | Required | Description                                                              |
+| --------------------- | ------- | -------- | ------------------------------------------------------------------------ |
+| `-d`, `--database-id` | TEXT    | Yes      | Database ID                                                              |
+| `--max-items`         | INTEGER | No       | Asset overrides per page (the API applies 100 when omitted; at most 500) |
+| `--starting-token`    | TEXT    | No       | Token for pagination (the previous page's `NextToken`)                   |
+| `--json-output`       | FLAG    | No       | Output raw JSON response                                                 |
 
 ```bash
 vamscli compliance bindings -d my-database
+vamscli compliance bindings -d my-database --max-items 20 --starting-token "token123"
 vamscli compliance bindings -d my-database --json-output
 ```
+
+`assetOverrideCount` is the total number of asset-level overrides; `assetOverrides` is one page of them. The response carries a `NextToken` when more overrides exist; pass it back as `--starting-token`.
 
 ---
 
@@ -301,6 +306,8 @@ vamscli compliance sweep -n cad-quality --json-output
 A schema with pipeline rules starts one workflow execution per asset it is bound to. Check `compliance bindings` on the databases that use the schema before sweeping a large one.
 :::
 
+The response lists the assets triggered and counts the rest: `skipped` is the number of bound assets the caller is not authorized to evaluate (counted, never listed), and `assetsRemaining` the number beyond the per-call cap, which a repeated sweep works through.
+
 ---
 
 ## compliance state
@@ -311,19 +318,22 @@ Show compliance state: one asset's record, or a database's overview.
 vamscli compliance state [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                                        |
-| --------------------- | ---- | -------- | -------------------------------------------------- |
-| `-d`, `--database-id` | TEXT | Yes      | Database ID                                        |
-| `-a`, `--asset-id`    | TEXT | No       | One asset's record; omit for the database overview |
-| `--json-output`       | FLAG | No       | Output raw JSON response                           |
+| Option                | Type    | Required | Description                                                                                     |
+| --------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `-d`, `--database-id` | TEXT    | Yes      | Database ID                                                                                     |
+| `-a`, `--asset-id`    | TEXT    | No       | One asset's record; omit for the database overview                                              |
+| `--max-items`         | INTEGER | No       | Asset records per page of the database overview (the API applies 100 when omitted; at most 500) |
+| `--starting-token`    | TEXT    | No       | Token for pagination of the database overview (the previous page's `NextToken`)                 |
+| `--json-output`       | FLAG    | No       | Output raw JSON response                                                                        |
 
 ```bash
 vamscli compliance state -d my-database
+vamscli compliance state -d my-database --max-items 20 --starting-token "token123"
 vamscli compliance state -d my-database -a my-asset
 vamscli compliance state -d my-database --json-output
 ```
 
-`complianceState` is one of `compliant`, `non_compliant`, `pending_evaluation`, `quarantined` or `unknown`. An asset with no binding is reported as `unknown` rather than as an error. The database overview carries a per-state `summary` and the record of every tracked asset with its `assetName`; only assets with a compliance record are counted.
+`complianceState` is one of `compliant`, `non_compliant`, `pending_evaluation`, `quarantined` or `unknown`. An asset with no binding is reported as `unknown` rather than as an error. The database overview carries a per-state `summary` and `totalAssets` covering every tracked asset, and one page of their records as `assets`, each with its `assetName`; only assets with a compliance record are counted. The response carries a `NextToken` when more records exist; pass it back as `--starting-token`. `--max-items` and `--starting-token` are rejected with `-a`, because the single-asset route is not paged.
 
 ---
 
@@ -359,22 +369,25 @@ Each evaluation carries its `evaluationId`, `schemaName`, `evaluatedAt`, the `ve
 
 ## compliance quarantine list
 
-List quarantined assets across every database the caller may read.
+List quarantined assets across every database the caller may read, one page per call.
 
 ```bash
 vamscli compliance quarantine list [OPTIONS]
 ```
 
-| Option          | Type | Required | Description                                               |
-| --------------- | ---- | -------- | --------------------------------------------------------- |
-| `--json-output` | FLAG | No       | Output raw JSON response (`{"quarantinedAssets": [...]}`) |
+| Option             | Type    | Required | Description                                                                 |
+| ------------------ | ------- | -------- | --------------------------------------------------------------------------- |
+| `--max-items`      | INTEGER | No       | Quarantined assets per page (the API applies 100 when omitted; at most 500) |
+| `--starting-token` | TEXT    | No       | Token for pagination (the previous page's `NextToken`)                      |
+| `--json-output`    | FLAG    | No       | Output raw JSON response (`{"quarantinedAssets": [...], "NextToken": ...}`) |
 
 ```bash
 vamscli compliance quarantine list
+vamscli compliance quarantine list --max-items 20 --starting-token "token123"
 vamscli compliance quarantine list --json-output
 ```
 
-The route returns the whole list in one response and takes no paging options.
+The response carries a `NextToken` when more quarantined assets exist; pass it back as `--starting-token`. Each page is filtered to the caller's databases after it is read, so a page can be empty while a token is present — keep paging until no token is returned.
 
 ---
 
@@ -488,15 +501,15 @@ vamscli compliance cascade create -d my-database -a my-asset
 vamscli compliance cascade create -d my-database -a my-asset --reason "Geometry revised" --no-approval
 ```
 
-:::note[--no-approval executes within the request]
-With `--no-approval` the cascade runs inside the create call and the response also carries its `result`. Each dependent is evaluated as by `compliance evaluate`, so a schema with pipeline rules starts one workflow execution per dependent.
+:::note[--no-approval starts the cascade in the background]
+With `--no-approval` the cascade is created in the `executing` state and the command returns its `cascadeId` and `state` at once; the evaluations run in the background and the response carries no result. Poll `compliance cascade get -c <id>` until the state is `completed` or `aborted` (an aborted cascade carries its `abortReason`). Each dependent is evaluated as by `compliance evaluate`, so a schema with pipeline rules starts one workflow execution per dependent.
 :::
 
 ---
 
 ## compliance cascade approve
 
-Approve a pending cascade. Execution runs within the request and its `result` is returned.
+Approve a pending cascade and start its execution. The cascade moves to `executing` and the command returns its `cascadeId` and `state` at once; the evaluations run in the background, so poll `compliance cascade get -c <id>` until the state is `completed` or `aborted`.
 
 ```bash
 vamscli compliance cascade approve [OPTIONS]
@@ -548,28 +561,31 @@ Query the compliance audit trail: the global trail, optionally narrowed to one e
 vamscli compliance audit [OPTIONS]
 ```
 
-| Option                | Type    | Required | Description                                              |
-| --------------------- | ------- | -------- | -------------------------------------------------------- |
-| `-d`, `--database-id` | TEXT    | No       | With `--asset-id`: one asset's history                   |
-| `-a`, `--asset-id`    | TEXT    | No       | With `--database-id`: one asset's history                |
-| `--event-type`        | TEXT    | No       | Only entries of this event type (global listing only)    |
-| `--start-date`        | TEXT    | No       | Earliest entry timestamp (ISO 8601)                      |
-| `--end-date`          | TEXT    | No       | Latest entry timestamp (ISO 8601)                        |
-| `--limit`             | INTEGER | No       | Most entries to return (the API applies 50 when omitted) |
-| `--json-output`       | FLAG    | No       | Output raw JSON response (`{"entries": [...]}`)          |
+| Option                | Type    | Required | Description                                                       |
+| --------------------- | ------- | -------- | ----------------------------------------------------------------- |
+| `-d`, `--database-id` | TEXT    | No       | With `--asset-id`: one asset's history                            |
+| `-a`, `--asset-id`    | TEXT    | No       | With `--database-id`: one asset's history                         |
+| `--event-type`        | TEXT    | No       | Only entries of this event type (global listing only)             |
+| `--start-date`        | TEXT    | No       | Earliest entry timestamp (ISO 8601)                               |
+| `--end-date`          | TEXT    | No       | Latest entry timestamp (ISO 8601)                                 |
+| `--max-items`         | INTEGER | No       | Entries per page (the API applies 100 when omitted; at most 500)  |
+| `--limit`             | INTEGER | No       | Alias of `--max-items`                                            |
+| `--starting-token`    | TEXT    | No       | Token for pagination (the previous page's `NextToken`)            |
+| `--json-output`       | FLAG    | No       | Output raw JSON response (`{"entries": [...], "NextToken": ...}`) |
 
 ```bash
 vamscli compliance audit
-vamscli compliance audit --event-type quarantine_released --limit 100
+vamscli compliance audit --event-type quarantine_released --max-items 100
 vamscli compliance audit --start-date 2026-09-01T00:00:00Z --end-date 2026-09-30T23:59:59Z
+vamscli compliance audit --starting-token "token123"
 vamscli compliance audit -d my-database -a my-asset
 vamscli compliance audit -d my-database -a my-asset --json-output
 ```
 
 Event types include `schema_bound_to_database`, `schema_bound_to_asset`, `schema_unbound_from_database`, `schema_unbound_from_asset`, `schema_deleted`, `compliance_check`, `quarantine_released`, `exception_granted`, `cascade_triggered` and `cascade_approved`. `--database-id` and `--asset-id` are given together; `--event-type` is rejected with them because the per-asset route has no such filter.
 
-:::note[The audit routes return no continuation token]
-`--limit` bounds how many entries are read, but neither route returns a token, so a result of exactly `--limit` entries may be incomplete and cannot be resumed. The CLI flags such a result; narrow the date window or raise `--limit` to see more.
+:::note[The audit routes return one page per call]
+Entries are returned most recent first, `--max-items` per page (`--limit` is the same option). The response carries a `NextToken` when more entries exist; pass it back as `--starting-token` with the same filters to read the next page. Without `--event-type` the global trail reads every event type in turn, and the token carries the position of that walk.
 :::
 
 ---

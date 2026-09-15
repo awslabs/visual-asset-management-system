@@ -203,13 +203,21 @@ API_COMPLIANCE_CASCADE_REJECT = "/compliance/cascades/{cascadeId}/reject"
 API_COMPLIANCE_AUDIT = "/compliance/audit"
 API_COMPLIANCE_AUDIT_ASSET = "/compliance/audit/{databaseId}/{assetId}"
 
-# The audit routes take a `limit` and return no continuation token; this is the value the handler
-# applies when the request names none, so it is the ceiling on what one call can reach.
-COMPLIANCE_AUDIT_DEFAULT_LIMIT = 50
+# The audit routes page on `maxItems` (alias `limit`) + `startingToken`, returning a `NextToken`;
+# the handler applies the default when the request names no page size and clamps larger values to
+# the cap.
+COMPLIANCE_AUDIT_DEFAULT_LIMIT = 100
+MAX_COMPLIANCE_AUDIT_PAGE_SIZE = 500
 # The evaluation-history route pages on `maxItems` (its page size) + `startingToken`, returning a
 # `NextToken`; the handler applies the default when none is given and clamps larger values to the cap.
 DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE = 50
 MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE = 200
+# The database overview, the quarantine listing and the bindings route page their list field
+# (`assets`, `quarantinedAssets`, `assetOverrides`) on `maxItems` + `startingToken` the same way;
+# the overview's `summary`/`totalAssets` and the bindings' `assetOverrideCount` still cover the
+# full set.
+DEFAULT_COMPLIANCE_LIST_PAGE_SIZE = 100
+MAX_COMPLIANCE_LIST_PAGE_SIZE = 500
 
 # Workflow execution list page-size cap (Step Functions throttling on the asset-scoped list).
 MAX_WORKFLOW_EXECUTION_PAGE_SIZE = 50

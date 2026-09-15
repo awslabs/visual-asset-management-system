@@ -6690,23 +6690,43 @@ class APIClient:
         return self._compliance_request(
             'DELETE', endpoint, f"Compliance schema '{schema_name}' deletion")
 
+    @staticmethod
+    def _compliance_page_params(max_items: Optional[int],
+                                starting_token: Optional[str]) -> Optional[Dict[str, Any]]:
+        """`maxItems` / `startingToken` query parameters, or None when neither is set."""
+        params: Dict[str, Any] = {}
+        if max_items is not None:
+            params['maxItems'] = max_items
+        if starting_token:
+            params['startingToken'] = starting_token
+        return params or None
+
     # ---- Bindings -----------------------------------------------------
 
-    def get_compliance_bindings(self, database_id: str) -> Dict[str, Any]:
+    def get_compliance_bindings(self, database_id: str, max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
-        Read a database's compliance schema binding and its asset-level overrides using the
-        /compliance/bind/{databaseId} GET endpoint.
+        Read a database's compliance schema binding and one page of its asset-level overrides
+        using the /compliance/bind/{databaseId} GET endpoint.
+
+        Args:
+            max_items: Overrides per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE
+                when omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
 
         Returns:
             API response data: {databaseId, databaseSchema, complianceAutoEval,
-            assetOverrides: [{assetId, schemaName, complianceState}], assetOverrideCount}
+            assetOverrides: [{assetId, schemaName, complianceState}] (one page),
+            assetOverrideCount (the total across every page), "NextToken"?: str}
 
         Raises:
             DatabaseNotFoundError: When the database does not exist
+            InvalidComplianceDataError: When the pagination token is malformed
         """
         endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
         return self._compliance_request(
-            'GET', endpoint, f"Failed to get compliance bindings for '{database_id}'")
+            'GET', endpoint, f"Failed to get compliance bindings for '{database_id}'",
+            params=self._compliance_page_params(max_items, starting_token))
 
     def bind_compliance_schema(self, database_id: str, schema_name: str,
                                asset_id: Optional[str] = None,
@@ -6797,7 +6817,10 @@ class APIClient:
         endpoint.
 
         Returns:
-            API response data: {message, schemaName, assetsTriggered: [{databaseId, assetId}]}
+            API response data: {message, schemaName, assetsTriggered: [{databaseId, assetId, ...}],
+            skipped, assetsRemaining}. `skipped` counts the bound assets the caller is not
+            authorized to evaluate; they are never listed. `assetsRemaining` counts the bound assets
+            beyond the per-call cap, which a repeated sweep works through.
         """
         endpoint = API_COMPLIANCE_SWEEP_SCHEMA.format(schemaName=schema_name)
         return self._compliance_request('POST', endpoint, f"Sweeping schema '{schema_name}'")
@@ -6818,14 +6841,9 @@ class APIClient:
             API response data: {"evaluations": [...], "NextToken"?: str}, most recent first.
         """
         endpoint = API_COMPLIANCE_EVALUATIONS_ASSET.format(databaseId=database_id, assetId=asset_id)
-        params: Dict[str, Any] = {}
-        if max_items is not None:
-            params['maxItems'] = max_items
-        if starting_token:
-            params['startingToken'] = starting_token
         return self._compliance_request(
             'GET', endpoint, f"Failed to list evaluations for asset '{asset_id}'",
-            params=params or None)
+            params=self._compliance_page_params(max_items, starting_token))
 
     def get_compliance_state(self, database_id: str, asset_id: str) -> Dict[str, Any]:
         """
@@ -6841,31 +6859,54 @@ class APIClient:
         return self._compliance_request(
             'GET', endpoint, f"Failed to get compliance state for asset '{asset_id}'")
 
-    def get_database_compliance_state(self, database_id: str) -> Dict[str, Any]:
+    def get_database_compliance_state(self, database_id: str, max_items: Optional[int] = None,
+                                      starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Read a database's compliance overview using the /compliance/state/{databaseId} GET
         endpoint.
 
+        Args:
+            max_items: Asset records per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE
+                when omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
         Returns:
             API response data: {databaseId, totalAssets, summary: {compliant, non_compliant,
-            pending_evaluation, quarantined, unknown}, assets: [records with assetName]}
+            pending_evaluation, quarantined, unknown}, assets: [records with assetName],
+            "NextToken"?: str}. `totalAssets` and `summary` cover every tracked asset; `assets` is
+            one page of them in assetId order.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
         """
         endpoint = API_COMPLIANCE_STATE_DATABASE.format(databaseId=database_id)
         return self._compliance_request(
-            'GET', endpoint, f"Failed to get compliance state for database '{database_id}'")
+            'GET', endpoint, f"Failed to get compliance state for database '{database_id}'",
+            params=self._compliance_page_params(max_items, starting_token))
 
     # ---- Quarantine ---------------------------------------------------
 
-    def list_quarantined_assets(self) -> Dict[str, Any]:
+    def list_quarantined_assets(self, max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
         List quarantined assets using the /compliance/quarantine GET endpoint.
 
+        Args:
+            max_items: Records per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE when
+                omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
         Returns:
-            API response data: {"quarantinedAssets": [compliance records with assetName]}. The route
-            returns the whole list and takes no paging parameters.
+            API response data: {"quarantinedAssets": [compliance records with assetName],
+            "NextToken"?: str}. The page is filtered to the databases the caller may read after it
+            is fetched, so a page can be empty while a NextToken is present.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
         """
         return self._compliance_request(
-            'GET', API_COMPLIANCE_QUARANTINE, "Failed to list quarantined assets")
+            'GET', API_COMPLIANCE_QUARANTINE, "Failed to list quarantined assets",
+            params=self._compliance_page_params(max_items, starting_token))
 
     def release_quarantine(self, database_id: str, asset_id: str,
                            reason: Optional[str] = None) -> Dict[str, Any]:
@@ -6952,10 +6993,15 @@ class APIClient:
                 when false it starts executing at once
 
         Returns:
-            API response data: {message, cascadeId, state}
+            API response data: {message, cascadeId, state}. With `require_approval` the handler
+            answers 200 and `state` is pending_approval. Without it the handler writes the cascade
+            in state executing, starts the executor asynchronously and answers 202; the request
+            does not wait for the evaluations. Poll `get_compliance_cascade` until `state` is
+            completed or aborted (an aborted cascade carries `abortReason`).
 
         Raises:
-            InvalidComplianceDataError: When the request is rejected
+            InvalidComplianceDataError: When the request is rejected, or the executor could not be
+                started (the cascade is then recorded as aborted)
         """
         body: Dict[str, Any] = {
             'databaseId': database_id,
@@ -6971,13 +7017,17 @@ class APIClient:
                                    reason: Optional[str] = None) -> Dict[str, Any]:
         """
         Approve a pending cascade using the /compliance/cascades/{cascadeId}/approve POST
-        endpoint. Execution runs within the request.
+        endpoint. The handler moves the cascade to executing, starts the executor asynchronously
+        and answers 202; the request does not wait for the evaluations.
 
         Returns:
-            API response data: {message, cascadeId, result}
+            API response data: {message, cascadeId, state} with `state` executing. Poll
+            `get_compliance_cascade` until `state` is completed or aborted.
 
         Raises:
             ComplianceCascadeNotFoundError: When the cascade does not exist or is not pending
+            InvalidComplianceDataError: When the executor could not be started (the cascade is then
+                recorded as aborted)
         """
         endpoint = API_COMPLIANCE_CASCADE_APPROVE.format(cascadeId=cascade_id)
         body = {'reason': reason} if reason else {}
@@ -7002,37 +7052,41 @@ class APIClient:
 
     # ---- Audit --------------------------------------------------------
 
-    @staticmethod
-    def _compliance_audit_params(start_date: Optional[str], end_date: Optional[str],
-                                 limit: Optional[int]) -> Dict[str, Any]:
+    def _compliance_audit_params(self, start_date: Optional[str], end_date: Optional[str],
+                                 max_items: Optional[int],
+                                 starting_token: Optional[str]) -> Dict[str, Any]:
         params: Dict[str, Any] = {}
         if start_date:
             params['startDate'] = start_date
         if end_date:
             params['endDate'] = end_date
-        if limit is not None:
-            params['limit'] = limit
+        params.update(self._compliance_page_params(max_items, starting_token) or {})
         return params
 
     def query_compliance_audit(self, event_type: Optional[str] = None,
                                start_date: Optional[str] = None, end_date: Optional[str] = None,
-                               limit: Optional[int] = None) -> Dict[str, Any]:
+                               max_items: Optional[int] = None,
+                               starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Query the compliance audit trail using the /compliance/audit GET endpoint.
 
         Args:
             event_type: Only entries of this type (schema_bound_to_database, compliance_check,
                 quarantine_released, exception_granted, cascade_triggered, ...). Without it the
-                handler scans the table instead of querying the event-type index.
+                handler reads every event type in turn.
             start_date / end_date: ISO 8601 bounds on the entry timestamp
-            limit: Most entries to return; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT
-                when omitted
+            max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
+                omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. Sent as
+                `maxItems`, which the route reads ahead of its `limit` alias.
+            starting_token: The NextToken of a previous page
 
         Returns:
-            API response data: {"entries": [...]}. The route returns no continuation token, so a
-            result of `limit` entries may be incomplete.
+            API response data: {"entries": [...], "NextToken"?: str}, most recent first.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
         """
-        params = self._compliance_audit_params(start_date, end_date, limit)
+        params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
         if event_type:
             params['eventType'] = event_type
         return self._compliance_request(
@@ -7042,21 +7096,27 @@ class APIClient:
     def get_asset_compliance_audit(self, database_id: str, asset_id: str,
                                    start_date: Optional[str] = None,
                                    end_date: Optional[str] = None,
-                                   limit: Optional[int] = None) -> Dict[str, Any]:
+                                   max_items: Optional[int] = None,
+                                   starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Read one asset's compliance audit history using the
         /compliance/audit/{databaseId}/{assetId} GET endpoint.
 
         Args:
             start_date / end_date: ISO 8601 bounds on the entry timestamp
-            limit: Most entries to return; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT
-                when omitted. This route has no eventType filter.
+            max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
+                omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. This route has
+                no eventType filter.
+            starting_token: The NextToken of a previous page
 
         Returns:
-            API response data: {"entries": [...]}, most recent first, with no continuation token.
+            API response data: {"entries": [...], "NextToken"?: str}, most recent first.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
         """
         endpoint = API_COMPLIANCE_AUDIT_ASSET.format(databaseId=database_id, assetId=asset_id)
-        params = self._compliance_audit_params(start_date, end_date, limit)
+        params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
         return self._compliance_request(
             'GET', endpoint, f"Failed to read the audit history for asset '{asset_id}'",
             params=params or None)

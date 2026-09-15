@@ -256,6 +256,9 @@ def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
         lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
         lambda: server.list_subscriptions(starting_token="tok"),
         lambda: server.list_compliance_evaluations("db1", "a1", starting_token="tok"),
+        lambda: server.list_quarantined_assets(starting_token="tok"),
+        lambda: server.query_compliance_audit(starting_token="tok"),
+        lambda: server.get_asset_compliance_audit("db1", "a1", starting_token="tok"),
     ],
 )
 def test_every_paginated_read_tool_forwards_starting_token(mock_client, call):

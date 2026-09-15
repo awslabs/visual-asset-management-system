@@ -25,7 +25,10 @@ import click
 from ..constants import (
     COMPLIANCE_AUDIT_DEFAULT_LIMIT,
     DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE,
+    DEFAULT_COMPLIANCE_LIST_PAGE_SIZE,
+    MAX_COMPLIANCE_AUDIT_PAGE_SIZE,
     MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE,
+    MAX_COMPLIANCE_LIST_PAGE_SIZE,
 )
 from ..utils.api_client import APIClient
 from ..utils.decorators import get_profile_manager_from_context, requires_setup_and_auth
@@ -111,6 +114,13 @@ _COMPLIANCE_ERRORS = (
 # Formatters
 # ---------------------------------------------------------------------------
 
+def _next_page_lines(result: Dict[str, Any]) -> list:
+    """The continuation hint every paged listing prints when the response carries a NextToken."""
+    if not result.get('NextToken'):
+        return []
+    return [f"\nNext token: {result['NextToken']}", "Use --starting-token to get the next page"]
+
+
 def format_schema(schema: Dict[str, Any], include_body: bool = False) -> str:
     lines = [
         f"Schema Name: {schema.get('schemaName', 'N/A')}",
@@ -159,13 +169,13 @@ def format_schema_write(result: Dict[str, Any]) -> str:
 
 
 def format_bindings(result: Dict[str, Any]) -> str:
+    overrides = result.get('assetOverrides') or []
     lines = [
         f"Database: {result.get('databaseId', 'N/A')}",
         f"Database Schema: {result.get('databaseSchema') or 'none'}",
         f"Auto Evaluate: {result.get('complianceAutoEval', False)}",
-        f"Asset Overrides: {result.get('assetOverrideCount', 0)}",
+        f"Asset Overrides: {result.get('assetOverrideCount', 0)} ({len(overrides)} on this page)",
     ]
-    overrides = result.get('assetOverrides') or []
     if overrides:
         lines.append("-" * 80)
         for override in overrides:
@@ -173,6 +183,7 @@ def format_bindings(result: Dict[str, Any]) -> str:
                 f"  {override.get('assetId', 'N/A')}: {override.get('schemaName', 'N/A')}"
                 f" ({override.get('complianceState', 'N/A')})"
             )
+    lines.extend(_next_page_lines(result))
     return '\n'.join(lines)
 
 
@@ -200,12 +211,12 @@ def format_state_record(record: Dict[str, Any]) -> str:
 
 def format_database_state(result: Dict[str, Any]) -> str:
     summary = result.get('summary') or {}
+    assets = result.get('assets') or []
     lines = [
         f"Database: {result.get('databaseId', 'N/A')}",
-        f"Tracked Assets: {result.get('totalAssets', 0)}",
+        f"Tracked Assets: {result.get('totalAssets', 0)} ({len(assets)} on this page)",
         "Summary: " + ', '.join(f"{state}={count}" for state, count in summary.items()),
     ]
-    assets = result.get('assets') or []
     if assets:
         lines.append("-" * 80)
         for record in assets:
@@ -214,6 +225,7 @@ def format_database_state(result: Dict[str, Any]) -> str:
                 f"  {record.get('assetId', 'N/A')}{name}: {record.get('complianceState', 'unknown')}"
                 f" [{record.get('schemaName') or 'no schema'}]"
             )
+    lines.extend(_next_page_lines(result))
     return '\n'.join(lines)
 
 
@@ -260,20 +272,23 @@ def format_evaluations(result: Dict[str, Any]) -> str:
     for evaluation in evaluations:
         out.append(format_evaluation(evaluation))
         out.append("-" * 80)
-    if result.get('NextToken'):
-        out.append(f"\nNext token: {result['NextToken']}")
-        out.append("Use --starting-token to get the next page")
+    out.extend(_next_page_lines(result))
     return '\n'.join(out)
 
 
 def format_quarantine_list(result: Dict[str, Any]) -> str:
     assets = result.get('quarantinedAssets', [])
     if not assets:
+        # The route filters the page to the caller's databases after fetching it, so an empty page
+        # can still carry a token.
+        if result.get('NextToken'):
+            return '\n'.join(["No quarantined assets on this page."] + _next_page_lines(result))
         return "No quarantined assets."
-    out = [f"Found {len(assets)} quarantined asset(s):", "-" * 80]
+    out = [f"Found {len(assets)} quarantined asset(s) on this page:", "-" * 80]
     for record in assets:
         out.append(format_state_record(record))
         out.append("-" * 80)
+    out.extend(_next_page_lines(result))
     return '\n'.join(out)
 
 
@@ -290,6 +305,7 @@ def format_cascade(cascade: Dict[str, Any]) -> str:
         ('approvalTimeoutAt', 'Approval Deadline'),
         ('approvedBy', 'Approved By'),
         ('rejectedBy', 'Rejected By'),
+        ('abortReason', 'Abort Reason'),
         ('completedAt', 'Completed'),
     ):
         if cascade.get(key):
@@ -308,11 +324,25 @@ def format_cascade_list(result: Dict[str, Any]) -> str:
     return '\n'.join(out)
 
 
-def format_audit_entries(result: Dict[str, Any], bound: int) -> str:
+def format_cascade_started(result: Dict[str, Any]) -> str:
+    """A cascade create / approve response: the id, the state, and how to follow an executing one."""
+    lines = [
+        f"  Cascade ID: {result.get('cascadeId', 'N/A')}",
+        f"  State: {result.get('state', 'N/A')}",
+    ]
+    if result.get('state') == 'executing':
+        lines.append("  The evaluations run in the background; poll "
+                     f"'vamscli compliance cascade get -c {result.get('cascadeId', '<id>')}' "
+                     "until the state is completed or aborted.")
+    return '\n'.join(lines)
+
+
+def format_audit_entries(result: Dict[str, Any]) -> str:
     entries = result.get('entries', [])
     if not entries:
         return "No audit entries found."
-    out = [f"Found {len(entries)} audit entr{'y' if len(entries) == 1 else 'ies'}:", "-" * 80]
+    out = [f"Found {len(entries)} audit entr{'y' if len(entries) == 1 else 'ies'} on this page:",
+           "-" * 80]
     for entry in entries:
         out.append(f"{entry.get('timestamp', 'N/A')}  {entry.get('eventType', 'N/A')}")
         out.append(f"  Asset: {entry.get('databaseId', 'N/A')}:{entry.get('assetId', 'N/A')}")
@@ -324,9 +354,7 @@ def format_audit_entries(result: Dict[str, Any], bound: int) -> str:
         if entry.get('details'):
             out.append(f"  Details: {entry['details']}")
         out.append("-" * 80)
-    if len(entries) >= bound:
-        out.append(f"⚠️  {len(entries)} entries is the limit in force ({bound}); the route returns "
-                   "no continuation token. Narrow the date window or raise --limit to see more.")
+    out.extend(_next_page_lines(result))
     return '\n'.join(out)
 
 
@@ -618,21 +646,31 @@ def unbind(ctx: click.Context, database_id: str, asset_id: Optional[str], json_o
 
 @compliance.command('bindings')
 @click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID')
+@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LIST_PAGE_SIZE), default=None,
+              help=f'Asset overrides per page (the API applies {DEFAULT_COMPLIANCE_LIST_PAGE_SIZE} '
+                   f'when omitted; at most {MAX_COMPLIANCE_LIST_PAGE_SIZE})')
+@click.option('--starting-token', default=None, help='Token for pagination (the previous page\'s NextToken)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def bindings(ctx: click.Context, database_id: str, json_output: bool):
+def bindings(ctx: click.Context, database_id: str, max_items: Optional[int],
+             starting_token: Optional[str], json_output: bool):
     """Show a database's schema binding and its asset-level overrides.
+
+    assetOverrideCount is the total number of overrides; assetOverrides is one page of them, and
+    the response carries a NextToken when more exist — pass it back as --starting-token.
 
     Examples:
         vamscli compliance bindings -d my-database
+        vamscli compliance bindings -d my-database --max-items 20 --starting-token "token123"
         vamscli compliance bindings -d my-database --json-output
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
     output_status(f"Retrieving compliance bindings for database '{database_id}'...", json_output)
     try:
-        result = api_client.get_compliance_bindings(database_id)
+        result = api_client.get_compliance_bindings(
+            database_id, max_items=max_items, starting_token=starting_token)
         output_result(result, json_output, cli_formatter=format_bindings)
         return result
     except _COMPLIANCE_ERRORS as e:
@@ -684,6 +722,9 @@ def sweep(ctx: click.Context, schema_name: str, json_output: bool):
     """Re-evaluate every asset bound to a schema.
 
     Run after 'compliance schema update' so existing assets are checked against the new version.
+    Bound assets the caller is not authorized to evaluate are counted as skipped and never listed;
+    bound assets beyond the per-call cap are counted as remaining, and a repeated sweep works
+    through them.
 
     Examples:
         vamscli compliance sweep -n cad-quality
@@ -700,6 +741,10 @@ def sweep(ctx: click.Context, schema_name: str, json_output: bool):
             lines = [f"  Assets Triggered: {len(triggered)}"]
             lines.extend(f"    {t.get('databaseId', 'N/A')}:{t.get('assetId', 'N/A')}"
                          for t in triggered)
+            if r.get('skipped'):
+                lines.append(f"  Skipped (not authorized to evaluate): {r['skipped']}")
+            if r.get('assetsRemaining'):
+                lines.append(f"  Remaining (beyond this call's cap): {r['assetsRemaining']}")
             return '\n'.join(lines)
 
         output_result(result, json_output, success_message=f"✓ {result.get('message', 'Sweep triggered.')}",
@@ -713,22 +758,37 @@ def sweep(ctx: click.Context, schema_name: str, json_output: bool):
 @click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID')
 @click.option('-a', '--asset-id', default=None,
               help='One asset\'s record; omit for the database overview')
+@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LIST_PAGE_SIZE), default=None,
+              help=f'Asset records per page of the database overview (the API applies '
+                   f'{DEFAULT_COMPLIANCE_LIST_PAGE_SIZE} when omitted; at most {MAX_COMPLIANCE_LIST_PAGE_SIZE})')
+@click.option('--starting-token', default=None,
+              help='Token for pagination of the database overview (the previous page\'s NextToken)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def state(ctx: click.Context, database_id: str, asset_id: Optional[str], json_output: bool):
+def state(ctx: click.Context, database_id: str, asset_id: Optional[str], max_items: Optional[int],
+          starting_token: Optional[str], json_output: bool):
     """Show compliance state: one asset's record, or a database's overview.
 
-    The database overview carries a per-state summary and the record of every tracked asset. An
-    asset that is not tracked is reported with state 'unknown'.
+    The database overview carries a per-state summary and totalAssets covering every tracked
+    asset, and one page of their records as assets; the response carries a NextToken when more
+    exist — pass it back as --starting-token. An asset that is not tracked is reported with state
+    'unknown'. --max-items and --starting-token apply to the overview only; the single-asset route
+    is not paged.
 
     Examples:
         vamscli compliance state -d my-database
+        vamscli compliance state -d my-database --max-items 20 --starting-token "token123"
         vamscli compliance state -d my-database -a my-asset
         vamscli compliance state -d my-database --json-output
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
+    if asset_id and (max_items is not None or starting_token):
+        raise click.ClickException(
+            "--max-items and --starting-token apply to the database overview; the single-asset "
+            "route is not paged"
+        )
     try:
         if asset_id:
             output_status(f"Retrieving compliance state for asset '{asset_id}'...", json_output)
@@ -736,7 +796,8 @@ def state(ctx: click.Context, database_id: str, asset_id: Optional[str], json_ou
             output_result(result, json_output, cli_formatter=format_state_record)
         else:
             output_status(f"Retrieving compliance state for database '{database_id}'...", json_output)
-            result = api_client.get_database_compliance_state(database_id)
+            result = api_client.get_database_compliance_state(
+                database_id, max_items=max_items, starting_token=starting_token)
             output_result(result, json_output, cli_formatter=format_database_state)
         return result
     except _COMPLIANCE_ERRORS as e:
@@ -789,21 +850,31 @@ def quarantine():
 
 
 @quarantine.command('list')
+@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LIST_PAGE_SIZE), default=None,
+              help=f'Quarantined assets per page (the API applies {DEFAULT_COMPLIANCE_LIST_PAGE_SIZE} '
+                   f'when omitted; at most {MAX_COMPLIANCE_LIST_PAGE_SIZE})')
+@click.option('--starting-token', default=None, help='Token for pagination (the previous page\'s NextToken)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list_quarantined(ctx: click.Context, json_output: bool):
+def list_quarantined(ctx: click.Context, max_items: Optional[int], starting_token: Optional[str],
+                     json_output: bool):
     """List quarantined assets across every database the caller may read.
+
+    The response carries a NextToken when more quarantined assets exist; pass it back as
+    --starting-token. Each page is filtered to the caller's databases after it is read, so a page
+    can be empty while a NextToken is present — keep paging until no token is returned.
 
     Examples:
         vamscli compliance quarantine list
+        vamscli compliance quarantine list --max-items 20 --starting-token "token123"
         vamscli compliance quarantine list --json-output
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
     output_status("Retrieving quarantined assets...", json_output)
     try:
-        result = api_client.list_quarantined_assets()
+        result = api_client.list_quarantined_assets(max_items=max_items, starting_token=starting_token)
         output_result(result, json_output, cli_formatter=format_quarantine_list)
         return result
     except _COMPLIANCE_ERRORS as e:
@@ -909,6 +980,9 @@ def list_cascades(ctx: click.Context, json_output: bool):
 def get_cascade(ctx: click.Context, cascade_id: str, json_output: bool):
     """Get a cascade's record and state.
 
+    An executing cascade runs in the background; poll this command until the state is completed
+    or aborted (an aborted cascade carries its abortReason).
+
     Examples:
         vamscli compliance cascade get -c 3f0c...-...
         vamscli compliance cascade get -c 3f0c...-... --json-output
@@ -938,7 +1012,10 @@ def create_cascade(ctx: click.Context, database_id: str, asset_id: str, reason: 
     """Create a cascade that re-evaluates the dependents of an asset.
 
     By default the cascade waits in pending_approval for 'cascade approve' or 'cascade reject';
-    an unapproved cascade expires after the approval timeout. With --no-approval it starts at once.
+    an unapproved cascade expires after the approval timeout. With --no-approval it is created in
+    the executing state and the evaluations run in the background: the command returns the
+    cascadeId and state at once, and 'cascade get' shows the outcome once the state is completed
+    or aborted.
 
     Examples:
         vamscli compliance cascade create -d my-database -a my-asset
@@ -951,8 +1028,7 @@ def create_cascade(ctx: click.Context, database_id: str, asset_id: str, reason: 
         result = api_client.create_compliance_cascade(
             database_id, asset_id, reason=reason, require_approval=not no_approval)
         output_result(result, json_output, success_message="✓ Cascade created.",
-                      cli_formatter=lambda r: f"  Cascade ID: {r.get('cascadeId', 'N/A')}\n"
-                                              f"  State: {r.get('state', 'N/A')}")
+                      cli_formatter=format_cascade_started)
         return result
     except _COMPLIANCE_ERRORS as e:
         _handle_compliance_error(e, json_output)
@@ -965,10 +1041,11 @@ def create_cascade(ctx: click.Context, database_id: str, asset_id: str, reason: 
 @click.pass_context
 @requires_setup_and_auth
 def approve_cascade(ctx: click.Context, cascade_id: str, reason: Optional[str], json_output: bool):
-    """Approve a pending cascade and execute it.
+    """Approve a pending cascade and start its execution.
 
-    Execution runs within the request and its result is returned. Only a cascade in
-    pending_approval can be approved.
+    The cascade moves to the executing state and the evaluations run in the background; the
+    command returns the cascadeId and state at once, and 'cascade get' shows the outcome once
+    the state is completed or aborted. Only a cascade in pending_approval can be approved.
 
     Examples:
         vamscli compliance cascade approve -c 3f0c...-...
@@ -979,15 +1056,8 @@ def approve_cascade(ctx: click.Context, cascade_id: str, reason: Optional[str], 
     output_status(f"Approving cascade '{cascade_id}'...", json_output)
     try:
         result = api_client.approve_compliance_cascade(cascade_id, reason=reason)
-
-        def _fmt(r):
-            lines = [f"  Cascade ID: {r.get('cascadeId', 'N/A')}"]
-            if r.get('result') is not None:
-                lines.append(f"  Result: {json.dumps(r['result'], indent=2)}")
-            return '\n'.join(lines)
-
-        output_result(result, json_output, success_message="✓ Cascade approved and executed.",
-                      cli_formatter=_fmt)
+        output_result(result, json_output, success_message="✓ Cascade approved.",
+                      cli_formatter=format_cascade_started)
         return result
     except _COMPLIANCE_ERRORS as e:
         _handle_compliance_error(e, json_output)
@@ -1029,14 +1099,19 @@ def reject_cascade(ctx: click.Context, cascade_id: str, reason: Optional[str], j
               help='Only entries of this event type (global listing only)')
 @click.option('--start-date', default=None, help='Earliest entry timestamp (ISO 8601)')
 @click.option('--end-date', default=None, help='Latest entry timestamp (ISO 8601)')
-@click.option('--limit', type=int, default=None,
-              help=f'Most entries to return (the API applies {COMPLIANCE_AUDIT_DEFAULT_LIMIT} when omitted)')
+@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_AUDIT_PAGE_SIZE), default=None,
+              help=f'Entries per page (the API applies {COMPLIANCE_AUDIT_DEFAULT_LIMIT} when omitted; '
+                   f'at most {MAX_COMPLIANCE_AUDIT_PAGE_SIZE})')
+@click.option('--limit', type=click.IntRange(1, MAX_COMPLIANCE_AUDIT_PAGE_SIZE), default=None,
+              help='Alias of --max-items')
+@click.option('--starting-token', default=None, help='Token for pagination (the previous page\'s NextToken)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str],
           event_type: Optional[str], start_date: Optional[str], end_date: Optional[str],
-          limit: Optional[int], json_output: bool):
+          max_items: Optional[int], limit: Optional[int], starting_token: Optional[str],
+          json_output: bool):
     """Query the compliance audit trail.
 
     Without --database-id/--asset-id the global trail is listed, optionally narrowed to one
@@ -1044,13 +1119,15 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
     quarantine_released, exception_granted, cascade_triggered, cascade_approved, ...). With both,
     one asset's history is listed; that route has no event-type filter.
 
-    The routes return no continuation token: a result of --limit entries may be incomplete, so
-    narrow the date window or raise --limit rather than treating it as the whole trail.
+    Entries are returned one page per call, most recent first. The response carries a NextToken
+    when more entries exist; pass it back as --starting-token to read the next page. --limit is
+    the same option as --max-items.
 
     Examples:
         vamscli compliance audit
-        vamscli compliance audit --event-type quarantine_released --limit 100
+        vamscli compliance audit --event-type quarantine_released --max-items 100
         vamscli compliance audit --start-date 2026-09-01T00:00:00Z --end-date 2026-09-30T23:59:59Z
+        vamscli compliance audit --starting-token "token123"
         vamscli compliance audit -d my-database -a my-asset
     """
     # Setup/auth already validated by decorator
@@ -1063,17 +1140,23 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
         raise click.ClickException(
             "--event-type applies to the global audit listing; the per-asset route has no such filter"
         )
-    bound = limit if limit is not None else COMPLIANCE_AUDIT_DEFAULT_LIMIT
+    if max_items is not None and limit is not None and max_items != limit:
+        raise click.ClickException(
+            "--limit is an alias of --max-items; give one of them, or the same value for both"
+        )
+    page_size = max_items if max_items is not None else limit
     try:
         if asset_id:
             output_status(f"Retrieving the audit history for asset '{asset_id}'...", json_output)
             result = api_client.get_asset_compliance_audit(
-                database_id, asset_id, start_date=start_date, end_date=end_date, limit=limit)
+                database_id, asset_id, start_date=start_date, end_date=end_date,
+                max_items=page_size, starting_token=starting_token)
         else:
             output_status("Querying the compliance audit trail...", json_output)
             result = api_client.query_compliance_audit(
-                event_type=event_type, start_date=start_date, end_date=end_date, limit=limit)
-        output_result(result, json_output, cli_formatter=lambda r: format_audit_entries(r, bound))
+                event_type=event_type, start_date=start_date, end_date=end_date,
+                max_items=page_size, starting_token=starting_token)
+        output_result(result, json_output, cli_formatter=format_audit_entries)
         return result
     except _COMPLIANCE_ERRORS as e:
         _handle_compliance_error(e, json_output)

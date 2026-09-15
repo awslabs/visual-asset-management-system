@@ -9299,7 +9299,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/bind/{databaseId}:
         get:
             summary: "Get the schema bindings of a database."
-            description: "Returns the schema bound to a database and every asset in the database that carries its own schema override."
+            description: "Returns the schema bound to a database and one page of the assets in the database that carry their own schema override; `assetOverrideCount` counts every override, and `NextToken` continues the page."
             parameters:
                 - name: databaseId
                   in: path
@@ -9307,6 +9307,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                - $ref: "#/components/parameters/complianceListMaxItemsParam"
+                - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
                 "200":
                     description: Bindings retrieved successfully.
@@ -9315,7 +9317,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/complianceBindingsResponse"
                 "400":
-                    description: Invalid database identifier, or the database does not exist.
+                    description: Invalid database identifier or pagination token, or the database does not exist.
                     content:
                         application/json:
                             schema:
@@ -9560,7 +9562,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/sweep/{schemaName}:
         post:
             summary: "Sweep the assets bound to a schema."
-            description: "Evaluates every asset whose compliance record is bound to the schema, up to 200 assets per call; `assetsRemaining` reports how many were not reached."
+            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate, up to 200 assets per call. `skipped` counts the bound assets the caller is not authorized to evaluate (they are never listed); `assetsRemaining` reports how many were not reached."
             parameters:
                 - name: schemaName
                   in: path
@@ -9688,7 +9690,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/state/{databaseId}:
         get:
             summary: "Get the compliance overview of a database."
-            description: "Returns per-state counts and every tracked asset of a database, each with its asset name."
+            description: "Returns per-state counts covering every tracked asset of a database, and one page of the tracked assets in `assetId` order, each with its asset name; `NextToken` continues the page."
             parameters:
                 - name: databaseId
                   in: path
@@ -9696,6 +9698,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                - $ref: "#/components/parameters/complianceListMaxItemsParam"
+                - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
                 "200":
                     description: Database compliance overview retrieved successfully.
@@ -9704,7 +9708,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/databaseComplianceOverviewResponse"
                 "400":
-                    description: Invalid database identifier.
+                    description: Invalid database identifier or pagination token.
                     content:
                         application/json:
                             schema:
@@ -9726,7 +9730,10 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/quarantine:
         get:
             summary: "List quarantined assets."
-            description: "Returns every quarantined asset across databases that the caller may read, each with its asset name."
+            description: "Returns one page of quarantined assets across databases, each with its asset name, filtered to the databases the caller may read after the page is read — a page can be empty while `NextToken` is present, so keep following the token."
+            parameters:
+                - $ref: "#/components/parameters/complianceListMaxItemsParam"
+                - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
                 "200":
                     description: Quarantined assets retrieved successfully.
@@ -9734,6 +9741,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/listQuarantinedResponse"
+                "400":
+                    description: Invalid pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
                     content:
@@ -9875,7 +9888,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         post:
             summary: "Create a cascade."
-            description: "Creates a cascade that re-evaluates the downstream assets of the named asset. With `requireApproval` (the default) the cascade waits in `pending_approval`; otherwise it executes in the request and the response carries the result."
+            description: "Creates a cascade that re-evaluates the downstream assets of the named asset. With `requireApproval` (the default) the cascade waits in `pending_approval` and the response is 200. Otherwise the cascade is written in the `executing` state, its execution is started asynchronously and the response is 202; the evaluations do not run inside the request. Follow the cascade with GET /compliance/cascades/{cascadeId} until `state` is `completed` or `aborted`."
             requestBody:
                 required: true
                 content:
@@ -9884,13 +9897,19 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             $ref: "#/components/schemas/createCascadeRequest"
             responses:
                 "200":
-                    description: Cascade created.
+                    description: Cascade created and waiting for approval.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/createCascadeResponse"
+                "202":
+                    description: Cascade created and executing in the background.
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/createCascadeResponse"
                 "400":
-                    description: Invalid parameters, or the asset does not exist.
+                    description: Invalid parameters, the asset does not exist, or the cascade could not be started (it is then recorded as `aborted`).
                     content:
                         application/json:
                             schema:
@@ -9912,7 +9931,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/cascades/{cascadeId}:
         get:
             summary: "Get a cascade."
-            description: "Returns one cascade with its state and per-node progress."
+            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; an aborted cascade carries `abortReason`."
             parameters:
                 - name: cascadeId
                   in: path
@@ -9950,7 +9969,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/cascades/{cascadeId}/approve:
         post:
             summary: "Approve a pending cascade."
-            description: "Moves a `pending_approval` cascade to `executing`, evaluates its downstream assets in dependency order within the request, and returns the execution result."
+            description: "Moves a `pending_approval` cascade to `executing`, starts its execution asynchronously and records a `cascade_approved` audit entry; the response is 202 and the evaluations do not run inside the request. Follow the cascade with GET /compliance/cascades/{cascadeId} until `state` is `completed` or `aborted`."
             parameters:
                 - name: cascadeId
                   in: path
@@ -9965,14 +9984,14 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         schema:
                             $ref: "#/components/schemas/cascadeDecisionRequest"
             responses:
-                "200":
-                    description: Cascade approved and executed.
+                "202":
+                    description: Cascade approved and executing in the background.
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/approveCascadeResponse"
                 "400":
-                    description: Invalid cascade identifier, or the cascade does not exist or is not pending approval.
+                    description: Invalid cascade identifier, the cascade does not exist or is not pending approval, or the cascade could not be started (it is then recorded as `aborted`).
                     content:
                         application/json:
                             schema:
@@ -16025,6 +16044,7 @@ components:
                     type: boolean
                 assetOverrides:
                     type: array
+                    description: "One page of the asset-level overrides, in `assetId` order."
                     items:
                         type: object
                         properties:
@@ -16036,6 +16056,10 @@ components:
                                 type: string
                 assetOverrideCount:
                     type: integer
+                    description: "Number of asset-level overrides across every page."
+                NextToken:
+                    type: string
+                    description: "Continuation token for the next page of `assetOverrides`; absent on the last page."
             required:
                 - databaseId
                 - databaseSchema
@@ -16137,11 +16161,15 @@ components:
                 assetsRemaining:
                     type: integer
                     description: "Bound assets beyond the 200-asset cap of one call."
+                skipped:
+                    type: integer
+                    description: "Bound assets the caller is not authorized to evaluate; counted, never listed."
             required:
                 - message
                 - schemaName
                 - assetsTriggered
                 - assetsRemaining
+                - skipped
 
         complianceEvaluation:
             type: object
@@ -16280,9 +16308,10 @@ components:
                     type: string
                 totalAssets:
                     type: integer
-                    description: "Number of assets in the database that have a compliance record."
+                    description: "Number of assets in the database that have a compliance record, across every page."
                 summary:
                     type: object
+                    description: "Per-state counts across every tracked asset, not just this page."
                     properties:
                         compliant:
                             type: integer
@@ -16296,8 +16325,12 @@ components:
                             type: integer
                 assets:
                     type: array
+                    description: "One page of the tracked assets, in `assetId` order, each with its `assetName`."
                     items:
                         $ref: "#/components/schemas/complianceState"
+                NextToken:
+                    type: string
+                    description: "Continuation token for the next page of `assets`; absent on the last page."
             required:
                 - databaseId
                 - totalAssets
@@ -16309,8 +16342,12 @@ components:
             properties:
                 quarantinedAssets:
                     type: array
+                    description: "One page of quarantined assets, filtered to the databases the caller may read; may be empty while `NextToken` is present."
                     items:
                         $ref: "#/components/schemas/complianceState"
+                NextToken:
+                    type: string
+                    description: "Continuation token for the next page; absent on the last page."
             required:
                 - quarantinedAssets
 
@@ -16392,6 +16429,9 @@ components:
                     format: date-time
                 rejectionReason:
                     type: string
+                abortReason:
+                    type: string
+                    description: "Why an `aborted` cascade stopped: the rejection, or the failure that ended the run."
                 completedAt:
                     type: string
                     format: date-time
@@ -16442,42 +16482,6 @@ components:
                 - databaseId
                 - assetId
 
-        cascadeExecutionResult:
-            type: object
-            description: "Outcome of executing a cascade."
-            properties:
-                cascadeId:
-                    type: string
-                    format: uuid
-                status:
-                    type: string
-                    enum: [completed]
-                evaluated:
-                    type: integer
-                    description: "Number of downstream assets evaluated."
-                results:
-                    type: array
-                    items:
-                        type: object
-                        properties:
-                            node:
-                                type: string
-                                description: "`databaseId:assetId` of the downstream asset."
-                            status:
-                                type: string
-                                description: "The evaluation verdict, `skipped` (no bound schema), or `error`."
-                            evaluationId:
-                                type: string
-                                format: uuid
-                        required:
-                            - node
-                            - status
-                error:
-                    type: string
-                    description: "Present instead of `status` when the cascade could not execute."
-            required:
-                - cascadeId
-
         createCascadeResponse:
             type: object
             properties:
@@ -16489,8 +16493,7 @@ components:
                 state:
                     type: string
                     enum: [pending_approval, executing]
-                result:
-                    $ref: "#/components/schemas/cascadeExecutionResult"
+                    description: "`pending_approval` with a 200 when the cascade waits for approval; `executing` with a 202 when its execution was started in the background."
             required:
                 - message
                 - cascadeId
@@ -16511,12 +16514,14 @@ components:
                 cascadeId:
                     type: string
                     format: uuid
-                result:
-                    $ref: "#/components/schemas/cascadeExecutionResult"
+                state:
+                    type: string
+                    enum: [executing]
+                    description: "The execution runs in the background; poll GET /compliance/cascades/{cascadeId} for `completed` or `aborted`."
             required:
                 - message
                 - cascadeId
-                - result
+                - state
 
         rejectCascadeResponse:
             type: object
@@ -16742,12 +16747,12 @@ components:
       complianceAuditMaxItemsParam:
         name: maxItems
         in: query
-        description: "Number of audit entries returned in one page. Default is 50, reduced to 500; follow NextToken for the rest. Takes precedence over limit"
+        description: "Number of audit entries returned in one page. Default is 100, reduced to 500; follow NextToken for the rest. Takes precedence over limit"
         schema:
             type: integer
             minimum: 1
             maximum: 500
-            default: 50
+            default: 100
       complianceAuditLimitParam:
         name: limit
         in: query
@@ -16756,7 +16761,16 @@ components:
             type: integer
             minimum: 1
             maximum: 500
-            default: 50
+            default: 100
+      complianceListMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Number of records returned in one page of the database compliance overview, the quarantine listing or the asset overrides of a binding. Default is 100, reduced to 500; follow NextToken for the rest"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
       complianceAuditStartDateParam:
         name: startDate
         in: query

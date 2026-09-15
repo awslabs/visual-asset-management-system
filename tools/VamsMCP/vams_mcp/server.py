@@ -34,8 +34,9 @@ from .client import (  # noqa: E402
     VamsClient,
     API_ASSETS,
     API_DATABASE_ASSETS,
-    COMPLIANCE_AUDIT_DEFAULT_LIMIT,
+    MAX_COMPLIANCE_AUDIT_PAGE_SIZE,
     MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE,
+    MAX_COMPLIANCE_LIST_PAGE_SIZE,
     SUBSCRIPTION_ENTITY_ASSET,
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
@@ -194,19 +195,13 @@ def _paginate_with_page_metadata(
     return result
 
 
-def _single_response_list(
-    page: Any, items_key: str, noun: str, bound: Optional[int] = None
-) -> Dict[str, Any]:
+def _single_response_list(page: Any, items_key: str) -> Dict[str, Any]:
     """Shape a route that returns its whole list in ONE response, under its own field name.
 
-    The compliance listings (schemas, quarantined assets, pending cascades, audit entries) carry no
-    ``message`` envelope and no continuation token, so ``paginate()`` has nothing to follow and a
-    bare ``Items`` read finds nothing. The list is lifted onto ``Items`` with a ``count`` so the tool
-    matches every other list tool, and every other top-level field is carried through.
-
-    ``bound`` is the row limit the route applied when it has one (the audit ``limit``). A result that
-    reached it is flagged ``truncated``: there is no token to resume with, so the caller must narrow
-    the request rather than treat the count as a total.
+    The compliance schema and pending-cascade listings carry no ``message`` envelope and no
+    continuation token, so ``paginate()`` has nothing to follow and a bare ``Items`` read finds
+    nothing. The list is lifted onto ``Items`` with a ``count`` so the tool matches every other list
+    tool, and every other top-level field is carried through.
     """
     items = page.get(items_key) if isinstance(page, dict) else None
     if not isinstance(items, list):
@@ -216,14 +211,6 @@ def _single_response_list(
     }
     result["Items"] = items
     result["count"] = len(items)
-    if bound is not None and len(items) >= bound:
-        result["truncated"] = True
-        result["note"] = (
-            f"Result may be INCOMPLETE: returned {len(items)} {noun}(s), which is the limit in force "
-            f"({bound}). This route returns no continuation token, so there is nothing to resume "
-            "with — narrow the date window or raise `limit` to see more, and do not report this "
-            "count as a total."
-        )
     return result
 
 
@@ -1511,9 +1498,7 @@ def list_compliance_schemas(database_id: Optional[str] = None) -> Dict[str, Any]
     `truncated`. Each item carries schemaName, databaseId (the scope, or GLOBAL), description,
     schemaBody (the rule document), version and createdAt.
     """
-    return _single_response_list(
-        CLIENT.api.list_compliance_schemas(database_id=database_id), "schemas", "schema"
-    )
+    return _single_response_list(CLIENT.api.list_compliance_schemas(database_id=database_id), "schemas")
 
 
 @mcp.tool()
@@ -1532,15 +1517,26 @@ def get_compliance_schema(schema_name: str) -> Dict[str, Any]:
 
 @mcp.tool()
 @tool_result
-def get_compliance_bindings(database_id: str) -> Dict[str, Any]:
-    """Read a database's compliance schema binding and its asset-level overrides.
+def get_compliance_bindings(
+    database_id: str,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read a database's compliance schema binding and ONE PAGE of its asset-level overrides.
 
     Returns `databaseSchema` (the bound schema name, or null when none), `complianceAutoEval`,
-    `assetOverrides` (each assetId, its schemaName and complianceState) and `assetOverrideCount`.
-    An asset override takes precedence over the database binding for that asset. The overrides list
-    is complete — the route returns it whole.
+    `assetOverrideCount` — the TOTAL number of overrides — and `assetOverrides`, one page of them
+    (each assetId, its schemaName and complianceState). An asset override takes precedence over the
+    database binding for that asset.
+
+    The response is the route's own page, not a walk: `max_items` is the page size (the route
+    applies its default when omitted and caps larger values), and a `NextToken` in the response
+    means more overrides exist — pass it back as `starting_token` to read the next page. Judge
+    completeness by `assetOverrideCount` against the rows seen, not by the length of one page.
     """
-    return CLIENT.api.get_compliance_bindings(database_id)
+    return CLIENT.api.get_compliance_bindings(
+        database_id, max_items=max_items, starting_token=starting_token
+    )
 
 
 @mcp.tool()
@@ -1560,15 +1556,24 @@ def get_asset_compliance_state(database_id: str, asset_id: str) -> Dict[str, Any
 
 @mcp.tool()
 @tool_result
-def get_database_compliance_overview(database_id: str) -> Dict[str, Any]:
-    """Read a database's compliance overview: `totalAssets`, a per-state `summary` (compliant,
-    non_compliant, pending_evaluation, quarantined, unknown) and `assets`, the record of every
-    tracked asset with its `assetName`.
+def get_database_compliance_overview(
+    database_id: str,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read a database's compliance overview: `totalAssets` and a per-state `summary` (compliant,
+    non_compliant, pending_evaluation, quarantined, unknown) covering EVERY tracked asset, plus
+    `assets` — ONE PAGE of their records, each with its `assetName`, in assetId order.
 
     Only assets with a compliance record are counted — an asset in a database with no binding is
-    absent, not `unknown`. The route returns the whole list in one response.
+    absent, not `unknown`. The response is the route's own page, not a walk: `max_items` is the
+    page size (the route applies its default when omitted and caps larger values), and a `NextToken`
+    in the response means more records exist — pass it back as `starting_token`. Use `summary` /
+    `totalAssets` for counts; do not count the rows of one page.
     """
-    return CLIENT.api.get_database_compliance_state(database_id)
+    return CLIENT.api.get_database_compliance_state(
+        database_id, max_items=max_items, starting_token=starting_token
+    )
 
 
 @mcp.tool()
@@ -1605,15 +1610,29 @@ def list_compliance_evaluations(
 
 @mcp.tool()
 @tool_result
-def list_quarantined_assets() -> Dict[str, Any]:
-    """List every quarantined asset the caller may read, as `Items` with `count`.
+def list_quarantined_assets(
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List the quarantined assets the caller may read, across every database (auto-paginated).
 
     Each item is the asset's compliance record (databaseId, assetId, assetName, schemaName,
-    quarantineReason, updatedAt). The route returns the whole list in one response and takes no
-    paging parameters, so there is no `starting_token` and the result is never `truncated`.
+    quarantineReason, updatedAt). The route filters each page to the caller's databases AFTER
+    reading it, so a page can be empty while a token remains — the walk keeps following the token,
+    and an empty `Items` with `truncated` set does not mean nothing is quarantined.
+
+    The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
+    and `NextToken` continues the walk — pass it back as `starting_token`.
     """
-    return _single_response_list(
-        CLIENT.api.list_quarantined_assets(), "quarantinedAssets", "quarantined asset"
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_quarantined_assets(
+            # The route reads its page size from `maxItems` and clamps it to its own cap.
+            max_items=min(params["pageSize"], MAX_COMPLIANCE_LIST_PAGE_SIZE),
+            starting_token=params.get("startingToken"),
+        ),
+        max_items=max_items,
+        items_key="quarantinedAssets",
+        starting_token=starting_token,
     )
 
 
@@ -1622,21 +1641,26 @@ def list_quarantined_assets() -> Dict[str, Any]:
 def list_compliance_cascades() -> Dict[str, Any]:
     """List cascades AWAITING APPROVAL, as `Items` with `count`.
 
-    Only cascades in state pending_approval are listed; an executing, completed or rejected cascade
+    Only cascades in state pending_approval are listed; an executing, completed or aborted cascade
     is read with get_compliance_cascade() by id. Each item carries cascadeId, triggeredByDatabaseId,
     triggeredByAssetId, triggerReason, createdAt and approvalTimeoutAt (after which an unapproved
     cascade expires). The route returns the whole list in one response and takes no paging
     parameters.
     """
-    return _single_response_list(CLIENT.api.list_compliance_cascades(), "cascades", "cascade")
+    return _single_response_list(CLIENT.api.list_compliance_cascades(), "cascades")
 
 
 @mcp.tool()
 @tool_result
 def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
     """Read one cascade: its `state` (pending_approval, executing, completed, aborted), the asset
-    that triggered it, and — once decided — approvedBy / approvalReason or rejectedBy /
-    rejectionReason with completedAt."""
+    that triggered it, per-node progress (`nodes`, `executionOrder`, `totalNodes`), and — once
+    decided — approvedBy / approvalReason or rejectedBy / rejectionReason with completedAt.
+
+    This is how a started cascade is followed: create_compliance_cascade() with
+    `require_approval=False` and approve_compliance_cascade() return while the cascade is
+    `executing`, so poll this tool until `state` is `completed` or `aborted`. An aborted cascade
+    carries `abortReason` (a rejection, or the failure that stopped the run)."""
     return CLIENT.api.get_compliance_cascade(cascade_id)
 
 
@@ -1646,28 +1670,34 @@ def query_compliance_audit(
     event_type: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    limit: Optional[int] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Query the global compliance audit trail, as `Items` with `count`.
+    """Query the global compliance audit trail, most recent first (auto-paginated).
 
     `event_type` narrows to one kind of entry (schema_bound_to_database, schema_bound_to_asset,
     schema_unbound_from_database, schema_unbound_from_asset, schema_deleted, compliance_check,
-    quarantine_released, exception_granted, cascade_triggered, cascade_approved, ...) and is what
-    makes the query indexed; without it the trail is scanned. `start_date` / `end_date` are ISO
-    8601 bounds on the entry timestamp.
+    quarantine_released, exception_granted, cascade_triggered, cascade_approved, ...); without it
+    every event type is read in turn and the token carries the position of that walk. `start_date`
+    / `end_date` are ISO 8601 bounds on the entry timestamp. Use get_asset_compliance_audit() for
+    one asset.
 
-    This route is BOUNDED by `limit` and returns NO continuation token: the handler applies its own
-    default when `limit` is omitted, and rows past the bound are unreachable in this call. A result
-    that reached the bound is flagged `truncated` with a `note` — narrow the window or raise `limit`
-    rather than reporting the count as a total. Use get_asset_compliance_audit() for one asset.
+    The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
+    and `NextToken` continues the walk — pass it back as `starting_token` (with the same filters,
+    which the token was issued for). Do not report a truncated count as the size of the trail.
     """
-    return _single_response_list(
-        CLIENT.api.query_compliance_audit(
-            event_type=event_type, start_date=start_date, end_date=end_date, limit=limit
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.query_compliance_audit(
+            event_type=event_type,
+            start_date=start_date,
+            end_date=end_date,
+            # The route reads its page size from `maxItems` and clamps it to its own cap.
+            max_items=min(params["pageSize"], MAX_COMPLIANCE_AUDIT_PAGE_SIZE),
+            starting_token=params.get("startingToken"),
         ),
-        "entries",
-        "audit entry",
-        bound=limit if limit is not None else COMPLIANCE_AUDIT_DEFAULT_LIMIT,
+        max_items=max_items,
+        items_key="entries",
+        starting_token=starting_token,
     )
 
 
@@ -1678,23 +1708,31 @@ def get_asset_compliance_audit(
     asset_id: str,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    limit: Optional[int] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Read one asset's compliance audit history, most recent first, as `Items` with `count`.
+    """Read one asset's compliance audit history, most recent first (auto-paginated).
 
     Same entry shape as query_compliance_audit(). This route has NO event-type filter — the
-    parameter is absent because the handler would ignore it — and, like the global trail, it is
-    BOUNDED by `limit` with no continuation token: a result that reached the bound is flagged
-    `truncated`, and the way past it is a narrower `start_date` / `end_date` window or a larger
-    `limit`.
+    parameter is absent because the handler would ignore it; `start_date` / `end_date` narrow the
+    window.
+
+    The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
+    and `NextToken` continues the walk — pass it back as `starting_token` with the same window.
     """
-    return _single_response_list(
-        CLIENT.api.get_asset_compliance_audit(
-            database_id, asset_id, start_date=start_date, end_date=end_date, limit=limit
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.get_asset_compliance_audit(
+            database_id,
+            asset_id,
+            start_date=start_date,
+            end_date=end_date,
+            # The route reads its page size from `maxItems` and clamps it to its own cap.
+            max_items=min(params["pageSize"], MAX_COMPLIANCE_AUDIT_PAGE_SIZE),
+            starting_token=params.get("startingToken"),
         ),
-        "entries",
-        "audit entry",
-        bound=limit if limit is not None else COMPLIANCE_AUDIT_DEFAULT_LIMIT,
+        max_items=max_items,
+        items_key="entries",
+        starting_token=starting_token,
     )
 
 
@@ -2320,13 +2358,17 @@ if CONFIG.enable_writes:
     @mcp.tool()
     @tool_result
     def sweep_compliance_schema(schema_name: str) -> Dict[str, Any]:
-        """Re-evaluate EVERY asset bound to a schema; returns `assetsTriggered` (databaseId,
-        assetId pairs).
+        """Re-evaluate EVERY asset bound to a schema that the caller may evaluate; returns
+        `assetsTriggered` (databaseId, assetId pairs), `skipped` and `assetsRemaining`.
 
-        The usual follow-up to update_compliance_schema(). Each asset is evaluated as by
-        evaluate_asset_compliance(), so a schema with pipeline rules starts one workflow execution
-        per bound asset — real AWS compute, multiplied by the binding count. Keep this tool out of
-        `autoApprove` and check get_compliance_bindings() for the blast radius first.
+        `skipped` counts the bound assets the caller is not authorized to evaluate — they are
+        counted, never listed, so a sweep by a narrowly scoped caller can trigger nothing and still
+        succeed. `assetsRemaining` counts the bound assets beyond the per-call cap; call again to
+        work through them. The usual follow-up to update_compliance_schema(). Each asset is
+        evaluated as by evaluate_asset_compliance(), so a schema with pipeline rules starts one
+        workflow execution per bound asset — real AWS compute, multiplied by the binding count.
+        Keep this tool out of `autoApprove` and check get_compliance_bindings() for the blast
+        radius first.
         """
         return CLIENT.api.sweep_compliance_schema(schema_name)
 
@@ -2360,14 +2402,18 @@ if CONFIG.enable_writes:
         require_approval: bool = True,
     ) -> Dict[str, Any]:
         """Create a cascade that re-evaluates the dependents of an asset. Returns `cascadeId` and
-        `state`.
+        `state`; nothing else — the evaluations never run inside this call.
 
         With `require_approval` (the default) the cascade waits in pending_approval for
         approve_compliance_cascade() / reject_compliance_cascade() and expires at its
-        approvalTimeoutAt; with `require_approval=False` it EXECUTES INSIDE THIS CALL and the
-        response also carries `result`. Executing re-evaluates every dependent, which starts a
-        workflow execution per pipeline rule — real AWS compute — so leave approval on unless the
-        user has asked for an immediate run, and keep this tool out of `autoApprove`.
+        approvalTimeoutAt. With `require_approval=False` the route answers 202 with `state`
+        `executing`: the run has been handed to a background executor and this call returns at
+        once, so poll get_compliance_cascade() until `state` is `completed` or `aborted` (an aborted
+        cascade carries `abortReason`) — there is no `result` in this response. A cascade the
+        executor could not be started for is recorded as aborted and reported as an error here.
+        Executing re-evaluates every dependent, which starts a workflow execution per pipeline
+        rule — real AWS compute — so leave approval on unless the user has asked for an immediate
+        run, and keep this tool out of `autoApprove`.
         """
         return CLIENT.api.create_compliance_cascade(
             database_id, asset_id, reason=reason, require_approval=require_approval
@@ -2376,11 +2422,14 @@ if CONFIG.enable_writes:
     @mcp.tool()
     @tool_result
     def approve_compliance_cascade(cascade_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
-        """Approve a pending cascade. Execution runs INSIDE this call and the response carries
-        `result`.
+        """Approve a pending cascade and START its execution. Returns `cascadeId` and `state`
+        (`executing`); the route answers 202 and the evaluations run in the background.
 
-        Only a cascade in pending_approval can be approved; any other state is reported as not
-        found. Approval starts the dependents' re-evaluation — a workflow execution per pipeline
+        This call does not wait for the run and carries no `result`: poll get_compliance_cascade()
+        until `state` is `completed` or `aborted` (an aborted cascade carries `abortReason`). Only a
+        cascade in pending_approval can be approved; any other state is reported as not found, and
+        a cascade whose executor could not be started is recorded as aborted and reported as an
+        error. Approval starts the dependents' re-evaluation — a workflow execution per pipeline
         rule, real AWS compute — so read the cascade with get_compliance_cascade() and confirm with
         the user first, and keep this tool out of `autoApprove`.
         """
