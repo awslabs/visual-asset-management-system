@@ -157,12 +157,12 @@ VAMS includes pre-built permission templates for common access patterns such as 
 
 ### Compliance permission templates
 
-When Compliance is enabled, two additional templates are available:
+Two templates set up compliance roles:
 
-| Template | Description |
-| --- | --- |
-| **Compliance Admin** | Full compliance management scoped to a database: create/update schemas, trigger evaluations, release quarantines, approve cascades, plus read-only access to assets and databases. |
-| **Compliance Readonly** | View-only compliance access scoped to a database: view schemas, evaluation results, quarantine list, and audit logs. Cannot modify compliance state. |
+| Template                | Description                                                                                                                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compliance Admin**    | Full compliance management scoped to a database: create, update and delete schemas, trigger evaluations, release quarantines, approve cascades, plus read-only access to assets and databases. |
+| **Compliance Readonly** | View-only compliance access scoped to a database: view schemas, evaluation results, quarantine list, and audit logs. Cannot modify compliance state.                                           |
 
 Both templates require `DATABASE_ID` and `ROLE_NAME` variables. For details on compliance permissions including the three compliance object types (`complianceSchema`, `complianceEvaluation`, `complianceCascade`), see [User Guide: Compliance > Permissions](compliance.md#permissions).
 

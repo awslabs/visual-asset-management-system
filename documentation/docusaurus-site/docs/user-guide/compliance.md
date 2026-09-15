@@ -1,9 +1,9 @@
 # Compliance
 
-Compliance management enables you to enforce structural and content standards on assets using schema-driven evaluation. When the Compliance feature is enabled, you can register compliance schemas, evaluate assets against those schemas, quarantine non-compliant assets, and propagate compliance actions through asset relationships.
+Compliance management enforces structural and content standards on assets through schema-driven evaluation. You register compliance schemas, bind them to databases or individual assets, evaluate assets against them, quarantine assets that fail, and propagate re-evaluation through asset relationships. This page walks through the web interface and the API calls behind it; the rule format, states and architecture are described in [Compliance (Concepts)](../concepts/compliance.md).
 
-:::info[Feature availability]
-Compliance is only available when Compliance is enabled in your VAMS deployment configuration. If you do not see the Compliance navigation items, contact your administrator.
+:::info[Navigation]
+The **Compliance** section of the left sidebar — **Compliance Schemas**, **Quarantine**, **Cascade Approvals** and **Audit Log** — and the database compliance overview appear to users whose role grants the `/compliance` and `/databases` web routes. If you do not see them, ask your administrator to apply one of the compliance [permission templates](#permissions).
 :::
 
 ---
@@ -14,23 +14,25 @@ Compliance is only available when Compliance is enabled in your VAMS deployment 
 
 Each asset detail view includes a **Compliance** tab showing:
 
-- **Current state** -- the compliance state of the asset displayed as a colored indicator: green (compliant), yellow (non-compliant/warning), red (quarantined), or blue (pending evaluation).
-- **Schema binding** -- which schema governs the asset and whether it was inherited from the database or set directly.
-- **Evaluate Now** button -- triggers immediate evaluation and cascade propagation to child assets.
-- **Evaluation history** -- a table of past evaluations with timestamps, verdicts, and violations.
+-   **Current state** -- the compliance state as a colored indicator: green (compliant), yellow (non-compliant), red (quarantined), or blue (pending evaluation).
+-   **Schema binding** -- which schema governs the asset and whether it is inherited from the database or set on the asset.
+-   **Evaluate Now** -- evaluates the asset and, when it has child assets, opens a cascade awaiting approval.
+-   **Evaluation history** -- past evaluations with their timestamps, verdicts and violations.
 
 :::info[Evaluation history]
-The evaluation history table displays the result of each evaluation, including a violations list showing which rules failed. If the table appears empty after evaluation, verify that the compliance schema uses the `vams-rules-v1` format.
+Each row lists the rules that failed as violations. An evaluation against a schema that is not in the `vams-rules-v1` format records an `error` status rather than a verdict.
 :::
 
 ### Database compliance overview
 
 1. Navigate to **Databases** in the left sidebar.
 2. In the databases table, choose the **Compliance** link for the database you want to inspect.
-3. The compliance overview page shows:
-   - A summary row with counts for each state: Compliant, Non-Compliant, Quarantined, Pending Evaluation, and Unknown.
-   - A compliance rate percentage (compliant divided by total tracked).
-   - A table of individual assets showing Asset Name, Asset ID, compliance state, schema name, and last evaluation time.
+3. The overview page shows:
+    - A summary row with counts for each state: Compliant, Non-Compliant, Quarantined, Pending Evaluation, and Unknown.
+    - A compliance rate (compliant assets divided by tracked assets).
+    - A table of tracked assets with Asset Name, Asset ID, compliance state, schema name, and last evaluation time.
+
+Only assets with a compliance record are counted; an asset that has never been bound does not appear.
 
 ---
 
@@ -40,33 +42,57 @@ The evaluation history table displays the result of each evaluation, including a
 
 1. Navigate to **Databases** and choose the database you want to configure.
 2. Choose **Edit** to open the database editor.
-3. In the **Compliance Schema** dropdown, select the schema you want to bind.
+3. In the **Compliance Schema** field, select the schema to bind. `GLOBAL` schemas and schemas scoped to this database are offered.
 4. Choose **Update Database**.
 
-All assets in the database are marked `pending_evaluation`. Use **Evaluate Now** on individual assets or **Sweep** on the schema to trigger evaluation.
+Every asset in the database without an asset-level override is marked `pending_evaluation`. Use **Evaluate Now** on individual assets or **Sweep** on the schema to produce verdicts. With automatic evaluation on (the default for a binding), an asset is also evaluated whenever it is created or updated.
+
+The same binding is made with the API:
+
+```bash
+PUT /compliance/bind/{databaseId}
+```
+
+```json
+{ "schemaName": "survey-compliance", "complianceAutoEval": true }
+```
 
 ### Removing a compliance schema
 
 1. Navigate to **Databases** and choose the database.
 2. Choose **Edit** to open the database editor.
-3. In the **Compliance Schema** dropdown, select **None (no compliance schema)**.
+3. In the **Compliance Schema** field, select **None (no compliance schema)**.
 4. Choose **Update Database**.
 
-All database-inherited compliance records are removed. The compliance overview will show "No Compliance Schema Bound" until a new schema is assigned.
+The compliance records of every asset that inherited the database schema are removed, and the overview shows **No Compliance Schema Bound** until a schema is assigned again.
 
 :::warning[Irreversible action]
-Removing a compliance schema deletes all compliance state history for assets that inherited from the database. Assets with explicit asset-level schema overrides are not affected.
+Removing a database's compliance schema deletes the compliance state of every asset that inherited it. Assets with an asset-level schema override keep their state.
 :::
+
+### Overriding the schema of one asset
+
+An asset can be bound to a schema of its own, which takes precedence over the database binding:
+
+```bash
+PUT /compliance/bind/{databaseId}/{assetId}
+```
+
+```json
+{ "schemaName": "strict-survey-compliance" }
+```
+
+Removing the override (`DELETE /compliance/bind/{databaseId}/{assetId}`) returns the asset to the database schema as `pending_evaluation`. `GET /compliance/bind/{databaseId}` lists the database binding and every override in the database.
 
 ---
 
 ## Managing schemas
 
-Compliance schemas define the rules that assets are evaluated against. VAMS supports two schema formats: the recommended `vams-rules-v1` format for rule-based evaluation with enforcement levels, and the legacy JSON Schema (draft-07) format for simple metadata validation.
+Compliance schemas define the rules assets are evaluated against. Write schemas in the `vams-rules-v1` format: named rules of the `pipeline`, `metadata` and `relationship` types, each with a `quarantine`, `warn` or `inform` enforcement level. A JSON Schema draft-07 body is accepted at registration but is not evaluated — an evaluation against it records an `error` status.
 
-### Registering a schema (vams-rules-v1)
+The **Compliance Schemas** page lists every schema you may read with its name, description and version. **Create Schema** opens the schema editor, which builds a `vams-rules-v1` body rule by rule; **Edit** opens an existing schema in the same editor and writes its next version; **Sweep** evaluates every asset bound to the schema.
 
-The `vams-rules-v1` format enables pipeline-connected evaluation, metadata validation, and relationship checks — each with configurable enforcement levels.
+### Registering a schema
 
 ```bash
 POST /compliance/schemas
@@ -84,7 +110,9 @@ POST /compliance/schemas
                 "enforcement": "quarantine",
                 "pipelineRef": {
                     "databaseId": "GLOBAL",
-                    "workflowId": "coord-validate-workflow"
+                    "workflowId": "coord-validate-workflow",
+                    "pipelineDatabaseId": "GLOBAL",
+                    "pipelineId": "coord-validate"
                 },
                 "checks": [
                     {
@@ -98,7 +126,7 @@ POST /compliance/schemas
                 "ruleType": "metadata",
                 "enforcement": "quarantine",
                 "metadataSchemaRef": {
-                    "databaseId": "my-database",
+                    "databaseId": "survey-project",
                     "schemaName": "scan-capture-metadata"
                 },
                 "checks": [
@@ -126,51 +154,33 @@ POST /compliance/schemas
 }
 ```
 
-### Registering a schema (legacy JSON Schema)
-
-For simple metadata structure validation, schemas can use JSON Schema (draft-07) format:
-
-```bash
-POST /compliance/schemas
-```
-
-```json
-{
-    "schemaName": "cad-model-standard",
-    "description": "Standard for CAD model metadata requirements",
-    "schemaBody": {
-        "type": "object",
-        "properties": {
-            "format": { "type": "string", "enum": ["step", "iges", "stl"] },
-            "units": { "type": "string" },
-            "tolerance": { "type": "number", "minimum": 0 }
-        },
-        "required": ["format", "units"]
-    }
-}
-```
-
-:::tip[Schema format selection]
-Use `vams-rules-v1` for new schemas — it supports pipeline-connected validation, enforcement levels, and tolerance comparisons. Legacy JSON Schema is retained for backward compatibility but does not support automated pipeline evaluation or graduated enforcement.
-:::
+A schema is `GLOBAL` unless the request names a `databaseId`, in which case it can only be bound within that database.
 
 ### Updating a schema
 
-Updates create a new version of the schema. Assets evaluated against the previous version retain their result until re-evaluated.
+An update writes a new version of the schema; assets keep the verdict of their last evaluation until they are evaluated again. Fields omitted from the request carry over from the current version.
 
 ```bash
 PUT /compliance/schemas/{schemaName}
 ```
 
 :::warning[System schemas]
-Schemas registered by the system (marked `isSystem: true`) cannot be modified by regular users.
+A schema registered by the system (`isSystem: true`) is updated only by the system user.
 :::
+
+### Deleting a schema
+
+A schema that no database or asset is bound to can be deleted through the API or the CLI (`vamscli compliance schema delete`); every version is removed and a `schema_deleted` entry is written to the audit log. Remove the schema's bindings first — the request is refused while a binding remains.
+
+```bash
+DELETE /compliance/schemas/{schemaName}
+```
 
 ### Sample schemas
 
 #### Coordinate transform validation
 
-Validates that point cloud assets meet positional accuracy requirements after coordinate transformation:
+Quarantines point cloud assets whose positional accuracy after coordinate transformation is outside tolerance. The pipeline's template tag `expected_crs` is set from `inputParameters`:
 
 ```json
 {
@@ -181,19 +191,21 @@ Validates that point cloud assets meet positional accuracy requirements after co
             "enforcement": "quarantine",
             "pipelineRef": {
                 "databaseId": "GLOBAL",
-                "workflowId": "coord-validate-workflow"
+                "workflowId": "coord-validate-workflow",
+                "pipelineDatabaseId": "GLOBAL",
+                "pipelineId": "coord-validate"
             },
             "inputParameters": { "expected_crs": "EPSG:27700" },
             "checks": [
                 {
                     "name": "residual_error",
-                    "description": "Positional residual must be under 1mm",
+                    "description": "Positional residual under 1 mm",
                     "outputField": "residual_error_mm",
                     "tolerance": { "operator": "lte", "value": 1.0 }
                 },
                 {
                     "name": "scale_deviation",
-                    "description": "Scale factor deviation within 1ppm",
+                    "description": "Scale factor deviation within 1 ppm",
                     "outputField": "scale_deviation_ppm",
                     "tolerance": { "operator": "lte", "value": 1.0 }
                 }
@@ -205,7 +217,7 @@ Validates that point cloud assets meet positional accuracy requirements after co
 
 #### Metadata completeness with relationship requirements
 
-Validates that scan assets have required metadata fields and are linked to a control point parent:
+Quarantines scan assets that lack required metadata, warns when a scan has no control point parent, and records whether related imagery is linked:
 
 ```json
 {
@@ -257,7 +269,7 @@ Validates that scan assets have required metadata fields and are linked to a con
 
 #### Combined pipeline and range validation
 
-Validates reconstruction quality with multiple tolerance types:
+Checks reconstruction quality with three tolerance operators:
 
 ```json
 {
@@ -268,7 +280,9 @@ Validates reconstruction quality with multiple tolerance types:
             "enforcement": "quarantine",
             "pipelineRef": {
                 "databaseId": "GLOBAL",
-                "workflowId": "reconstruction-validate"
+                "workflowId": "reconstruction-validate",
+                "pipelineDatabaseId": "GLOBAL",
+                "pipelineId": "reconstruction-metrics"
             },
             "checks": [
                 {
@@ -292,11 +306,9 @@ Validates reconstruction quality with multiple tolerance types:
 }
 ```
 
-#### Using an existing pipeline with default metrics
+#### Using an existing workflow with the derived measurements
 
-Any existing VAMS workflow can be used for compliance without modifying its containers. When no custom `compliance-output.json` is produced, the pipeline callback automatically provides two default metrics: `execution_success` (1.0 on success, 0.0 on failure) and `processing_duration_seconds` (wall-clock execution time).
-
-This example uses the Coordinate Transform workflow to validate that processing completes successfully within a 60-second time budget:
+Any workflow can back a pipeline rule without changes to its pipelines. When the pipeline writes no `compliance-output.json`, two measurements are derived from the execution itself: `execution_success` (`1.0` on success, `0.0` otherwise) and `processing_duration_seconds`. This schema requires the Coordinate Transform workflow to succeed within 60 seconds:
 
 ```json
 {
@@ -308,18 +320,20 @@ This example uses the Coordinate Transform workflow to validate that processing 
             "pipelineRef": {
                 "databaseId": "GLOBAL",
                 "workflowId": "coordinate-transform",
+                "pipelineDatabaseId": "GLOBAL",
+                "pipelineId": "coordinate-transform",
                 "templateId": "coordinate-transform-wgs84-to-osgb36-laz"
             },
             "checks": [
                 {
                     "name": "must_succeed",
-                    "description": "Coordinate transform must complete successfully",
+                    "description": "Coordinate transform completes successfully",
                     "outputField": "execution_success",
                     "tolerance": { "operator": "gte", "value": 1.0 }
                 },
                 {
                     "name": "time_budget",
-                    "description": "Must complete within 60 seconds",
+                    "description": "Completes within 60 seconds",
                     "outputField": "processing_duration_seconds",
                     "tolerance": { "operator": "lte", "value": 60.0 }
                 }
@@ -329,8 +343,8 @@ This example uses the Coordinate Transform workflow to validate that processing 
 }
 ```
 
-:::tip[Default metrics — no container changes required]
-Default metrics make it possible to enforce compliance on any pipeline without writing a custom compliance output file. Use `execution_success` to ensure a workflow completes without error, and `processing_duration_seconds` to enforce time budgets. For domain-specific measurements (geometric accuracy, noise levels, coverage ratios), implement a custom `compliance-output.json` in the pipeline container — see [Compliance (Concepts)](../concepts/compliance.md#pipeline-compliance-output-contract).
+:::tip[Domain-specific measurements]
+For measurements of your own — geometric accuracy, noise levels, coverage ratios — the pipeline writes a `compliance-output.json` file under its results output prefix. The file format and the `write_compliance_output` helper are described in [Compliance (Concepts) — Pipeline output contract](../concepts/compliance.md#pipeline-output-contract).
 :::
 
 ---
@@ -343,9 +357,9 @@ Default metrics make it possible to enforce compliance on any pipeline without w
 2. Open the **Compliance** tab.
 3. Choose **Evaluate Now**.
 
-The evaluation runs synchronously for metadata and relationship rules. If the asset has child assets linked via `parentChild` relationships, a cascade is automatically created in `pending_approval` state to propagate re-evaluation to children.
+Metadata and relationship rules complete at once. A pipeline rule launches a workflow execution — visible among the workflow's executions — and the asset stays `pending_evaluation` until the execution completes and its measurements are checked. If the asset has child assets linked by `parentChild` relationships, a cascade is opened in `pending_approval` so the children can be re-evaluated.
 
-Alternatively, use the API:
+The same evaluation is started with the API:
 
 ```bash
 POST /compliance/evaluate/{databaseId}/{assetId}
@@ -353,12 +367,12 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 
 ### Schema sweep
 
-A sweep triggers evaluation for all assets governed by a specific schema. This is useful after registering or updating a schema.
+A sweep evaluates every asset bound to a schema — for example after registering or updating the schema.
 
-1. Navigate to **Compliance > Schemas** in the left sidebar.
+1. Navigate to **Compliance > Compliance Schemas** in the left sidebar.
 2. Locate the schema and choose **Sweep** in the Actions column.
 
-Alternatively, use the API:
+A sweep evaluates up to 200 assets per request and reports how many remain; run it again to reach the rest.
 
 ```bash
 POST /compliance/sweep/{schemaName}
@@ -368,12 +382,12 @@ POST /compliance/sweep/{schemaName}
 
 ## Quarantine
 
-When an asset fails a rule with `quarantine` enforcement level, it enters the quarantined state and appears in the quarantine list.
+An asset that fails a rule with `quarantine` enforcement enters the `quarantined` state and appears in the quarantine list. Whether a quarantined asset can still be downloaded depends on the deployment's `app.compliance.quarantineBlocksDownload` setting; the asset's subscribers are notified either way.
 
 ### Viewing quarantined assets
 
 1. Navigate to **Compliance > Quarantine** in the left sidebar.
-2. The page lists all currently quarantined assets with their Asset Name, Asset ID, Database ID, and quarantine reason.
+2. The page lists every quarantined asset you may read with its Asset Name, Asset ID and Database ID.
 
 ### Releasing from quarantine
 
@@ -381,42 +395,42 @@ When an asset fails a rule with `quarantine` enforcement level, it enters the qu
 2. Choose **Release**.
 3. The asset state changes from `quarantined` to `compliant`.
 
-:::tip[Auto-release]
-If you fix the underlying compliance issue (for example, adding missing metadata or creating a required parent link) and re-evaluate the asset, quarantine is automatically cleared when all rules pass. You do not need to manually release in this case.
+:::tip[Release by re-evaluation]
+Fixing the underlying issue — adding the missing metadata, creating the required parent link — and evaluating the asset again clears the quarantine when every `quarantine`-level rule passes. No manual release is needed in that case.
 :::
 
 ### Granting an exception
 
-If an asset must remain available despite non-compliance:
+If an asset must remain available despite the failure:
 
 1. In the quarantine list, locate the asset.
 2. Choose **Exception**.
 3. Enter the reason for the exception in the confirmation dialog.
 4. Choose **Confirm**.
 
-The asset's compliance state changes to `compliant` and the exception is recorded in the audit log with the reason and the user who granted it.
+The asset's compliance state changes to `compliant`, and the reason, the grantor and the time are recorded on the asset's compliance record and in the audit log.
 
 :::note
-Exceptions are visible in the database compliance overview. The asset will show as compliant until the next re-evaluation triggers.
+An exception holds until the asset is evaluated again; a later evaluation that fails a `quarantine`-level rule quarantines the asset once more.
 :::
 
 ---
 
 ## Cascade approvals
 
-Cascades propagate compliance changes through asset relationships. When a cascade requires approval, it appears in the approval queue.
+A cascade re-evaluates the downstream assets of a parent — every descendant linked through `parentChild` relationships, parents before children. Cascades opened after an evaluation wait for approval.
 
 ### Reviewing pending cascades
 
 1. Navigate to **Compliance > Cascade Approvals** in the left sidebar.
-2. The page lists cascades in `pending_approval` state with their trigger details and timeout.
+2. The page lists cascades in `pending_approval` with the asset that triggered them, the reason, and the approval timeout timestamp recorded 24 hours after creation.
 
 ### Approving a cascade
 
 1. Locate the cascade in the list.
 2. Choose **Approve**.
 3. Enter an optional reason.
-4. The cascade proceeds with execution.
+4. The downstream assets are evaluated in dependency order and the cascade completes.
 
 ### Rejecting a cascade
 
@@ -425,56 +439,52 @@ Cascades propagate compliance changes through asset relationships. When a cascad
 3. Enter an optional reason.
 4. The cascade is aborted.
 
-:::warning[Approval timeout]
-Cascades have a 24-hour approval window. If not approved within that period, the cascade expires automatically.
-:::
+A cascade can also be created directly — `POST /compliance/cascades` with the parent's `databaseId` and `assetId` — and executes at once when created with `requireApproval: false`.
 
 ---
 
 ## Audit log
 
-The compliance audit log records every compliance action across the system.
+The compliance audit log records every compliance action across the deployment.
 
 ### Viewing the audit log
 
 1. Navigate to **Compliance > Audit Log** in the left sidebar.
-2. Use the **Event Type** filter to narrow results (e.g., only show `quarantine_released` events).
-3. The log shows entries ordered by most recent first.
+2. Use the **Event Type** filter to narrow the list (for example, only `quarantine_released` events).
+3. Entries are ordered newest first.
 
 ### Event types
 
-| Event type                    | Description                                            |
-| ----------------------------- | ------------------------------------------------------ |
-| `compliance_check`            | An asset was evaluated against a schema                |
-| `state_change`                | An asset's compliance state changed                    |
-| `quarantine_released`         | An asset was released from quarantine                  |
-| `exception_granted`           | A compliance exception was granted                     |
-| `cascade_triggered`           | A cascade propagation was initiated                    |
-| `cascade_approved`            | A pending cascade was approved for execution           |
-| `cascade_rejected`            | A pending cascade was rejected                         |
-| `schema_registered`           | A new schema was registered                            |
-| `schema_updated`              | An existing schema was updated (new version)           |
-| `schema_bound_to_database`    | A schema was bound to a database                       |
-| `schema_unbound_from_database`| A schema binding was removed from a database           |
-| `schema_bound_to_asset`       | A schema was bound directly to an asset                |
-| `schema_unbound_from_asset`   | An asset-level schema override was removed             |
+| Event type                     | Description                                                         |
+| ------------------------------ | ------------------------------------------------------------------- |
+| `compliance_check`             | An asset was evaluated against a schema                             |
+| `quarantine_released`          | An asset left quarantine, by release or by a passing re-evaluation  |
+| `exception_granted`            | An exception was granted to a quarantined asset                     |
+| `schema_bound_to_database`     | A schema was bound to a database                                    |
+| `schema_unbound_from_database` | A database's schema binding was removed                             |
+| `schema_bound_to_asset`        | A schema was bound directly to an asset                             |
+| `schema_unbound_from_asset`    | An asset-level schema override was removed                          |
+| `schema_deleted`               | A schema was deleted                                                |
+| `cascade_triggered`            | A cascade was created through the API                               |
+| `cascade_auto_triggered`       | A cascade was opened after the evaluation of an asset with children |
+| `cascade_approved`             | A pending cascade was approved and executed                         |
+| `cascade_rejected`             | A pending cascade was rejected                                      |
+| `cascade_completed`            | A cascade finished evaluating its downstream assets                 |
 
 ---
 
 ## Permissions
 
-Compliance operations are governed by the same two-tier role-based access control system as other VAMS features. Both tiers must allow access for an operation to succeed.
+Compliance operations are governed by the same two-tier access control as the rest of VAMS. Both tiers must allow a request.
 
-### Tier 1: API route access
+### Tier 1: route access
 
-Controls which users can call compliance API endpoints. To grant access, create a constraint with object type `api` that matches `/compliance` routes:
+Controls which users can call the compliance API and open the compliance pages. Grant the API routes with an `api` constraint and the pages with a `web` constraint, both matching `/compliance`:
 
 ```json
 {
     "objectType": "api",
-    "criteriaOr": [
-        { "field": "route__path", "operator": "starts_with", "value": "/compliance" }
-    ],
+    "criteriaOr": [{ "field": "route__path", "operator": "starts_with", "value": "/compliance" }],
     "groupPermissions": [
         { "permission": "GET", "permissionType": "allow" },
         { "permission": "POST", "permissionType": "allow" }
@@ -482,52 +492,49 @@ Controls which users can call compliance API endpoints. To grant access, create 
 }
 ```
 
-### Tier 2: Object-level access
+### Tier 2: object-level access
 
-Controls which specific compliance resources a user can access. Three object types govern compliance operations:
+Controls which compliance resources a user can act on. Three object types govern compliance operations:
 
-| Object Type | Controls | Constraint Fields | Use Case |
-| --- | --- | --- | --- |
-| `complianceSchema` | Schema CRUD, binding, sweep | `complianceSchemaName` | Restrict which schemas a user can view or manage |
-| `complianceEvaluation` | Evaluate, quarantine, audit | `databaseId`, `complianceState` | Scope evaluations and quarantine actions to specific databases |
-| `complianceCascade` | Cascade approve/reject | `cascadeId` | Control who can approve cascade propagations |
+| Object type            | Controls                                              | Constraint fields               | Use case                                                       |
+| ---------------------- | ----------------------------------------------------- | ------------------------------- | -------------------------------------------------------------- |
+| `complianceSchema`     | Schema registration, update, deletion, binding, sweep | `complianceSchemaName`          | Restrict which schemas a user can view or manage               |
+| `complianceEvaluation` | Evaluate, state, quarantine, audit                    | `databaseId`, `complianceState` | Scope evaluations and quarantine actions to specific databases |
+| `complianceCascade`    | Cascade create, approve, reject                       | `cascadeId`                     | Control who can approve cascade propagations                   |
 
 ### Default admin access
 
-The built-in admin role automatically receives full access (GET, PUT, POST, DELETE) to all three compliance object types with `contains .*` criteria (matches all values). No additional configuration is needed for administrators.
+The built-in admin role holds full access (GET, PUT, POST, DELETE) to all three compliance object types. No additional configuration is needed for administrators.
 
 ### Permission templates
 
-VAMS includes two pre-built permission templates for compliance roles:
+VAMS includes two permission templates for compliance roles:
 
-| Template | File | Description |
-| --- | --- | --- |
-| Compliance Admin | `compliance-admin.json` | Full management access: create/update schemas, trigger evaluations, release quarantine, approve cascades. Scoped to a specific database. |
-| Compliance Readonly | `compliance-readonly.json` | View-only access: view schemas, evaluation results, quarantine list, cascade status, and audit logs. Cannot trigger evaluations or modify state. |
+| Template            | File                       | Description                                                                                                                                                                                  |
+| ------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compliance Admin    | `compliance-admin.json`    | Full schema management, evaluation and quarantine actions within one database, cascade approval, plus the compliance web and API routes and read access to the database's assets.            |
+| Compliance Readonly | `compliance-readonly.json` | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state. |
 
-Both templates accept `DATABASE_ID` and `ROLE_NAME` variables. Apply them via **Admin > Permissions > Constraints > Import Template** or the CLI.
+Both templates take `DATABASE_ID` and `ROLE_NAME` variables. Apply them through **Admin > Permissions > Constraints > Import Template** or the CLI.
 
-### Example: Database-scoped compliance admin
+### Example: database-scoped compliance admin
 
-To grant a user full compliance management for a specific database:
-
-1. Apply the `compliance-admin` template with `DATABASE_ID` set to your target database.
+1. Apply the `compliance-admin` template with `DATABASE_ID` set to the target database.
 2. Assign the resulting role to the user.
 
-The user can manage schemas globally but can only trigger evaluations and view compliance state within the scoped database.
+The user manages schemas across the deployment but evaluates assets and acts on quarantine only within the scoped database.
 
-### Example: Read-only compliance viewer
+### Example: read-only compliance viewer
 
-To grant a user view-only compliance access:
-
-1. Apply the `compliance-readonly` template with `DATABASE_ID` set to your target database.
+1. Apply the `compliance-readonly` template with `DATABASE_ID` set to the target database.
 2. Assign the resulting role to the user.
 
-The user can view schemas, evaluation history, quarantine status, and audit logs but cannot trigger evaluations, release quarantines, or approve cascades.
+The user views schemas, evaluation history, quarantine status and the audit log but cannot evaluate, release, grant exceptions or approve cascades.
 
 :::tip[Troubleshooting 403 errors]
-If a user receives "Not Authorized" on compliance pages, verify they have both:
-1. An `api` constraint allowing `/compliance` routes (Tier 1)
+If a user receives **Not Authorized** on compliance pages or calls, verify they hold both:
+
+1. `api` and `web` constraints allowing the `/compliance` routes (Tier 1)
 2. A `complianceSchema`, `complianceEvaluation`, or `complianceCascade` constraint matching the resource (Tier 2)
 
 Missing either tier results in a 403 response.
@@ -537,7 +544,9 @@ Missing either tier results in a 403 response.
 
 ## Related topics
 
--   [Compliance (Concepts)](../concepts/compliance.md) -- architecture, schema format reference, tolerance operators, and API endpoints
--   [Metadata and Schemas](../concepts/metadata-and-schemas.md) -- metadata schemas referenced by `metadata` rule types
--   [Permissions Model](../concepts/permissions-model.md) -- role-based access control for compliance operations
--   [Databases](../concepts/databases.md) -- database-level configuration and schema binding
+-   [Compliance (Concepts)](../concepts/compliance.md) -- rule format, pipeline output contract, states, cascades and the authorization model
+-   [Compliance API](../api/compliance.md) -- endpoint reference
+-   [CLI: Compliance commands](../cli/commands/compliance.md) -- `vamscli compliance` command group
+-   [Metadata and Schemas](../concepts/metadata-and-schemas.md) -- metadata schemas referenced by `metadata` rules
+-   [Permissions Model](../concepts/permissions-model.md) -- access control for compliance operations
+-   [Databases](../concepts/databases.md) -- database configuration and schema binding

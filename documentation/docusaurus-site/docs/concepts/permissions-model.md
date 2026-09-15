@@ -140,25 +140,25 @@ The matchers component evaluates whether the requesting user belongs to the poli
 
 Each object type supports specific constraint fields that can be used in criteria conditions.
 
-| Object Type      | Constraint Fields                                                       | Description                                                                      |
-| ---------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `api`            | `route__path`                                                           | Backend API route paths.                                                         |
-| `web`            | `route__path`                                                           | Frontend UI page routes.                                                         |
-| `database`       | `databaseId`                                                            | Database entity operations.                                                      |
-| `asset`          | `databaseId`, `assetName`, `assetType`, `tags`                          | Asset entity operations (includes file operations).                              |
-| `pipeline`       | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas). |
-| `workflow`       | `databaseId`, `workflowId`, `category`, `name`                          | Workflow management, triggers, and execution.                                    |
-| `metadataSchema` | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`          | Metadata schema management.                                                      |
-| `tag`            | `tagName`, `databaseId`                                                 | Tag CRUD operations.                                                             |
-| `tagType`        | `tagTypeName`, `databaseId`                                             | Tag type CRUD operations.                                                        |
-| `role`           | `roleName`                                                              | Role management.                                                                 |
-| `userRole`       | `roleName`, `userId`                                                    | User-to-role assignment management.                                              |
-| `complianceSchema` | `complianceSchemaName`                                                | Compliance schema management and binding operations.                             |
-| `complianceEvaluation` | `databaseId`, `complianceState`                                  | Compliance evaluation, quarantine, and audit operations.                         |
-| `complianceCascade` | `cascadeId`                                                          | Cascade approval and execution operations.                                       |
+| Object Type            | Constraint Fields                                                       | Description                                                                      |
+| ---------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `api`                  | `route__path`                                                           | Backend API route paths.                                                         |
+| `web`                  | `route__path`                                                           | Frontend UI page routes.                                                         |
+| `database`             | `databaseId`                                                            | Database entity operations.                                                      |
+| `asset`                | `databaseId`, `assetName`, `assetType`, `tags`                          | Asset entity operations (includes file operations).                              |
+| `pipeline`             | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas). |
+| `workflow`             | `databaseId`, `workflowId`, `category`, `name`                          | Workflow management, triggers, and execution.                                    |
+| `metadataSchema`       | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`          | Metadata schema management.                                                      |
+| `tag`                  | `tagName`, `databaseId`                                                 | Tag CRUD operations.                                                             |
+| `tagType`              | `tagTypeName`, `databaseId`                                             | Tag type CRUD operations.                                                        |
+| `role`                 | `roleName`                                                              | Role management.                                                                 |
+| `userRole`             | `roleName`, `userId`                                                    | User-to-role assignment management.                                              |
+| `complianceSchema`     | `complianceSchemaName`                                                  | Compliance schema management and binding operations.                             |
+| `complianceEvaluation` | `databaseId`, `complianceState`                                         | Compliance evaluation, quarantine, and audit operations.                         |
+| `complianceCascade`    | `cascadeId`                                                             | Cascade approval and execution operations.                                       |
 
 :::info[Compliance object types]
-Compliance object types are only available when Compliance is enabled. The default admin role includes constraints for all three compliance types with `contains .*` (match all) criteria. For non-admin roles, use the `compliance-admin` or `compliance-readonly` permission templates for quick setup.
+The default admin role includes constraints for all three compliance object types with `contains .*` (match all) criteria. For non-admin roles, use the `compliance-admin` or `compliance-readonly` permission templates for quick setup; see [Compliance](compliance.md#authorization-model).
 :::
 
 This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
@@ -244,7 +244,7 @@ A common mistake is creating a `database` constraint and assuming it automatical
 -   **Using `criteriaAnd` for multiple databases** -- If you need access to multiple databases, use `criteriaOr` (not `criteriaAnd`). A single entity can only have one `databaseId`, so multiple `equals` conditions in `criteriaAnd` will never match simultaneously.
 -   **Forgetting non-mutating POST routes for read-only roles** -- Routes like `/search` and `/auth/routes` use POST but do not modify data. Read-only roles must allow POST on these specific paths for the UI to function.
 -   **Using wildcards for GLOBAL access** -- When granting access to GLOBAL resources, use `databaseId equals GLOBAL` (not `databaseId contains .*`). A wildcard inadvertently matches all databases.
--   **Missing compliance object types** -- If Compliance is enabled, granting `/compliance` API routes alone is insufficient. Users also need `complianceSchema`, `complianceEvaluation`, or `complianceCascade` object type constraints at Tier 2 to access specific resources. Use the `compliance-admin` or `compliance-readonly` templates for correct setup.
+-   **Missing compliance object types** -- Granting `/compliance` API routes alone is insufficient. Users also need `complianceSchema`, `complianceEvaluation`, or `complianceCascade` object type constraints at Tier 2 to access specific resources. Use the `compliance-admin` or `compliance-readonly` templates for correct setup.
 
 ## Permission templates
 
@@ -524,30 +524,26 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 
 ### Compliance routes
 
-:::info
-These routes are only deployed when `app.compliance.enabled` is `true`.
-:::
-
-| Route                                                            | Methods     | Tier 2 Object Type     | Tier 2 Fields          |
-| ---------------------------------------------------------------- | ----------- | ---------------------- | ---------------------- |
-| `/compliance/schemas`                                            | GET, POST   | `complianceSchema`     | `complianceSchemaName` |
-| `/compliance/schemas/\{schemaName\}`                             | GET, PUT    | `complianceSchema`     | `complianceSchemaName` |
-| `/compliance/sweep/\{schemaName\}`                               | POST        | `complianceSchema`     | `complianceSchemaName` |
-| `/compliance/bind/\{databaseId\}`                                | GET, PUT, DELETE | `complianceSchema` | `complianceSchemaName` |
-| `/compliance/bind/\{databaseId\}/\{assetId\}`                    | PUT, DELETE  | `complianceSchema`     | `complianceSchemaName` |
-| `/compliance/evaluate/\{databaseId\}/\{assetId\}`                | POST        | `complianceEvaluation` | `databaseId`           |
-| `/compliance/evaluations/\{databaseId\}/\{assetId\}`             | GET         | `complianceEvaluation` | `databaseId`           |
-| `/compliance/state/\{databaseId\}/\{assetId\}`                   | GET         | `complianceEvaluation` | `databaseId`           |
-| `/compliance/state/\{databaseId\}`                               | GET         | `complianceEvaluation` | `databaseId`           |
-| `/compliance/quarantine`                                         | GET         | `complianceEvaluation` | `complianceState`      |
-| `/compliance/quarantine/\{databaseId\}/\{assetId\}/release`      | POST        | `complianceEvaluation` | `complianceState`      |
-| `/compliance/quarantine/\{databaseId\}/\{assetId\}/exception`    | POST        | `complianceEvaluation` | `complianceState`      |
-| `/compliance/cascades`                                           | GET, POST   | `complianceCascade`    | `cascadeId`            |
-| `/compliance/cascades/\{cascadeId\}`                             | GET         | `complianceCascade`    | `cascadeId`            |
-| `/compliance/cascades/\{cascadeId\}/approve`                     | POST        | `complianceCascade`    | `cascadeId`            |
-| `/compliance/cascades/\{cascadeId\}/reject`                      | POST        | `complianceCascade`    | `cascadeId`            |
-| `/compliance/audit/\{databaseId\}/\{assetId\}`                   | GET         | `complianceEvaluation` | `databaseId`           |
-| `/compliance/audit`                                              | GET         | `complianceEvaluation` | `databaseId`           |
+| Route                                                     | Methods          | Tier 2 Object Type     | Tier 2 Fields          |
+| --------------------------------------------------------- | ---------------- | ---------------------- | ---------------------- |
+| `/compliance/schemas`                                     | GET, POST        | `complianceSchema`     | `complianceSchemaName` |
+| `/compliance/schemas/{schemaName}`                        | GET, PUT, DELETE | `complianceSchema`     | `complianceSchemaName` |
+| `/compliance/sweep/{schemaName}`                          | POST             | `complianceSchema`     | `complianceSchemaName` |
+| `/compliance/bind/{databaseId}`                           | GET, PUT, DELETE | `complianceSchema`     | `complianceSchemaName` |
+| `/compliance/bind/{databaseId}/{assetId}`                 | PUT, DELETE      | `complianceSchema`     | `complianceSchemaName` |
+| `/compliance/evaluate/{databaseId}/{assetId}`             | POST             | `complianceEvaluation` | `databaseId`           |
+| `/compliance/evaluations/{databaseId}/{assetId}`          | GET              | `complianceEvaluation` | `databaseId`           |
+| `/compliance/state/{databaseId}/{assetId}`                | GET              | `complianceEvaluation` | `databaseId`           |
+| `/compliance/state/{databaseId}`                          | GET              | `complianceEvaluation` | `databaseId`           |
+| `/compliance/quarantine`                                  | GET              | `complianceEvaluation` | `complianceState`      |
+| `/compliance/quarantine/{databaseId}/{assetId}/release`   | POST             | `complianceEvaluation` | `complianceState`      |
+| `/compliance/quarantine/{databaseId}/{assetId}/exception` | POST             | `complianceEvaluation` | `complianceState`      |
+| `/compliance/cascades`                                    | GET, POST        | `complianceCascade`    | `cascadeId`            |
+| `/compliance/cascades/{cascadeId}`                        | GET              | `complianceCascade`    | `cascadeId`            |
+| `/compliance/cascades/{cascadeId}/approve`                | POST             | `complianceCascade`    | `cascadeId`            |
+| `/compliance/cascades/{cascadeId}/reject`                 | POST             | `complianceCascade`    | `cascadeId`            |
+| `/compliance/audit/{databaseId}/{assetId}`                | GET              | `complianceEvaluation` | `databaseId`           |
+| `/compliance/audit`                                       | GET              | `complianceEvaluation` | `databaseId`           |
 
 ## Performance considerations
 

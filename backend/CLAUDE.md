@@ -35,6 +35,9 @@ backend/
 │   │   ├── apiRoutes.py                            # MASTER API route registry: ApiRoute constants,
 │   │   │                                           #   category group arrays, ALL_API_ROUTES.
 │   │   │                                           #   Handlers dispatch via ApiRoute.matches().
+│   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
+│   │   │                                           #   rule parsing/inheritance, metadata/relationship/
+│   │   │                                           #   pipeline checks, tolerances, verdict → state
 │   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists
 │   │   ├── dynamodb.py                             # query_all_items, query_has_match,
 │   │   │                                           #   to_update_expr, get_asset_object_from_id
@@ -45,7 +48,8 @@ backend/
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
-│   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
+│   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes,
+│   │       │                                       #   workflow.execution.completed event builder
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
@@ -58,6 +62,16 @@ backend/
 │   │   │                                           #   constraints, cognito, preTokenGen;
 │   │   │                                           #   __init__: request_to_claims() → claims
 │   │   ├── authz/__init__.py                       # CasbinEnforcer proxy (ABAC/RBAC)
+│   │   ├── compliance/                             # Compliance. API handlers (one Lambda each):
+│   │   │                                           #   complianceSchemaService (schemas CRUD incl. DELETE),
+│   │   │                                           #   complianceSchemaBindingService (db/asset bindings),
+│   │   │                                           #   complianceEvaluateService (evaluate/sweep/evaluations/
+│   │   │                                           #   state), complianceQuarantineService, complianceCascadeService,
+│   │   │                                           #   complianceAuditService. Event-driven: complianceTrigger
+│   │   │                                           #   (asset indexer SNS), complianceWorkflowCallback (EventBridge
+│   │   │                                           #   workflow.execution.completed). Shared modules (not Lambdas):
+│   │   │                                           #   complianceEvaluationStore (all DynamoDB/Lambda access +
+│   │   │                                           #   run_evaluation), complianceCascadeExecutor, complianceNotifications
 │   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
 │   │   │                                           #   pipelineTemplateService = templates + tagSchema)
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
@@ -77,6 +91,7 @@ backend/
 │   └── models/                                     # Pydantic v1 models, one file per domain
 │       ├── assetsV3.py                             # GOLD STANDARD model file
 │       ├── common.py                               # Response helpers, APIGatewayProxyResponseV2
+│       ├── compliance.py                           # vams-rules-v1 schema body + compliance request models
 │       └── apiKeys, pipelines, workflows, executions, assetHistory, [domain].py
 ├── lambdaLayers/                                   # Lambda layer definitions
 └── tests/                                          # See backend/tests/CLAUDE.md
@@ -491,7 +506,7 @@ return success(body=item)
 -   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "mfaEnabled": bool}`. `roles` comes from the `vams:roles` authorizer context value, which the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a 60-second per-user cache — so it is populated for every auth mode (Cognito, external OAuth IDP, API key), not only where a Cognito pre-token-generation trigger runs. It is informational for handlers and audit logs: `CasbinEnforcer` re-reads a user's roles from DynamoDB when building policy, so authorization does not depend on it.
 -   **MFA-aware**: roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims.
 -   **Object annotation**: set `item['object__type']` before every `enforce()` call.
--   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`. Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
+-   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`. Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
 
 ### System User (`SYSTEM_USER`)
 
@@ -505,7 +520,7 @@ Defined in `common/constants.py`. Request: `(sub, obj, act)`; policy line: `(sub
 
 ### Constraint Fields (`PERMISSION_CONSTRAINT_FIELDS`)
 
-Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `object__type`, `route__path`.
+Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `complianceSchemaName`, `complianceState`, `cascadeId`, `object__type`, `route__path`. The compliance handlers annotate `complianceSchema` objects with `complianceSchemaName`, `complianceEvaluation` objects with `databaseId` + `complianceState`, and `complianceCascade` objects with `cascadeId`.
 
 ---
 
@@ -808,6 +823,8 @@ asset_table = dynamodb.Table(asset_table_name)
 ### Common Environment Variables
 
 `VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`.
+
+Compliance-related handler-specific vars: `EXECUTE_WORKFLOW_FUNCTION_NAME` (the evaluate-service, cascade-service and trigger Lambdas — read by `complianceEvaluationStore` to launch a pipeline rule's workflow execution through a `lambdaCrossCall`); `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD` (`downloadAsset` and `streamAsset` only, set from `app.compliance.quarantineBlocksDownload`; the compliance asset-state table is resolved only when it is `true`); `ORCHESTRATION_BUS_ARN` + `ORCHESTRATION_EVENT_SOURCE_PREFIX` (set on the workflow Lambdas by `workflowFunctions.ts`; `sfn/processWorkflowExecutionOutput`, `sfn/handleExecutionError` and `executionService` publish the `workflow.execution.completed` event only when both are set). The compliance Lambdas receive **no** table-name env vars: every table resolves through SSM (`ResourceKeys.COMPLIANCE_*_STORAGE_TABLE`; legacy override `COMPLIANCE_*_STORAGE_TABLE_NAME`), and the workflow callback resolves its output locations from the V2 execution records rather than a bucket env var.
 
 `PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL) is **not** set for every handler — only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, covering the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`). All five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level, so a handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start. Add the variable to the handler's own builder before reading it.
 

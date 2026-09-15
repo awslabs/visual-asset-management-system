@@ -57,6 +57,7 @@ One folder per domain. The current domains:
 -   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
 -   `assetLinks/` — Asset relationship management
 -   `comments/` — Comment CRUD
+-   `compliance/` — Compliance (schemas, bindings, evaluation, quarantine, cascades, audit). API handlers `complianceSchemaService`, `complianceSchemaBindingService`, `complianceEvaluateService`, `complianceQuarantineService`, `complianceCascadeService`, `complianceAuditService`; event-driven `complianceTrigger` (asset indexer SNS) and `complianceWorkflowCallback` (EventBridge `workflow.execution.completed`); shared `complianceEvaluationStore` (all AWS access + `run_evaluation`), `complianceCascadeExecutor`, `complianceNotifications`. Pure rule logic lives in `common/compliance/evaluationEngine.py`, models in `models/compliance.py`. Casbin object types `complianceSchema` (`complianceSchemaName`), `complianceEvaluation` (`databaseId`, `complianceState`), `complianceCascade` (`cascadeId`). Tests in `tests/handlers/compliance/`
 -   `config/` — System configuration
 -   `databases/` — Database CRUD
 -   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
