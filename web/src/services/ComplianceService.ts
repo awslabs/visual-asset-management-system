@@ -136,13 +136,29 @@ export interface EvaluationRecord {
     pipelineRuleName?: string;
 }
 
+export type CascadeState = "pending_approval" | "executing" | "completed" | "aborted" | "rejected";
+
 export interface CascadeRecord {
     cascadeId: string;
-    status: "pending_approval" | "approved" | "rejected" | "executing" | "completed";
-    triggerAssetId: string;
-    triggerDatabaseId: string;
+    state: CascadeState;
+    triggeredByDatabaseId: string;
+    triggeredByAssetId: string;
+    triggerReason?: string;
+    actor?: string;
     requireApproval: boolean;
     createdAt: string;
+    /** JSON-encoded map of node key ("databaseId#assetId") to that node's evaluation state. */
+    nodes?: string;
+    totalNodes?: number;
+    completedAt?: string;
+    abortReason?: string;
+}
+
+/** Response of the cascade create/approve/reject routes; `state` is set when the cascade moves. */
+export interface CascadeActionResponse {
+    message: string;
+    cascadeId: string;
+    state?: CascadeState;
 }
 
 export interface AuditEntry {
@@ -151,10 +167,47 @@ export interface AuditEntry {
     databaseId?: string;
     assetId?: string;
     schemaName?: string;
-    userId: string;
+    actor: string;
     timestamp: string;
-    details?: Record<string, any>;
+    details?: string | Record<string, any>;
 }
+
+// --- Pagination ---
+
+/** Rows requested per page from the paged compliance listings. */
+export const COMPLIANCE_LISTING_PAGE_SIZE = 50;
+
+/** Token paging as the backend exposes it: `startingToken` is the previous page's `NextToken`. */
+export interface PagingParams {
+    maxItems?: number;
+    startingToken?: string;
+}
+
+export interface PagedAuditEntries {
+    entries: AuditEntry[];
+    nextToken?: string;
+}
+
+export interface PagedEvaluations {
+    evaluations: EvaluationRecord[];
+    nextToken?: string;
+}
+
+const pagingQuery = (paging?: PagingParams): Record<string, string> => {
+    const query: Record<string, string> = {};
+    if (paging?.maxItems) {
+        query.maxItems = `${paging.maxItems}`;
+    }
+    if (paging?.startingToken) {
+        query.startingToken = paging.startingToken;
+    }
+    return query;
+};
+
+const responseErrored = (response: any): boolean =>
+    !!response?.message &&
+    typeof response.message === "string" &&
+    (response.message.includes("error") || response.message.includes("Error"));
 
 // --- Schema Management ---
 
@@ -169,7 +222,7 @@ export const fetchComplianceSchemas = async (): Promise<[boolean, ComplianceSche
         }
         return [true, response.schemas || response.Items || []];
     } catch (error: any) {
-        console.error("fetchComplianceSchemas error:", error);
+        console.log("fetchComplianceSchemas error:", error);
         return [false, error?.message || "Failed to fetch compliance schemas"];
     }
 };
@@ -187,7 +240,7 @@ export const fetchComplianceSchema = async (
         }
         return [true, response];
     } catch (error: any) {
-        console.error("fetchComplianceSchema error:", error);
+        console.log("fetchComplianceSchema error:", error);
         return [false, error?.message || "Failed to fetch compliance schema"];
     }
 };
@@ -207,7 +260,7 @@ export const createComplianceSchema = async (
         }
         return [true, response];
     } catch (error: any) {
-        console.error("createComplianceSchema error:", error);
+        console.log("createComplianceSchema error:", error);
         return [false, error?.message || "Failed to create compliance schema"];
     }
 };
@@ -228,7 +281,7 @@ export const updateComplianceSchema = async (
         }
         return [true, response];
     } catch (error: any) {
-        console.error("updateComplianceSchema error:", error);
+        console.log("updateComplianceSchema error:", error);
         return [false, error?.message || "Failed to update compliance schema"];
     }
 };
@@ -251,7 +304,7 @@ export const evaluateAssetCompliance = async (
         }
         return [true, response];
     } catch (error: any) {
-        console.error("evaluateAssetCompliance error:", error);
+        console.log("evaluateAssetCompliance error:", error);
         return [false, error?.message || "Failed to evaluate asset compliance"];
     }
 };
@@ -269,26 +322,32 @@ export const sweepSchema = async (schemaName: string): Promise<[boolean, any]> =
         }
         return [true, response];
     } catch (error: any) {
-        console.error("sweepSchema error:", error);
+        console.log("sweepSchema error:", error);
         return [false, error?.message || "Failed to sweep schema"];
     }
 };
 
 export const fetchEvaluationHistory = async (
     databaseId: string,
-    assetId: string
-): Promise<[boolean, EvaluationRecord[] | string]> => {
+    assetId: string,
+    paging?: PagingParams
+): Promise<[boolean, PagedEvaluations | string]> => {
     try {
-        const response = await apiClient.get(`compliance/evaluations/${databaseId}/${assetId}`, {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
+        const response = await apiClient.get(`compliance/evaluations/${databaseId}/${assetId}`, {
+            queryStringParameters: pagingQuery(paging),
+        });
+        if (responseErrored(response)) {
             return [false, response.message];
         }
-        return [true, response.evaluations || response.Items || []];
+        return [
+            true,
+            {
+                evaluations: response.evaluations || response.Items || [],
+                nextToken: response.NextToken || undefined,
+            },
+        ];
     } catch (error: any) {
-        console.error("fetchEvaluationHistory error:", error);
+        console.log("fetchEvaluationHistory error:", error);
         return [false, error?.message || "Failed to fetch evaluation history"];
     }
 };
@@ -307,13 +366,19 @@ export const fetchComplianceState = async (
         }
         return [true, response];
     } catch (error: any) {
-        console.error("fetchComplianceState error:", error);
+        console.log("fetchComplianceState error:", error);
         return [false, error?.message || "Failed to fetch compliance state"];
     }
 };
 
 // --- Database Compliance Overview ---
 
+/** An asset row of the database overview: its state row plus the enriched display name. */
+export interface DatabaseComplianceAsset extends ComplianceState {
+    assetName?: string;
+}
+
+/** `summary` and `totalAssets` cover the whole database; `assets` is one page of it. */
 export interface DatabaseComplianceOverview {
     databaseId: string;
     totalAssets: number;
@@ -324,41 +389,72 @@ export interface DatabaseComplianceOverview {
         quarantined: number;
         unknown: number;
     };
-    assets: ComplianceState[];
+    assets: DatabaseComplianceAsset[];
+    nextToken?: string;
 }
 
 export const fetchDatabaseComplianceOverview = async (
-    databaseId: string
+    databaseId: string,
+    paging?: PagingParams
 ): Promise<[boolean, DatabaseComplianceOverview | string]> => {
     try {
-        const response = await apiClient.get(`compliance/state/${databaseId}`, {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
+        const response = await apiClient.get(`compliance/state/${databaseId}`, {
+            queryStringParameters: pagingQuery(paging),
+        });
+        if (responseErrored(response)) {
             return [false, response.message];
         }
-        return [true, response];
+        const { NextToken, ...overview } = response;
+        return [
+            true,
+            { ...overview, assets: overview.assets || [], nextToken: NextToken || undefined },
+        ];
     } catch (error: any) {
-        console.error("fetchDatabaseComplianceOverview error:", error);
+        console.log("fetchDatabaseComplianceOverview error:", error);
         return [false, error?.message || "Failed to fetch database compliance overview"];
     }
 };
 
 // --- Quarantine ---
 
-export const fetchQuarantinedAssets = async (): Promise<[boolean, any[] | string]> => {
+export interface QuarantinedAsset extends ComplianceState {
+    assetName?: string;
+    quarantineReason?: string | null;
+    exceptionGranted?: boolean;
+    exceptionReason?: string;
+    exceptionGrantedBy?: string;
+    exceptionGrantedAt?: string;
+}
+
+export interface PagedQuarantinedAssets {
+    quarantinedAssets: QuarantinedAsset[];
+    nextToken?: string;
+}
+
+/**
+ * One page of quarantined assets. Authorization filters the page after it is read, so a page may
+ * be empty while `nextToken` is still set; callers keep paging until it is absent.
+ */
+export const fetchQuarantinedAssets = async (
+    paging?: PagingParams
+): Promise<[boolean, PagedQuarantinedAssets | string]> => {
     try {
-        const response = await apiClient.get("compliance/quarantine", {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
+        const response = await apiClient.get("compliance/quarantine", {
+            queryStringParameters: pagingQuery(paging),
+        });
+        if (responseErrored(response)) {
             return [false, response.message];
         }
-        return [true, response.quarantinedAssets || response.assets || response.Items || []];
+        return [
+            true,
+            {
+                quarantinedAssets:
+                    response.quarantinedAssets || response.assets || response.Items || [],
+                nextToken: response.NextToken || undefined,
+            },
+        ];
     } catch (error: any) {
-        console.error("fetchQuarantinedAssets error:", error);
+        console.log("fetchQuarantinedAssets error:", error);
         return [false, error?.message || "Failed to fetch quarantined assets"];
     }
 };
@@ -380,7 +476,7 @@ export const releaseFromQuarantine = async (
         }
         return [true, response.message || "Released from quarantine"];
     } catch (error: any) {
-        console.error("releaseFromQuarantine error:", error);
+        console.log("releaseFromQuarantine error:", error);
         return [false, error?.message || "Failed to release from quarantine"];
     }
 };
@@ -403,7 +499,7 @@ export const grantException = async (
         }
         return [true, response.message || "Exception granted"];
     } catch (error: any) {
-        console.error("grantException error:", error);
+        console.log("grantException error:", error);
         return [false, error?.message || "Failed to grant exception"];
     }
 };
@@ -421,43 +517,69 @@ export const fetchCascades = async (): Promise<[boolean, CascadeRecord[] | strin
         }
         return [true, response.cascades || response.Items || []];
     } catch (error: any) {
-        console.error("fetchCascades error:", error);
+        console.log("fetchCascades error:", error);
         return [false, error?.message || "Failed to fetch cascades"];
     }
 };
 
-export const approveCascade = async (cascadeId: string): Promise<[boolean, string]> => {
+export const fetchCascade = async (
+    cascadeId: string
+): Promise<[boolean, CascadeRecord | string]> => {
     try {
-        const response = await apiClient.post(`compliance/cascades/${cascadeId}/approve`, {
-            body: {},
-        });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
+        const response = await apiClient.get(`compliance/cascades/${cascadeId}`, {});
+        if (responseErrored(response)) {
             return [false, response.message];
         }
-        return [true, response.message || "Cascade approved"];
+        return [true, response];
     } catch (error: any) {
-        console.error("approveCascade error:", error);
+        console.log("fetchCascade error:", error);
+        return [false, error?.message || "Failed to fetch cascade"];
+    }
+};
+
+/**
+ * Approval starts the cascade asynchronously: the response carries `state: "executing"` and the
+ * caller observes completion through `fetchCascade`.
+ */
+export const approveCascade = async (
+    cascadeId: string,
+    reason?: string
+): Promise<[boolean, CascadeActionResponse | string]> => {
+    try {
+        const response = await apiClient.post(`compliance/cascades/${cascadeId}/approve`, {
+            body: reason === undefined ? {} : { reason },
+        });
+        if (responseErrored(response)) {
+            return [false, response.message];
+        }
+        return [
+            true,
+            {
+                message: response.message || "Cascade approved",
+                cascadeId: response.cascadeId || cascadeId,
+                state: response.state,
+            },
+        ];
+    } catch (error: any) {
+        console.log("approveCascade error:", error);
         return [false, error?.message || "Failed to approve cascade"];
     }
 };
 
-export const rejectCascade = async (cascadeId: string): Promise<[boolean, string]> => {
+export const rejectCascade = async (
+    cascadeId: string,
+    reason?: string
+): Promise<[boolean, string]> => {
     try {
         const response = await apiClient.post(`compliance/cascades/${cascadeId}/reject`, {
-            body: {},
+            body: reason === undefined ? {} : { reason },
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
+        if (responseErrored(response)) {
             return [false, response.message];
         }
         return [true, response.message || "Cascade rejected"];
     } catch (error: any) {
-        console.error("rejectCascade error:", error);
+        console.log("rejectCascade error:", error);
         return [false, error?.message || "Failed to reject cascade"];
     }
 };
@@ -480,7 +602,7 @@ export const bindSchemaToDatabase = async (
         }
         return [true, response.message || "Schema bound to database"];
     } catch (error: any) {
-        console.error("bindSchemaToDatabase error:", error);
+        console.log("bindSchemaToDatabase error:", error);
         return [false, error?.message || "Failed to bind schema to database"];
     }
 };
@@ -496,7 +618,7 @@ export const unbindSchemaFromDatabase = async (databaseId: string): Promise<[boo
         }
         return [true, response.message || "Schema unbound from database"];
     } catch (error: any) {
-        console.error("unbindSchemaFromDatabase error:", error);
+        console.log("unbindSchemaFromDatabase error:", error);
         return [false, error?.message || "Failed to unbind schema from database"];
     }
 };
@@ -518,7 +640,7 @@ export const bindSchemaToAsset = async (
         }
         return [true, response.message || "Schema bound to asset"];
     } catch (error: any) {
-        console.error("bindSchemaToAsset error:", error);
+        console.log("bindSchemaToAsset error:", error);
         return [false, error?.message || "Failed to bind schema to asset"];
     }
 };
@@ -537,64 +659,116 @@ export const unbindSchemaFromAsset = async (
         }
         return [true, response.message || "Schema unbound from asset"];
     } catch (error: any) {
-        console.error("unbindSchemaFromAsset error:", error);
+        console.log("unbindSchemaFromAsset error:", error);
         return [false, error?.message || "Failed to unbind schema from asset"];
     }
 };
 
-export const getDatabaseBindings = async (databaseId: string): Promise<[boolean, any]> => {
+export interface AssetSchemaOverride {
+    databaseId: string;
+    assetId: string;
+    schemaName: string;
+    [key: string]: any;
+}
+
+/** `assetOverrideCount` counts every override; `assetOverrides` is one page of them. */
+export interface DatabaseBindings {
+    databaseId: string;
+    databaseSchema?: string | null;
+    complianceAutoEval?: boolean;
+    assetOverrides: AssetSchemaOverride[];
+    assetOverrideCount: number;
+    nextToken?: string;
+}
+
+export const getDatabaseBindings = async (
+    databaseId: string,
+    paging?: PagingParams
+): Promise<[boolean, DatabaseBindings | string]> => {
     try {
-        const response = await apiClient.get(`compliance/bind/${databaseId}`, {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
+        const response = await apiClient.get(`compliance/bind/${databaseId}`, {
+            queryStringParameters: pagingQuery(paging),
+        });
+        if (responseErrored(response)) {
             return [false, response.message];
         }
-        return [true, response];
+        const { NextToken, ...bindings } = response;
+        return [
+            true,
+            {
+                ...bindings,
+                assetOverrides: bindings.assetOverrides || [],
+                assetOverrideCount:
+                    bindings.assetOverrideCount ?? (bindings.assetOverrides || []).length,
+                nextToken: NextToken || undefined,
+            },
+        ];
     } catch (error: any) {
-        console.error("getDatabaseBindings error:", error);
+        console.log("getDatabaseBindings error:", error);
         return [false, error?.message || "Failed to get database bindings"];
     }
 };
 
 // --- Audit ---
 
+/** Filters of the global audit query; `eventType` selects one partition, dates bound `timestamp`. */
+export interface AuditQueryParams extends PagingParams {
+    eventType?: string;
+    startDate?: string;
+    endDate?: string;
+}
+
+const auditQuery = (params?: AuditQueryParams): Record<string, string> => {
+    const query = pagingQuery(params);
+    if (params?.eventType) {
+        query.eventType = params.eventType;
+    }
+    if (params?.startDate) {
+        query.startDate = params.startDate;
+    }
+    if (params?.endDate) {
+        query.endDate = params.endDate;
+    }
+    return query;
+};
+
+const pagedEntries = (response: any): PagedAuditEntries => ({
+    entries: response.entries || response.Items || [],
+    nextToken: response.NextToken || undefined,
+});
+
 export const fetchAssetAuditHistory = async (
     databaseId: string,
-    assetId: string
-): Promise<[boolean, AuditEntry[] | string]> => {
+    assetId: string,
+    params?: AuditQueryParams
+): Promise<[boolean, PagedAuditEntries | string]> => {
     try {
-        const response = await apiClient.get(`compliance/audit/${databaseId}/${assetId}`, {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
+        const response = await apiClient.get(`compliance/audit/${databaseId}/${assetId}`, {
+            queryStringParameters: auditQuery(params),
+        });
+        if (responseErrored(response)) {
             return [false, response.message];
         }
-        return [true, response.entries || response.Items || []];
+        return [true, pagedEntries(response)];
     } catch (error: any) {
-        console.error("fetchAssetAuditHistory error:", error);
+        console.log("fetchAssetAuditHistory error:", error);
         return [false, error?.message || "Failed to fetch audit history"];
     }
 };
 
 export const fetchAuditLog = async (
-    queryParams?: Record<string, string>
-): Promise<[boolean, AuditEntry[] | string]> => {
+    params?: AuditQueryParams
+): Promise<[boolean, PagedAuditEntries | string]> => {
     try {
         const response = await apiClient.get("compliance/audit", {
-            queryStringParameters: queryParams || {},
+            queryStringParameters: auditQuery(params),
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
+        if (responseErrored(response)) {
             return [false, response.message];
         }
-        return [true, response.entries || response.Items || []];
+        return [true, pagedEntries(response)];
     } catch (error: any) {
-        console.error("fetchAuditLog error:", error);
+        console.log("fetchAuditLog error:", error);
         return [false, error?.message || "Failed to fetch audit log"];
     }
 };

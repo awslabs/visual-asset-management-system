@@ -7,6 +7,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Header from "@cloudscape-design/components/header";
+import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
@@ -15,7 +16,11 @@ import FormField from "@cloudscape-design/components/form-field";
 import Link from "@cloudscape-design/components/link";
 import { SelectProps } from "@cloudscape-design/components";
 import Synonyms from "../synonyms";
-import { fetchAuditLog } from "../services/ComplianceService";
+import {
+    fetchAuditLog,
+    AuditEntry,
+    COMPLIANCE_LISTING_PAGE_SIZE,
+} from "../services/ComplianceService";
 
 const eventTypeOptions: SelectProps.Option[] = [
     { label: "All Events", value: "" },
@@ -30,32 +35,68 @@ const eventTypeOptions: SelectProps.Option[] = [
 ];
 
 const ComplianceAuditLog: React.FC = () => {
-    const [items, setItems] = useState<any[]>([]);
+    const [items, setItems] = useState<AuditEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [selectedEventType, setSelectedEventType] = useState<SelectProps.Option>(
         eventTypeOptions[0]
     );
 
-    const loadData = useCallback(async () => {
-        setLoading(true);
-        setError(null);
-        const params: Record<string, string> = {};
-        if (selectedEventType.value) {
-            params.eventType = selectedEventType.value;
-        }
-        const [success, result] = await fetchAuditLog(params);
-        if (success && Array.isArray(result)) {
-            setItems(result);
-        } else {
-            setError(typeof result === "string" ? result : "Failed to load audit log");
-        }
-        setLoading(false);
-    }, [selectedEventType]);
+    // Server-side token paging: tokens[i] is the startingToken that fetches page i
+    // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
+    // NextToken, which is what Pagination's openEnd renders.
+    const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
+    const [hasMore, setHasMore] = useState(false);
+    const [currentPageIndex, setCurrentPageIndex] = useState(1);
+    const [loadedPages, setLoadedPages] = useState(1);
+
+    const loadPage = useCallback(
+        async (pageNumber: number, startingToken: string | undefined) => {
+            setLoading(true);
+            setError(null);
+            const [success, result] = await fetchAuditLog({
+                eventType: selectedEventType.value || undefined,
+                maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
+                startingToken,
+            });
+            if (success && typeof result !== "string") {
+                setItems(result.entries);
+                setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
+                if (result.nextToken) {
+                    setTokens((prev) => ({ ...prev, [pageNumber + 1]: result.nextToken }));
+                    setHasMore(true);
+                } else {
+                    setHasMore(false);
+                }
+            } else {
+                setError(typeof result === "string" ? result : "Failed to load audit log");
+                setItems([]);
+                setHasMore(false);
+            }
+            setLoading(false);
+        },
+        [selectedEventType]
+    );
+
+    // A reload (or a filter change) restarts the walk from the first page: a token belongs
+    // to the query that produced it.
+    const loadData = useCallback(() => {
+        setTokens({});
+        setCurrentPageIndex(1);
+        setLoadedPages(1);
+        setHasMore(false);
+        return loadPage(0, undefined);
+    }, [loadPage]);
 
     useEffect(() => {
         loadData();
     }, [loadData]);
+
+    const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
+        const newIndex = detail.currentPageIndex;
+        setCurrentPageIndex(newIndex);
+        loadPage(newIndex - 1, tokens[newIndex - 1]);
+    };
 
     return (
         <SpaceBetween size="l">
@@ -69,10 +110,10 @@ const ComplianceAuditLog: React.FC = () => {
                 header={
                     <Header
                         variant="h1"
-                        counter={`(${items.length})`}
+                        counter={`(${items.length}${hasMore ? "+" : ""})`}
                         actions={
                             <SpaceBetween direction="horizontal" size="xs">
-                                <FormField label="">
+                                <FormField label="Event type">
                                     <Select
                                         selectedOption={selectedEventType}
                                         onChange={({ detail }) =>
@@ -80,9 +121,15 @@ const ComplianceAuditLog: React.FC = () => {
                                         }
                                         options={eventTypeOptions}
                                         filteringType="auto"
+                                        ariaLabel="Filter audit entries by event type"
                                     />
                                 </FormField>
-                                <Button iconName="refresh" onClick={loadData} />
+                                <Button
+                                    iconName="refresh"
+                                    ariaLabel="Refresh audit log"
+                                    onClick={loadData}
+                                    loading={loading}
+                                />
                             </SpaceBetween>
                         }
                     >
@@ -91,6 +138,20 @@ const ComplianceAuditLog: React.FC = () => {
                 }
                 loading={loading}
                 items={items}
+                pagination={
+                    <Pagination
+                        currentPageIndex={currentPageIndex}
+                        pagesCount={hasMore ? loadedPages + 1 : loadedPages}
+                        openEnd={hasMore}
+                        onChange={handlePageChange}
+                        disabled={loading}
+                        ariaLabels={{
+                            nextPageLabel: "Next page of audit entries",
+                            previousPageLabel: "Previous page of audit entries",
+                            pageLabel: (pageNumber) => `Page ${pageNumber} of audit entries`,
+                        }}
+                    />
+                }
                 empty={
                     <Box textAlign="center" padding="l">
                         <b>No audit entries</b>
@@ -103,26 +164,26 @@ const ComplianceAuditLog: React.FC = () => {
                     {
                         id: "timestamp",
                         header: "Timestamp",
-                        cell: (item: any) =>
+                        cell: (item) =>
                             item.timestamp ? new Date(item.timestamp).toLocaleString() : "-",
                         sortingField: "timestamp",
                     },
                     {
                         id: "eventType",
                         header: "Event Type",
-                        cell: (item: any) => item.eventType || "-",
+                        cell: (item) => item.eventType || "-",
                         sortingField: "eventType",
                     },
                     {
                         id: "databaseId",
                         header: Synonyms.Database,
-                        cell: (item: any) => item.databaseId || "-",
+                        cell: (item) => item.databaseId || "-",
                         sortingField: "databaseId",
                     },
                     {
                         id: "assetId",
                         header: Synonyms.Asset,
-                        cell: (item: any) =>
+                        cell: (item) =>
                             item.assetId && item.assetId !== "*" ? (
                                 <Link
                                     href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
@@ -137,18 +198,18 @@ const ComplianceAuditLog: React.FC = () => {
                     {
                         id: "schemaName",
                         header: "Schema",
-                        cell: (item: any) => item.schemaName || "-",
+                        cell: (item) => item.schemaName || "-",
                     },
                     {
                         id: "actor",
                         header: "Actor",
-                        cell: (item: any) => item.actor || "-",
+                        cell: (item) => item.actor || "-",
                         sortingField: "actor",
                     },
                     {
                         id: "details",
                         header: "Details",
-                        cell: (item: any) => {
+                        cell: (item) => {
                             if (!item.details) return "-";
                             try {
                                 const parsed =
@@ -157,7 +218,9 @@ const ComplianceAuditLog: React.FC = () => {
                                         : item.details;
                                 return JSON.stringify(parsed);
                             } catch {
-                                return item.details;
+                                return typeof item.details === "string"
+                                    ? item.details
+                                    : JSON.stringify(item.details);
                             }
                         },
                     },

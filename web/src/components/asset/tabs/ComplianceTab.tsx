@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import {
     Box,
@@ -11,6 +11,7 @@ import {
     Container,
     Header,
     Link,
+    Pagination,
     SpaceBetween,
     StatusIndicator,
     Table,
@@ -29,7 +30,9 @@ import {
     grantException,
     ComplianceState,
     EvaluationRecord,
+    COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../../../services/ComplianceService";
+import ReasonModal from "../../compliance/ReasonModal";
 import Synonyms from "../../../synonyms";
 
 interface ComplianceTabProps {
@@ -76,14 +79,40 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
     const [evaluating, setEvaluating] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
+    const [exceptionModalVisible, setExceptionModalVisible] = useState(false);
+    const [granting, setGranting] = useState(false);
 
-    useEffect(() => {
-        if (isActive && canViewCompliance && databaseId && assetId) {
-            loadComplianceData();
-        }
-    }, [isActive, canViewCompliance, databaseId, assetId]);
+    // Server-side token paging of the evaluation history: tokens[i] is the startingToken that
+    // fetches page i (tokens[0] is undefined).
+    const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
+    const [hasMore, setHasMore] = useState(false);
+    const [currentPageIndex, setCurrentPageIndex] = useState(1);
+    const [loadedPages, setLoadedPages] = useState(1);
 
-    const loadComplianceData = async () => {
+    const loadEvaluationsPage = useCallback(
+        async (pageNumber: number, startingToken: string | undefined) => {
+            const [evalSuccess, evalResult] = await fetchEvaluationHistory(databaseId, assetId, {
+                maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
+                startingToken,
+            });
+            if (evalSuccess && typeof evalResult !== "string") {
+                setEvaluations(evalResult.evaluations);
+                setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
+                if (evalResult.nextToken) {
+                    setTokens((prev) => ({ ...prev, [pageNumber + 1]: evalResult.nextToken }));
+                    setHasMore(true);
+                } else {
+                    setHasMore(false);
+                }
+            } else {
+                setHasMore(false);
+            }
+        },
+        [databaseId, assetId]
+    );
+
+    // Reads the current state and restarts the history walk from its first page.
+    const loadComplianceData = useCallback(async () => {
         setLoading(true);
         setError(null);
 
@@ -93,12 +122,30 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                 setComplianceState(stateResult);
             }
 
-            const [evalSuccess, evalResult] = await fetchEvaluationHistory(databaseId, assetId);
-            if (evalSuccess && Array.isArray(evalResult)) {
-                setEvaluations(evalResult);
-            }
+            setTokens({});
+            setCurrentPageIndex(1);
+            setLoadedPages(1);
+            setHasMore(false);
+            await loadEvaluationsPage(0, undefined);
         } catch (err: any) {
             setError(err?.message || "Failed to load compliance data");
+        } finally {
+            setLoading(false);
+        }
+    }, [databaseId, assetId, loadEvaluationsPage]);
+
+    useEffect(() => {
+        if (isActive && canViewCompliance && databaseId && assetId) {
+            loadComplianceData();
+        }
+    }, [isActive, canViewCompliance, databaseId, assetId, loadComplianceData]);
+
+    const handlePageChange = async ({ detail }: { detail: { currentPageIndex: number } }) => {
+        const newIndex = detail.currentPageIndex;
+        setCurrentPageIndex(newIndex);
+        setLoading(true);
+        try {
+            await loadEvaluationsPage(newIndex - 1, tokens[newIndex - 1]);
         } finally {
             setLoading(false);
         }
@@ -128,11 +175,11 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
         }
     };
 
-    const handleException = async () => {
-        const reason = window.prompt("Enter reason for exception:");
-        if (!reason) return;
-
+    const handleException = async (reason: string) => {
+        setGranting(true);
         const [success, message] = await grantException(databaseId, assetId, reason);
+        setGranting(false);
+        setExceptionModalVisible(false);
         if (success) {
             setActionMessage(message);
             await loadComplianceData();
@@ -175,18 +222,14 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                         variant="h3"
                         actions={
                             <SpaceBetween direction="horizontal" size="xs">
-                                {complianceState?.complianceState === "quarantined" && (
-                                    <>
-                                        {canRelease && (
-                                            <Button onClick={handleRelease}>Release</Button>
-                                        )}
-                                        {canGrantException && (
-                                            <Button onClick={handleException}>
-                                                Grant Exception
-                                            </Button>
-                                        )}
-                                    </>
-                                )}
+                                {complianceState?.complianceState === "quarantined" &&
+                                    canRelease && <Button onClick={handleRelease}>Release</Button>}
+                                {complianceState?.complianceState === "quarantined" &&
+                                    canGrantException && (
+                                        <Button onClick={() => setExceptionModalVisible(true)}>
+                                            Grant Exception
+                                        </Button>
+                                    )}
                                 {canEvaluate && (
                                     <Button
                                         variant="primary"
@@ -225,10 +268,30 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                 </SpaceBetween>
             </Container>
 
-            <Container header={<Header variant="h3">Evaluation History</Header>}>
+            <Container
+                header={
+                    <Header variant="h3" counter={`(${evaluations.length}${hasMore ? "+" : ""})`}>
+                        Evaluation History
+                    </Header>
+                }
+            >
                 <Table
                     loading={loading}
                     items={evaluations}
+                    pagination={
+                        <Pagination
+                            currentPageIndex={currentPageIndex}
+                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
+                            openEnd={hasMore}
+                            onChange={handlePageChange}
+                            disabled={loading}
+                            ariaLabels={{
+                                nextPageLabel: "Next page of evaluations",
+                                previousPageLabel: "Previous page of evaluations",
+                                pageLabel: (pageNumber) => `Page ${pageNumber} of evaluations`,
+                            }}
+                        />
+                    }
                     empty={
                         <Box textAlign="center" padding="l">
                             No evaluations recorded for this {Synonyms.asset}.
@@ -289,6 +352,17 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                     ]}
                 />
             </Container>
+
+            <ReasonModal
+                visible={exceptionModalVisible}
+                header="Grant compliance exception"
+                label="Reason for exception"
+                description={`Why this ${Synonyms.asset} may stay in use while quarantined. Recorded in the compliance audit log.`}
+                confirmLabel="Grant exception"
+                loading={granting}
+                onConfirm={handleException}
+                onDismiss={() => setExceptionModalVisible(false)}
+            />
         </SpaceBetween>
     );
 };

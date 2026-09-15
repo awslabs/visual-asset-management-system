@@ -121,8 +121,8 @@ describe("Navigation", () => {
         expect(findNavLink(container, "#/compliance/cascades/")).toBeFalsy();
     });
 
-    // TEMPORARY-TEST: pins that a user without the compliance routes never sees the section,
-    // proving the flag gate was replaced by the route filter rather than dropped entirely.
+    // Durable guard: a user without the compliance routes never sees the section; the route
+    // filter alone decides whether it renders.
     it("hides the Compliance section when no compliance routes are allowed", async () => {
         allowRoutes("/databases/");
         const container = await renderNavigation();

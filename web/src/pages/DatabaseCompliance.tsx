@@ -9,6 +9,7 @@ import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
+import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table from "@cloudscape-design/components/table";
@@ -22,6 +23,7 @@ import {
     sweepSchema,
     getDatabaseBindings,
     DatabaseComplianceOverview,
+    COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
 
 const stateIndicatorMap: Record<string, { type: string; label: string }> = {
@@ -42,39 +44,79 @@ const DatabaseCompliancePage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
 
+    // Server-side token paging of the asset-state table: tokens[i] is the startingToken that
+    // fetches page i (tokens[0] is undefined). The summary counts cover the whole database on
+    // every page; only `assets` is the page.
+    const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
+    const [hasMore, setHasMore] = useState(false);
+    const [currentPageIndex, setCurrentPageIndex] = useState(1);
+    const [loadedPages, setLoadedPages] = useState(1);
+
+    const loadPage = useCallback(
+        async (pageNumber: number, startingToken: string | undefined) => {
+            if (!databaseId) return;
+            setLoading(true);
+            setError(null);
+            try {
+                const [overviewSuccess, overviewResult] = await fetchDatabaseComplianceOverview(
+                    databaseId,
+                    { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken }
+                );
+                if (overviewSuccess && typeof overviewResult !== "string") {
+                    setOverview(overviewResult);
+                    setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
+                    if (overviewResult.nextToken) {
+                        setTokens((prev) => ({
+                            ...prev,
+                            [pageNumber + 1]: overviewResult.nextToken,
+                        }));
+                        setHasMore(true);
+                    } else {
+                        setHasMore(false);
+                    }
+                } else {
+                    setError(
+                        typeof overviewResult === "string"
+                            ? overviewResult
+                            : "Failed to load overview"
+                    );
+                    setHasMore(false);
+                }
+            } catch (err: any) {
+                setError(err?.message || "Failed to load compliance data");
+            } finally {
+                setLoading(false);
+            }
+        },
+        [databaseId]
+    );
+
+    // A reload restarts the walk from the first page and re-reads the binding.
     const loadData = useCallback(async () => {
         if (!databaseId) return;
-        setLoading(true);
-        setError(null);
+        setTokens({});
+        setCurrentPageIndex(1);
+        setLoadedPages(1);
+        setHasMore(false);
+        await loadPage(0, undefined);
 
-        try {
-            const [overviewSuccess, overviewResult] = await fetchDatabaseComplianceOverview(
-                databaseId
-            );
-            if (overviewSuccess && typeof overviewResult !== "string") {
-                setOverview(overviewResult);
-            } else {
-                setError(
-                    typeof overviewResult === "string" ? overviewResult : "Failed to load overview"
-                );
-            }
-
-            const [bindingSuccess, bindingResult] = await getDatabaseBindings(databaseId);
-            if (bindingSuccess && typeof bindingResult !== "string") {
-                setDatabaseSchema(bindingResult.databaseSchema || null);
-            }
-        } catch (err: any) {
-            setError(err?.message || "Failed to load compliance data");
-        } finally {
-            setLoading(false);
+        const [bindingSuccess, bindingResult] = await getDatabaseBindings(databaseId);
+        if (bindingSuccess && typeof bindingResult !== "string") {
+            setDatabaseSchema(bindingResult.databaseSchema || null);
         }
-    }, [databaseId]);
+    }, [databaseId, loadPage]);
 
     useEffect(() => {
         if (databaseId) {
             loadData();
         }
     }, [databaseId, loadData]);
+
+    const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
+        const newIndex = detail.currentPageIndex;
+        setCurrentPageIndex(newIndex);
+        loadPage(newIndex - 1, tokens[newIndex - 1]);
+    };
 
     const handleEvaluateAll = async () => {
         if (!databaseSchema) {
@@ -103,6 +145,8 @@ const DatabaseCompliancePage: React.FC = () => {
     const totalTracked = overview?.totalAssets || 0;
     const compliantCount = summary?.compliant || 0;
     const complianceRate = totalTracked > 0 ? Math.round((compliantCount / totalTracked) * 100) : 0;
+    const pageAssets = overview?.assets || [];
+    const isPaging = hasMore || currentPageIndex > 1;
 
     return (
         <SpaceBetween size="l">
@@ -191,10 +235,39 @@ const DatabaseCompliancePage: React.FC = () => {
                 </ColumnLayout>
             </Container>
 
-            <Container header={<Header variant="h3">{Synonyms.Asset} Compliance States</Header>}>
+            <Container
+                header={
+                    <Header
+                        variant="h3"
+                        counter={`(${pageAssets.length} of ${totalTracked})`}
+                        description={
+                            isPaging
+                                ? `Showing ${pageAssets.length} of ${totalTracked} tracked ${Synonyms.assets}; the summary above covers all of them.`
+                                : undefined
+                        }
+                    >
+                        {Synonyms.Asset} Compliance States
+                    </Header>
+                }
+            >
                 <Table
                     loading={loading}
-                    items={overview?.assets || []}
+                    items={pageAssets}
+                    pagination={
+                        <Pagination
+                            currentPageIndex={currentPageIndex}
+                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
+                            openEnd={hasMore}
+                            onChange={handlePageChange}
+                            disabled={loading}
+                            ariaLabels={{
+                                nextPageLabel: `Next page of ${Synonyms.assets}`,
+                                previousPageLabel: `Previous page of ${Synonyms.assets}`,
+                                pageLabel: (pageNumber) =>
+                                    `Page ${pageNumber} of ${Synonyms.assets}`,
+                            }}
+                        />
+                    }
                     empty={
                         <Box textAlign="center" padding="l">
                             No {Synonyms.assets} are being tracked for compliance in this{" "}
