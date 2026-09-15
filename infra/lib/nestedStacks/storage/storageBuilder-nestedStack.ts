@@ -126,7 +126,7 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
-        // Compliance  tables
+        // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table;
         complianceAssetStateStorageTable: dynamodb.Table;
         complianceEvaluationStorageTable: dynamodb.Table;
@@ -2124,7 +2124,7 @@ export function storageResourcesBuilder(
     });
 
     /////////////////////////////////////////////////////////////////////////////
-    // Compliance  Tables
+    // Compliance Tables
     /////////////////////////////////////////////////////////////////////////////
 
     const complianceSchemaStorageTable = new dynamodb.Table(scope, "ComplianceSchemaStorageTable", {
@@ -2215,13 +2215,17 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    const complianceCascadeStorageTable = new dynamodb.Table(scope, "ComplianceCascadeStorageTable", {
-        ...dynamodbDefaultProps,
-        partitionKey: {
-            name: "cascadeId",
-            type: dynamodb.AttributeType.STRING,
-        },
-    });
+    const complianceCascadeStorageTable = new dynamodb.Table(
+        scope,
+        "ComplianceCascadeStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "cascadeId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
 
     complianceCascadeStorageTable.addGlobalSecondaryIndex({
         indexName: "StateIndex",
@@ -2915,6 +2919,17 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowStorageTableV2.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowTriggersStorage]:
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
+        // Compliance tables
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
+            storageResources.dynamo.complianceSchemaStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceAssetStateStorage]:
+            storageResources.dynamo.complianceAssetStateStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceEvaluationStorage]:
+            storageResources.dynamo.complianceEvaluationStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceCascadeStorage]:
+            storageResources.dynamo.complianceCascadeStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceAuditStorage]:
+            storageResources.dynamo.complianceAuditStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,

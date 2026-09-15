@@ -158,7 +158,7 @@ Each object type supports specific constraint fields that can be used in criteri
 | `complianceCascade` | `cascadeId`                                                          | Cascade approval and execution operations.                                       |
 
 :::info[Compliance object types]
-Compliance object types are only available when Compliance  is enabled. The default admin role includes constraints for all three compliance types with `contains .*` (match all) criteria. For non-admin roles, use the `compliance-admin` or `compliance-readonly` permission templates for quick setup.
+Compliance object types are only available when Compliance is enabled. The default admin role includes constraints for all three compliance types with `contains .*` (match all) criteria. For non-admin roles, use the `compliance-admin` or `compliance-readonly` permission templates for quick setup.
 :::
 
 This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
@@ -522,7 +522,7 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | ---------------------- | ------- | ------------------ | --------------------------------------------------------- |
 | `/addon/physna/viewer` | GET     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 
-### Compliance routes (Compliance)
+### Compliance routes
 
 :::info
 These routes are only deployed when `app.compliance.enabled` is `true`.
