@@ -4,23 +4,22 @@
  */
 
 /**
- * No Fargate Batch job definition may name a container user, so the image's own `USER` is what runs.
+ * Container user enforcement for Batch job definitions.
  *
- * `BatchFargatePipelineConstruct` hardcoded `user: "root"` on its `EcsFargateContainerDefinition`. That
- * value becomes `ContainerProperties.User`, which REPLACES the user the image declares — so the
- * coordinateTransform Dockerfile's `USER coordxform` was inert at runtime while the Dockerfile and its
- * guard test in `containerBuildSources.test.ts` were both green. Removing the override is what makes
- * every one of those Dockerfiles take effect, and this file is what stops it coming back: a
- * reintroduced override would re-neutralise four images at once and break no other assertion.
+ * **Fargate jobs:** No job definition may name a container user, so the image's own `USER` is what
+ * runs. `BatchFargatePipelineConstruct` hardcoded `user: "root"` on its
+ * `EcsFargateContainerDefinition`. That value becomes `ContainerProperties.User`, which REPLACES
+ * the user the image declares — so the coordinateTransform Dockerfile's `USER coordxform` was inert
+ * at runtime while the Dockerfile and its guard test in `containerBuildSources.test.ts` were both
+ * green. Removing the override is what makes every one of those Dockerfiles take effect, and the
+ * assertion below is what stops it coming back.
  *
- * The construct is shared by five job definitions — conversion/coordinateTransform,
- * genAi/metadata3dLabeling (whose image declares no `USER`, so it keeps running as root either way),
- * preview/3dThumbnail, and both preview/pcPotreeViewer images — so the assertion is written over all of
- * them rather than over a named subset.
- *
- * Asserted on the emitted `AWS::Batch::JobDefinition`, because the user AWS Batch applies is the one it
- * receives. `ContainerProperties.User` is absent (rather than `"root"`) when no override is set, which is
- * what makes the absence assertion below meaningful.
+ * **EC2 GPU jobs (issue #327):** GPU pipeline containers now run as uid/gid 10000:10000, enforced
+ * via the image's `USER` directive (not ContainerProperties.User, which stays absent). The EFS
+ * access point POSIX user matches this uid/gid, so containers can read/write the shared Hugging
+ * Face cache. The assertion below verifies the USER directive is present in each GPU image by
+ * checking the emitted job definition does NOT name a user override — if ContainerProperties.User
+ * appeared, it would replace the image's USER and break EFS write permission.
  */
 
 import * as fs from "fs";
