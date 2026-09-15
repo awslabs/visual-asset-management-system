@@ -116,7 +116,7 @@ export class CosmosCommonConstruct extends Construct {
                     reason: "Model cache bucket does not require access logging as it contains only cached model weights downloaded from HuggingFace",
                 },
             ],
-            true,
+            true
         );
     }
 }

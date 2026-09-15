@@ -77,13 +77,13 @@ export class IsaacLabTrainingConstruct extends Construct {
             // role ECR pull + ecr:GetAuthorizationToken permissions (fromRegistry does not).
             containerImageRef = ecs.ContainerImage.fromEcrRepository(
                 props.codeBuildImage.repository,
-                props.codeBuildImage.tag,
+                props.codeBuildImage.tag
             );
         } else {
             const containerImage = new DockerImageAsset(this, "IsaacLabTrainingImage", {
                 directory: path.join(
                     __dirname,
-                    "../../../../../../../backendPipelines/simulation/isaacLabTraining/container",
+                    "../../../../../../../backendPipelines/simulation/isaacLabTraining/container"
                 ),
                 platform: Platform.LINUX_AMD64,
                 buildArgs: {
@@ -133,7 +133,7 @@ export class IsaacLabTrainingConstruct extends Construct {
         props.pipelineSecurityGroups[0].addIngressRule(
             props.pipelineSecurityGroups[0],
             ec2.Port.tcp(2049),
-            "Allow NFS for EFS access",
+            "Allow NFS for EFS access"
         );
 
         // Launch template with larger EBS volume for Isaac Lab container (10GB+)
@@ -184,7 +184,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                         imageType: batch.EcsMachineImageType.ECS_AL2023_NVIDIA,
                     },
                 ],
-            },
+            }
         );
 
         // Enable Container Insights on the ECS cluster created by Batch
@@ -217,7 +217,7 @@ export class IsaacLabTrainingConstruct extends Construct {
         getEcsClusterArn.node.addDependency(computeEnvironment);
 
         const ecsClusterArn = getEcsClusterArn.getResponseField(
-            "computeEnvironments.0.ecsClusterArn",
+            "computeEnvironments.0.ecsClusterArn"
         );
 
         // Now enable Container Insights on the ECS cluster
@@ -299,7 +299,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                     "states:SendTaskHeartbeat",
                 ],
                 resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
-            }),
+            })
         );
 
         // Batch job definition using CDK-managed container image
@@ -448,7 +448,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                     props.config.env.coreStackName,
                     props.config.env.account,
                     "IsaacLab-StateMachineLogGroup",
-                    10,
+                    10
                 ),
             retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -476,26 +476,26 @@ export class IsaacLabTrainingConstruct extends Construct {
         // Add STATE_MACHINE_ARN to vamsExecuteFunction (must be done after state machine creation)
         lambdaFunctions.vamsExecuteFunction.addEnvironment(
             "STATE_MACHINE_ARN",
-            stateMachine.stateMachineArn,
+            stateMachine.stateMachineArn
         );
 
         lambdaFunctions.vamsExecuteFunction.addEnvironment(
             "ORCHESTRATION_BUS_NAME",
-            props.storageResources.eventBridge.orchestrationBus.eventBusName,
+            props.storageResources.eventBridge.orchestrationBus.eventBusName
         );
         props.storageResources.eventBridge.orchestrationBus.grantPutEventsTo(
-            lambdaFunctions.vamsExecuteFunction,
+            lambdaFunctions.vamsExecuteFunction
         );
 
         // Registered with the sub-execution so the execution log viewer can read this state
         // machine's logs
         lambdaFunctions.vamsExecuteFunction.addEnvironment(
             "STATE_MACHINE_LOG_GROUP_NAME",
-            stateMachineLogGroup.logGroupName,
+            stateMachineLogGroup.logGroupName
         );
         lambdaFunctions.vamsExecuteFunction.addEnvironment(
             "STATE_MACHINE_LOG_GROUP_ARN",
-            stateMachineLogGroup.logGroupArn,
+            stateMachineLogGroup.logGroupArn
         );
 
         // Set output
@@ -517,7 +517,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                 "backendPipelines",
                 "simulation",
                 "isaacLabTraining",
-                "vamsSchema",
+                "vamsSchema"
             );
 
             new VamsSchemaRegistration(this, "IsaacLabTrainingRegistration", {
@@ -563,7 +563,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                     ],
                 },
             ],
-            true,
+            true
         );
     }
 }

@@ -426,6 +426,18 @@ const NVIDIA_DOCKERFILES: { label: string; file: string }[] = [
         file: path.join(PIPELINES_DIR, "genAi", "nvidia", "cosmos", "3", "container", "Dockerfile"),
     },
     {
+        label: "cosmos predict v1",
+        file: path.join(
+            PIPELINES_DIR,
+            "genAi",
+            "nvidia",
+            "cosmos",
+            "predict",
+            "containerv1",
+            "Dockerfile"
+        ),
+    },
+    {
         label: "cosmos predict v2.5",
         file: path.join(
             PIPELINES_DIR,
@@ -464,6 +476,10 @@ const NVIDIA_DOCKERFILES: { label: string; file: string }[] = [
     {
         label: "gr00t",
         file: path.join(PIPELINES_DIR, "genAi", "nvidia", "gr00t", "container", "Dockerfile"),
+    },
+    {
+        label: "isaac lab training",
+        file: path.join(PIPELINES_DIR, "simulation", "isaacLabTraining", "container", "Dockerfile"),
     },
 ];
 

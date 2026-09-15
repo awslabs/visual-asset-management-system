@@ -19,7 +19,19 @@ RUN apt-get update && apt-get install -y \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Initialize git-lfs
+# Non-root runtime user (issue #327), created up front so HOME is fixed BEFORE the uv steps below.
+# uv resolves its download cache (~/.cache/uv) and managed CPython install (~/.local/share/uv/python)
+# from $HOME; the venv's `python` is a symlink into the latter. If those were created under /root
+# (mode 0700), the runtime user could neither execute the interpreter nor re-run `uv sync` in the
+# entrypoint. Building with HOME=/home/vams puts them where uid 10000 can reach them; ownership is
+# fixed up after `uv sync` further down. Build steps themselves stay root: /opt is root-owned, so
+# cloning into /opt/cosmos-reason2 and creating /opt/ml/code as uid 10000 would fail with EACCES,
+# and the python3-dev install and the /usr/local/cuda symlink below need root regardless.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+
+# Initialize git-lfs (writes $HOME/.gitconfig, i.e. /home/vams/.gitconfig, so the runtime user sees it)
 RUN git lfs install
 
 # Install AWS CLI v2
@@ -33,15 +45,6 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION
 
 # Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /uvx /usr/local/bin/
-
-# Create non-root user early (issue #327) so uv installs CPython and the venv as that user.
-# uv caches downloads in $HOME/.cache/uv and managed Python in $HOME/.local/share/uv/python,
-# and .venv/bin/python is a symlink into that install. Built as root those land in /root (mode 0700),
-# so uid 10000 can neither execute the venv's interpreter nor re-run `uv sync` in the entrypoint.
-RUN groupadd -g 10000 vams && \
-    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
-ENV HOME=/home/vams
-USER 10000:10000
 
 # Clone cosmos-reason2, pinned to a commit. A clone with no ref makes the framework version part
 # of WHEN the image was built rather than of what VAMS commit built it, and `uv sync --locked`
@@ -59,7 +62,17 @@ RUN git clone ${COSMOS_REASON_REPO} /opt/cosmos-reason2 && \
 
 # Install Python dependencies using uv
 WORKDIR /opt/cosmos-reason2
-RUN uv sync --locked --extra=cu128
+# chown in the SAME layer as the sync: a later `RUN chown -R` would copy the multi-GB venv into a
+# second layer just to change ownership. Also pre-create the cache dirs the runtime user writes to:
+# the entrypoint re-runs `uv sync` (uv cache) and pre-compiles Triton's CUDA utils (~/.triton), vLLM
+# keeps its compile cache under ~/.cache/vllm, and HF/torch/pip fall back to ~/.cache when HF_HOME is
+# not pointed at EFS. The entrypoint also cd's into /opt/cosmos-reason2, so the tree must be
+# writable for __pycache__ and for `uv sync` to touch .venv.
+RUN uv sync --locked --extra=cu128 && \
+    mkdir -p /home/vams/.cache/uv /home/vams/.cache/huggingface /home/vams/.cache/torch \
+             /home/vams/.cache/pip /home/vams/.cache/vllm /home/vams/.triton \
+             /home/vams/.local/share/uv && \
+    chown -R vams:vams /home/vams /opt/cosmos-reason2
 
 # Triton bundled ptxas doesn't support latest GPU architectures
 ENV TRITON_PTXAS_PATH="/usr/local/cuda/bin/ptxas"
@@ -96,8 +109,8 @@ RUN ln -sf /usr/local/cuda-12.8/compat/libcuda.so.1 /usr/local/cuda-12.8/compat/
     fi
 
 # Create code directory and copy VAMS container code
-RUN mkdir -p /opt/ml/code
-COPY __main__.py model_manager.py inference.py manifest_io.py entrypoint.sh /opt/ml/code/
+RUN mkdir -p /opt/ml/code && chown vams:vams /opt/ml/code
+COPY --chown=vams:vams __main__.py model_manager.py inference.py manifest_io.py entrypoint.sh /opt/ml/code/
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled
 # from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
 # and the kernel returns ENOENT ("no such file or directory") on exec.
@@ -108,7 +121,9 @@ ENV PATH="/opt/cosmos-reason2/.venv/bin:$PATH"
 
 WORKDIR /opt/ml/code
 
-# Non-root user was set earlier; the EFS model cache mount point is owned by this uid/gid
-# via userdata chown after mount, so the container can read/write cached model weights.
+# Run as the non-root vams user (issue #327). The EFS model cache is owned by this uid/gid via
+# userdata chown after mount, so the container can read/write cached model weights without root.
+# Numeric form so runtime runAsNonRoot checks can verify it without reading the image's /etc/passwd.
+USER 10000:10000
 
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]
