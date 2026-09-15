@@ -198,11 +198,21 @@ describe("the created guardrail", () => {
         ]);
     });
 
-    test("anonymizes every listed PII entity by default, blocks them on `block`, and adds no PII policy on `off`", () => {
+    test("applies the PII action to the prompt and the response: anonymizes every listed entity by default, blocks them on `block`, and adds no PII policy on `off`", () => {
         const entities = (t: Template) =>
             guardrailOf(t)[1].Properties.SensitiveInformationPolicyConfig?.PiiEntitiesConfig;
+        // The legacy Action alone reaches the model response only; InputAction with InputEnabled is what
+        // masks or blocks the PII an uploaded file carries before the model reads the prompt.
+        const entity = (type: string, action: "ANONYMIZE" | "BLOCK") => ({
+            Type: type,
+            Action: action,
+            InputAction: action,
+            InputEnabled: true,
+            OutputAction: action,
+            OutputEnabled: true,
+        });
         expect(entities(created)).toEqual(
-            SYSTEM_GENAI_GUARDRAIL_PII_ENTITIES.map((type) => ({ Type: type, Action: "ANONYMIZE" }))
+            SYSTEM_GENAI_GUARDRAIL_PII_ENTITIES.map((type) => entity(type, "ANONYMIZE"))
         );
         expect(SYSTEM_GENAI_GUARDRAIL_PII_ENTITIES).toEqual(
             expect.arrayContaining([
@@ -225,7 +235,7 @@ describe("the created guardrail", () => {
             });
         });
         expect(entities(blocking)).toEqual(
-            SYSTEM_GENAI_GUARDRAIL_PII_ENTITIES.map((type) => ({ Type: type, Action: "BLOCK" }))
+            SYSTEM_GENAI_GUARDRAIL_PII_ENTITIES.map((type) => entity(type, "BLOCK"))
         );
 
         const off = synth("CreatedOff", (c) => {

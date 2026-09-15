@@ -60,7 +60,8 @@ export interface SystemGenAiGuardrailConstructProps {
  * `bedrockGuardrail.create.enabled` is set: a PROMPT_ATTACK content filter on the prompt at the
  * configured strength (the response side is NONE, as Bedrock requires for that filter) and, unless
  * `piiFilter` is `off`, one sensitive-information filter per entity in
- * {@link SYSTEM_GENAI_GUARDRAIL_PII_ENTITIES} that anonymizes or blocks. A published version follows the
+ * {@link SYSTEM_GENAI_GUARDRAIL_PII_ENTITIES} that anonymizes or blocks on the prompt and on the response
+ * alike. A published version follows the
  * DRAFT, and the version's description carries a digest of the policy so a changed strength or PII
  * treatment publishes a new version instead of leaving the functions on the old one.
  *
@@ -88,6 +89,9 @@ export class SystemGenAiGuardrailConstruct extends Construct {
             ],
         };
 
+        // The legacy `action` alone is applied to the model response; the prompt needs its own
+        // `inputAction` (with the side enabled) for the filter to mask or block the PII an uploaded file
+        // carries before the model reads it. Both sides carry the configured action.
         const piiAction = create.piiFilter === "block" ? "BLOCK" : "ANONYMIZE";
         const sensitiveInformationPolicyConfig:
             | bedrock.CfnGuardrail.SensitiveInformationPolicyConfigProperty
@@ -98,6 +102,10 @@ export class SystemGenAiGuardrailConstruct extends Construct {
                       piiEntitiesConfig: SYSTEM_GENAI_GUARDRAIL_PII_ENTITIES.map((type) => ({
                           type: type,
                           action: piiAction,
+                          inputAction: piiAction,
+                          inputEnabled: true,
+                          outputAction: piiAction,
+                          outputEnabled: true,
                       })),
                   };
 

@@ -48,6 +48,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines** The shared 3D render container downcasts each explored B-rep face to `TopoDS_Face` before triangulating it, so STEP, IGES, and BREP files render and receive their `sys_geometry`, `sys_statistics`, `sys_cad`, and `ext_*` attributes in the SYSTEM GenAI metadata and 3D Preview Thumbnail pipelines instead of degrading to attributes-only with a `TypeError`.
 -   **Workflows / Vector search** A file or asset unarchive no longer fires file-upload triggers (no re-analysis, no rewritten `genai_*` metadata, no duplicate vectors) and the vector indexer marks the file's existing items live without demoting them, so a restored file is searchable immediately rather than after a re-run.
 -   **Pipelines** The SYSTEM GenAI metadata pipeline treats a Bedrock guardrail response whose filters only anonymized PII as a success: the `genai_*` metadata (and a video window's record) carries the masked text with its type tokens and `analysis-summary.json` / `segments/<segmentKey>.json` record `guardrailMasked` with the masked entity types; only a `BLOCKED` filter action, or a `guardrail_intervened` response without a trace, is a `BedrockGuardrailIntervened` failure.
+-   **CDK** The created Bedrock guardrail's PII filter sets `inputAction` and `outputAction` (both enabled) to the configured `piiFilter` action, so PII in an analysis prompt is anonymized or blocked before the model reads it as well as in the model response.
 
 ### Chores
 
