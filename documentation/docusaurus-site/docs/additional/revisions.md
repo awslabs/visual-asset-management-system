@@ -42,6 +42,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **GPU pipeline Batch containers run as non-root** — The Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, and Isaac Lab training containers now run as non-root user (uid/gid 10000:10000). EFS access points enforce POSIX ownership matching this uid/gid, so containers can read/write the shared Hugging Face cache and checkpoint storage without root privileges. (issue #327)
 -   **Potree point cloud viewer pipeline** — The container job role can send the workflow task-token heartbeat (`states:SendTaskHeartbeat`, scoped to the deployment account and region), so a long PDAL/Potree conversion keeps its parent task alive instead of logging an `AccessDeniedException` on every heartbeat.
 
 **Other changes:**
