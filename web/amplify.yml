@@ -3,6 +3,7 @@ frontend:
     phases:
         preBuild:
             commands:
+                - npm install -g npm@11.0.0
                 - export NODE_OPTIONS=--max-old-space-size=8192
                 - npm ci
         build:
