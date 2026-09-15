@@ -2352,12 +2352,6 @@ export function storageResourcesBuilder(
             fmmEvaluationStorageTable: fmmEvaluationStorageTable,
             fmmCascadeStorageTable: fmmCascadeStorageTable,
             fmmAuditStorageTable: fmmAuditStorageTable,
-            // Pipeline + workflow V2 data model tables
-            pipelineStorageTableV2: pipelineStorageTableV2,
-            pipelineTemplatesStorageTable: pipelineTemplatesStorageTable,
-            pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
-            workflowStorageTableV2: workflowStorageTableV2,
-            workflowTriggersStorageTable: workflowTriggersStorageTable,
         },
     };
 
