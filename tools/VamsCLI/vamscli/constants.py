@@ -172,6 +172,45 @@ API_WORKFLOW_EXECUTION_LOGS = "/workflows/executions/{executionId}/logs"
 API_WORKFLOW_EXECUTION_RERUN = "/workflows/executions/{executionId}/rerun"
 API_WORKFLOW_EXECUTION_PERMANENT = "/workflows/executions/{executionId}/permanent"
 
+# Compliance API Endpoints
+# Schema registry: the collection route lists (GET) and registers (POST); the named route reads
+# (GET), writes a new version (PUT) and removes an unbound schema (DELETE).
+API_COMPLIANCE_SCHEMAS = "/compliance/schemas"
+API_COMPLIANCE_SCHEMA_BY_NAME = "/compliance/schemas/{schemaName}"
+# Schema bindings: the database route reads the binding and its asset overrides (GET), binds (PUT)
+# and unbinds (DELETE); the asset route binds an override (PUT) and removes it (DELETE).
+API_COMPLIANCE_BIND_DATABASE = "/compliance/bind/{databaseId}"
+API_COMPLIANCE_BIND_ASSET = "/compliance/bind/{databaseId}/{assetId}"
+# Evaluation: evaluate one asset (POST); sweep re-evaluates every asset bound to a schema (POST);
+# the evaluations route is an asset's evaluation history (GET).
+API_COMPLIANCE_EVALUATE_ASSET = "/compliance/evaluate/{databaseId}/{assetId}"
+API_COMPLIANCE_SWEEP_SCHEMA = "/compliance/sweep/{schemaName}"
+API_COMPLIANCE_EVALUATIONS_ASSET = "/compliance/evaluations/{databaseId}/{assetId}"
+# Compliance state: one asset's record, and the per-database summary with every tracked asset.
+API_COMPLIANCE_STATE_ASSET = "/compliance/state/{databaseId}/{assetId}"
+API_COMPLIANCE_STATE_DATABASE = "/compliance/state/{databaseId}"
+# Quarantine: the listing, and the release / exception actions on one quarantined asset.
+API_COMPLIANCE_QUARANTINE = "/compliance/quarantine"
+API_COMPLIANCE_QUARANTINE_RELEASE = "/compliance/quarantine/{databaseId}/{assetId}/release"
+API_COMPLIANCE_QUARANTINE_EXCEPTION = "/compliance/quarantine/{databaseId}/{assetId}/exception"
+# Cascades: the collection lists pending cascades (GET) and creates one (POST); the id route reads
+# one (GET); approve / reject act on a pending cascade (POST).
+API_COMPLIANCE_CASCADES = "/compliance/cascades"
+API_COMPLIANCE_CASCADE_BY_ID = "/compliance/cascades/{cascadeId}"
+API_COMPLIANCE_CASCADE_APPROVE = "/compliance/cascades/{cascadeId}/approve"
+API_COMPLIANCE_CASCADE_REJECT = "/compliance/cascades/{cascadeId}/reject"
+# Audit trail: the global listing (filterable by eventType) and one asset's history.
+API_COMPLIANCE_AUDIT = "/compliance/audit"
+API_COMPLIANCE_AUDIT_ASSET = "/compliance/audit/{databaseId}/{assetId}"
+
+# The audit routes take a `limit` and return no continuation token; this is the value the handler
+# applies when the request names none, so it is the ceiling on what one call can reach.
+COMPLIANCE_AUDIT_DEFAULT_LIMIT = 50
+# The evaluation-history route pages on `maxItems` (its page size) + `startingToken`, returning a
+# `NextToken`; the handler applies the default when none is given and clamps larger values to the cap.
+DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE = 50
+MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE = 200
+
 # Workflow execution list page-size cap (Step Functions throttling on the asset-scoped list).
 MAX_WORKFLOW_EXECUTION_PAGE_SIZE = 50
 # Global execution list page-size cap (the handler clamps larger values to this).

@@ -83,6 +83,7 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
@@ -93,9 +94,13 @@ web/
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions,
+                              #   Compliance tabs
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
+      compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
+                              #   pipeline/metadata/relationship rules) + complianceSchemaRules.ts
+                              #   (pure pipelineRef fields/validation + rule-draft round-trip)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.
@@ -118,6 +123,11 @@ web/
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
       Subscription/ Tag/
+
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
+      ComplianceAuditLog.tsx DatabaseCompliance.tsx
 
       # Orchestration route shells — each reads route params and renders the matching
       # features/orchestration component; keep the page logic in the feature module.

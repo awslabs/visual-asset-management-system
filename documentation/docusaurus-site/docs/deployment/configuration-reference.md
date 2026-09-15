@@ -573,6 +573,17 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`Api
 | `app.metadataSchema.autoLoadDefaultAssetSchema`      | boolean | `true`  | Creates a GLOBAL schema named `defaultAsset` with a Location field (LLA - Latitude/Longitude/Altitude).                                                                             |
 | `app.metadataSchema.autoLoadDefaultAssetFileSchema`  | boolean | `true`  | Creates a GLOBAL schema named `defaultAssetFile3dModel` with a `Polygon_Count` field and file type restrictions for common 3D formats (.glb, .usd, .obj, .fbx, .gltf, .stl, .usdz). |
 
+## Compliance (`app.compliance`)
+
+Compliance deploys with every VAMS deployment: five Amazon DynamoDB tables, eight AWS Lambda functions, and the `/compliance/*` API routes for schema management, automated evaluation, quarantine management, cascade execution, and audit logging. There is no enable switch; access to the routes is governed by permissions like every other page. These two fields tune its behavior.
+
+| Field                                     | Type    | Default | Description                                                                                                                                                                                                                                                                  |
+| ----------------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.compliance.autoLoadDefaultSchema`    | boolean | `true`  | Deploys a default global compliance schema (`default-compliance-schema`) that validates a bound asset's metadata against the default asset metadata schema at the `warn` level. Set to `false` to skip.                                                                      |
+| `app.compliance.quarantineBlocksDownload` | boolean | `false` | When `true`, quarantined assets cannot be downloaded unless the asset has an active exception or the requesting user holds the `compliance_admin` role. When `false` (default), quarantine is informational only — the UI displays a warning but downloads proceed normally. |
+
+**Authorization:** The default admin role is granted full access to all compliance operations. For non-admin users, use the `compliance-admin` or `compliance-readonly` permission templates (in `documentation/permissionsTemplates/`) to grant scoped access. Compliance uses three dedicated Casbin object types: `complianceSchema`, `complianceEvaluation`, and `complianceCascade`. See [Permissions Model: Compliance Routes](../concepts/permissions-model.md#compliance-routes) for details.
+
 ## Processing pipelines (`app.pipelines`)
 
 :::note[Implemented by]

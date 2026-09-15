@@ -9104,6 +9104,1029 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 type: object
             security:
                 - DefaultCognitoAuthorizer: []
+    /compliance/schemas:
+        get:
+            summary: "List compliance schemas."
+            description: "Returns the latest version of every registered compliance schema the caller may read. With `databaseId`, only GLOBAL schemas and schemas scoped to that database are returned."
+            parameters:
+                - name: databaseId
+                  in: query
+                  description: "Restrict the listing to GLOBAL schemas plus the schemas scoped to this database."
+                  required: false
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Schemas retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/listComplianceSchemasResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Register a compliance schema."
+            description: "Registers a compliance schema body under a name. Registering a name that already exists writes the next version of that schema. The body is validated as `vams-rules-v1` when it declares that format, otherwise as a JSON Schema draft-07 subset; only `vams-rules-v1` schemas are evaluated."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createComplianceSchemaRequest"
+            responses:
+                "200":
+                    description: Schema version written.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/writeComplianceSchemaResponse"
+                "400":
+                    description: Invalid parameters, invalid schema body, or the scoping database does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/schemas/{schemaName}:
+        get:
+            summary: "Get a compliance schema."
+            description: "Returns the latest version of a compliance schema."
+            parameters:
+                - name: schemaName
+                  in: path
+                  description: "Name of the compliance schema."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Schema retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/complianceSchema"
+                "400":
+                    description: Invalid schema name, or the schema does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update a compliance schema."
+            description: "Writes the next version of a compliance schema. Fields omitted from the request carry over from the latest version. A system schema is only updated by the system user."
+            parameters:
+                - name: schemaName
+                  in: path
+                  description: "Name of the compliance schema to update."
+                  required: true
+                  schema:
+                      type: string
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateComplianceSchemaRequest"
+            responses:
+                "200":
+                    description: Schema version written.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/writeComplianceSchemaResponse"
+                "400":
+                    description: Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, or the schema is a system schema.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete a compliance schema."
+            description: "Deletes every version of a compliance schema that no database or asset is bound to, and records a `schema_deleted` audit entry."
+            parameters:
+                - name: schemaName
+                  in: path
+                  description: "Name of the compliance schema to delete."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Schema deleted.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/deleteComplianceSchemaResponse"
+                "400":
+                    description: Invalid schema name, the schema does not exist, or the schema is bound to a database or asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/bind/{databaseId}:
+        get:
+            summary: "Get the schema bindings of a database."
+            description: "Returns the schema bound to a database and every asset in the database that carries its own schema override."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Bindings retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/complianceBindingsResponse"
+                "400":
+                    description: Invalid database identifier, or the database does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Bind a schema to a database."
+            description: "Binds a GLOBAL or database-scoped schema to a database. Every asset in the database without an asset-level override becomes `pending_evaluation` under the schema."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/bindComplianceSchemaRequest"
+            responses:
+                "200":
+                    description: Schema bound to the database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bindDatabaseResponse"
+                "400":
+                    description: Invalid parameters, the schema or database does not exist, or the schema is scoped to another database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Remove the schema binding of a database."
+            description: "Removes the database binding and deletes the compliance records of the assets that inherited it. Asset-level overrides are kept."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Binding removed, or the database had no binding.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/unbindDatabaseResponse"
+                "400":
+                    description: Invalid database identifier, or the database does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/bind/{databaseId}/{assetId}:
+        put:
+            summary: "Bind a schema to an asset."
+            description: "Binds a GLOBAL or database-scoped schema directly to an asset as an override of the database binding. The asset becomes `pending_evaluation` under the schema."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: path
+                  description: "Asset identifier."
+                  required: true
+                  schema:
+                      type: string
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/bindComplianceSchemaRequest"
+            responses:
+                "200":
+                    description: Schema bound to the asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bindAssetResponse"
+                "400":
+                    description: Invalid parameters, the schema or asset does not exist, or the schema is scoped to another database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Remove the schema override of an asset."
+            description: "Removes an asset-level schema override. The asset falls back to the database binding as `pending_evaluation`, or leaves compliance tracking when the database has no binding."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: path
+                  description: "Asset identifier."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Override removed, or the asset had no override.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/unbindAssetResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/evaluate/{databaseId}/{assetId}:
+        post:
+            summary: "Evaluate an asset."
+            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none. Metadata and relationship rules complete in the request; a pipeline rule launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: path
+                  description: "Asset identifier."
+                  required: true
+                  schema:
+                      type: string
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/evaluateAssetRequest"
+            responses:
+                "200":
+                    description: Evaluation recorded.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/evaluateAssetResponse"
+                "400":
+                    description: Invalid parameters, the asset does not exist, no schema is named or bound, or the evaluation could not run.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/sweep/{schemaName}:
+        post:
+            summary: "Sweep the assets bound to a schema."
+            description: "Evaluates every asset whose compliance record is bound to the schema, up to 200 assets per call; `assetsRemaining` reports how many were not reached."
+            parameters:
+                - name: schemaName
+                  in: path
+                  description: "Name of the schema to sweep."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Sweep completed.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/sweepSchemaResponse"
+                "400":
+                    description: Invalid schema name, or the schema does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/evaluations/{databaseId}/{assetId}:
+        get:
+            summary: "List the evaluations of an asset."
+            description: "Returns the evaluation history of an asset, newest first, one page per call."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: path
+                  description: "Asset identifier."
+                  required: true
+                  schema:
+                      type: string
+                - $ref: "#/components/parameters/complianceEvaluationsMaxItemsParam"
+                - $ref: "#/components/parameters/complianceStartingTokenParam"
+            responses:
+                "200":
+                    description: Evaluation history retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/evaluationHistoryResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/state/{databaseId}/{assetId}:
+        get:
+            summary: "Get the compliance state of an asset."
+            description: "Returns the compliance record of an asset: its state, bound schema and last evaluation. An asset with no record is reported as `unknown` with no schema."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: path
+                  description: "Asset identifier."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Compliance state retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/complianceState"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/state/{databaseId}:
+        get:
+            summary: "Get the compliance overview of a database."
+            description: "Returns per-state counts and every tracked asset of a database, each with its asset name."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Database compliance overview retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/databaseComplianceOverviewResponse"
+                "400":
+                    description: Invalid database identifier.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/quarantine:
+        get:
+            summary: "List quarantined assets."
+            description: "Returns every quarantined asset across databases that the caller may read, each with its asset name."
+            responses:
+                "200":
+                    description: Quarantined assets retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/listQuarantinedResponse"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/quarantine/{databaseId}/{assetId}/release:
+        post:
+            summary: "Release an asset from quarantine."
+            description: "Sets a quarantined asset to `compliant` without recording an exception, and writes a `quarantine_released` audit entry."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: path
+                  description: "Asset identifier."
+                  required: true
+                  schema:
+                      type: string
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/releaseQuarantineRequest"
+            responses:
+                "200":
+                    description: Asset released from quarantine.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/complianceMessageResponse"
+                "400":
+                    description: Invalid parameters, the asset has no compliance record, or the asset is not quarantined.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/quarantine/{databaseId}/{assetId}/exception:
+        post:
+            summary: "Grant an exception to a quarantined asset."
+            description: "Sets a quarantined asset to `compliant`, records the exception (reason, grantor, time) on its compliance record, and writes an `exception_granted` audit entry."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: path
+                  description: "Asset identifier."
+                  required: true
+                  schema:
+                      type: string
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/grantExceptionRequest"
+            responses:
+                "200":
+                    description: Exception granted.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/grantExceptionResponse"
+                "400":
+                    description: Invalid parameters, no reason given, the asset has no compliance record, or the asset is not quarantined.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/cascades:
+        get:
+            summary: "List pending cascades."
+            description: "Returns every cascade in the `pending_approval` state that the caller may read, newest first."
+            responses:
+                "200":
+                    description: Pending cascades retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/listCascadesResponse"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create a cascade."
+            description: "Creates a cascade that re-evaluates the downstream assets of the named asset. With `requireApproval` (the default) the cascade waits in `pending_approval`; otherwise it executes in the request and the response carries the result."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createCascadeRequest"
+            responses:
+                "200":
+                    description: Cascade created.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/createCascadeResponse"
+                "400":
+                    description: Invalid parameters, or the asset does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/cascades/{cascadeId}:
+        get:
+            summary: "Get a cascade."
+            description: "Returns one cascade with its state and per-node progress."
+            parameters:
+                - name: cascadeId
+                  in: path
+                  description: "Cascade identifier."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Cascade retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/cascadeDetail"
+                "400":
+                    description: Invalid cascade identifier, or the cascade does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/cascades/{cascadeId}/approve:
+        post:
+            summary: "Approve a pending cascade."
+            description: "Moves a `pending_approval` cascade to `executing`, evaluates its downstream assets in dependency order within the request, and returns the execution result."
+            parameters:
+                - name: cascadeId
+                  in: path
+                  description: "Cascade identifier."
+                  required: true
+                  schema:
+                      type: string
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/cascadeDecisionRequest"
+            responses:
+                "200":
+                    description: Cascade approved and executed.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/approveCascadeResponse"
+                "400":
+                    description: Invalid cascade identifier, or the cascade does not exist or is not pending approval.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/cascades/{cascadeId}/reject:
+        post:
+            summary: "Reject a pending cascade."
+            description: "Moves a `pending_approval` cascade to `aborted`."
+            parameters:
+                - name: cascadeId
+                  in: path
+                  description: "Cascade identifier."
+                  required: true
+                  schema:
+                      type: string
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/cascadeDecisionRequest"
+            responses:
+                "200":
+                    description: Cascade rejected.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/rejectCascadeResponse"
+                "400":
+                    description: Invalid cascade identifier, or the cascade does not exist or is not pending approval.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/audit:
+        get:
+            summary: "Query the compliance audit trail."
+            description: "Returns audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it every event type is read in turn. Entries are filtered to the databases the caller may read."
+            parameters:
+                - name: eventType
+                  in: query
+                  description: "Restrict the page to one event type (for example `compliance_check`, `quarantine_released`, `exception_granted`, `cascade_triggered`)."
+                  required: false
+                  schema:
+                      type: string
+                - $ref: "#/components/parameters/complianceAuditStartDateParam"
+                - $ref: "#/components/parameters/complianceAuditEndDateParam"
+                - $ref: "#/components/parameters/complianceAuditMaxItemsParam"
+                - $ref: "#/components/parameters/complianceAuditLimitParam"
+                - $ref: "#/components/parameters/complianceStartingTokenParam"
+            responses:
+                "200":
+                    description: Audit entries retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/auditLogResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /compliance/audit/{databaseId}/{assetId}:
+        get:
+            summary: "Get the audit history of an asset."
+            description: "Returns the audit entries of one asset, newest first, one page per call."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: path
+                  description: "Asset identifier."
+                  required: true
+                  schema:
+                      type: string
+                - $ref: "#/components/parameters/complianceAuditStartDateParam"
+                - $ref: "#/components/parameters/complianceAuditEndDateParam"
+                - $ref: "#/components/parameters/complianceAuditMaxItemsParam"
+                - $ref: "#/components/parameters/complianceAuditLimitParam"
+                - $ref: "#/components/parameters/complianceStartingTokenParam"
+            responses:
+                "200":
+                    description: Asset audit history retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/auditLogResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
 components:
     securitySchemes:
         DefaultCognitoAuthorizer:
@@ -14577,6 +15600,1007 @@ components:
                     type: array
                     items:
                         $ref: "#/components/schemas/constraintPermissionType"
+
+        complianceSchema:
+            type: object
+            description: "The latest version of a registered compliance schema."
+            properties:
+                schemaName:
+                    type: string
+                    description: "Unique name of the compliance schema (3-63 characters; letters, digits, hyphens, underscores)."
+                databaseId:
+                    type: string
+                    description: "Database the schema is scoped to, or `GLOBAL`. A database-scoped schema can only be bound within that database."
+                description:
+                    type: string
+                    description: "Human-readable description of the schema."
+                schemaBody:
+                    type: object
+                    description: "Schema definition: a `vams-rules-v1` document (see `vamsRulesV1Schema`) or a JSON Schema draft-07 subset. Only `vams-rules-v1` schemas are evaluated."
+                version:
+                    type: integer
+                    description: "Version number of this row; every registration or update writes the next version."
+                createdAt:
+                    type: string
+                    format: date-time
+                    description: "Time this version was written."
+                isSystem:
+                    type: boolean
+                    description: "Whether the schema was registered by the system. A system schema is only updated by the system user."
+            required:
+                - schemaName
+                - databaseId
+                - schemaBody
+                - version
+                - createdAt
+                - isSystem
+
+        vamsRulesV1Schema:
+            type: object
+            description: "Schema body in the `vams-rules-v1` format: a set of named rules, each of one rule type with one enforcement level."
+            properties:
+                schemaFormat:
+                    type: string
+                    enum: [vams-rules-v1]
+                extends:
+                    type: string
+                    description: "Name of a parent schema whose rules are inherited. A rule of the same name in this schema replaces the parent's."
+                rules:
+                    type: object
+                    description: "Rules keyed by rule name. At least one rule is required."
+                    additionalProperties:
+                        oneOf:
+                            - $ref: "#/components/schemas/compliancePipelineRule"
+                            - $ref: "#/components/schemas/complianceMetadataRule"
+                            - $ref: "#/components/schemas/complianceRelationshipRule"
+            required:
+                - schemaFormat
+                - rules
+
+        compliancePipelineRule:
+            type: object
+            description: "Runs a VAMS workflow and compares the measurements one of its pipelines writes to `compliance-output.json` against tolerances."
+            properties:
+                ruleType:
+                    type: string
+                    enum: [pipeline]
+                enforcement:
+                    $ref: "#/components/schemas/complianceEnforcementLevel"
+                pipelineRef:
+                    $ref: "#/components/schemas/compliancePipelineRef"
+                inputParameters:
+                    type: object
+                    description: "Values handed to the pipeline as template tag values."
+                    additionalProperties: true
+                checks:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/compliancePipelineCheck"
+            required:
+                - ruleType
+                - enforcement
+                - pipelineRef
+                - checks
+
+        compliancePipelineRef:
+            type: object
+            description: "The workflow a pipeline rule executes and the pipeline within that workflow whose measurements the checks read."
+            properties:
+                databaseId:
+                    type: string
+                    description: "Database of the workflow; `GLOBAL` is accepted."
+                workflowId:
+                    type: string
+                    description: "Identifier of the workflow to execute."
+                pipelineDatabaseId:
+                    type: string
+                    description: "Database of the pipeline; `GLOBAL` is accepted."
+                pipelineId:
+                    type: string
+                    description: "Identifier of the pipeline whose output the checks read. The execution request keys its parameters by this id."
+                templateId:
+                    type: string
+                    description: "Template of the pipeline to run. When omitted, the pipeline's default template is used."
+            required:
+                - databaseId
+                - workflowId
+                - pipelineDatabaseId
+                - pipelineId
+
+        compliancePipelineCheck:
+            type: object
+            description: "One measurement compared against one tolerance."
+            properties:
+                name:
+                    type: string
+                description:
+                    type: string
+                outputField:
+                    type: string
+                    description: "Key of the `measurements` object in `compliance-output.json` to read. `execution_success` and `processing_duration_seconds` are available for every execution."
+                tolerance:
+                    $ref: "#/components/schemas/complianceTolerance"
+            required:
+                - name
+                - outputField
+                - tolerance
+
+        complianceTolerance:
+            type: object
+            description: "Comparison applied to a measurement. `lte`, `gte` and `eq` take `value` (`eq` also an optional `epsilon`, default 0.001); `between` takes `min` and `max`."
+            properties:
+                operator:
+                    type: string
+                    enum: [lte, gte, eq, between]
+                value:
+                    type: number
+                min:
+                    type: number
+                max:
+                    type: number
+                epsilon:
+                    type: number
+            required:
+                - operator
+
+        complianceMetadataRule:
+            type: object
+            description: "Validates the asset's metadata against a VAMS metadata schema."
+            properties:
+                ruleType:
+                    type: string
+                    enum: [metadata]
+                enforcement:
+                    $ref: "#/components/schemas/complianceEnforcementLevel"
+                metadataSchemaRef:
+                    type: object
+                    properties:
+                        databaseId:
+                            type: string
+                            description: "Database of the metadata schema; `GLOBAL` is accepted."
+                        schemaName:
+                            type: string
+                    required:
+                        - databaseId
+                        - schemaName
+                checks:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: object
+                        properties:
+                            name:
+                                type: string
+                            description:
+                                type: string
+                            validateRequired:
+                                type: boolean
+                                description: "Every required field of the metadata schema is present."
+                                default: false
+                            validateTypes:
+                                type: boolean
+                                description: "Every present field has the type the metadata schema declares."
+                                default: false
+                            additionalRequiredFields:
+                                type: array
+                                description: "Field names required in addition to the metadata schema's own required fields."
+                                items:
+                                    type: string
+                        required:
+                            - name
+            required:
+                - ruleType
+                - enforcement
+                - metadataSchemaRef
+                - checks
+
+        complianceRelationshipRule:
+            type: object
+            description: "Validates that the asset carries the required asset links."
+            properties:
+                ruleType:
+                    type: string
+                    enum: [relationship]
+                enforcement:
+                    $ref: "#/components/schemas/complianceEnforcementLevel"
+                checks:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: object
+                        properties:
+                            name:
+                                type: string
+                            description:
+                                type: string
+                            direction:
+                                type: string
+                                enum: [parents, children, related]
+                            relationshipType:
+                                type: string
+                                enum: [parentChild, related]
+                            minCount:
+                                type: integer
+                                minimum: 0
+                            maxCount:
+                                type: integer
+                                minimum: 0
+                        required:
+                            - name
+                            - direction
+                            - relationshipType
+            required:
+                - ruleType
+                - enforcement
+                - checks
+
+        complianceEnforcementLevel:
+            type: string
+            description: "What a failed rule does to the verdict: `quarantine` quarantines the asset, `warn` marks it `non_compliant`, `inform` records the failure only."
+            enum: [quarantine, warn, inform]
+
+        listComplianceSchemasResponse:
+            type: object
+            properties:
+                schemas:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/complianceSchema"
+                    description: "The latest version of each schema the caller may read."
+            required:
+                - schemas
+
+        createComplianceSchemaRequest:
+            type: object
+            properties:
+                schemaName:
+                    type: string
+                    description: "Name of the schema (3-63 characters; letters, digits, hyphens, underscores)."
+                schemaBody:
+                    type: object
+                    description: "Schema definition: a `vams-rules-v1` document (see `vamsRulesV1Schema`) or a JSON Schema draft-07 subset."
+                description:
+                    type: string
+                    description: "Human-readable description."
+                databaseId:
+                    type: string
+                    description: "Database to scope the schema to. Defaults to `GLOBAL`."
+                    default: GLOBAL
+                isSystem:
+                    type: boolean
+                    description: "Marks the schema as a system schema. Honoured only when the caller is the system user."
+                    default: false
+            required:
+                - schemaName
+                - schemaBody
+
+        updateComplianceSchemaRequest:
+            type: object
+            description: "Every field is optional; an omitted field carries over from the latest version."
+            properties:
+                schemaBody:
+                    type: object
+                    description: "Replacement schema definition."
+                description:
+                    type: string
+                    description: "Replacement description."
+                databaseId:
+                    type: string
+                    description: "Replacement database scope, or `GLOBAL`."
+
+        writeComplianceSchemaResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                schemaName:
+                    type: string
+                databaseId:
+                    type: string
+                internalVersion:
+                    type: integer
+                    description: "Version number of the row written."
+            required:
+                - message
+                - schemaName
+                - databaseId
+                - internalVersion
+
+        deleteComplianceSchemaResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                schemaName:
+                    type: string
+                versionsDeleted:
+                    type: integer
+            required:
+                - message
+                - schemaName
+                - versionsDeleted
+
+        bindComplianceSchemaRequest:
+            type: object
+            properties:
+                schemaName:
+                    type: string
+                    description: "Name of a GLOBAL schema or a schema scoped to the target database."
+                complianceAutoEval:
+                    type: boolean
+                    description: "Database binding only: evaluate assets of the database automatically when they are created or updated."
+                    default: true
+            required:
+                - schemaName
+
+        bindDatabaseResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                schemaName:
+                    type: string
+                databaseId:
+                    type: string
+                assetsPendingEvaluation:
+                    type: integer
+                    description: "Number of assets marked `pending_evaluation` under the schema."
+            required:
+                - message
+                - schemaName
+                - databaseId
+                - assetsPendingEvaluation
+
+        unbindDatabaseResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                databaseId:
+                    type: string
+                previousSchema:
+                    type: string
+                    description: "The schema that was bound. Absent when the database had no binding."
+                removedComplianceRecords:
+                    type: integer
+                    description: "Number of database-inherited compliance records deleted. Absent when the database had no binding."
+            required:
+                - message
+                - databaseId
+
+        bindAssetResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                databaseId:
+                    type: string
+                assetId:
+                    type: string
+                schemaName:
+                    type: string
+                schemaSource:
+                    type: string
+                    enum: [asset]
+            required:
+                - message
+                - databaseId
+                - assetId
+                - schemaName
+                - schemaSource
+
+        unbindAssetResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                databaseId:
+                    type: string
+                assetId:
+                    type: string
+                fallbackSchema:
+                    type: string
+                    nullable: true
+                    description: "The database schema the asset now inherits, or null when the database has no binding. Absent when the asset had no override."
+                schemaSource:
+                    type: string
+                    nullable: true
+                    description: "`database` when the asset fell back to the database binding, null when it left compliance tracking. Absent when the asset had no override."
+            required:
+                - message
+                - databaseId
+                - assetId
+
+        complianceBindingsResponse:
+            type: object
+            properties:
+                databaseId:
+                    type: string
+                databaseSchema:
+                    type: string
+                    nullable: true
+                    description: "Schema bound to the database, or null."
+                complianceAutoEval:
+                    type: boolean
+                assetOverrides:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            assetId:
+                                type: string
+                            schemaName:
+                                type: string
+                            complianceState:
+                                type: string
+                assetOverrideCount:
+                    type: integer
+            required:
+                - databaseId
+                - databaseSchema
+                - complianceAutoEval
+                - assetOverrides
+                - assetOverrideCount
+
+        evaluateAssetRequest:
+            type: object
+            properties:
+                schemaName:
+                    type: string
+                    description: "Schema to evaluate against. When omitted, the asset's bound schema is used."
+
+        complianceRuleResult:
+            type: object
+            description: "Outcome of one rule."
+            properties:
+                ruleName:
+                    type: string
+                ruleType:
+                    type: string
+                    enum: [pipeline, metadata, relationship]
+                enforcement:
+                    $ref: "#/components/schemas/complianceEnforcementLevel"
+                passed:
+                    type: boolean
+                message:
+                    type: string
+                    nullable: true
+                measured:
+                    type: object
+                    nullable: true
+                    description: "Pipeline rules: the measured value of each check, keyed by `outputField`."
+                expected:
+                    type: object
+                    nullable: true
+                    description: "Pipeline rules: the tolerance of each check (`operator`, `value`, `min`, `max`), keyed by `outputField`."
+            required:
+                - ruleName
+                - ruleType
+                - enforcement
+                - passed
+
+        evaluateAssetResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                evaluationId:
+                    type: string
+                    format: uuid
+                schemaName:
+                    type: string
+                verdict:
+                    type: string
+                    enum: [compliant, non_compliant, quarantined, pending_pipeline, error]
+                complianceState:
+                    type: string
+                    enum: [compliant, non_compliant, quarantined, pending_evaluation, unknown]
+                ruleResults:
+                    type: array
+                    description: "Results of the rules that completed in the request."
+                    items:
+                        $ref: "#/components/schemas/complianceRuleResult"
+                pipelineRulesPending:
+                    type: integer
+                    description: "Number of pipeline rules whose workflow execution was launched and is awaited."
+            required:
+                - message
+                - evaluationId
+                - schemaName
+                - verdict
+                - complianceState
+                - ruleResults
+                - pipelineRulesPending
+
+        sweepSchemaResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                schemaName:
+                    type: string
+                assetsTriggered:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            databaseId:
+                                type: string
+                            assetId:
+                                type: string
+                            evaluationId:
+                                type: string
+                                format: uuid
+                            verdict:
+                                type: string
+                assetsRemaining:
+                    type: integer
+                    description: "Bound assets beyond the 200-asset cap of one call."
+            required:
+                - message
+                - schemaName
+                - assetsTriggered
+                - assetsRemaining
+
+        complianceEvaluation:
+            type: object
+            description: "One evaluation record."
+            properties:
+                evaluationId:
+                    type: string
+                    format: uuid
+                databaseId:
+                    type: string
+                assetId:
+                    type: string
+                schemaName:
+                    type: string
+                evaluatedAt:
+                    type: string
+                    format: date-time
+                status:
+                    type: string
+                    enum: [completed, pending_pipeline, error, failed]
+                verdict:
+                    type: string
+                    enum: [compliant, non_compliant, quarantined, pending_pipeline, error]
+                violations:
+                    type: array
+                    description: "Messages of the rules that did not pass."
+                    items:
+                        type: string
+                ruleResults:
+                    type: string
+                    description: "JSON-encoded list of rule results (see `complianceRuleResult`)."
+                pipelineRulesPending:
+                    type: string
+                    description: "JSON-encoded pipeline rules awaiting their workflow execution. Present while `status` is `pending_pipeline`."
+                pipelineExecutions:
+                    type: array
+                    description: "Workflow executions launched for the pipeline rules."
+                    items:
+                        type: object
+                        properties:
+                            ruleName:
+                                type: string
+                            executionId:
+                                type: string
+                            status:
+                                type: string
+                executionId:
+                    type: string
+                    description: "Execution launched for the first pipeline rule; correlates the workflow completion event to this evaluation."
+                pipelineRuleName:
+                    type: string
+                actor:
+                    type: string
+                completedAt:
+                    type: string
+                    format: date-time
+                errorMessage:
+                    type: string
+            required:
+                - evaluationId
+                - databaseId
+                - assetId
+                - schemaName
+                - evaluatedAt
+                - status
+                - verdict
+                - actor
+
+        evaluationHistoryResponse:
+            type: object
+            properties:
+                evaluations:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/complianceEvaluation"
+                NextToken:
+                    type: string
+                    description: "Continuation token for the next page; absent on the last page."
+            required:
+                - evaluations
+
+        complianceState:
+            type: object
+            description: "The compliance record of an asset."
+            properties:
+                databaseId:
+                    type: string
+                assetId:
+                    type: string
+                complianceState:
+                    type: string
+                    enum: [compliant, non_compliant, pending_evaluation, quarantined, unknown]
+                schemaName:
+                    type: string
+                    nullable: true
+                    description: "Bound schema, or null when the asset has no compliance record."
+                schemaSource:
+                    type: string
+                    nullable: true
+                    enum: [database, asset, null]
+                    description: "Whether the binding is inherited from the database or set on the asset."
+                lastEvaluationId:
+                    type: string
+                    format: uuid
+                lastEvaluatedAt:
+                    type: string
+                    format: date-time
+                updatedAt:
+                    type: string
+                    format: date-time
+                quarantineReason:
+                    type: string
+                    nullable: true
+                    description: "Messages of the rules that failed, present while the asset is quarantined."
+                exceptionGranted:
+                    type: boolean
+                exceptionReason:
+                    type: string
+                exceptionGrantedBy:
+                    type: string
+                exceptionGrantedAt:
+                    type: string
+                    format: date-time
+                assetName:
+                    type: string
+                    description: "Display name of the asset. Present on the database overview and the quarantine listing."
+            required:
+                - databaseId
+                - assetId
+                - complianceState
+
+        databaseComplianceOverviewResponse:
+            type: object
+            properties:
+                databaseId:
+                    type: string
+                totalAssets:
+                    type: integer
+                    description: "Number of assets in the database that have a compliance record."
+                summary:
+                    type: object
+                    properties:
+                        compliant:
+                            type: integer
+                        non_compliant:
+                            type: integer
+                        pending_evaluation:
+                            type: integer
+                        quarantined:
+                            type: integer
+                        unknown:
+                            type: integer
+                assets:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/complianceState"
+            required:
+                - databaseId
+                - totalAssets
+                - summary
+                - assets
+
+        listQuarantinedResponse:
+            type: object
+            properties:
+                quarantinedAssets:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/complianceState"
+            required:
+                - quarantinedAssets
+
+        releaseQuarantineRequest:
+            type: object
+            properties:
+                reason:
+                    type: string
+                    description: "Reason recorded in the audit entry. Defaults to `released via API`."
+
+        grantExceptionRequest:
+            type: object
+            properties:
+                reason:
+                    type: string
+                    description: "Justification recorded on the compliance record and in the audit entry."
+            required:
+                - reason
+
+        grantExceptionResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                reason:
+                    type: string
+                grantedBy:
+                    type: string
+            required:
+                - message
+                - reason
+                - grantedBy
+
+        complianceMessageResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+            required:
+                - message
+
+        cascadeDetail:
+            type: object
+            properties:
+                cascadeId:
+                    type: string
+                    format: uuid
+                state:
+                    type: string
+                    enum: [pending_approval, executing, completed, aborted]
+                triggeredByDatabaseId:
+                    type: string
+                triggeredByAssetId:
+                    type: string
+                triggerReason:
+                    type: string
+                createdAt:
+                    type: string
+                    format: date-time
+                actor:
+                    type: string
+                requireApproval:
+                    type: boolean
+                approvalTimeoutAt:
+                    type: string
+                    format: date-time
+                    description: "24 hours after creation. Present on cascades created with `requireApproval`."
+                approvedBy:
+                    type: string
+                approvedAt:
+                    type: string
+                    format: date-time
+                approvalReason:
+                    type: string
+                rejectedBy:
+                    type: string
+                rejectedAt:
+                    type: string
+                    format: date-time
+                rejectionReason:
+                    type: string
+                completedAt:
+                    type: string
+                    format: date-time
+                totalNodes:
+                    type: integer
+                nodes:
+                    type: string
+                    description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped`, `error`)."
+                executionOrder:
+                    type: string
+                    description: "JSON-encoded list of the downstream assets in evaluation order."
+            required:
+                - cascadeId
+                - state
+                - triggeredByDatabaseId
+                - triggeredByAssetId
+                - createdAt
+                - actor
+                - requireApproval
+
+        listCascadesResponse:
+            type: object
+            properties:
+                cascades:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/cascadeDetail"
+            required:
+                - cascades
+
+        createCascadeRequest:
+            type: object
+            properties:
+                databaseId:
+                    type: string
+                    description: "Database of the asset whose downstream assets are re-evaluated."
+                assetId:
+                    type: string
+                    description: "Asset whose downstream assets are re-evaluated."
+                reason:
+                    type: string
+                    description: "Reason recorded on the cascade. Defaults to `manual trigger`."
+                requireApproval:
+                    type: boolean
+                    description: "Wait for approval before executing."
+                    default: true
+            required:
+                - databaseId
+                - assetId
+
+        cascadeExecutionResult:
+            type: object
+            description: "Outcome of executing a cascade."
+            properties:
+                cascadeId:
+                    type: string
+                    format: uuid
+                status:
+                    type: string
+                    enum: [completed]
+                evaluated:
+                    type: integer
+                    description: "Number of downstream assets evaluated."
+                results:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            node:
+                                type: string
+                                description: "`databaseId:assetId` of the downstream asset."
+                            status:
+                                type: string
+                                description: "The evaluation verdict, `skipped` (no bound schema), or `error`."
+                            evaluationId:
+                                type: string
+                                format: uuid
+                        required:
+                            - node
+                            - status
+                error:
+                    type: string
+                    description: "Present instead of `status` when the cascade could not execute."
+            required:
+                - cascadeId
+
+        createCascadeResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                cascadeId:
+                    type: string
+                    format: uuid
+                state:
+                    type: string
+                    enum: [pending_approval, executing]
+                result:
+                    $ref: "#/components/schemas/cascadeExecutionResult"
+            required:
+                - message
+                - cascadeId
+                - state
+
+        cascadeDecisionRequest:
+            type: object
+            properties:
+                reason:
+                    type: string
+                    description: "Reason recorded on the cascade and in the audit entry. Defaults to `approved` or `rejected`."
+
+        approveCascadeResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                cascadeId:
+                    type: string
+                    format: uuid
+                result:
+                    $ref: "#/components/schemas/cascadeExecutionResult"
+            required:
+                - message
+                - cascadeId
+                - result
+
+        rejectCascadeResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                cascadeId:
+                    type: string
+                    format: uuid
+            required:
+                - message
+                - cascadeId
+
+        auditLogEntry:
+            type: object
+            properties:
+                entryId:
+                    type: string
+                    format: uuid
+                timestamp:
+                    type: string
+                    format: date-time
+                eventType:
+                    type: string
+                    enum:
+                        - compliance_check
+                        - quarantine_released
+                        - exception_granted
+                        - schema_bound_to_database
+                        - schema_unbound_from_database
+                        - schema_bound_to_asset
+                        - schema_unbound_from_asset
+                        - schema_deleted
+                        - cascade_triggered
+                        - cascade_auto_triggered
+                        - cascade_approved
+                        - cascade_rejected
+                        - cascade_completed
+                databaseId:
+                    type: string
+                    description: "`*` on entries that are not about one database."
+                assetId:
+                    type: string
+                    description: "`*` on entries that are not about one asset."
+                actor:
+                    type: string
+                    description: "User, or `SYSTEM_USER`, that caused the event."
+                schemaName:
+                    type: string
+                evaluationId:
+                    type: string
+                    format: uuid
+                cascadeId:
+                    type: string
+                    format: uuid
+                details:
+                    type: string
+                    description: "JSON-encoded event-specific details."
+                previousState:
+                    type: string
+                newState:
+                    type: string
+            required:
+                - entryId
+                - timestamp
+                - eventType
+                - databaseId
+                - assetId
+                - actor
+                - details
+
+        auditLogResponse:
+            type: object
+            properties:
+                entries:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/auditLogEntry"
+                NextToken:
+                    type: string
+                    description: "Continuation token for the next page; absent on the last page."
+            required:
+                - entries
+
     parameters:
       maxItemsParam:
         name: maxItems
@@ -14706,3 +16730,49 @@ components:
             minimum: 1
             maximum: 500
             default: 100
+      complianceEvaluationsMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Number of evaluations returned in one page. Default is 50, reduced to 200; follow NextToken for the rest"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      complianceAuditMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Number of audit entries returned in one page. Default is 50, reduced to 500; follow NextToken for the rest. Takes precedence over limit"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+      complianceAuditLimitParam:
+        name: limit
+        in: query
+        description: "Alias of maxItems for the audit listings, read when maxItems is absent"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+      complianceAuditStartDateParam:
+        name: startDate
+        in: query
+        description: "ISO-8601 timestamp; only entries at or after it are returned"
+        schema:
+            type: string
+      complianceAuditEndDateParam:
+        name: endDate
+        in: query
+        description: "ISO-8601 timestamp; only entries at or before it are returned"
+        schema:
+            type: string
+      complianceStartingTokenParam:
+        name: startingToken
+        in: query
+        description: "Opaque continuation token from a previous response's NextToken"
+        schema:
+            type: string
+        allowEmptyValue: true

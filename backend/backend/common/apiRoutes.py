@@ -546,6 +546,80 @@ API_ADDON_PHYSNA_VIEWER = ApiRoute("/addon/physna/viewer", (GET,), "addons")
 ADDON_ROUTES: Tuple[ApiRoute, ...] = (API_ADDON_PHYSNA_VIEWER,)
 
 # ---------------------------------------------------------------------------
+# Compliance (schemas, bindings, evaluation, quarantine, cascades, audit)
+# ---------------------------------------------------------------------------
+# Schema registry: collection GET (list) + POST (register); single schema GET + PUT (new version)
+# + DELETE (remove an unbound schema).
+API_COMPLIANCE_SCHEMAS = ApiRoute("/compliance/schemas", (GET, POST), "compliance")
+API_COMPLIANCE_SCHEMA_BY_NAME = ApiRoute(
+    "/compliance/schemas/{schemaName}", (GET, PUT, DELETE), "compliance"
+)
+# Schema bindings: database-scoped GET (list bound assets) + PUT (bind) + DELETE (unbind);
+# asset-scoped PUT (bind) + DELETE (unbind).
+API_COMPLIANCE_BIND_DATABASE = ApiRoute(
+    "/compliance/bind/{databaseId}", (GET, PUT, DELETE), "compliance"
+)
+API_COMPLIANCE_BIND_ASSET = ApiRoute(
+    "/compliance/bind/{databaseId}/{assetId}", (PUT, DELETE), "compliance"
+)
+# Evaluation: on-demand evaluate for one asset; sweep re-evaluates every asset bound to a schema.
+API_COMPLIANCE_EVALUATE_ASSET = ApiRoute(
+    "/compliance/evaluate/{databaseId}/{assetId}", (POST,), "compliance"
+)
+API_COMPLIANCE_SWEEP_SCHEMA = ApiRoute("/compliance/sweep/{schemaName}", (POST,), "compliance")
+API_COMPLIANCE_EVALUATIONS_ASSET = ApiRoute(
+    "/compliance/evaluations/{databaseId}/{assetId}", (GET,), "compliance"
+)
+# Compliance state: per asset, and the per-database summary listing.
+API_COMPLIANCE_STATE_ASSET = ApiRoute(
+    "/compliance/state/{databaseId}/{assetId}", (GET,), "compliance"
+)
+API_COMPLIANCE_STATE_DATABASE = ApiRoute("/compliance/state/{databaseId}", (GET,), "compliance")
+# Quarantine: listing plus the release / exception actions on one quarantined asset.
+API_COMPLIANCE_QUARANTINE = ApiRoute("/compliance/quarantine", (GET,), "compliance")
+API_COMPLIANCE_QUARANTINE_RELEASE = ApiRoute(
+    "/compliance/quarantine/{databaseId}/{assetId}/release", (POST,), "compliance"
+)
+API_COMPLIANCE_QUARANTINE_EXCEPTION = ApiRoute(
+    "/compliance/quarantine/{databaseId}/{assetId}/exception", (POST,), "compliance"
+)
+# Cascades: collection GET (list) + POST (create); single cascade GET; approve / reject actions.
+API_COMPLIANCE_CASCADES = ApiRoute("/compliance/cascades", (GET, POST), "compliance")
+API_COMPLIANCE_CASCADE_BY_ID = ApiRoute("/compliance/cascades/{cascadeId}", (GET,), "compliance")
+API_COMPLIANCE_CASCADE_APPROVE = ApiRoute(
+    "/compliance/cascades/{cascadeId}/approve", (POST,), "compliance"
+)
+API_COMPLIANCE_CASCADE_REJECT = ApiRoute(
+    "/compliance/cascades/{cascadeId}/reject", (POST,), "compliance"
+)
+# Audit trail: global listing (filterable by event type) and the per-asset history.
+API_COMPLIANCE_AUDIT = ApiRoute("/compliance/audit", (GET,), "compliance")
+API_COMPLIANCE_AUDIT_ASSET = ApiRoute(
+    "/compliance/audit/{databaseId}/{assetId}", (GET,), "compliance"
+)
+
+COMPLIANCE_ROUTES: Tuple[ApiRoute, ...] = (
+    API_COMPLIANCE_SCHEMAS,
+    API_COMPLIANCE_SCHEMA_BY_NAME,
+    API_COMPLIANCE_BIND_DATABASE,
+    API_COMPLIANCE_BIND_ASSET,
+    API_COMPLIANCE_EVALUATE_ASSET,
+    API_COMPLIANCE_SWEEP_SCHEMA,
+    API_COMPLIANCE_EVALUATIONS_ASSET,
+    API_COMPLIANCE_STATE_ASSET,
+    API_COMPLIANCE_STATE_DATABASE,
+    API_COMPLIANCE_QUARANTINE,
+    API_COMPLIANCE_QUARANTINE_RELEASE,
+    API_COMPLIANCE_QUARANTINE_EXCEPTION,
+    API_COMPLIANCE_CASCADES,
+    API_COMPLIANCE_CASCADE_BY_ID,
+    API_COMPLIANCE_CASCADE_APPROVE,
+    API_COMPLIANCE_CASCADE_REJECT,
+    API_COMPLIANCE_AUDIT,
+    API_COMPLIANCE_AUDIT_ASSET,
+)
+
+# ---------------------------------------------------------------------------
 # Master list and lookups
 # ---------------------------------------------------------------------------
 ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
@@ -571,6 +645,7 @@ ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
     + USER_ROUTES
     + SEARCH_ROUTES
     + ADDON_ROUTES
+    + COMPLIANCE_ROUTES
 )
 
 

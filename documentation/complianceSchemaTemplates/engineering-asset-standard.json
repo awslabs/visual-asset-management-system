@@ -1,0 +1,49 @@
+{
+    "metadata": {
+        "name": "Engineering Asset Standard",
+        "description": "Baseline compliance schema for engineering assets. Requires ownership, classification, and lifecycle metadata.",
+        "version": "1.0.0"
+    },
+    "schemaName": "engineering-asset-standard",
+    "description": "Requires name, owner, classification, and retention policy for all engineering assets.",
+    "schemaBody": {
+        "type": "object",
+        "required": ["name", "owner", "classification", "retention_days"],
+        "properties": {
+            "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "Asset name or identifier"
+            },
+            "owner": {
+                "type": "string",
+                "description": "Owner email address"
+            },
+            "classification": {
+                "type": "string",
+                "enum": ["public", "internal", "confidential", "restricted"],
+                "description": "Data classification level"
+            },
+            "retention_days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3650,
+                "description": "Data retention period in days"
+            },
+            "department": {
+                "type": "string",
+                "description": "Owning department or team"
+            },
+            "version": {
+                "type": "string",
+                "description": "Asset version string"
+            },
+            "review_date": {
+                "type": "string",
+                "description": "Next scheduled review date (ISO 8601)"
+            }
+        },
+        "additionalProperties": true
+    }
+}

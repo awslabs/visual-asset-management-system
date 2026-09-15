@@ -1,0 +1,287 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""complianceWorkflowCallback (EventBridge-invoked): consumes the `workflow.execution.completed`
+event, correlates the execution to a pending evaluation through the ExecutionIdIndex, reads the
+pipeline's `compliance-output.json` from the execution's recorded result rows on success, and drives
+the evaluation's completion. Ignores other detail types and executions it does not own."""
+
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from backend.tests.handlers.compliance._harness import (
+    ASSET, DB, REAL_TO_UPDATE_EXPR, RULES_SCHEMA_BODY, SCHEMA, update_values,
+)
+from common.workflows.executionRecords import (
+    WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE, workflow_execution_completed_event,
+)
+from handlers.compliance import complianceEvaluationStore as store
+from handlers.compliance import complianceWorkflowCallback as callback
+from models.compliance import PipelineRule
+
+MOD = "handlers.compliance.complianceWorkflowCallback"
+STORE = "handlers.compliance.complianceEvaluationStore"
+
+EXECUTION_ID = "exec-1"
+STARTED = "2026-01-01T00:00:00+00:00"
+COMPLETED = "2026-01-01T00:01:00+00:00"
+PIPELINE_RULE = PipelineRule(**RULES_SCHEMA_BODY["rules"]["residual-bound"])
+OUTPUT = {"complianceOutput": True, "status": "success", "measurements": {"residual": 0.2}}
+
+
+def completion_event(status="SUCCEEDED", execution_id=EXECUTION_ID, detail_type=None):
+    """The event as EventBridge delivers the emitters' `put_events` entry: the entry's `Detail`
+    JSON becomes `detail`, its `DetailType` becomes `detail-type`."""
+    entry = workflow_execution_completed_event(
+        "arn:aws:events:us-east-1:123456789012:event-bus/orchestration", "vams.orch",
+        execution_id, "GLOBAL", "wf-1", status, STARTED, COMPLETED)
+    return {
+        "source": entry["Source"],
+        "detail-type": detail_type or entry["DetailType"],
+        "detail": json.loads(entry["Detail"]),
+    }
+
+
+def _pending_evaluation(status="pending_pipeline"):
+    return {
+        "evaluationId": "eval-1", "databaseId": DB, "assetId": ASSET, "schemaName": SCHEMA,
+        "status": status,
+        "ruleResults": json.dumps([]),
+        "pipelineRulesPending": json.dumps([{"ruleName": "residual-bound",
+                                             "rule": PIPELINE_RULE.dict()}]),
+        "pipelineExecutions": [{"ruleName": "residual-bound", "executionId": EXECUTION_ID,
+                                "status": "pending"}],
+        "executionId": EXECUTION_ID, "pipelineRuleName": "residual-bound",
+    }
+
+
+def _tracking_row():
+    return {"evaluationId": "eval-1#residual-bound", "recordType": "pipelineExecution",
+            "parentEvaluationId": "eval-1", "pipelineRuleName": "residual-bound",
+            "executionId": EXECUTION_ID, "status": "pending"}
+
+
+def _result_row(content, path="/compliance-output.json", truncated=False):
+    row = {"pipelineExecutionId": "pe-1", "relativeFilePath": path,
+           "resultsContent": content if isinstance(content, str) else json.dumps(content)}
+    if truncated:
+        row["resultsContentTruncated"] = True
+    return row
+
+
+class Callback:
+    """The tables the callback and the store read: the evaluation table serves the ExecutionIdIndex
+    query and the parent lookup; the pipeline-execution rows and their result rows serve the output
+    read."""
+
+    def __init__(self, evaluation=None, found=True, tracking=True, pipeline_rows=None,
+                 result_rows=None):
+        evaluation = evaluation if evaluation is not None else _pending_evaluation()
+        self.evaluation = MagicMock(name="evaluation_table")
+        rows = ([_tracking_row()] if tracking else [evaluation]) if found else []
+        self.evaluation.query.return_value = {"Items": rows}
+        self.evaluation.get_item.return_value = {"Item": evaluation} if found else {}
+        self.state = MagicMock(name="asset_state_table")
+        self.state.get_item.return_value = {"Item": {"complianceState": "pending_evaluation"}}
+        self.audit = MagicMock(name="audit_table")
+        self.pipeline_executions = MagicMock(name="pipeline_executions_table")
+        self.pipeline_executions.query.return_value = {"Items": list(
+            pipeline_rows if pipeline_rows is not None else
+            [{"pipelineExecutionId": "pe-1", "pipelineId": "pipe-1", "endStatePipeline": "true"}])}
+        self.results = MagicMock(name="output_results_table")
+        self.results.query.return_value = {"Items": list(
+            result_rows if result_rows is not None else [_result_row(OUTPUT)])}
+
+    def run(self, event):
+        with patch(f"{STORE}.to_update_expr", REAL_TO_UPDATE_EXPR), \
+                patch(f"{STORE}.evaluation_table", self.evaluation), \
+                patch(f"{STORE}.asset_state_table", self.state), \
+                patch(f"{STORE}.audit_table", self.audit), \
+                patch(f"{MOD}.pipeline_executions_table", self.pipeline_executions), \
+                patch(f"{MOD}.output_results_table", self.results):
+            return callback.lambda_handler(event, MagicMock())
+
+    def finalized(self):
+        return [u for u in update_values(self.evaluation) if "verdict" in u]
+
+
+@pytest.mark.unit
+class TestEventContract:
+
+    def test_the_emitted_entry_is_what_the_callback_consumes(self):
+        """The callback reads exactly the fields the pure event builder writes."""
+        detail = completion_event()["detail"]
+        assert set(detail) == {"executionId", "workflowDatabaseId", "workflowId", "status",
+                               "startedAt", "completedAt"}
+        assert detail["executionId"] == EXECUTION_ID
+        assert callback.WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE == WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE
+
+    def test_another_detail_type_is_ignored(self):
+        harness = Callback()
+        response = harness.run(completion_event(detail_type="pipeline.execution.registered"))
+        assert response == {"statusCode": 200, "body": "Ignored"}
+        harness.evaluation.query.assert_not_called()
+
+    def test_a_missing_execution_id_is_a_no_op(self):
+        harness = Callback()
+        event = completion_event()
+        event["detail"].pop("executionId")
+        response = harness.run(event)
+        assert response["statusCode"] == 200
+        harness.evaluation.query.assert_not_called()
+
+    def test_a_string_encoded_detail_is_parsed(self):
+        harness = Callback()
+        event = completion_event()
+        event["detail"] = json.dumps(event["detail"])
+        response = harness.run(event)
+        assert json.loads(response["body"])["finalized"] is True
+
+    def test_an_unknown_execution_id_is_a_no_op(self):
+        harness = Callback(found=False)
+        response = harness.run(completion_event(execution_id="someone-elses-run"))
+        assert response == {"statusCode": 200, "body": "Not a compliance execution"}
+        query = harness.evaluation.query.call_args.kwargs
+        assert query["IndexName"] == "ExecutionIdIndex"
+        assert query["KeyConditionExpression"]._values[1] == "someone-elses-run"
+        harness.evaluation.update_item.assert_not_called()
+        harness.state.update_item.assert_not_called()
+
+    def test_an_evaluation_that_already_completed_is_not_touched(self):
+        harness = Callback(evaluation=_pending_evaluation(status="completed"))
+        response = harness.run(completion_event())
+        assert response == {"statusCode": 200, "body": "Already processed"}
+        harness.evaluation.update_item.assert_not_called()
+
+    def test_a_failure_inside_the_callback_answers_500(self):
+        harness = Callback()
+        harness.evaluation.query.side_effect = RuntimeError("table unavailable")
+        response = harness.run(completion_event())
+        assert response["statusCode"] == 500
+
+
+@pytest.mark.unit
+class TestSucceededExecution:
+
+    def test_the_output_is_applied_and_the_evaluation_finalized(self):
+        harness = Callback()
+        response = harness.run(completion_event("SUCCEEDED"))
+        outcome = json.loads(response["body"])
+        assert outcome["finalized"] is True
+        assert outcome["verdict"] == "compliant"
+        assert outcome["ruleName"] == "residual-bound"
+
+        tracking = update_values(harness.evaluation)[0]
+        assert tracking["status"] == "completed"
+        assert tracking["executionStatus"] == "SUCCEEDED"
+        result = json.loads(tracking["ruleResults"])[0]
+        assert result["passed"] is True
+        assert result["measured"] == {"residual": 0.2}
+        parent = harness.finalized()[0]
+        assert parent["status"] == "completed"
+        assert update_values(harness.state)[0]["complianceState"] == "compliant"
+
+        pipeline_query = harness.pipeline_executions.query.call_args.kwargs
+        assert pipeline_query["IndexName"] == "PipelineExecByWorkflowExecGSI"
+        assert pipeline_query["KeyConditionExpression"]._values[1] == EXECUTION_ID
+        assert harness.results.query.call_args.kwargs["KeyConditionExpression"]._values[1] == "pe-1"
+
+    def test_a_measurement_out_of_tolerance_quarantines(self):
+        harness = Callback(result_rows=[_result_row(dict(OUTPUT, measurements={"residual": 9}))])
+        outcome = json.loads(harness.run(completion_event("SUCCEEDED"))["body"])
+        assert outcome["verdict"] == "quarantined"
+        assert update_values(harness.state)[0]["complianceState"] == "quarantined"
+
+    def test_the_rules_pipeline_is_read_before_the_end_state_pipeline(self):
+        other = {"pipelineExecutionId": "pe-end", "pipelineId": "end", "endStatePipeline": "true"}
+        mine = {"pipelineExecutionId": "pe-1", "pipelineId": "pipe-1"}
+        harness = Callback(pipeline_rows=[other, mine])
+        harness.run(completion_event("SUCCEEDED"))
+        read_order = [c.kwargs["KeyConditionExpression"]._values[1]
+                      for c in harness.results.query.call_args_list]
+        assert read_order[0] == "pe-1"
+
+    def test_other_result_files_and_truncated_outputs_are_skipped(self):
+        harness = Callback(result_rows=[
+            _result_row({"complianceOutput": True, "measurements": {"residual": 99}},
+                        path="/summary.json"),
+            _result_row(OUTPUT, truncated=True),
+            _result_row("not json"),
+            _result_row(dict(OUTPUT, measurements={"residual": 0.1})),
+        ])
+        outcome = json.loads(harness.run(completion_event("SUCCEEDED"))["body"])
+        assert outcome["verdict"] == "compliant"
+        tracking = update_values(harness.evaluation)[0]
+        assert json.loads(tracking["ruleResults"])[0]["measured"] == {"residual": 0.1}
+
+    def test_no_output_document_falls_back_to_the_default_measurements(self):
+        harness = Callback(result_rows=[])
+        outcome = json.loads(harness.run(completion_event("SUCCEEDED"))["body"])
+        # residual is not a default measurement, so the rule fails on the missing field.
+        assert outcome["verdict"] == "quarantined"
+        tracking = update_values(harness.evaluation)[0]
+        result = json.loads(tracking["ruleResults"])[0]
+        assert "output field 'residual' missing" in result["message"]
+        assert result["measured"] == {"residual": None}
+
+    def test_result_rows_are_paged_to_exhaustion(self):
+        harness = Callback()
+        harness.results.query.side_effect = [
+            {"Items": [_result_row({"other": 1}, path="/a.json")], "LastEvaluatedKey": {"k": 1}},
+            {"Items": [_result_row(OUTPUT)]},
+        ]
+        outcome = json.loads(harness.run(completion_event("SUCCEEDED"))["body"])
+        assert outcome["verdict"] == "compliant"
+        assert harness.results.query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"k": 1}
+
+
+@pytest.mark.unit
+class TestTerminalFailures:
+
+    @pytest.mark.parametrize("status", ["FAILED", "ABORTED", "TIMED_OUT"])
+    def test_a_non_succeeded_execution_fails_the_rule_without_reading_outputs(self, status):
+        harness = Callback()
+        outcome = json.loads(harness.run(completion_event(status))["body"])
+        assert outcome["finalized"] is True
+        assert outcome["verdict"] == "quarantined"
+        harness.pipeline_executions.query.assert_not_called()
+        harness.results.query.assert_not_called()
+        tracking = update_values(harness.evaluation)[0]
+        assert tracking["executionStatus"] == status
+        assert json.loads(tracking["ruleResults"])[0]["message"] == f"Pipeline execution {status}"
+        parent = harness.finalized()[0]
+        assert parent["violations"] == [f"Pipeline execution {status}"]
+        assert update_values(harness.state)[0]["complianceState"] == "quarantined"
+
+    def test_a_failed_warn_rule_is_non_compliant(self):
+        evaluation = _pending_evaluation()
+        warn_rule = PipelineRule(**dict(RULES_SCHEMA_BODY["rules"]["residual-bound"],
+                                        enforcement="warn"))
+        evaluation["pipelineRulesPending"] = json.dumps(
+            [{"ruleName": "residual-bound", "rule": warn_rule.dict()}])
+        harness = Callback(evaluation=evaluation)
+        outcome = json.loads(harness.run(completion_event("FAILED"))["body"])
+        assert outcome["verdict"] == "non_compliant"
+
+
+@pytest.mark.unit
+class TestCorrelation:
+
+    def test_a_parent_row_without_a_tracking_row_still_resolves(self):
+        harness = Callback(tracking=False)
+        outcome = json.loads(harness.run(completion_event("SUCCEEDED"))["body"])
+        assert outcome["finalized"] is True
+        harness.evaluation.get_item.assert_not_called()
+
+    def test_finalization_is_recorded_by_the_system_actor(self):
+        harness = Callback()
+        harness.run(completion_event("SUCCEEDED"))
+        audit = harness.audit.put_item.call_args.kwargs["Item"]
+        assert audit["eventType"] == "compliance_check"
+        assert audit["actor"] == store.SYSTEM_ACTOR
+        assert audit["evaluationId"] == "eval-1"
+        assert json.loads(audit["details"]) == {"verdict": "compliant",
+                                                "pipelineExecutionStatus": "SUCCEEDED",
+                                                "phase": "pipeline_callback"}

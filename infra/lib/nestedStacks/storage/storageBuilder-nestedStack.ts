@@ -126,6 +126,12 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
+        // Compliance tables
+        complianceSchemaStorageTable: dynamodb.Table;
+        complianceAssetStateStorageTable: dynamodb.Table;
+        complianceEvaluationStorageTable: dynamodb.Table;
+        complianceCascadeStorageTable: dynamodb.Table;
+        complianceAuditStorageTable: dynamodb.Table;
     };
 }
 
@@ -2117,6 +2123,157 @@ export function storageResourcesBuilder(
         },
     });
 
+    /////////////////////////////////////////////////////////////////////////////
+    // Compliance Tables
+    /////////////////////////////////////////////////////////////////////////////
+
+    const complianceSchemaStorageTable = new dynamodb.Table(scope, "ComplianceSchemaStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "internalVersion",
+            type: dynamodb.AttributeType.NUMBER,
+        },
+    });
+
+    complianceSchemaStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceAssetStateStorageTable = new dynamodb.Table(
+        scope,
+        "ComplianceAssetStateStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "databaseId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "assetId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    complianceAssetStateStorageTable.addGlobalSecondaryIndex({
+        indexName: "SchemaNameIndex",
+        partitionKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "complianceState",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceEvaluationStorageTable = new dynamodb.Table(
+        scope,
+        "ComplianceEvaluationStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "evaluationId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
+        indexName: "AssetIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "evaluatedAt",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
+        indexName: "ExecutionIdIndex",
+        partitionKey: {
+            name: "executionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceCascadeStorageTable = new dynamodb.Table(
+        scope,
+        "ComplianceCascadeStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "cascadeId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    complianceCascadeStorageTable.addGlobalSecondaryIndex({
+        indexName: "StateIndex",
+        partitionKey: {
+            name: "state",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "createdAt",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceAuditStorageTable = new dynamodb.Table(scope, "ComplianceAuditStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "entryId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "AssetIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "EventTypeIndex",
+        partitionKey: {
+            name: "eventType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     ///DEPRECATED TABLES
 
     //Build storage resources object
@@ -2193,6 +2350,12 @@ export function storageResourcesBuilder(
             pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
+            // Compliance tables
+            complianceSchemaStorageTable: complianceSchemaStorageTable,
+            complianceAssetStateStorageTable: complianceAssetStateStorageTable,
+            complianceEvaluationStorageTable: complianceEvaluationStorageTable,
+            complianceCascadeStorageTable: complianceCascadeStorageTable,
+            complianceAuditStorageTable: complianceAuditStorageTable,
         },
     };
 
@@ -2756,6 +2919,17 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowStorageTableV2.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowTriggersStorage]:
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
+        // Compliance tables
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
+            storageResources.dynamo.complianceSchemaStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceAssetStateStorage]:
+            storageResources.dynamo.complianceAssetStateStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceEvaluationStorage]:
+            storageResources.dynamo.complianceEvaluationStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceCascadeStorage]:
+            storageResources.dynamo.complianceCascadeStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.complianceAuditStorage]:
+            storageResources.dynamo.complianceAuditStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,

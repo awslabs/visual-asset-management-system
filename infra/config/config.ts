@@ -1131,6 +1131,20 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // Initialize compliance configuration if undefined (backward compatibility)
+    if (config.app.compliance == undefined) {
+        config.app.compliance = {
+            autoLoadDefaultSchema: true,
+            quarantineBlocksDownload: false,
+        };
+    }
+    if (config.app.compliance.autoLoadDefaultSchema == undefined) {
+        config.app.compliance.autoLoadDefaultSchema = true;
+    }
+    if (config.app.compliance.quarantineBlocksDownload == undefined) {
+        config.app.compliance.quarantineBlocksDownload = false;
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -3465,6 +3479,10 @@ export interface ConfigPublic {
             autoLoadDefaultDatabaseSchema: boolean;
             autoLoadDefaultAssetSchema: boolean;
             autoLoadDefaultAssetFileSchema: boolean;
+        };
+        compliance: {
+            autoLoadDefaultSchema: boolean;
+            quarantineBlocksDownload: boolean;
         };
     };
 }

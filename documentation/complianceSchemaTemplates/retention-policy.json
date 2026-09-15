@@ -1,0 +1,52 @@
+{
+    "metadata": {
+        "name": "Retention Policy Schema",
+        "description": "Ensures assets have proper lifecycle and retention metadata. Use this to enforce data governance policies around asset expiry, archival, and disposal.",
+        "version": "1.0.0"
+    },
+    "schemaName": "retention-policy",
+    "description": "Enforces lifecycle and retention metadata for data governance compliance.",
+    "schemaBody": {
+        "type": "object",
+        "required": ["retention_days", "disposal_method", "data_owner"],
+        "properties": {
+            "retention_days": {
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 36500,
+                "description": "Minimum retention period in days before asset can be disposed"
+            },
+            "disposal_method": {
+                "type": "string",
+                "enum": ["delete", "archive", "anonymize", "transfer"],
+                "description": "How the asset should be handled after retention period expires"
+            },
+            "data_owner": {
+                "type": "string",
+                "description": "Email of the person or team accountable for retention compliance"
+            },
+            "legal_hold": {
+                "type": "boolean",
+                "description": "Whether the asset is under legal hold (prevents disposal regardless of retention)"
+            },
+            "regulation": {
+                "type": "string",
+                "description": "Applicable regulation or policy (e.g., GDPR, HIPAA, FedRAMP, NARA)"
+            },
+            "archive_tier": {
+                "type": "string",
+                "enum": ["hot", "warm", "cold", "glacier"],
+                "description": "Storage tier for archived assets"
+            },
+            "last_access_review": {
+                "type": "string",
+                "description": "Date of the last access review (ISO 8601)"
+            },
+            "next_review_date": {
+                "type": "string",
+                "description": "Date of the next scheduled retention review (ISO 8601)"
+            }
+        },
+        "additionalProperties": true
+    }
+}

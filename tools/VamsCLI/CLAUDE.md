@@ -54,6 +54,7 @@ tools/VamsCLI/
       execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
+      compliance.py          # Compliance: schema sub-group, bind/unbind/bindings, evaluate/sweep/state/evaluations, quarantine + cascade sub-groups, audit
       industry/
         industry.py          # Industry command group
         engineering/
@@ -80,17 +81,18 @@ tools/VamsCLI/
       glb_combiner.py        # GLB binary file combination
   tests/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
-    test_*.py                # 59 test files, one per command group or behavior area
+    test_*.py                # 67 test files, one per command group or behavior area
 ```
 
-### Command Groups (24 top-level)
+### Command Groups (25 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, comment, subscription, features,
-search, sync, workflow, pipeline, execution, industry, user, role, api-key
+search, sync, workflow, pipeline, execution, industry, user, role, api-key,
+compliance
 ```
 
 Sync has a nested sub-command group:
@@ -107,6 +109,16 @@ Comment and subscription cover the comments and subscriptions APIs:
 
 -   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
 -   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
+
+Compliance covers the schema registry, bindings, evaluation, quarantine, cascades and the audit trail:
+
+-   `compliance schema list|get|create|update|delete` -- `create`/`update` take `--schema-file` (a JSON file path or the body inline); `delete` requires `--confirm` and the API refuses a schema that is still bound
+-   `compliance bind|unbind|bindings` -- `-d` binds a database, `-d -a` binds one asset as an override; `--no-auto-eval` is rejected with `-a` because the asset route does not read it
+-   `compliance evaluate|sweep|state|evaluations` -- `state -d` is the database overview, `state -d -a` one asset's record; `evaluations` pages on `--max-items`/`--starting-token` (the route reads its page size from `maxItems`)
+-   `compliance quarantine list|release|exception`, `compliance cascade list|get|create|approve|reject`
+-   `compliance audit [-d -a] [--event-type] [--start-date] [--end-date] [--limit]` -- the routes return no continuation token, so a result of `--limit` entries is flagged as possibly incomplete; `--event-type` is rejected with `-d -a` because the per-asset route has no such filter
+
+The compliance list routes (`schemas`, `quarantinedAssets`, `cascades`, audit `entries`) return their whole list in one response under a route-specific field and take no paging parameters, so those commands have none — a `--starting-token` there would be a knob the route ignores (`tools/VamsMCP/CLAUDE.md` Rule 9).
 
 Industry has nested sub-command groups:
 
@@ -155,6 +167,7 @@ VamsCLIError (base)
     RoleError (+ 4 subclasses)
     ConstraintError (+ 5 subclasses)
     UserRoleError (+ 4 subclasses)
+    ComplianceError (+ 3 subclasses: ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError)
     ProfileAlreadyExistsError
 ```
 
@@ -554,7 +567,7 @@ Treat a command whose output includes another command's output as this bug until
 ### Framework and Configuration
 
 -   **Framework**: pytest with Click's `CliRunner`
--   **Test files**: `tests/test_*.py` (59 files)
+-   **Test files**: `tests/test_*.py` (67 files)
 -   **Shared fixtures**: `tests/conftest.py`
 
 ### Key Fixtures (conftest.py)

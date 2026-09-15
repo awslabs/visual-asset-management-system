@@ -16,6 +16,7 @@ import {
     Popover,
     Icon,
     Spinner,
+    Badge,
 } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import {
@@ -24,11 +25,24 @@ import {
     unsubscribeFromAsset,
     downloadAsset,
 } from "../../services/APIService";
+import { fetchComplianceState, ComplianceState } from "../../services/ComplianceService";
 import PreviewModal from "../filemanager/components/PreviewModal";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+
+// The API route the badge reads; the badge is fetched only when the caller may call it.
+const COMPLIANCE_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
+
+const COMPLIANCE_BADGE: Record<string, { color: "green" | "red" | "grey"; label: string }> = {
+    compliant: { color: "green", label: "Compliant" },
+    non_compliant: { color: "red", label: "Non-Compliant" },
+    quarantined: { color: "red", label: "Quarantined" },
+    pending_evaluation: { color: "grey", label: "Pending" },
+};
+const UNKNOWN_BADGE = { color: "grey" as const, label: "Unknown" };
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -57,6 +71,21 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const [subscribed, setSubscribed] = useState<boolean>(false);
     const [isSubscribing, setIsSubscribing] = useState<boolean>(false);
     const [userName, setUserName] = useState<string>("");
+
+    // Compliance badge state
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canReadCompliance = canCallRoute("GET", COMPLIANCE_STATE_API_ROUTE);
+    const [complianceBadge, setComplianceBadge] = useState<ComplianceState | null>(null);
+
+    useEffect(() => {
+        if (canReadCompliance && asset?.assetId && databaseId) {
+            fetchComplianceState(databaseId, asset.assetId).then(([success, result]) => {
+                if (success && typeof result !== "string") {
+                    setComplianceBadge(result);
+                }
+            });
+        }
+    }, [canReadCompliance, asset?.assetId, databaseId]);
 
     // Asset preview thumbnail state
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
@@ -234,9 +263,28 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             </SpaceBetween>
                         }
                     >
-                        <span style={{ fontSize: "1.2em" }}>
-                            {asset?.assetName || `${Synonyms.Asset} Details`}
-                        </span>
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <span style={{ fontSize: "1.2em" }}>
+                                {asset?.assetName || `${Synonyms.Asset} Details`}
+                            </span>
+                            {complianceBadge && (
+                                <Badge
+                                    color={
+                                        (
+                                            COMPLIANCE_BADGE[complianceBadge.complianceState] ||
+                                            UNKNOWN_BADGE
+                                        ).color
+                                    }
+                                >
+                                    {
+                                        (
+                                            COMPLIANCE_BADGE[complianceBadge.complianceState] ||
+                                            UNKNOWN_BADGE
+                                        ).label
+                                    }
+                                </Badge>
+                            )}
+                        </SpaceBetween>
                     </Header>
                 }
             >
