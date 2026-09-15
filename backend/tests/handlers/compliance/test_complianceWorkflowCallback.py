@@ -4,7 +4,8 @@
 """complianceWorkflowCallback (EventBridge-invoked): consumes the `workflow.execution.completed`
 event, correlates the execution to a pending evaluation through the ExecutionIdIndex, reads the
 pipeline's `compliance-output.json` from the execution's recorded result rows on success, and drives
-the evaluation's completion. Ignores other detail types and executions it does not own."""
+the evaluation's completion. Requires the completion detail type and a detail that parses as the
+completion contract; ignores other detail types, malformed details and executions it does not own."""
 
 import json
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,7 @@ import pytest
 from backend.tests.handlers.compliance._harness import (
     ASSET, DB, REAL_TO_UPDATE_EXPR, RULES_SCHEMA_BODY, SCHEMA, update_values,
 )
+from backend.tests.handlers.compliance.test_complianceEvaluationStore import FakeEvaluationTable
 from common.workflows.executionRecords import (
     WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE, workflow_execution_completed_event,
 )
@@ -24,7 +26,9 @@ from models.compliance import PipelineRule
 MOD = "handlers.compliance.complianceWorkflowCallback"
 STORE = "handlers.compliance.complianceEvaluationStore"
 
-EXECUTION_ID = "exec-1"
+# Execution ids in the shape the emitters publish (executionRecords.new_guid: 32 lowercase hex).
+EXECUTION_ID = "e1000000000000000000000000000001"
+UNKNOWN_EXECUTION_ID = "e9990000000000000000000000000999"
 STARTED = "2026-01-01T00:00:00+00:00"
 COMPLETED = "2026-01-01T00:01:00+00:00"
 PIPELINE_RULE = PipelineRule(**RULES_SCHEMA_BODY["rules"]["residual-bound"])
@@ -72,17 +76,19 @@ def _result_row(content, path="/compliance-output.json", truncated=False):
 
 
 class Callback:
-    """The tables the callback and the store read: the evaluation table serves the ExecutionIdIndex
-    query and the parent lookup; the pipeline-execution rows and their result rows serve the output
-    read."""
+    """The tables the callback and the store read: the evaluation table (an in-memory fake honoring
+    the store's status conditions) serves the ExecutionIdIndex query, the parent lookup and the
+    tracking-row re-read; the pipeline-execution rows and their result rows serve the output read."""
 
     def __init__(self, evaluation=None, found=True, tracking=True, pipeline_rows=None,
                  result_rows=None):
         evaluation = evaluation if evaluation is not None else _pending_evaluation()
-        self.evaluation = MagicMock(name="evaluation_table")
+        self.evaluation_rows = FakeEvaluationTable()
+        self.evaluation = self.evaluation_rows.mock
         rows = ([_tracking_row()] if tracking else [evaluation]) if found else []
         self.evaluation.query.return_value = {"Items": rows}
-        self.evaluation.get_item.return_value = {"Item": evaluation} if found else {}
+        if found:
+            self.evaluation_rows.seed(evaluation, *([_tracking_row()] if tracking else []))
         self.state = MagicMock(name="asset_state_table")
         self.state.get_item.return_value = {"Item": {"complianceState": "pending_evaluation"}}
         self.audit = MagicMock(name="audit_table")
@@ -117,12 +123,25 @@ class TestEventContract:
                                "startedAt", "completedAt"}
         assert detail["executionId"] == EXECUTION_ID
         assert callback.WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE == WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE
+        parsed = callback.parse_completion_detail(detail)
+        assert (parsed.executionId, parsed.status) == (EXECUTION_ID, "SUCCEEDED")
+        assert (parsed.startedAt, parsed.completedAt) == (STARTED, COMPLETED)
 
     def test_another_detail_type_is_ignored(self):
         harness = Callback()
         response = harness.run(completion_event(detail_type="pipeline.execution.registered"))
         assert response == {"statusCode": 200, "body": "Ignored"}
         harness.evaluation.query.assert_not_called()
+
+    def test_an_event_without_a_detail_type_is_skipped(self):
+        harness = Callback()
+        event = completion_event()
+        event.pop("detail-type")
+        with patch(f"{MOD}.logger") as logger:
+            response = harness.run(event)
+        assert response == {"statusCode": 200, "body": "Ignored"}
+        harness.evaluation.query.assert_not_called()
+        logger.info.assert_called_once()
 
     def test_a_missing_execution_id_is_a_no_op(self):
         harness = Callback()
@@ -131,6 +150,59 @@ class TestEventContract:
         response = harness.run(event)
         assert response["statusCode"] == 200
         harness.evaluation.query.assert_not_called()
+
+    @pytest.mark.parametrize("detail", [
+        pytest.param("not json", id="non-json-string"),
+        pytest.param(["not", "an", "object"], id="list"),
+        pytest.param("[1, 2]", id="json-list-string"),
+        pytest.param(42, id="number"),
+        pytest.param(None, id="absent"),
+    ], )
+    def test_a_detail_that_is_not_an_object_is_skipped_not_raised(self, detail):
+        harness = Callback()
+        event = completion_event()
+        event["detail"] = detail
+        with patch(f"{MOD}.logger") as logger:
+            response = harness.run(event)
+        assert response == {"statusCode": 200, "body": "Ignored"}
+        harness.evaluation.query.assert_not_called()
+        logger.info.assert_called_once()
+        logger.exception.assert_not_called()
+
+    @pytest.mark.parametrize("field,value", [
+        ("executionId", "someone-elses-run"),
+        ("executionId", "../" + "a" * 30),
+        ("status", "RUNNING"),
+        ("status", "SUCCEEDED; DROP"),
+        ("startedAt", "yesterday"),
+        ("completedAt", "2026-01-01 00:01:00"),
+    ])
+    def test_a_detail_outside_the_completion_contract_is_skipped(self, field, value):
+        harness = Callback()
+        event = completion_event()
+        event["detail"][field] = value
+        with patch(f"{MOD}.logger") as logger:
+            response = harness.run(event)
+        assert response == {"statusCode": 200, "body": "Ignored"}
+        harness.evaluation.query.assert_not_called()
+        # The offending value is not echoed into the log line.
+        assert value not in logger.info.call_args.args[0]
+
+    def test_empty_optional_fields_are_accepted(self):
+        """A main row with no recorded start date yields an empty startedAt."""
+        harness = Callback()
+        event = completion_event()
+        event["detail"]["startedAt"] = ""
+        event["detail"]["workflowDatabaseId"] = ""
+        response = harness.run(event)
+        assert json.loads(response["body"])["finalized"] is True
+
+    def test_extra_detail_fields_are_ignored(self):
+        harness = Callback()
+        event = completion_event()
+        event["detail"]["templateBody"] = "{...}"
+        response = harness.run(event)
+        assert json.loads(response["body"])["finalized"] is True
 
     def test_a_string_encoded_detail_is_parsed(self):
         harness = Callback()
@@ -141,11 +213,11 @@ class TestEventContract:
 
     def test_an_unknown_execution_id_is_a_no_op(self):
         harness = Callback(found=False)
-        response = harness.run(completion_event(execution_id="someone-elses-run"))
+        response = harness.run(completion_event(execution_id=UNKNOWN_EXECUTION_ID))
         assert response == {"statusCode": 200, "body": "Not a compliance execution"}
         query = harness.evaluation.query.call_args.kwargs
         assert query["IndexName"] == "ExecutionIdIndex"
-        assert query["KeyConditionExpression"]._values[1] == "someone-elses-run"
+        assert query["KeyConditionExpression"]._values[1] == UNKNOWN_EXECUTION_ID
         harness.evaluation.update_item.assert_not_called()
         harness.state.update_item.assert_not_called()
 
@@ -154,6 +226,17 @@ class TestEventContract:
         response = harness.run(completion_event())
         assert response == {"statusCode": 200, "body": "Already processed"}
         harness.evaluation.update_item.assert_not_called()
+
+    def test_a_redelivered_event_records_nothing_twice(self):
+        harness = Callback()
+        first = json.loads(harness.run(completion_event())["body"])
+        assert first["finalized"] is True
+        harness.evaluation.query.return_value = {"Items": [
+            dict(_tracking_row(), status="completed")]}
+        second = harness.run(completion_event())
+        assert second == {"statusCode": 200, "body": "Already processed"}
+        assert len(harness.finalized()) == 1
+        assert harness.state.update_item.call_count == 1
 
     def test_a_failure_inside_the_callback_answers_500(self):
         harness = Callback()
@@ -186,7 +269,10 @@ class TestSucceededExecution:
         pipeline_query = harness.pipeline_executions.query.call_args.kwargs
         assert pipeline_query["IndexName"] == "PipelineExecByWorkflowExecGSI"
         assert pipeline_query["KeyConditionExpression"]._values[1] == EXECUTION_ID
-        assert harness.results.query.call_args.kwargs["KeyConditionExpression"]._values[1] == "pe-1"
+        results_query = harness.results.query.call_args.kwargs
+        assert results_query["KeyConditionExpression"]._values[1] == "pe-1"
+        # The end-state lambda wrote these rows moments before it published the event.
+        assert results_query["ConsistentRead"] is True
 
     def test_a_measurement_out_of_tolerance_quarantines(self):
         harness = Callback(result_rows=[_result_row(dict(OUTPUT, measurements={"residual": 9}))])
@@ -270,10 +356,15 @@ class TestTerminalFailures:
 class TestCorrelation:
 
     def test_a_parent_row_without_a_tracking_row_still_resolves(self):
+        """The parent row alone resolves the rule (no parent lookup), and the completion creates the
+        rule's tracking row rather than requiring one to exist."""
         harness = Callback(tracking=False)
         outcome = json.loads(harness.run(completion_event("SUCCEEDED"))["body"])
         assert outcome["finalized"] is True
-        harness.evaluation.get_item.assert_not_called()
+        parent_lookups = [c for c in harness.evaluation.get_item.call_args_list
+                          if c.kwargs["Key"] == {"evaluationId": "eval-1"}]
+        assert parent_lookups == []
+        assert harness.evaluation_rows.rows["eval-1#residual-bound"]["status"] == "completed"
 
     def test_finalization_is_recorded_by_the_system_actor(self):
         harness = Callback()

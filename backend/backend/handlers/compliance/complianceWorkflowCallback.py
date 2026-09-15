@@ -5,8 +5,10 @@
 
 Consumes the `workflow.execution.completed` event the workflow end-state and error-handler
 lambdas put on the orchestration bus (`common.workflows.executionRecords.
-workflow_execution_completed_event`). The detail carries `executionId`, `workflowDatabaseId`,
-`workflowId`, `status`, `startedAt`, `completedAt` and an optional `executionGroupId`.
+workflow_execution_completed_event`). The event's `detail-type` must be that detail type, and its
+`detail` is parsed through `models.executions.WorkflowExecutionCompletedDetailModel`: `executionId`,
+`workflowDatabaseId`, `workflowId`, `status`, `startedAt`, `completedAt` and an optional
+`executionGroupId`. Anything else is logged and skipped.
 
 The execution is correlated to a compliance evaluation through the evaluation table's
 ExecutionIdIndex. On a succeeded execution the pipeline's `compliance-output.json` is read from
@@ -20,6 +22,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 import boto3
+from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 
@@ -29,6 +32,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.workflows.executionRecords import WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
+from models.executions import WorkflowExecutionCompletedDetailModel
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
@@ -47,33 +51,52 @@ output_results_table = dynamodb.Table(output_results_table_name)
 
 
 def lambda_handler(event, context):
-    """Finalize the pipeline rule a completed workflow execution belongs to."""
-    detail = event.get("detail") or {}
+    """Finalize the pipeline rule a completed workflow execution belongs to.
+
+    Only a `workflow.execution.completed` event whose detail parses as
+    `WorkflowExecutionCompletedDetailModel` is processed; an event with another or no detail type,
+    or a detail that is not a JSON object of that shape, is logged and skipped."""
+    detail_type = event.get("detail-type") or event.get("detailType") or ""
+    if detail_type != WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE:
+        logger.info(f"Ignoring event of detail type '{detail_type}'")
+        return {"statusCode": 200, "body": "Ignored"}
+
+    detail = parse_completion_detail(event.get("detail"))
+    if detail is None:
+        return {"statusCode": 200, "body": "Ignored"}
+
+    try:
+        return process_completed_execution(
+            detail.executionId,
+            execution_status=detail.status,
+            started_at=detail.startedAt,
+            completed_at=detail.completedAt,
+        )
+    except Exception as e:
+        logger.exception(
+            f"Error finalizing compliance evaluation for execution {detail.executionId}: {e}")
+        return {"statusCode": 500, "body": json.dumps({"message": "Callback failed"})}
+
+
+def parse_completion_detail(raw_detail) -> Optional[WorkflowExecutionCompletedDetailModel]:
+    """The event detail as `WorkflowExecutionCompletedDetailModel`, or None (logged) when it is not
+    a JSON object of that shape. EventBridge delivers the detail as an object; a string is accepted
+    when it decodes to one."""
+    detail = raw_detail
     if isinstance(detail, str):
         try:
             detail = json.loads(detail)
         except json.JSONDecodeError:
-            detail = {}
-    detail_type = event.get("detail-type") or event.get("detailType") or ""
-    if detail_type and detail_type != WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE:
-        logger.info(f"Ignoring event of detail type {detail_type}")
-        return {"statusCode": 200, "body": "Ignored"}
-
-    execution_id = detail.get("executionId", "")
-    if not execution_id:
-        logger.info("Completion event carries no executionId, skipping")
-        return {"statusCode": 200, "body": "No executionId"}
-
+            logger.info("Completion event detail is not JSON, skipping")
+            return None
+    if not isinstance(detail, dict):
+        logger.info("Completion event detail is not an object, skipping")
+        return None
     try:
-        return process_completed_execution(
-            execution_id,
-            execution_status=detail.get("status", ""),
-            started_at=detail.get("startedAt"),
-            completed_at=detail.get("completedAt"),
-        )
-    except Exception as e:
-        logger.exception(f"Error finalizing compliance evaluation for execution {execution_id}: {e}")
-        return {"statusCode": 500, "body": json.dumps({"message": "Callback failed"})}
+        return parse(detail, model=WorkflowExecutionCompletedDetailModel)
+    except ValidationError:
+        logger.info("Completion event detail does not match the completion contract, skipping")
+        return None
 
 
 def process_completed_execution(execution_id: str, execution_status: str,
@@ -112,7 +135,9 @@ def read_compliance_output(execution_id: str, pipeline_id: str) -> Optional[Dict
     The result rows are keyed by pipelineExecutionId, so the execution's PipelineExecutions rows
     (PipelineExecByWorkflowExecGSI) are read first — the rule's pipeline preferred, then the
     end-state pipeline, then any other — and each pipeline execution's result rows are read to
-    exhaustion.
+    exhaustion. The result rows are read consistently: the end-state lambda writes them moments
+    before it publishes the completion event this callback consumes, and an eventually-consistent
+    read that lags that write would report the pipeline as having written no output.
     """
     pipeline_rows = query_all_items(
         pipeline_executions_table,
@@ -126,6 +151,7 @@ def read_compliance_output(execution_id: str, pipeline_id: str) -> Optional[Dict
         result_rows = query_all_items(
             output_results_table,
             KeyConditionExpression=Key("pipelineExecutionId").eq(pipeline_execution_id),
+            ConsistentRead=True,
         )
         for result in result_rows:
             path = result.get("relativeFilePath", "") or result.get("s3Key", "")

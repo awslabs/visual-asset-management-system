@@ -78,26 +78,13 @@ FAILED_STATUS = "FAILED"
 def emit_workflow_execution_completed(workflow_execution_id, workflow_database_id, workflow_id,
                                       execution_status, started_at, completed_at,
                                       execution_group_id=""):
-    """Best-effort `workflow.execution.completed` event on the orchestration bus once the main
-    execution row holds its terminal status. Skipped (logged) when no bus is configured; a publish
-    failure is logged and never fails the reconciliation that precedes it."""
-    if not orchestration_bus_arn:
-        logger.info("No orchestration bus configured; workflow completion event skipped")
-        return
-    try:
-        events_client.put_events(Entries=[er.workflow_execution_completed_event(
-            event_bus_arn=orchestration_bus_arn,
-            event_source_prefix=orchestration_event_source_prefix,
-            execution_id=workflow_execution_id,
-            workflow_database_id=workflow_database_id,
-            workflow_id=workflow_id,
-            status=execution_status,
-            started_at=started_at,
-            completed_at=completed_at,
-            execution_group_id=execution_group_id,
-        )])
-    except Exception as e:
-        logger.exception(f"Failed publishing workflow completion event for {workflow_execution_id}: {e}")
+    """This lambda's `workflow.execution.completed` announcement: the shared emitter bound to the
+    events client and bus configuration resolved at import. Best-effort — skipped (logged) when no
+    bus is configured, and a publish failure is logged rather than failing the reconciliation."""
+    return eo.emit_workflow_execution_completed(
+        events_client, orchestration_bus_arn, orchestration_event_source_prefix,
+        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
+        started_at, completed_at, execution_group_id=execution_group_id)
 
 # executionError and executionLog land on the same main-row item, so they share the item's
 # free-form text budget: the error message keeps a small reserved slice and the log takes the
@@ -245,7 +232,10 @@ def reconcile_failed_execution(body, error_info):
         logger.exception(f"Error writing failing-pipeline log rows (continuing): {e}")
 
     # 3) Finalize the main row FAILED (unless already terminal) with error + log, then announce the
-    #    terminal status on the orchestration bus.
+    #    terminal status on the orchestration bus. The status read here and the finalize write are
+    #    separate calls, so the end-state lambda can finish the run in between; the write carries the
+    #    terminal guard and reports whether it landed, and only a FAILED status that landed is
+    #    announced — the writer that finished the run first has already announced its status.
     try:
         main_table = dynamodb.Table(workflow_execution_database_v2)
         existing = main_table.query(
@@ -254,14 +244,18 @@ def reconcile_failed_execution(body, error_info):
         main_row = rows[0] if rows else {}
         current_status = main_row.get('executionStatus', '') if rows else ''
         if current_status not in eo.TERMINAL_STATUSES:
-            eo.finalize_main_row(
+            finalized = eo.finalize_main_row(
                 dynamodb, workflow_execution_database_v2, execution_id,
                 workflow_database_id, workflow_id, FAILED_STATUS, now,
                 execution_log=execution_log, execution_error=error_message)
-            emit_workflow_execution_completed(
-                execution_id, workflow_database_id, workflow_id, FAILED_STATUS,
-                started_at=main_row.get('executionStartDate', ''), completed_at=now,
-                execution_group_id=main_row.get('executionGroupId', ''))
+            if finalized:
+                emit_workflow_execution_completed(
+                    execution_id, workflow_database_id, workflow_id, FAILED_STATUS,
+                    started_at=main_row.get('executionStartDate', ''), completed_at=now,
+                    execution_group_id=main_row.get('executionGroupId', ''))
+            else:
+                logger.info(f"Execution {execution_id} was finished by another writer; the FAILED "
+                            "completion event is not published")
     except Exception as e:
         logger.exception(f"Error finalizing main execution row (continuing): {e}")
 

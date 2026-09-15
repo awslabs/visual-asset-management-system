@@ -8,9 +8,19 @@ database with `complianceAutoEval` on, it resolves the asset's bound schema (the
 else the database binding — auto-registering the asset under it) and runs an evaluation through
 `complianceEvaluationStore.run_evaluation`. After an evaluation of an asset that has children it
 opens a cascade awaiting approval so the downstream assets can be re-evaluated.
+
+Two guards keep the trigger from multiplying evaluations:
+
+  - a file event for an object a workflow execution wrote (`vams-changesource` object metadata of
+    `workflowExecution`, read with a HEAD on the object) is skipped, so a pipeline rule whose
+    workflow writes its outputs into the asset does not re-enter the trigger and relaunch itself;
+  - an event for an asset whose state row already points at a `pending_pipeline` evaluation that
+    began at or after the change is coalesced into that evaluation, so an N-file upload yields one
+    evaluation rather than N concurrent pipeline launches.
 """
 
 import json
+import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -20,11 +30,17 @@ from botocore.config import Config
 
 from common.compliance import evaluationEngine as engine
 from common.resourceNames import ResourceKeys, get_table_name
+from common.s3MetadataKeys import (
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+)
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
+# Reads the change-provenance metadata of the object a file event names (HeadObject only).
+s3_client = boto3.client("s3", config=retry_config)
 logger = safeLogger(service_name="ComplianceTrigger")
 
 SCHEMA_SOURCE_DATABASE = "database"
@@ -95,16 +111,19 @@ def _process_stream_record(message):
     if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
         return
 
-    _process_compliance_event(database_id, asset_id)
+    _process_compliance_event(
+        database_id, asset_id,
+        event_time=parse_event_time(dynamodb_data.get("ApproximateCreationDateTime")))
 
 
 def _process_file_event(message):
     """A file indexer message (S3 event shape)."""
-    s3_info = message.get("s3")
-    if not s3_info:
+    s3_record = message if message.get("s3") else None
+    if s3_record is None:
         records = message.get("Records", [])
         if records:
-            s3_info = records[0].get("s3")
+            s3_record = records[0]
+    s3_info = (s3_record or {}).get("s3")
     if not s3_info:
         logger.info("File event has no s3 data, skipping")
         return
@@ -117,12 +136,69 @@ def _process_file_event(message):
         logger.info("Could not extract an assetId from the object key")
         return
 
+    if object_change_source(s3_info, message) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
+        logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
+                    "skipping compliance evaluation")
+        return
+
     database_id = _resolve_database_for_asset(asset_id)
     if not database_id:
         logger.info(f"Could not resolve a databaseId for asset {asset_id}")
         return
 
-    _process_compliance_event(database_id, asset_id)
+    _process_compliance_event(database_id, asset_id,
+                              event_time=parse_event_time(s3_record.get("eventTime")))
+
+
+def object_change_source(s3_info, message):
+    """The `vams-changesource` object metadata of the object a file event names, read with a HEAD on
+    the event's object version; "" when the object carries none or cannot be read.
+
+    The file indexer message carries the S3 event record only, not the object's metadata, so the
+    provenance is read from the object itself. Event keys arrive form-encoded; the decoded key is
+    tried first and the raw key second, since a literal '+' in a key decodes to a space that names
+    no object. Unreadable is reported as unknown rather than as a workflow write, so a missing
+    permission or a deleted object leaves the evaluation to proceed."""
+    bucket = (s3_info.get("bucket") or {}).get("name") or message.get("ASSET_BUCKET_NAME", "")
+    raw_key = (s3_info.get("object") or {}).get("key", "")
+    version_id = (s3_info.get("object") or {}).get("versionId", "")
+    if not bucket or not raw_key:
+        return ""
+    decoded_key = urllib.parse.unquote_plus(raw_key)
+    candidates = [decoded_key] if decoded_key == raw_key else [decoded_key, raw_key]
+    for key in candidates:
+        head_kwargs = {"Bucket": bucket, "Key": key}
+        if version_id and version_id != "null":
+            head_kwargs["VersionId"] = version_id
+        try:
+            head = s3_client.head_object(**head_kwargs)
+        except Exception as e:
+            logger.info(f"Could not read the change provenance of an object under {bucket}: {e}")
+            continue
+        return (head.get("Metadata") or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY, "") or ""
+    return ""
+
+
+def parse_event_time(value):
+    """The instant an event reports as an aware UTC datetime, or None when it carries none.
+
+    Accepts the S3 event `eventTime` (ISO-8601 with a trailing Z), the DynamoDB stream
+    `ApproximateCreationDateTime` (epoch seconds, as a number or its string form) and the
+    evaluation store's `isoformat()` timestamps."""
+    if value is None or value == "":
+        return None
+    text = str(value).strip()
+    try:
+        return datetime.fromtimestamp(float(text), tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        pass
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _extract_asset_id_from_key(object_key, prefix):
@@ -162,8 +238,12 @@ def _database_item(database_id):
     return database_table.get_item(Key={"databaseId": database_id}).get("Item")
 
 
-def _process_compliance_event(database_id, asset_id):
-    """Evaluate an asset when its database has auto-evaluation on and it has a bound schema."""
+def _process_compliance_event(database_id, asset_id, event_time=None):
+    """Evaluate an asset when its database has auto-evaluation on and it has a bound schema.
+
+    `event_time` is the instant of the change the event reports, when the event carries one. An
+    asset whose state row already points at an evaluation still awaiting its pipeline rules, begun at
+    or after that instant, is not evaluated again: the in-flight evaluation covers the change."""
     db_item = _database_item(database_id)
     if not db_item or db_item.get("complianceAutoEval") is not True:
         logger.info(f"Database {database_id} does not have complianceAutoEval enabled, skipping")
@@ -182,7 +262,35 @@ def _process_compliance_event(database_id, asset_id):
         logger.info(f"Asset {database_id}:{asset_id} has no schema assigned")
         return
 
+    if covered_by_pending_evaluation(compliance_record, event_time):
+        logger.info(f"Asset {database_id}:{asset_id} has evaluation "
+                    f"{compliance_record.get('lastEvaluationId')} awaiting its pipeline rules; "
+                    "the change is coalesced into it")
+        return
+
     trigger_evaluation(database_id, asset_id, schema_name)
+
+
+def covered_by_pending_evaluation(compliance_record, event_time):
+    """Whether the asset's state row points at an evaluation still `pending_pipeline` that began at or
+    after `event_time` — or at any such evaluation when the event carries no time.
+
+    The state row alone is not trusted: its `pending_evaluation` state is confirmed against the
+    evaluation row (consistent read), so a state row left behind by an evaluation that has since
+    completed does not suppress the next evaluation. An evaluation that began BEFORE the change may
+    not have seen it, so it does not cover the change and a new evaluation runs."""
+    if compliance_record.get("complianceState") != engine.STATE_PENDING_EVALUATION:
+        return False
+    evaluation_id = compliance_record.get("lastEvaluationId")
+    if not evaluation_id:
+        return False
+    evaluation = store.get_evaluation(evaluation_id, consistent_read=True) or {}
+    if evaluation.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        return False
+    if event_time is None:
+        return True
+    evaluated_at = parse_event_time(evaluation.get("evaluatedAt"))
+    return evaluated_at is not None and evaluated_at >= event_time
 
 
 def check_default_schema(database_id, asset_id, db_item=None):

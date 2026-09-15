@@ -18,7 +18,10 @@ Evaluation record (COMPLIANCE_EVALUATION_STORAGE_TABLE, PK `evaluationId`):
     actor, completedAt, errorMessage.
 Pipeline-execution tracking row (same table, one per started pipeline rule):
     evaluationId = "<parent evaluationId>#<ruleName>", recordType "pipelineExecution",
-    parentEvaluationId, pipelineRuleName, executionId (ExecutionIdIndex), status, ruleResults.
+    parentEvaluationId, pipelineRuleName, executionId (ExecutionIdIndex), status (pending |
+    completed), executionStatus, ruleResults, completedAt. The completion write is conditioned on
+    `status = pending`, which is what makes a redelivered completion event a no-op; the parent's
+    pipeline results are the aggregate of these rows.
     It carries no databaseId:assetId, so it stays out of the AssetIndex listing.
 Asset-state record (COMPLIANCE_ASSET_STATE_STORAGE_TABLE, PK databaseId, SK assetId):
     schemaName (SchemaNameIndex PK), schemaSource (database | asset), complianceState
@@ -244,11 +247,47 @@ def get_pipeline_item(database_id: str, pipeline_id: str) -> Optional[Dict[str, 
 
 # --- Writes ---
 
+# Placeholders a status condition adds beside the `#f<n>` / `:v<n>` aliases `to_update_expr`
+# generates. A boto3 `Attr(...)` condition object is not used for this: boto3 renders it with its own
+# `:v0` placeholder and merges that over the caller's ExpressionAttributeValues, which would replace
+# the first SET value of the update with the condition's value.
+_STATUS_CONDITION_NAME = "#cond_status"
+_STATUS_CONDITION_VALUE_PREFIX = ":cond_status"
 
-def update_item(table, key: Dict[str, Any], updates: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+
+def status_condition(*allowed_statuses: str, allow_absent: bool = False,
+                     ) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
+    """A `(ConditionExpression, names, values)` triple asserting the row's `status` is one of
+    `allowed_statuses` — or, with `allow_absent`, that the row carries no `status` yet."""
+    names = {_STATUS_CONDITION_NAME: "status"}
+    values = {f"{_STATUS_CONDITION_VALUE_PREFIX}{index}": status
+              for index, status in enumerate(allowed_statuses)}
+    clauses = [f"{_STATUS_CONDITION_NAME} = {placeholder}" for placeholder in values]
+    if allow_absent:
+        clauses.insert(0, f"attribute_not_exists({_STATUS_CONDITION_NAME})")
+    return " OR ".join(clauses), names, values
+
+
+def is_conditional_check_failure(error: Exception) -> bool:
+    """Whether a DynamoDB write error is a ConditionalCheckFailedException (the row no longer
+    satisfies the write's status condition), as opposed to a real failure that must surface."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        return (response.get("Error") or {}).get("Code", "") == "ConditionalCheckFailedException"
+    return False
+
+
+def update_item(table, key: Dict[str, Any], updates: Dict[str, Any], condition=None,
+                **kwargs) -> Dict[str, Any]:
     """SET the given attributes on one row (attribute names are aliased, so reserved words such
-    as `status` are safe)."""
+    as `status` are safe). `condition` is a `status_condition(...)` triple; its placeholders are
+    merged beside the update's own."""
     names, values, expression = to_update_expr(updates)
+    if condition is not None:
+        condition_expression, condition_names, condition_values = condition
+        names = {**names, **condition_names}
+        values = {**values, **condition_values}
+        kwargs["ConditionExpression"] = condition_expression
     return table.update_item(
         Key=key,
         UpdateExpression=expression,
@@ -258,9 +297,11 @@ def update_item(table, key: Dict[str, Any], updates: Dict[str, Any], **kwargs) -
     )
 
 
-def update_evaluation(evaluation_id: str, updates: Dict[str, Any], **kwargs) -> Dict[str, Any]:
-    """SET attributes on an evaluation (or tracking) row."""
-    return update_item(evaluation_table, {"evaluationId": evaluation_id}, updates, **kwargs)
+def update_evaluation(evaluation_id: str, updates: Dict[str, Any], condition=None,
+                      **kwargs) -> Dict[str, Any]:
+    """SET attributes on an evaluation (or tracking) row, optionally under a status condition."""
+    return update_item(evaluation_table, {"evaluationId": evaluation_id}, updates,
+                       condition=condition, **kwargs)
 
 
 def update_asset_state(database_id: str, asset_id: str, updates: Dict[str, Any]) -> None:
@@ -312,7 +353,9 @@ def build_execute_workflow_request(rule: PipelineRule, database_id: str, asset_i
                                    execution_group_id: str = "") -> Dict[str, Any]:
     """The `ExecuteWorkflowRequestV2Model` body for one pipeline rule: the whole asset as the
     single input file, the rule's template (and its inputParameters as template tags) keyed by
-    the pipeline id, and a manual trigger."""
+    the pipeline id, and a manual trigger. `execution_group_id` is the evaluation id, so every
+    execution the evaluation launches shares one group and its audit entry and completion event
+    name the evaluation they belong to."""
     ref = rule.pipelineRef
     parameters: Dict[str, Any] = {}
     if ref.templateId:
@@ -412,7 +455,8 @@ def start_pipeline_rule_executions(
             else:
                 execution_id = invoke_execute_workflow(
                     ref.databaseId, ref.workflowId,
-                    build_execute_workflow_request(rule, database_id, asset_id))
+                    build_execute_workflow_request(rule, database_id, asset_id,
+                                                   execution_group_id=evaluation_id))
         except Exception as e:
             logger.exception(f"Failed launching the workflow for pipeline rule '{rule_name}': {e}")
 
@@ -625,9 +669,11 @@ def find_evaluation_rows_by_execution_id(execution_id: str) -> List[Dict[str, An
     )
 
 
-def get_evaluation(evaluation_id: str) -> Optional[Dict[str, Any]]:
-    """One evaluation-table row, or None."""
-    return evaluation_table.get_item(Key={"evaluationId": evaluation_id}).get("Item")
+def get_evaluation(evaluation_id: str, consistent_read: bool = False) -> Optional[Dict[str, Any]]:
+    """One evaluation-table row, or None. `consistent_read` reads the row as of the write that
+    preceded the call rather than an eventually-consistent replica."""
+    return evaluation_table.get_item(
+        Key={"evaluationId": evaluation_id}, ConsistentRead=consistent_read).get("Item")
 
 
 def resolve_pipeline_execution(execution_id: str) -> Optional[Tuple[Dict[str, Any], str]]:
@@ -638,7 +684,9 @@ def resolve_pipeline_execution(execution_id: str) -> Optional[Tuple[Dict[str, An
         return None
     tracking = next((r for r in rows if r.get("recordType") == PIPELINE_EXECUTION_RECORD_TYPE), None)
     if tracking is not None:
-        parent = get_evaluation(tracking["parentEvaluationId"])
+        # A sibling rule's callback may have written the parent moments ago; the consistent read
+        # sees it, so a finalized evaluation is recognized before any work is done for it.
+        parent = get_evaluation(tracking["parentEvaluationId"], consistent_read=True)
         rule_name = tracking.get("pipelineRuleName", "")
     else:
         parent = rows[0]
@@ -660,6 +708,17 @@ def complete_pipeline_rule(
     started pipeline rule has reported, finalize the evaluation's verdict, the asset state and
     the audit trail.
 
+    Idempotent under at-least-once delivery and safe under concurrent completions:
+
+      - the rule's outcome lands on its tracking row under a `status = pending` condition, so a
+        redelivered completion event finds the row completed and records nothing twice;
+      - the evaluation's pipeline results are aggregated from the tracking rows, read consistently
+        after this rule's write, rather than from the caller's snapshot of the parent record — the
+        callback whose tracking write was the last to land therefore sees every sibling completed;
+      - the progress write and the finalize write both carry a `status = pending_pipeline`
+        condition, so two callbacks that each see the other completed finalize exactly once, and a
+        late progress write cannot overwrite a finalized evaluation with a partial result set.
+
     Returns `{evaluationId, ruleName, finalized, verdict?, complianceState?}`.
     """
     evaluation_id = evaluation["evaluationId"]
@@ -667,50 +726,64 @@ def complete_pipeline_rule(
     rule = pending_rules.get(rule_name)
     if rule is None:
         logger.warning(f"Evaluation {evaluation_id} holds no pending pipeline rule '{rule_name}'")
-        return {"evaluationId": evaluation_id, "ruleName": rule_name, "finalized": False}
+        return _not_finalized(evaluation_id, rule_name)
 
     rule_results = engine.evaluate_pipeline_rules(
         {rule_name: rule}, execution_status, compliance_output, started_at, completed_at)
     finished_at = now_iso()
 
-    update_evaluation(pipeline_execution_record_id(evaluation_id, rule_name), {
-        "status": PIPELINE_EXECUTION_COMPLETED,
-        "executionStatus": execution_status,
-        "ruleResults": json.dumps([r.dict() for r in rule_results]),
-        "completedAt": finished_at,
-    })
+    try:
+        update_evaluation(pipeline_execution_record_id(evaluation_id, rule_name), {
+            "status": PIPELINE_EXECUTION_COMPLETED,
+            "executionStatus": execution_status,
+            "ruleResults": json.dumps([r.dict() for r in rule_results]),
+            "completedAt": finished_at,
+        }, condition=status_condition(PIPELINE_EXECUTION_PENDING, allow_absent=True))
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        logger.info(f"Evaluation {evaluation_id} rule '{rule_name}' was already recorded; "
+                    "the redelivered completion is ignored")
+        return _not_finalized(evaluation_id, rule_name)
 
-    executions = list(evaluation.get("pipelineExecutions") or [])
-    for entry in executions:
-        if entry.get("ruleName") == rule_name:
-            entry["status"] = PIPELINE_EXECUTION_COMPLETED
-    all_results = engine.rule_results_from_json(evaluation.get("ruleResults", "[]")) + rule_results
-
-    outstanding = [
-        entry for entry in executions
-        if entry.get("ruleName") != rule_name and not _tracking_row_completed(evaluation_id, entry)
+    executions, pipeline_results, outstanding = _aggregate_tracking_rows(
+        evaluation_id, evaluation.get("pipelineExecutions") or [])
+    started_rule_names = {entry.get("ruleName") for entry in executions}
+    base_results = [
+        result for result in engine.rule_results_from_json(evaluation.get("ruleResults", "[]"))
+        if result.ruleName not in started_rule_names
     ]
+    all_results = base_results + pipeline_results
+    progress = {
+        "pipelineExecutions": executions,
+        "ruleResults": json.dumps([r.dict() for r in all_results]),
+    }
+
     if outstanding:
-        update_evaluation(evaluation_id, {
-            "pipelineExecutions": executions,
-            "ruleResults": json.dumps([r.dict() for r in all_results]),
-        })
-        return {"evaluationId": evaluation_id, "ruleName": rule_name, "finalized": False}
+        try:
+            update_evaluation(evaluation_id, progress,
+                              condition=status_condition(engine.EVALUATION_STATUS_PENDING_PIPELINE))
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+            logger.info(f"Evaluation {evaluation_id} was finalized by another callback")
+        return _not_finalized(evaluation_id, rule_name)
 
     verdict = determine_verdict(all_results)
     compliance_state = engine.verdict_to_state(verdict)
     try:
         update_evaluation(evaluation_id, {
-            "pipelineExecutions": executions,
-            "ruleResults": json.dumps([r.dict() for r in all_results]),
+            **progress,
             "status": engine.EVALUATION_STATUS_COMPLETED,
             "verdict": verdict.value,
             "violations": engine.violations(all_results),
             "completedAt": finished_at,
-        }, ConditionExpression=Attr("status").eq(engine.EVALUATION_STATUS_PENDING_PIPELINE))
-    except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+        }, condition=status_condition(engine.EVALUATION_STATUS_PENDING_PIPELINE))
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
         logger.info(f"Evaluation {evaluation_id} was finalized by another callback")
-        return {"evaluationId": evaluation_id, "ruleName": rule_name, "finalized": False}
+        return _not_finalized(evaluation_id, rule_name)
 
     database_id = evaluation["databaseId"]
     asset_id = evaluation["assetId"]
@@ -749,7 +822,27 @@ def complete_pipeline_rule(
     }
 
 
-def _tracking_row_completed(evaluation_id: str, entry: Dict[str, Any]) -> bool:
-    """Whether another pipeline rule's tracking row has already reported."""
-    row = get_evaluation(pipeline_execution_record_id(evaluation_id, entry.get("ruleName", "")))
-    return bool(row) and row.get("status") == PIPELINE_EXECUTION_COMPLETED
+def _not_finalized(evaluation_id: str, rule_name: str) -> Dict[str, Any]:
+    return {"evaluationId": evaluation_id, "ruleName": rule_name, "finalized": False}
+
+
+def _aggregate_tracking_rows(
+    evaluation_id: str, started: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[RuleResult], List[str]]:
+    """Read every started pipeline rule's tracking row with a consistent read and fold them into
+    `(pipelineExecutions entries with their current status, the completed rules' results in
+    start order, the names of the rules still outstanding)`."""
+    executions: List[Dict[str, Any]] = []
+    results: List[RuleResult] = []
+    outstanding: List[str] = []
+    for entry in started:
+        rule_name = entry.get("ruleName", "")
+        row = get_evaluation(pipeline_execution_record_id(evaluation_id, rule_name),
+                             consistent_read=True) or {}
+        status = row.get("status") or PIPELINE_EXECUTION_PENDING
+        executions.append({**entry, "status": status})
+        if status == PIPELINE_EXECUTION_COMPLETED:
+            results.extend(engine.rule_results_from_json(row.get("ruleResults", "[]")))
+        else:
+            outstanding.append(rule_name)
+    return executions, results, outstanding

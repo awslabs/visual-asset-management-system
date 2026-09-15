@@ -115,26 +115,14 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table)
 def emit_workflow_execution_completed(workflow_execution_id, workflow_database_id, workflow_id,
                                       execution_status, started_at, completed_at,
                                       execution_group_id=""):
-    """Best-effort `workflow.execution.completed` event on the orchestration bus once the main
-    execution row holds its terminal status. Skipped (logged) when no bus is configured; a publish
-    failure is logged and never fails the terminal-status write that precedes it."""
-    if not orchestration_bus_arn:
-        logger.info("No orchestration bus configured; workflow completion event skipped")
-        return
-    try:
-        events_client.put_events(Entries=[er.workflow_execution_completed_event(
-            event_bus_arn=orchestration_bus_arn,
-            event_source_prefix=orchestration_event_source_prefix,
-            execution_id=workflow_execution_id,
-            workflow_database_id=workflow_database_id,
-            workflow_id=workflow_id,
-            status=execution_status,
-            started_at=started_at,
-            completed_at=completed_at,
-            execution_group_id=execution_group_id,
-        )])
-    except Exception as e:
-        logger.exception(f"Failed publishing workflow completion event for {workflow_execution_id}: {e}")
+    """This lambda's `workflow.execution.completed` announcement: the shared emitter bound to the
+    events client and bus configuration resolved at import. Best-effort — skipped (logged) when no
+    bus is configured, and a publish failure is logged rather than failing the terminal-status write
+    that precedes it."""
+    return eo.emit_workflow_execution_completed(
+        events_client, orchestration_bus_arn, orchestration_event_source_prefix,
+        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
+        started_at, completed_at, execution_group_id=execution_group_id)
 
 
 def _lambda_metadata_service(payload):
