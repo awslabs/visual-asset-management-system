@@ -602,6 +602,22 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         expect(actions.filter((a) => a.startsWith("states:"))).toEqual([]);
     });
 
+    test("the embedding function is granted read-write on the asset buckets, not read only", () => {
+        // generateEmbedding appends the content-chunk count row to the file's .metadata.json under the
+        // run's output prefix in the ASSET bucket, so a read-only asset-bucket grant fails every run of
+        // a text file with chunks at that PutObject. The write grant must name the asset bucket itself;
+        // the aux-bucket grant alone does not cover it.
+        const statements = statementsOf(lambdaOnly, "GenerateEmbedding");
+        const onAssetBucket = statements.filter((s) =>
+            JSON.stringify(s.Resource).includes("AssetBucket")
+        );
+        expect(onAssetBucket.length).toBeGreaterThan(0);
+        const assetActions = actionsOf(onAssetBucket);
+        expect(assetActions).toContain("s3:GetObject*");
+        expect(assetActions).toContain("s3:PutObject");
+        expect(assetActions).toContain("s3:DeleteObject*");
+    });
+
     test("with vector search off the segment function is granted the analysis model only", () => {
         const off = synth("SearchOff", (c) => {
             c.app.vectorSearch.enabled = false;

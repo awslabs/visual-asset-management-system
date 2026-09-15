@@ -415,7 +415,9 @@ export function buildGenerateEmbeddingFunction(
         },
     });
 
-    grantReadPermissionsToAllAssetBuckets(fun);
+    // Reads the analysis step's .metadata.json from the run's output prefix and appends the
+    // content-chunk count row to it, so the asset buckets are read-write like generateMetadata's.
+    grantReadWritePermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantReadWrite(fun);
     orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
