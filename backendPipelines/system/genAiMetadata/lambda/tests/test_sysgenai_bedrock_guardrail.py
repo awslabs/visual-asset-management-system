@@ -4,8 +4,9 @@
 """The shared guardrail helper both Converse callers of this pipeline use (generateMetadata and the media image's
 segment function, which carries a byte-identical copy): the configuration is read from the environment with a
 both-or-neither rule, the untrusted prompt parts (text and images) travel in guardContent blocks only when a
-guardrail is configured, an intervention is recognised by its stopReason, and its cause carries the reply and
-the filters of the trace but never the text a filter matched."""
+guardrail is configured, an intervention is a BLOCKED filter on either side of the trace (a stop reason without
+a trace counts as one; anonymized-only masking does not), the masked entity types are reported by type only, and
+an intervention's cause carries the reply and the filters of the trace but never the text a filter matched."""
 
 import json
 
@@ -17,6 +18,17 @@ gr = h.load_local("bedrockGuardrail")
 
 CONFIG = {"guardrailIdentifier": "gr", "guardrailVersion": "1", "trace": "enabled"}
 PNG = {"image": {"format": "png", "source": {"bytes": b"\x89PNG\r\n\x1a\n" + b"\x01" * 16}}}
+
+
+def _intervened(trace=None, text="Blocked."):
+    response = {"output": {"message": {"content": [{"text": text}]}}, "stopReason": "guardrail_intervened"}
+    if trace is not None:
+        response["trace"] = trace
+    return response
+
+
+def _assessment(**policies):
+    return {"guardrail": {"outputAssessments": {"gr": [dict(policies)]}}}
 
 
 @pytest.mark.unit
@@ -73,6 +85,76 @@ class TestBlocks:
         assert [block["guardContent"]["image"]["source"]["bytes"] for block in guarded] == [
             PNG["image"]["source"]["bytes"], second["image"]["source"]["bytes"]]
         assert gr.user_image_blocks([], CONFIG) == [] and gr.user_image_blocks([], None) == []
+
+
+@pytest.mark.unit
+class TestVerdict:
+    """Amazon Bedrock returns stopReason guardrail_intervened both when a filter blocks and when the
+    sensitive-information filter anonymizes; the trace decides which happened."""
+
+    def test_a_blocked_input_filter_is_an_intervention_with_a_cause(self):
+        response = _intervened({"guardrail": {"inputAssessment": {"gr": {"contentPolicy": {"filters": [
+            {"type": "PROMPT_ATTACK", "action": "BLOCKED", "confidence": "HIGH"}]}}}}})
+        assert gr.intervened(response) is True
+        assert gr.masked_entity_types(response) == []
+        cause = gr.guardrail_cause(response)
+        assert cause.startswith("guardrail intervened: Blocked.")
+        assert json.loads(cause[len("guardrail intervened: Blocked. "):]) == {
+            "input": [{"policy": "contentPolicy", "type": "PROMPT_ATTACK", "action": "BLOCKED", "confidence": "HIGH"}]}
+
+    def test_an_anonymized_only_output_is_a_masked_success(self):
+        """The message is the complete answer with {NAME}/{ADDRESS} tokens in place of the entities; the caller
+        uses it as any other reply and records the masked types, never the matched values."""
+        response = _intervened(_assessment(sensitiveInformationPolicy={"piiEntities": [
+            {"match": "Jane Q. Public", "type": "NAME", "action": "ANONYMIZED", "detected": True},
+            {"match": "John Public", "type": "NAME", "action": "ANONYMIZED", "detected": True},
+            {"match": "Bay 4", "type": "ADDRESS", "action": "ANONYMIZED", "detected": True}]}),
+            text='{"description": "Inspector {NAME} at Warehouse {ADDRESS} 4"}')
+        assert gr.intervened(response) is False
+        assert gr.masked_entity_types(response) == ["ADDRESS", "NAME"]
+        assert "Jane" not in json.dumps(gr.masked_entity_types(response))
+
+    def test_anonymized_on_the_input_side_is_a_masked_success_too(self):
+        response = _intervened({"guardrail": {"inputAssessment": {"gr": {"sensitiveInformationPolicy": {"piiEntities": [
+            {"match": "123-45-6789", "type": "US_SOCIAL_SECURITY_NUMBER", "action": "ANONYMIZED", "detected": True}],
+            "regexes": [{"name": "badge", "match": "B-12", "regex": r"B-\d+", "action": "ANONYMIZED", "detected": True}]}}}}})
+        assert gr.intervened(response) is False
+        assert gr.masked_entity_types(response) == ["US_SOCIAL_SECURITY_NUMBER"]
+
+    def test_a_blocked_filter_beside_anonymized_ones_is_an_intervention(self):
+        response = _intervened({"guardrail": {
+            "inputAssessment": {"gr": {"sensitiveInformationPolicy": {"piiEntities": [
+                {"match": "x@example.com", "type": "EMAIL", "action": "ANONYMIZED", "detected": True}]}}},
+            "outputAssessments": {"gr": [{"contentPolicy": {"filters": [
+                {"type": "PROMPT_ATTACK", "action": "BLOCKED", "confidence": "MEDIUM"}]}}]}}})
+        assert gr.intervened(response) is True
+        assert gr.masked_entity_types(response) == ["EMAIL"]
+        assert "BLOCKED" in gr.guardrail_cause(response) and "x@example.com" not in gr.guardrail_cause(response)
+
+    @pytest.mark.parametrize("trace", [None, {}, {"guardrail": {}},
+                                       {"guardrail": {"inputAssessment": {"gr": {"invocationMetrics": {"guardrailProcessingLatency": 3}}}}}])
+    def test_the_stop_reason_without_a_filter_entry_is_an_intervention(self, trace):
+        """Nothing says what the guardrail did, so the conservative reading holds."""
+        response = _intervened(trace)
+        assert gr.intervened(response) is True
+        assert gr.masked_entity_types(response) == []
+
+    def test_detect_only_entries_change_neither_verdict(self):
+        """A filter in detect mode reports action NONE and takes none: beside an anonymized entry the response is
+        still a masked success, alone with the stop reason it is still an intervention."""
+        beside = _intervened(_assessment(sensitiveInformationPolicy={"piiEntities": [
+            {"type": "PHONE", "action": "ANONYMIZED", "detected": True},
+            {"type": "NAME", "action": "NONE", "detected": True}]}))
+        assert gr.intervened(beside) is False and gr.masked_entity_types(beside) == ["PHONE"]
+        alone = _intervened(_assessment(sensitiveInformationPolicy={"piiEntities": [
+            {"type": "NAME", "action": "NONE", "detected": True}]}))
+        assert gr.intervened(alone) is True
+
+    def test_an_ordinary_reply_is_not_intervened(self):
+        response = {"output": {"message": {"content": [{"text": "{}"}]}}, "stopReason": "end_turn"}
+        assert gr.intervened(response) is False and gr.masked_entity_types(response) == []
+        assert gr.intervened({}) is False and gr.intervened(None) is False
+        assert gr.FILTER_ACTION_BLOCKED == "BLOCKED" and gr.FILTER_ACTION_ANONYMIZED == "ANONYMIZED"
 
 
 @pytest.mark.unit

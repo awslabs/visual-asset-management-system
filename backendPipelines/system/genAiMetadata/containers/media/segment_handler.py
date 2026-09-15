@@ -13,7 +13,9 @@ failure.
 
 When a Bedrock guardrail is configured (``BEDROCK_GUARDRAIL_IDENTIFIER`` and ``BEDROCK_GUARDRAIL_VERSION``, both
 or neither), every Converse call carries it and the parts of the prompt that come from the file and its metadata
-travel in a ``guardContent`` block so the guardrail's input filters evaluate them."""
+travel in a ``guardContent`` block so the guardrail's input filters evaluate them. A filter that blocks is the
+intervention above; a reply the sensitive-information filter only masked is a success whose description carries
+the filter's type tokens, and the window's record notes ``guardrailMasked`` with the masked entity types."""
 
 import datetime
 import hashlib
@@ -354,11 +356,12 @@ def parse_segment_json(text: str) -> dict:
     }
 
 
-def analyze_window(user_blocks: List[dict], image_blocks: List[dict]) -> Tuple[dict, dict]:
-    """``(result, usage)`` after at most MAX_ATTEMPTS Converse calls: a throttle backs off and retries, an
-    unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an exhausted attempt
-    budget raise SegmentAnalysisFailure. With a guardrail configured the frames travel in ``guardContent``
-    blocks, like the file-derived text."""
+def analyze_window(user_blocks: List[dict], image_blocks: List[dict]) -> Tuple[dict, dict, List[str]]:
+    """``(result, usage, masked_types)`` after at most MAX_ATTEMPTS Converse calls: a throttle backs off and
+    retries, an unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an exhausted
+    attempt budget raise SegmentAnalysisFailure. With a guardrail configured the frames travel in ``guardContent``
+    blocks, like the file-derived text. ``masked_types`` names the entity types the guardrail anonymized in the
+    prompt or the reply (empty when none): a masked reply is a complete answer and is parsed like any other."""
     content = list(user_blocks) + bedrockGuardrail.user_image_blocks(image_blocks, GUARDRAIL_CONFIG)
     request = {
         "modelId": BEDROCK_ANALYSIS_MODEL_ID,
@@ -381,10 +384,11 @@ def analyze_window(user_blocks: List[dict], image_blocks: List[dict]) -> Tuple[d
             raise SegmentAnalysisFailure(str(exc))
         if bedrockGuardrail.intervened(response):
             raise SegmentAnalysisFailure(bedrockGuardrail.guardrail_cause(response), ERROR_BEDROCK_GUARDRAIL_INTERVENED)
+        masked_types = bedrockGuardrail.masked_entity_types(response)
         message = ((response.get("output") or {}).get("message") or {})
         text = "".join(block.get("text", "") for block in (message.get("content") or []))
         try:
-            return parse_segment_json(text), response.get("usage") or {}
+            return parse_segment_json(text), response.get("usage") or {}, masked_types
         except ModelResponseError as exc:
             last_parse_error = exc
             logger.warning(f"Attempt {attempt}: {exc}")
@@ -519,7 +523,7 @@ def lambda_handler(event, context):
 
     user_blocks = build_user_blocks(asset_name, phrase, relative_path, label, duration_seconds, genai, len(image_blocks))
     try:
-        result, usage = analyze_window(user_blocks, image_blocks)
+        result, usage, masked_types = analyze_window(user_blocks, image_blocks)
         source_text, modalities = compose_source_text(asset_name, phrase, relative_path, segment_sentence, result, genai)
         prepared = embeddings.truncate_for_model(source_text, EMBEDDING_MODEL_ID)
         vector = embeddings.round_vector(embeddings.embed_text(
@@ -581,8 +585,13 @@ def lambda_handler(event, context):
         "objects": result["objects"], "actions": result["actions"], "textSeen": result["textSeen"],
         "analysisModelId": BEDROCK_ANALYSIS_MODEL_ID, "usage": {"inputTokens": int(usage.get("inputTokens", 0) or 0),
                                                                 "outputTokens": int(usage.get("outputTokens", 0) or 0)},
+        # The sensitive-information filter's masking, types only; the description carries its type tokens.
+        "guardrailMasked": bool(masked_types), "guardrailMaskedTypes": masked_types,
         "generatedAt": generated_at, "documentS3Location": document_uri,
     })
+    if masked_types:
+        logger.info({"message": "Guardrail masked entities in the window analysis", "segmentKey": segment_key,
+                     "maskedTypes": masked_types})
     logger.info({"message": "Segment analyzed", "segmentKey": segment_key, "documentS3Location": document_uri,
                  "frames": len(image_blocks)})
     return {"segmentKey": segment_key, "status": STATUS_SUCCEEDED, "documentS3Location": document_uri}

@@ -359,6 +359,65 @@ class TestGuardrail:
             assert all(leaked not in cause for cause in recorded), leaked
             assert leaked not in logged, leaked
 
+    def test_an_anonymized_only_reply_is_a_masked_success(self, monkeypatch):
+        """Bedrock returns stopReason guardrail_intervened when the sensitive-information filter masks the reply;
+        the message is the complete answer with the filter's type tokens. The window is analysed, embedded and
+        published like any other, and its record notes the masked types — never the matched values."""
+        s3 = _seed(FakeS3())
+        events = FakeEvents()
+        masked = _reply(description="{NAME} inspects a red hat at Warehouse {ADDRESS} 4.", textSeen="{EMAIL}")
+        masked["stopReason"] = "guardrail_intervened"
+        masked["trace"] = {"guardrail": {"outputAssessments": {"gr-abc123": [{"sensitiveInformationPolicy": {"piiEntities": [
+            {"match": "Jane Q. Public", "type": "NAME", "action": "ANONYMIZED", "detected": True},
+            {"match": "Bay 4", "type": "ADDRESS", "action": "ANONYMIZED", "detected": True},
+            {"match": "jane@example.com", "type": "EMAIL", "action": "ANONYMIZED", "detected": True}]}}]}}}
+        module = _load(monkeypatch, s3, FakeBedrockRuntime([masked]), events, env=GUARDRAIL_ENV)
+        response = _run(module)
+        assert response["status"] == "SUCCEEDED" and "error" not in response
+        assert (_RUN, _RESULTS + "execution.status.json") not in s3.objects
+        assert (_RUN, _RESULTS + "segments/t0000010000.failed.json") not in s3.objects
+        assert len(events.entries) == 1 and len(_embedding_puts(s3)) == 1
+        _key, document = _document(s3)
+        assert "{NAME} inspects a red hat at Warehouse {ADDRESS} 4." in document["sourceText"]
+        record = json.loads(s3.objects[(_RUN, _RESULTS + "segments/t0000010000.json")])
+        assert record["description"] == "{NAME} inspects a red hat at Warehouse {ADDRESS} 4."
+        assert record["guardrailMasked"] is True and record["guardrailMaskedTypes"] == ["ADDRESS", "EMAIL", "NAME"]
+        written = json.dumps([record, document, events.entries])
+        logged = " ".join(str(call) for call in module.logger.info.call_args_list + module.logger.error.call_args_list)
+        for leaked in ("Jane", "Bay 4", "jane@example.com"):
+            assert leaked not in written and leaked not in logged, leaked
+        module.logger.error.assert_not_called()
+
+    def test_a_blocked_filter_beside_anonymized_ones_is_still_an_intervention(self, monkeypatch):
+        s3 = _seed(FakeS3())
+        mixed = converse_response("Blocked by the guardrail.", stop_reason="guardrail_intervened",
+                                  trace={"guardrail": {
+                                      "inputAssessment": {"gr-abc123": {"sensitiveInformationPolicy": {"piiEntities": [
+                                          {"match": "x@example.com", "type": "EMAIL", "action": "ANONYMIZED", "detected": True}]}}},
+                                      "outputAssessments": {"gr-abc123": [{"contentPolicy": {"filters": [
+                                          {"type": "PROMPT_ATTACK", "confidence": "HIGH", "action": "BLOCKED"}]}}]}}})
+        module = _load(monkeypatch, s3, FakeBedrockRuntime([mixed]), FakeEvents(), env=GUARDRAIL_ENV)
+        response = _run(module)
+        assert response["status"] == "FAILED" and response["error"] == "BedrockGuardrailIntervened"
+        assert "BLOCKED" in _status(s3)["cause"] and "x@example.com" not in _status(s3)["cause"]
+        module.embeddings.embed_text.assert_not_called()
+
+    def test_the_stop_reason_without_a_trace_is_an_intervention(self, monkeypatch):
+        s3 = _seed(FakeS3())
+        response = _reply()
+        response["stopReason"] = "guardrail_intervened"
+        module = _load(monkeypatch, s3, FakeBedrockRuntime([response]), FakeEvents(), env=GUARDRAIL_ENV)
+        result = _run(module)
+        assert result["status"] == "FAILED" and result["error"] == "BedrockGuardrailIntervened"
+        module.embeddings.embed_text.assert_not_called()
+
+    def test_an_ordinary_reply_records_no_masking(self, monkeypatch):
+        s3 = _seed(FakeS3())
+        module = _load(monkeypatch, s3, FakeBedrockRuntime([_reply()]), FakeEvents(), env=GUARDRAIL_ENV)
+        assert _run(module)["status"] == "SUCCEEDED"
+        record = json.loads(s3.objects[(_RUN, _RESULTS + "segments/t0000010000.json")])
+        assert record["guardrailMasked"] is False and record["guardrailMaskedTypes"] == []
+
     @pytest.mark.parametrize("env", [{"BEDROCK_GUARDRAIL_IDENTIFIER": "gr-abc123", "BEDROCK_GUARDRAIL_VERSION": ""},
                                      {"BEDROCK_GUARDRAIL_IDENTIFIER": "", "BEDROCK_GUARDRAIL_VERSION": "DRAFT"}])
     def test_one_guardrail_variable_without_the_other_is_a_configuration_error(self, monkeypatch, env):

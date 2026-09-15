@@ -4,7 +4,8 @@
 """The Bedrock guardrail every Converse call of this pipeline applies: its configuration from the environment
 (``BEDROCK_GUARDRAIL_IDENTIFIER`` and ``BEDROCK_GUARDRAIL_VERSION``, both or neither), the ``guardContent``
 blocks that carry the untrusted parts of a prompt (text and images) so the guardrail's input filters evaluate
-them, and the account of an intervention that the caught failure records.
+them, the verdict on a response — blocked (an intervention the caught failure records) or masked (a success
+whose text carries the sensitive-information filter's mask tokens) — and the account of an intervention.
 
 The media branch image carries a byte-identical copy of this module (a container build context cannot reach
 ``lambda/``), so it imports only the standard library.
@@ -15,8 +16,14 @@ from typing import List, Optional
 
 GUARDRAIL_IDENTIFIER_VAR = "BEDROCK_GUARDRAIL_IDENTIFIER"
 GUARDRAIL_VERSION_VAR = "BEDROCK_GUARDRAIL_VERSION"
-# The stopReason a Converse response carries when the guardrail blocked the input or the output.
+# The stopReason a Converse response carries when the guardrail acted on the input or the output: a filter
+# BLOCKED the call, or the sensitive-information filter ANONYMIZED text. In the second case the message is the
+# complete answer with the matched entities replaced by their type tokens ({NAME}, {ADDRESS}, ...). The trace
+# tells the two apart; the stop reason alone does not.
 GUARDRAIL_STOP_REASON = "guardrail_intervened"
+# The actions a filter entry of the trace reports.
+FILTER_ACTION_BLOCKED = "BLOCKED"
+FILTER_ACTION_ANONYMIZED = "ANONYMIZED"
 GUARD_CONTENT_QUALIFIERS = ["guard_content"]
 # The one cold-start line a caller logs when no guardrail is configured: the Converse calls of that process run
 # without prompt-attack filters, and this line is the operator's signal of it.
@@ -88,8 +95,31 @@ def user_image_blocks(images: List[dict], guardrail_config: Optional[dict]) -> L
     return [guard_image_block(image) for image in images]
 
 
+def _filter_entries(response: dict) -> List[dict]:
+    """Every filter summary of the response's trace, input and output sides together."""
+    summary = assessment_summary((response or {}).get("trace"))
+    return [entry for side in summary.values() for entry in side]
+
+
 def intervened(response: dict) -> bool:
-    return (response or {}).get("stopReason") == GUARDRAIL_STOP_REASON
+    """Whether the guardrail blocked the call. The stop reason is necessary but not sufficient: a response
+    whose filters carry a BLOCKED action on either side is an intervention; one whose filters carry ANONYMIZED
+    actions and no BLOCKED one is a masked success, and its message is used as any other answer; the stop reason
+    with no trace or no filter entries — nothing to say what the guardrail did — is an intervention."""
+    if (response or {}).get("stopReason") != GUARDRAIL_STOP_REASON:
+        return False
+    actions = [entry.get("action") for entry in _filter_entries(response)]
+    if not actions or FILTER_ACTION_BLOCKED in actions:
+        return True
+    return FILTER_ACTION_ANONYMIZED not in actions
+
+
+def masked_entity_types(response: dict) -> List[str]:
+    """The distinct types of the filters that anonymized text on either side, sorted; empty when nothing was
+    masked. Types only — the ``match`` text a filter replaced is the sensitive value itself."""
+    types = {str(entry.get("type") or "") for entry in _filter_entries(response)
+             if entry.get("action") == FILTER_ACTION_ANONYMIZED}
+    return sorted(item for item in types if item)
 
 
 def _filter_summaries(assessment: dict) -> List[dict]:

@@ -652,6 +652,75 @@ class TestGuardrail:
         summary = s3.json_at("abkt", SUMMARY_KEY)
         assert summary["status"] == "FAILED" and summary["error"] == "BedrockGuardrailIntervened"
         assert summary["metadataFile"] == f"s3://abkt/{METADATA_FILE_KEY}" and summary["promotedFieldCount"] == 11
+        assert summary["guardrailMasked"] is False and summary["guardrailMaskedTypes"] == []
+
+    def test_an_anonymized_only_reply_is_a_masked_success(self):
+        """Bedrock returns stopReason guardrail_intervened when the sensitive-information filter masks the reply;
+        the message is the complete answer with the filter's type tokens. The genai_* rows carry that text, the
+        run succeeds, and the summary records the masked types — never the matched values."""
+        s3 = _seed(h.FakeS3())
+        masked = _reply(title="Inspection report", description="Inspector {NAME} reviewed the pump at Warehouse {ADDRESS} 4.",
+                        textSummary="Reviewed by {NAME}; contact {EMAIL}.")
+        masked["stopReason"] = "guardrail_intervened"
+        masked["trace"] = {"guardrail": {"outputAssessments": {"gr-abc123": [{"sensitiveInformationPolicy": {"piiEntities": [
+            {"match": "Jane Q. Public", "type": "NAME", "action": "ANONYMIZED", "detected": True},
+            {"match": "John Public", "type": "NAME", "action": "ANONYMIZED", "detected": True},
+            {"match": "Bay 4", "type": "ADDRESS", "action": "ANONYMIZED", "detected": True},
+            {"match": "jane@example.com", "type": "EMAIL", "action": "ANONYMIZED", "detected": True}]}}]}}}
+        bedrock = h.FakeBedrock([masked])
+        mod, state = _run(_state(), s3, bedrock, env=GUARDRAIL_ENV)
+        assert len(bedrock.calls) == 1
+        assert state["analysisStatus"] == "SUCCEEDED"
+        assert ("abkt", STATUS_KEY) not in s3.objects
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert rows["genai_description"]["metadataValue"] == "Inspector {NAME} reviewed the pump at Warehouse {ADDRESS} 4."
+        assert rows["genai_text_summary"]["metadataValue"] == "Reviewed by {NAME}; contact {EMAIL}."
+        assert rows["genai_title"]["metadataValue"] == "Inspection report"
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["status"] == "SUCCEEDED" and summary["error"] is None
+        assert summary["guardrailMasked"] is True
+        assert summary["guardrailMaskedTypes"] == ["ADDRESS", "EMAIL", "NAME"]
+        assert summary["usage"] == {"inputTokens": 100, "outputTokens": 50}
+        written = json.dumps([s3.json_at("abkt", SUMMARY_KEY), s3.json_at("abkt", METADATA_FILE_KEY)])
+        logged = " ".join(str(call) for call in mod.logger.info.call_args_list + mod.logger.error.call_args_list)
+        for leaked in ("Jane", "John Public", "Bay 4", "jane@example.com"):
+            assert leaked not in written and leaked not in logged, leaked
+        assert any("Guardrail masked ADDRESS, EMAIL, NAME" in str(call) for call in mod.logger.info.call_args_list)
+        mod.logger.error.assert_not_called()
+
+    def test_a_blocked_filter_beside_anonymized_ones_is_still_an_intervention(self):
+        s3 = _seed(h.FakeS3())
+        response = {"output": {"message": {"role": "assistant", "content": [{"text": "Blocked by the guardrail."}]}},
+                    "stopReason": "guardrail_intervened",
+                    "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+                    "trace": {"guardrail": {
+                        "inputAssessment": {"gr-abc123": {"sensitiveInformationPolicy": {"piiEntities": [
+                            {"match": "x@example.com", "type": "EMAIL", "action": "ANONYMIZED", "detected": True}]}}},
+                        "outputAssessments": {"gr-abc123": [{"contentPolicy": {"filters": [
+                            {"type": "PROMPT_ATTACK", "confidence": "HIGH", "action": "BLOCKED"}]}}]}}}}
+        _mod, state = _run(_state(), s3, h.FakeBedrock([response]), env=GUARDRAIL_ENV)
+        assert state["analysisStatus"] == "FAILED"
+        status = s3.json_at("abkt", STATUS_KEY)
+        assert status["error"] == "BedrockGuardrailIntervened"
+        assert "BLOCKED" in status["cause"] and "ANONYMIZED" in status["cause"] and "x@example.com" not in status["cause"]
+        assert _keys(s3, METADATA_FILE_KEY) == MESH_EXT_KEYS
+
+    def test_the_stop_reason_without_a_trace_is_an_intervention(self):
+        """With nothing to say what the guardrail did, the reply is not trusted as an answer."""
+        s3 = _seed(h.FakeS3())
+        response = _reply()
+        response["stopReason"] = "guardrail_intervened"
+        _mod, state = _run(_state(), s3, h.FakeBedrock([response]), env=GUARDRAIL_ENV)
+        assert state["analysisStatus"] == "FAILED"
+        assert s3.json_at("abkt", STATUS_KEY)["error"] == "BedrockGuardrailIntervened"
+        assert _keys(s3, METADATA_FILE_KEY) == MESH_EXT_KEYS
+
+    def test_an_ordinary_reply_records_no_masking(self):
+        s3 = _seed(h.FakeS3())
+        _mod, state = _run(_state(), s3, h.FakeBedrock([_reply()]), env=GUARDRAIL_ENV)
+        assert state["analysisStatus"] == "SUCCEEDED"
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["guardrailMasked"] is False and summary["guardrailMaskedTypes"] == []
 
     @pytest.mark.parametrize("env", [{"BEDROCK_GUARDRAIL_IDENTIFIER": "gr-abc123", "BEDROCK_GUARDRAIL_VERSION": ""},
                                      {"BEDROCK_GUARDRAIL_IDENTIFIER": "", "BEDROCK_GUARDRAIL_VERSION": "DRAFT"}])
@@ -772,6 +841,7 @@ class TestMetadataOutput:
         assert summary["analysisModelId"] == h.DEFAULT_ENV["BEDROCK_ANALYSIS_MODEL_ID"]
         assert (summary["fileClass"], summary["renderBranch"], summary["renderSkipped"]) == ("mesh", "BLENDER", None)
         assert summary["usage"] == {"inputTokens": 100, "outputTokens": 50}
+        assert summary["guardrailMasked"] is False and summary["guardrailMaskedTypes"] == []
         assert summary["imagesSent"] == 2
         assert summary["vocabularyCorrections"] == [
             "category: 'industrial equipment' -> 'Industrial Equipment'", "subcategory: 'pump' -> 'Pump'",

@@ -20,7 +20,10 @@ always together), every Converse call carries it and the parts of the prompt tha
 its metadata — the asset's name, description and tags, the file identity and attributes, the existing
 metadata and the text excerpt — travel in a ``guardContent`` block so the guardrail's input filters
 evaluate them; the instruction, the vocabulary and the render note stay in a plain text block. A
-guardrail intervention is a caught failure recorded as ``BedrockGuardrailIntervened``.
+guardrail intervention — a filter that blocked the prompt or the response — is a caught failure recorded as
+``BedrockGuardrailIntervened``. A response the sensitive-information filter only masked is a success: its
+text, with the filter's type tokens in place of the entities, is parsed as any other answer, and the
+analysis summary records ``guardrailMasked`` with the masked entity types.
 """
 
 import datetime
@@ -388,10 +391,12 @@ def parse_model_json(text):
 
 
 def analyze(user_blocks, image_blocks):
-    """``(result, usage)`` after at most MAX_ATTEMPTS Converse calls. A throttle backs off and
+    """``(result, usage, masked_types)`` after at most MAX_ATTEMPTS Converse calls. A throttle backs off and
     retries, an unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an
     exhausted attempt budget are a BedrockAnalysisFailure the caller records. With a guardrail configured the
-    images travel in ``guardContent`` blocks, like the file-derived text."""
+    images travel in ``guardContent`` blocks, like the file-derived text. ``masked_types`` names the entity
+    types the guardrail anonymized in the prompt or the reply (empty when none): a masked reply is a complete
+    answer and is parsed like any other."""
     content = list(user_blocks) + bedrockGuardrail.user_image_blocks(image_blocks, GUARDRAIL_CONFIG)
     request = {
         "modelId": BEDROCK_ANALYSIS_MODEL_ID,
@@ -415,11 +420,12 @@ def analyze(user_blocks, image_blocks):
         if bedrockGuardrail.intervened(response):
             raise BedrockAnalysisFailure(common.ERROR_BEDROCK_GUARDRAIL_INTERVENED,
                                          bedrockGuardrail.guardrail_cause(response))
+        masked_types = bedrockGuardrail.masked_entity_types(response)
         message = ((response.get("output") or {}).get("message") or {})
         text = "".join(block.get("text", "") for block in (message.get("content") or []))
         usage = response.get("usage") or {}
         try:
-            return parse_model_json(text), usage
+            return parse_model_json(text), usage, masked_types
         except ModelResponseError as e:
             last_parse_error = e
             logger.warning(f"Attempt {attempt}: {e}")
@@ -593,6 +599,10 @@ def lambda_handler(event, context):
         "renderSkipped": manifest.get("renderSkipped"),
         "imagesSent": len(image_blocks),
         "usage": {},
+        # Whether the guardrail's sensitive-information filter masked entities in the prompt or the reply, and
+        # the types it masked (never the values); the genai_* rows then carry the filter's type tokens.
+        "guardrailMasked": False,
+        "guardrailMaskedTypes": [],
         "sourceModalities": modalities,
         "warnings": warnings,
         "vocabularyCorrections": [],
@@ -608,7 +618,7 @@ def lambda_handler(event, context):
                                      vocabulary.vocabulary_prompt_parts(vocab), prompt_existing,
                                      text_excerpt, len(image_blocks), guarded=GUARDRAIL_CONFIG is not None)
     try:
-        result, usage = analyze(user_blocks, image_blocks)
+        result, usage, masked_types = analyze(user_blocks, image_blocks)
         result, corrections = vocabulary.validate_against_vocabulary(result, vocab)
         common.write_json(s3_client, metadata_uri,
                           metadata_file_body(promoted, location_row,
@@ -623,10 +633,14 @@ def lambda_handler(event, context):
                                     [result["category"]] if result["category"] else []))
         summary["usage"] = {"inputTokens": int(usage.get("inputTokens", 0) or 0),
                             "outputTokens": int(usage.get("outputTokens", 0) or 0)}
+        summary["guardrailMasked"] = bool(masked_types)
+        summary["guardrailMaskedTypes"] = masked_types
         summary["vocabularyCorrections"] = corrections
         summary["status"] = common.STATUS_SUCCEEDED
         summary["metadataFile"] = metadata_uri
         event["analysisStatus"] = common.STATUS_SUCCEEDED
+        if masked_types:
+            logger.info(f"Guardrail masked {', '.join(masked_types)}; the analysis carries the mask tokens")
         logger.info(f"Metadata written: {metadata_uri} ({promoted_count} promoted, {len(corrections)} corrections)")
     except BedrockAnalysisFailure as failure:
         logger.error(f"Bedrock analysis failed ({failure.code}): {failure.cause}")
