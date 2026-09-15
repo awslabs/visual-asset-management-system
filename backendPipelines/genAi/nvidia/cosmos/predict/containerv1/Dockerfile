@@ -52,9 +52,16 @@ RUN mkdir -p /opt/ml/code
 COPY __main__.py model_manager.py inference.py entrypoint.sh /opt/ml/code/
 RUN chmod +x /opt/ml/code/entrypoint.sh
 
+# Create non-root user (issue #327) with a real HOME and ownership of paths the entrypoint writes:
+# miniconda is installed to /root/miniconda3 and the entrypoint activates it via ~/miniconda3.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams && \
+    mv /root/miniconda3 /home/vams/miniconda3 && \
+    chown -R vams:vams /home/vams /opt/ml/code /opt/cosmos-predict1
+
 WORKDIR /opt/ml/code
-# Isolated AWS Batch GPU job (no inbound listener) built on a root-only NVIDIA base image; running
-# as a non-root USER needs a uid/volume-permission design first -- suppressed for the 2.6.1 gate per
-# release policy, flagged for follow-up.
-# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
+
+# Run as non-root user. The EFS model cache is owned by this uid/gid via userdata chown after mount.
+USER 10000:10000
+
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

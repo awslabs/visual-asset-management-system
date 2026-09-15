@@ -12,6 +12,7 @@ import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../../config/config";
 import { requireTLSAndAdditionalPolicyAddToResourcePolicy } from "../../../../../../helper/security";
+import { GPU_CONTAINER_UID, GPU_CONTAINER_GID } from "./gpuContainerUser";
 
 export interface CosmosCommonConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -38,6 +39,7 @@ export class CosmosCommonConstruct extends Construct {
     public readonly modelCacheBucket: s3.Bucket;
     public readonly efsFileSystem: efs.FileSystem;
     public readonly efsSecurityGroup: ec2.SecurityGroup;
+    public readonly efsAccessPoint: efs.AccessPoint;
 
     constructor(parent: Construct, name: string, props: CosmosCommonConstructProps) {
         super(parent, name);
@@ -81,6 +83,26 @@ export class CosmosCommonConstruct extends Construct {
             performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
             throughputMode: efs.ThroughputMode.ELASTIC,
             removalPolicy: RemovalPolicy.DESTROY,
+        });
+
+        /**
+         * EFS Access Point for Cosmos model cache (issue #327)
+         * Enforces POSIX uid/gid 10000:10000 so non-root GPU containers can read/write the shared
+         * Hugging Face cache without permission errors. The createAcl creates the root directory
+         * owned by this uid/gid when the access point is first used.
+         */
+        this.efsAccessPoint = new efs.AccessPoint(this, "CosmosModelCacheAccessPoint", {
+            fileSystem: this.efsFileSystem,
+            path: "/cosmos-models",
+            posixUser: {
+                uid: String(GPU_CONTAINER_UID),
+                gid: String(GPU_CONTAINER_GID),
+            },
+            createAcl: {
+                ownerUid: String(GPU_CONTAINER_UID),
+                ownerGid: String(GPU_CONTAINER_GID),
+                permissions: "755",
+            },
         });
 
         /**

@@ -33,6 +33,15 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION
 # Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /uvx /usr/local/bin/
 
+# Create non-root user early (issue #327) so uv installs CPython and the venv as that user.
+# uv caches downloads in $HOME/.cache/uv and managed Python in $HOME/.local/share/uv/python,
+# and .venv/bin/python is a symlink into that install. Built as root those land in /root (mode 0700),
+# so uid 10000 can neither execute the venv's interpreter nor re-run `uv sync` in the entrypoint.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+USER 10000:10000
+
 # Clone cosmos-transfer2.5, pinned to a commit. A clone with no ref makes the framework version
 # part of WHEN the image was built rather than of what VAMS commit built it, and two things here
 # depend on the revision being fixed: `uv sync --locked` below resolves against the lockfile AT
@@ -89,8 +98,8 @@ RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypo
 ENV PATH="/opt/cosmos-transfer2.5/.venv/bin:$PATH"
 
 WORKDIR /opt/ml/code
-# Isolated AWS Batch GPU job (no inbound listener) built on a root-only NVIDIA base image; running
-# as a non-root USER needs a uid/volume-permission design first -- suppressed for the 2.6.1 gate per
-# release policy, flagged for follow-up.
-# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
+
+# Non-root user was set earlier; the EFS model cache mount point is owned by this uid/gid
+# via userdata chown after mount, so the container can read/write cached model weights.
+
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

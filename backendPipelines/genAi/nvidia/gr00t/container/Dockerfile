@@ -74,8 +74,9 @@ RUN mkdir -p /workspace/scripts
 COPY finetune_gr00t.py /workspace/scripts/finetune_gr00t.py
 
 WORKDIR /opt/ml/code
-# Isolated AWS Batch GPU job (no inbound listener) built on a root-only NVIDIA base image; running
-# as a non-root USER needs a uid/volume-permission design first -- suppressed for the 2.6.1 gate per
-# release policy, flagged for follow-up.
-# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
+
+# Run as non-root user (issue #327). The EFS model cache mount point is owned by this uid/gid
+# via a chown command in the launch-template userdata after the EFS is mounted.
+USER 10000:10000
+
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

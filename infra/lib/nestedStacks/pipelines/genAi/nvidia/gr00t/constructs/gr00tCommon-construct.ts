@@ -38,6 +38,7 @@ export class Gr00tCommonConstruct extends Construct {
     public readonly modelCacheBucket: s3.Bucket;
     public readonly efsFileSystem: efs.FileSystem;
     public readonly efsSecurityGroup: ec2.SecurityGroup;
+    public readonly efsAccessPoint: efs.AccessPoint;
 
     constructor(parent: Construct, name: string, props: Gr00tCommonConstructProps) {
         super(parent, name);
@@ -81,6 +82,26 @@ export class Gr00tCommonConstruct extends Construct {
             performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
             throughputMode: efs.ThroughputMode.ELASTIC,
             removalPolicy: RemovalPolicy.DESTROY,
+        });
+
+        /**
+         * EFS Access Point for Gr00t model cache (issue #327)
+         * Enforces POSIX uid/gid 10000:10000 so non-root GPU containers can read/write the shared
+         * model cache without permission errors. The createAcl creates the root directory owned by
+         * this uid/gid when the access point is first used.
+         */
+        this.efsAccessPoint = new efs.AccessPoint(this, "Gr00tModelCacheAccessPoint", {
+            fileSystem: this.efsFileSystem,
+            path: "/gr00t-models",
+            posixUser: {
+                uid: "10000",
+                gid: "10000",
+            },
+            createAcl: {
+                ownerUid: "10000",
+                ownerGid: "10000",
+                permissions: "755",
+            },
         });
 
         /**

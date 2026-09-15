@@ -28,6 +28,10 @@ import {
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import { NagSuppressions } from "cdk-nag";
+import {
+    GPU_CONTAINER_UID,
+    GPU_CONTAINER_GID,
+} from "../../../genAi/nvidia/cosmos/constructs/gpuContainerUser";
 import * as path from "path";
 
 export interface IsaacLabTrainingConstructProps {
@@ -104,6 +108,25 @@ export class IsaacLabTrainingConstruct extends Construct {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
             throughputMode: efs.ThroughputMode.BURSTING,
+        });
+
+        // EFS Access Point for Isaac Lab checkpoints (issue #327)
+        // Enforces POSIX uid/gid 10000:10000 so non-root GPU containers can read/write checkpoints
+        // without permission errors. The createAcl creates the root directory owned by this uid/gid
+        // when the access point is first used. Path is "/" because the access point itself is the
+        // checkpoint root; mounting it at /mnt/efs/checkpoints in the container gives the expected path.
+        const trainingEfsAccessPoint = new efs.AccessPoint(this, "TrainingEfsAccessPoint", {
+            fileSystem: trainingEfs,
+            path: "/",
+            posixUser: {
+                uid: String(GPU_CONTAINER_UID),
+                gid: String(GPU_CONTAINER_GID),
+            },
+            createAcl: {
+                ownerUid: String(GPU_CONTAINER_UID),
+                ownerGid: String(GPU_CONTAINER_GID),
+                permissions: "755",
+            },
         });
 
         // Allow NFS traffic from the security group to itself for EFS access
@@ -295,7 +318,12 @@ export class IsaacLabTrainingConstruct extends Construct {
                     batch.EcsVolume.efs({
                         name: "training-efs",
                         fileSystem: trainingEfs,
-                        containerPath: "/mnt/efs",
+                        containerPath: "/mnt/efs/checkpoints",
+                        accessPointId: trainingEfsAccessPoint.accessPointId,
+                        transitEncryption: "ENABLED",
+                        authorizationConfig: {
+                            iam: "ENABLED",
+                        },
                     }),
                 ],
             }),
