@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Compliance Readonly",
-        "description": "Read-only access for Compliance compliance operations. Can view compliance schemas, evaluation state, audit logs, and cascade status. Cannot trigger evaluations, modify schemas, or release quarantined assets.",
+        "description": "Read-only access for compliance operations. Can view compliance schemas, evaluation state, audit logs, and cascade status. Cannot trigger evaluations, modify schemas, or release quarantined assets.",
         "version": "1.0"
     },
     "variables": [
@@ -25,7 +25,7 @@
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
         {
-            "name": "{{ROLE_NAME}}-compliance-api-routes",
+            "name": "{{ROLE_NAME}}-compliance-api-routes-get",
             "description": "Allow read-only API access to compliance endpoints",
             "objectType": "api",
             "criteriaAnd": [],
@@ -33,15 +33,29 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/compliance" },
                 { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
                 { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
-                { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" }
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/loginProfile" }
             ],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-api-routes-post",
+            "description": "Allow non-mutating POST API access (sign-in profile and route listing)",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/loginProfile" }
+            ],
+            "groupPermissions": [{ "action": "POST", "type": "allow" }]
         },
         {
             "name": "{{ROLE_NAME}}-compliance-schemas-readonly",
             "description": "Allow viewing compliance schemas",
             "objectType": "complianceSchema",
-            "criteriaAnd": [],
+            "criteriaAnd": [
+                { "field": "complianceSchemaName", "operator": "contains", "value": ".*" }
+            ],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
@@ -59,7 +73,7 @@
             "name": "{{ROLE_NAME}}-compliance-cascades-readonly",
             "description": "Allow viewing cascade operations",
             "objectType": "complianceCascade",
-            "criteriaAnd": [],
+            "criteriaAnd": [{ "field": "cascadeId", "operator": "contains", "value": ".*" }],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
