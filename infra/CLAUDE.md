@@ -85,7 +85,8 @@ infra/
         conversion/{3dBasic,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
         3dRecon/splatToolbox/  genAi/nvidia/{cosmos,gr00t}/
-        system/genAiMetadata/               # SYSTEM GenAI metadata pipeline (ids in infra/common/systemPipelines.ts)
+        system/genAiMetadata/               # SYSTEM GenAI metadata pipeline (ids in infra/common/systemPipelines.ts);
+                                            # constructs/systemGenAiGuardrail-construct.ts creates its Bedrock guardrail
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
@@ -187,7 +188,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu, deployDeferredIndexSchema), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
--   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCoordinateTransform, usePreviewPcPotreeViewer, usePreview3dThumbnail, useSplatToolbox, useSystemGenAiMetadata (enabled, bedrockAnalysisModelId, useFargateRenderer, lambdaLimits, bedrockGuardrail), useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining, useNvidiaCosmos, useNvidiaCosmos3, useNvidiaGr00t
+-   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCoordinateTransform, usePreviewPcPotreeViewer, usePreview3dThumbnail, useSplatToolbox, useSystemGenAiMetadata (enabled, bedrockAnalysisModelId, useFargateRenderer, lambdaLimits, bedrockGuardrail — `create.{enabled,promptAttackInputStrength,piiFilter}` creates the guardrail, `guardrailIdentifier`/`guardrailVersion` reference an operator-owned one; exclusive), useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining, useNvidiaCosmos, useNvidiaCosmos3, useNvidiaGr00t
 -   `app.addons`: useGarnetFramework, usePhysnaSync
 -   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
 -   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE, apiGatewayTimeoutTime default 29 / max 300 — integration timeout in seconds, applied as `timeoutInMillis` on every route integration in `buildOpenApiSpec.ts`; above 29 requires an approved account `L-E5AE38E3` quota increase)
@@ -345,14 +346,15 @@ Partition(): string  // Returns current partition
 false — so the prop is self-guarding and needs no ternary. Pass it and the resource falls back to its
 service's AWS-managed key when the operator has not enabled a CMK.
 
-| Resource                  | Prop                           | Notes                                                    |
-| ------------------------- | ------------------------------ | -------------------------------------------------------- |
-| `dynamodb.Table`          | `encryption` + `encryptionKey` | `CUSTOMER_MANAGED` only when a key exists                |
-| `s3.Bucket`               | `encryption` + `encryptionKey` | `BucketEncryption.KMS`; set `bucketKeyEnabled`           |
-| `sns.Topic` / `sqs.Queue` | `masterKey` / `encryptionKey`  |                                                          |
-| `logs.LogGroup`           | `encryptionKey`                | The key policy already admits the Logs service principal |
-| `efs.FileSystem`          | `encrypted: true` + `kmsKey`   | See trap 1                                               |
-| `secretsmanager.Secret`   | `encryptionKey`                | See trap 2                                               |
+| Resource                  | Prop                           | Notes                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dynamodb.Table`          | `encryption` + `encryptionKey` | `CUSTOMER_MANAGED` only when a key exists                                                                                                                                                                                                                                                                                                  |
+| `s3.Bucket`               | `encryption` + `encryptionKey` | `BucketEncryption.KMS`; set `bucketKeyEnabled`                                                                                                                                                                                                                                                                                             |
+| `sns.Topic` / `sqs.Queue` | `masterKey` / `encryptionKey`  |                                                                                                                                                                                                                                                                                                                                            |
+| `logs.LogGroup`           | `encryptionKey`                | The key policy already admits the Logs service principal                                                                                                                                                                                                                                                                                   |
+| `efs.FileSystem`          | `encrypted: true` + `kmsKey`   | See trap 1                                                                                                                                                                                                                                                                                                                                 |
+| `secretsmanager.Secret`   | `encryptionKey`                | See trap 2                                                                                                                                                                                                                                                                                                                                 |
+| `bedrock.CfnGuardrail`    | `kmsKeyArn`                    | Pass `key.keyArn`. Bedrock authorizes the key through the CREATOR (the CloudFormation execution role: Decrypt, GenerateDataKey, DescribeKey, CreateGrant — delegated via `AccountRootPrincipal`) and the USER roles (Decrypt, already in `kmsKeyLambdaPermissionAddToResourcePolicy`), not a service principal; add none to the key policy |
 
 Three traps, each of which passes `cdk synth` and fails later:
 
@@ -582,7 +584,7 @@ Whenever you **add or change** an S3 bucket, DynamoDB table, or CloudWatch log g
 1. **Removal on teardown** — `RemovalPolicy.RETAIN` (survives `cdk destroy`; manual delete) vs. `RemovalPolicy.DESTROY` (auto; pair S3 with `autoDeleteObjects: true`).
 2. **Custom name (redeploy-collision flag)** — whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can collide on a redeploy into the same account/configuration.
 
-These axes are independent. **Retained + auto-named** resources (asset, auxiliary, artefacts, access logs buckets; all DynamoDB tables) survive teardown but do **not** block redeploy. **Custom/fixed-named** resources (the ALB web app bucket and its access logs bucket, named for the domain host; every `/aws/vendedlogs/...` log group) **must** be flagged so operators delete any orphaned copy before redeploying.
+These axes are independent. **Retained + auto-named** resources (asset, auxiliary, artefacts, access logs buckets; all DynamoDB tables) survive teardown but do **not** block redeploy. **Custom/fixed-named** resources (the ALB web app bucket and its access logs bucket, named for the domain host; every `/aws/vendedlogs/...` log group; the SYSTEM GenAI metadata pipeline's Amazon Bedrock guardrail, `VAMS-SystemGenAiMetadata-<hash>`, whose name the API requires) **must** be flagged so operators delete any orphaned copy before redeploying.
 
 **The VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`): `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. **Not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
 

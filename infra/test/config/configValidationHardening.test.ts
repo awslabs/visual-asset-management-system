@@ -754,7 +754,7 @@ describe("system GenAI metadata pipeline validation", () => {
             ).toThrow(/bedrockGuardrail requires both/);
         });
 
-        test("backfills an absent block to two empty strings", () => {
+        test("backfills an absent block to two empty strings and a created guardrail", () => {
             const config = resolve((c) => {
                 vectorSearchOff(c);
                 delete c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail;
@@ -762,6 +762,7 @@ describe("system GenAI metadata pipeline validation", () => {
             expect(config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail).toEqual({
                 guardrailIdentifier: "",
                 guardrailVersion: "",
+                create: { enabled: true, promptAttackInputStrength: "LOW", piiFilter: "anonymize" },
             });
         });
 
@@ -806,20 +807,37 @@ describe("system GenAI metadata pipeline validation", () => {
             ).toThrow(/guardrailIdentifier must be the guardrail's 12-character id/);
         });
 
-        test("an enabled pipeline without a guardrail deploys with a warning that records the deviation", () => {
-            resolve(withGuardrail("", ""))();
+        test("an enabled pipeline that neither creates nor names a guardrail deploys with a warning that records the deviation", () => {
+            resolve((c) => {
+                withGuardrail("", "")(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create = {
+                    enabled: false,
+                    promptAttackInputStrength: "LOW",
+                    piiFilter: "anonymize",
+                };
+            })();
             expect(warnings()).toContain(
                 "pipelines.useSystemGenAiMetadata is enabled without a bedrockGuardrail"
             );
             expect(warnings()).toContain("prompt-attack");
+            expect(warnings()).toContain("bedrockGuardrail.create.enabled");
         });
 
-        test("no such warning with a guardrail, or on a disabled pipeline without one", () => {
+        test("no such warning with a created or an operator-owned guardrail, or on a disabled pipeline without one", () => {
+            // An empty pair with no create block: the guardrail is created by default.
+            resolve(withGuardrail("", ""))();
+            expect(warnings()).not.toContain("enabled without a bedrockGuardrail");
+            warn.mockClear();
             resolve(withGuardrail("kb4v3hkqvi6f", "1"))();
             expect(warnings()).not.toContain("enabled without a bedrockGuardrail");
             warn.mockClear();
             resolve((c) => {
                 withGuardrail("", "")(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create = {
+                    enabled: false,
+                    promptAttackInputStrength: "LOW",
+                    piiFilter: "anonymize",
+                };
                 c.app.pipelines.useSystemGenAiMetadata.enabled = false;
             })();
             expect(warnings()).not.toContain("enabled without a bedrockGuardrail");

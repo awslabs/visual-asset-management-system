@@ -163,8 +163,10 @@ write, including the latest/archived lifecycle of the item.
     indexer) are set by `systemGenAiMetadataFunctions.ts` on `generateEmbedding` and `segmentAnalyze` and
     read at import by `containers/media/segment_handler.py` — the model-discipline rule above is what
     makes them mandatory on every producer. `BEDROCK_GUARDRAIL_IDENTIFIER` and `BEDROCK_GUARDRAIL_VERSION`
-    (`app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.{guardrailIdentifier,guardrailVersion}`, set
-    both or neither — `config.ts` refuses one without the other) are set on `generateMetadata` and
+    (the created guardrail's `GuardrailId` and published `Version` attributes when
+    `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled`, else the operator's
+    `bedrockGuardrail.{guardrailIdentifier,guardrailVersion}` pair, set both or neither — `config.ts` refuses
+    one without the other and refuses the pair together with `create.enabled`) are set on `generateMetadata` and
     `segmentAnalyze` and read through `bedrockGuardrail.py` (byte-identical copy in the media image):
     when unset, the process logs `GUARDRAIL_UNCONFIGURED_WARNING` once at cold start and every Converse
     call runs without prompt-attack filters. `VIDEO_SEGMENT_SECONDS` and `CONTENT_CHUNKING` are **not**

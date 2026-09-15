@@ -129,6 +129,15 @@ export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
 export const SYSTEM_GENAI_GUARDRAIL_IDENTIFIER_PATTERN = /^[a-z0-9]{12}$/;
 export const SYSTEM_GENAI_GUARDRAIL_VERSION_PATTERN = /^(DRAFT|[1-9][0-9]{0,7})$/;
 
+// The strengths Amazon Bedrock Guardrails accepts for a content filter's input side, and the three
+// sensitive-information treatments the created guardrail offers. Each is the closed set the CDK
+// guardrail definition renders from, so a value outside it is rejected at synth.
+export const SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS = ["LOW", "MEDIUM", "HIGH"] as const;
+export type SystemGenAiGuardrailPromptAttackStrength =
+    (typeof SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS)[number];
+export const SYSTEM_GENAI_GUARDRAIL_PII_FILTERS = ["off", "anonymize", "block"] as const;
+export type SystemGenAiGuardrailPiiFilter = (typeof SYSTEM_GENAI_GUARDRAIL_PII_FILTERS)[number];
+
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
@@ -737,7 +746,11 @@ export function getConfig(app: cdk.App): Config {
                 maxInputFileSizeMb: SYSTEM_GENAI_DEFAULT_MAX_INPUT_FILE_SIZE_MB,
                 maxPointCloudPoints: SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS,
             },
-            bedrockGuardrail: { guardrailIdentifier: "", guardrailVersion: "" },
+            bedrockGuardrail: {
+                guardrailIdentifier: "",
+                guardrailVersion: "",
+                create: { enabled: true, promptAttackInputStrength: "LOW", piiFilter: "anonymize" },
+            },
         };
     }
     if (config.app.pipelines.useSystemGenAiMetadata.enabled == undefined) {
@@ -763,12 +776,15 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxPointCloudPoints =
             SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS;
     }
-    //Operator-owned Amazon Bedrock guardrail applied to every analysis prompt. Both fields name one
-    //guardrail, so a half-set pair is a configuration mistake in either pipeline state.
+    //The Amazon Bedrock guardrail applied to every analysis prompt: either the one the deployment
+    //creates (bedrockGuardrail.create) or an operator-owned one named by guardrailIdentifier and
+    //guardrailVersion. Both fields of the pair name one guardrail, so a half-set pair is a configuration
+    //mistake in either pipeline state.
     if (config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail == undefined) {
         config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
             guardrailIdentifier: "",
             guardrailVersion: "",
+            create: { enabled: true, promptAttackInputStrength: "LOW", piiFilter: "anonymize" },
         };
     }
     config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier ??= "";
@@ -781,7 +797,10 @@ export function getConfig(app: cdk.App): Config {
             throw new Error(
                 "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail requires both " +
                     "guardrailIdentifier and guardrailVersion, or neither. Received: " +
-                    JSON.stringify(guardrail)
+                    JSON.stringify({
+                        guardrailIdentifier: guardrail.guardrailIdentifier,
+                        guardrailVersion: guardrail.guardrailVersion,
+                    })
             );
         }
         //The identifier is the 12-character guardrail id, not its ARN: the IAM grant composes the ARN
@@ -810,14 +829,64 @@ export function getConfig(app: cdk.App): Config {
                     JSON.stringify(guardrail.guardrailVersion)
             );
         }
-        //Amazon security guidance for Bedrock calls is a guardrail with prompt-attack filtering on every
-        //invocation. The guardrail is account state VAMS cannot create, so an enabled pipeline without
-        //one deploys, with this warning as the record of the deviation.
-        if (config.app.pipelines.useSystemGenAiMetadata.enabled && !identifierSet) {
+        //The guardrail the deployment creates: a PROMPT_ATTACK input filter at the configured strength
+        //(output NONE) and, unless piiFilter is "off", sensitive-information filters that anonymize or
+        //block PII and credentials in the prompt. Created by default; a configuration written before
+        //the block existed that already names an operator-owned guardrail keeps that guardrail, so
+        //an absent create.enabled follows the pair rather than replacing it.
+        if (guardrail.create == undefined) {
+            guardrail.create = {
+                enabled: !identifierSet,
+                promptAttackInputStrength: "LOW",
+                piiFilter: "anonymize",
+            };
+        }
+        guardrail.create.enabled ??= !identifierSet;
+        guardrail.create.promptAttackInputStrength ??= "LOW";
+        guardrail.create.piiFilter ??= "anonymize";
+        if (
+            !SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS.includes(
+                guardrail.create.promptAttackInputStrength
+            )
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength " +
+                    `must be one of ${JSON.stringify(
+                        SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS
+                    )}. Received: ${JSON.stringify(guardrail.create.promptAttackInputStrength)}`
+            );
+        }
+        if (!SYSTEM_GENAI_GUARDRAIL_PII_FILTERS.includes(guardrail.create.piiFilter)) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter " +
+                    `must be one of ${JSON.stringify(
+                        SYSTEM_GENAI_GUARDRAIL_PII_FILTERS
+                    )}. Received: ${JSON.stringify(guardrail.create.piiFilter)}`
+            );
+        }
+        //One guardrail per deployment: the created one or the operator's, never both, since the
+        //analysis functions carry a single guardrail identifier.
+        if (guardrail.create.enabled && identifierSet) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled is " +
+                    "true while guardrailIdentifier names an operator-owned guardrail. Set create.enabled " +
+                    "to false to use the operator-owned guardrail, or clear guardrailIdentifier and " +
+                    "guardrailVersion to use the guardrail the deployment creates."
+            );
+        }
+        //Organizational Bedrock guardrail guidance is a guardrail with prompt-attack filtering on every
+        //invocation. A pipeline that neither creates one nor names one deploys, with this warning as
+        //the record of the deviation.
+        if (
+            config.app.pipelines.useSystemGenAiMetadata.enabled &&
+            !guardrail.create.enabled &&
+            !identifierSet
+        ) {
             console.warn(
                 "Configuration Warning: pipelines.useSystemGenAiMetadata is enabled without a " +
                     "bedrockGuardrail. The analysis prompts (file content, rendered views, operator " +
-                    "vocabulary) are sent to Amazon Bedrock with no guardrail; create one with prompt-attack " +
+                    "vocabulary) are sent to Amazon Bedrock with no guardrail; set " +
+                    "bedrockGuardrail.create.enabled to true, or create one with prompt-attack " +
                     "and content filters in this account and Region and set bedrockGuardrail.guardrailIdentifier " +
                     "and guardrailVersion."
             );
@@ -3605,6 +3674,11 @@ export interface ConfigPublic {
                 bedrockGuardrail: {
                     guardrailIdentifier: string;
                     guardrailVersion: string;
+                    create: {
+                        enabled: boolean;
+                        promptAttackInputStrength: SystemGenAiGuardrailPromptAttackStrength;
+                        piiFilter: SystemGenAiGuardrailPiiFilter;
+                    };
                 };
             };
             useNvidiaCosmos: {

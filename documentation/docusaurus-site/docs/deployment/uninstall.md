@@ -133,6 +133,17 @@ aws cloudformation delete-stack \
 
 Then manually delete the retained resources using the steps in Step 2 through Step 11.
 
+:::note[The SYSTEM GenAI guardrail is deleted with the stack, and an orphan blocks a redeploy]
+When `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled` is `true`, the pipeline's nested stack owns an Amazon Bedrock guardrail named `VAMS-SystemGenAiMetadata-<deployment hash>` and its published version, both deleted with the stack. Amazon Bedrock rejects a second guardrail with the same name in an account and Region, so a guardrail left behind by a failed teardown fails the next deployment of the same configuration name and `app.baseStackName` at the guardrail resource. List and delete it before redeploying:
+
+```bash
+aws bedrock list-guardrails --query "guardrails[?starts_with(name, 'VAMS-SystemGenAiMetadata-')].[id,name,status]" --output table
+aws bedrock delete-guardrail --guardrail-identifier <GUARDRAIL_ID>
+```
+
+Deleting the guardrail deletes every version of it. An operator-owned guardrail referenced through `guardrailIdentifier` is not a stack resource and is never touched by a teardown.
+:::
+
 :::note[Amazon SQS queues are deleted with the stack]
 Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, the vector indexer queue and the system-workflow launch queue when vector search is enabled, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — the dead-letter queue each one redrives to, and the dead-letter queue of the `vector.embedding.ready` rule target. The dead-letter queues, the workflow trigger dispatch queue, and both vector search queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
 

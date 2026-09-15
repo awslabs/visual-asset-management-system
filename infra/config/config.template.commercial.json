@@ -114,7 +114,12 @@
                 },
                 "bedrockGuardrail": {
                     "guardrailIdentifier": "",
-                    "guardrailVersion": ""
+                    "guardrailVersion": "",
+                    "create": {
+                        "enabled": true,
+                        "promptAttackInputStrength": "LOW",
+                        "piiFilter": "anonymize"
+                    }
                 }
             },
             "useConversionCoordinateTransform": {

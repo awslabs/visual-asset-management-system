@@ -514,6 +514,17 @@ Deployed conditionally for each enabled pipeline:
 | **Job Definition**      | Container definitions with pipeline-specific configuration |
 | **Security Groups**     | Pipeline-specific security groups within VPC               |
 
+## Amazon Bedrock
+
+Deployed when `app.pipelines.useSystemGenAiMetadata.enabled` and `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled` are both `true` (the commercial template's default):
+
+| Resource                           | Removal on teardown | Custom name (redeploy collision)                       | Purpose                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------- | ------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **SYSTEM GenAI Guardrail**         | Deleted with stack  | **Yes** — `VAMS-SystemGenAiMetadata-<deployment hash>` | Amazon Bedrock guardrail every analysis prompt of the SYSTEM GenAI metadata pipeline is sent with: a prompt-attack input filter at the configured strength and, unless `create.piiFilter` is `off`, PII and credential filters that anonymize or block. Encrypted with the VAMS KMS key when one is enabled. |
+| **SYSTEM GenAI Guardrail Version** | Deleted with stack  | No                                                     | The published version of the guardrail the analysis functions reference; a policy change publishes a new one.                                                                                                                                                                                                |
+
+Amazon Bedrock requires a guardrail name and rejects a duplicate in the same account and Region, so the guardrail is an explicitly named resource: if a teardown fails and leaves it behind, delete it before redeploying the same configuration into the same account and Region (see [Uninstall the solution](../deployment/uninstall.md#step-1-destroy-the-cdk-stack)). The name is hashed from the core stack name and account, so two deployments with different `app.baseStackName` values coexist. Models, inference profiles, and an operator-owned guardrail referenced through `guardrailIdentifier` are not stack resources.
+
 ## Amazon Elastic Container Registry
 
 Deployed for each pipeline configured with `useCodeBuild: true`. AWS CodeBuild builds the pipeline's

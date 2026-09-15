@@ -1173,7 +1173,15 @@ export interface ConfigPublic {
                 autoRegisterAutoTriggerOnFileUpload: boolean;
                 useFargateRenderer: boolean;
                 lambdaLimits: { maxInputFileSizeMb: number; maxPointCloudPoints: number };
-                bedrockGuardrail: { guardrailIdentifier: string; guardrailVersion: string };
+                bedrockGuardrail: {
+                    guardrailIdentifier: string;
+                    guardrailVersion: string;
+                    create: {
+                        enabled: boolean;
+                        promptAttackInputStrength: "LOW" | "MEDIUM" | "HIGH";
+                        piiFilter: "off" | "anonymize" | "block";
+                    };
+                };
             };
             useRapidPipeline: {
                 enabled: boolean;

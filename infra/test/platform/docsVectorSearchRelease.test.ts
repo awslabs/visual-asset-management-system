@@ -734,10 +734,17 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
             expect(cfg).toContain("`" + key + "`");
         }
         expect(configTs).toMatch(
-            /bedrockGuardrail:\s*\{\s*guardrailIdentifier:\s*string;\s*guardrailVersion:\s*string;?\s*\}/
+            /bedrockGuardrail:\s*\{\s*guardrailIdentifier:\s*string;\s*guardrailVersion:\s*string;\s*create:\s*\{\s*enabled:\s*boolean;\s*promptAttackInputStrength:\s*SystemGenAiGuardrailPromptAttackStrength;\s*piiFilter:\s*SystemGenAiGuardrailPiiFilter;\s*\};\s*\}/
         );
         expect(cfg).toContain("guardrailIdentifier");
         expect(cfg).toContain("guardrailVersion");
+        for (const key of [
+            "create.enabled",
+            "create.promptAttackInputStrength",
+            "create.piiFilter",
+        ]) {
+            expect(cfg).toContain("`" + key + "`");
+        }
     });
 });
 

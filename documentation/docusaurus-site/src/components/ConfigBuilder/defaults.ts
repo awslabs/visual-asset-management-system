@@ -251,7 +251,15 @@ const COMMERCIAL: ConfigShape = {
                     maxInputFileSizeMb: 2048,
                     maxPointCloudPoints: 20000000,
                 },
-                bedrockGuardrail: { guardrailIdentifier: "", guardrailVersion: "" },
+                bedrockGuardrail: {
+                    guardrailIdentifier: "",
+                    guardrailVersion: "",
+                    create: {
+                        enabled: true,
+                        promptAttackInputStrength: "LOW",
+                        piiFilter: "anonymize",
+                    },
+                },
             },
             useConversionCoordinateTransform: {
                 enabled: false,
@@ -411,6 +419,9 @@ function buildGovCloud(): ConfigShape {
     // Off in the restricted partitions; Amazon Bedrock model access there is a manual, two-account step.
     cfg.app.vectorSearch.enabled = false;
     cfg.app.pipelines.useSystemGenAiMetadata.enabled = false;
+    // Amazon Bedrock Guardrails availability in the restricted partitions is unverified, so the
+    // deployment does not create one there.
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = false;
     // The GovCloud preset names the "us-gov." inference profile; getConfig() also accepts a "us."
     // profile there, with a warning.
     cfg.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =

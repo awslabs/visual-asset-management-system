@@ -77,7 +77,11 @@ const SPEC_PIPELINE_DEFAULTS = {
     autoRegisterAutoTriggerOnFileUpload: true,
     useFargateRenderer: false,
     lambdaLimits: { maxInputFileSizeMb: 2048, maxPointCloudPoints: 20000000 },
-    bedrockGuardrail: { guardrailIdentifier: "", guardrailVersion: "" },
+    bedrockGuardrail: {
+        guardrailIdentifier: "",
+        guardrailVersion: "",
+        create: { enabled: true, promptAttackInputStrength: "LOW", piiFilter: "anonymize" },
+    },
 };
 
 describe("the vector index name", () => {

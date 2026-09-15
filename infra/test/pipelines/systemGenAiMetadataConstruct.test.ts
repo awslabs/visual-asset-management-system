@@ -84,9 +84,12 @@ const createMockConfig = (): Config.Config => {
     config.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = true;
     config.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
         "global.anthropic.claude-haiku-4-5-20251001-v1:0";
+    // The baseline runs without a guardrail; the created guardrail has its own suite
+    // (systemGenAiMetadataGuardrail.test.ts).
     config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
         guardrailIdentifier: "",
         guardrailVersion: "",
+        create: { enabled: false, promptAttackInputStrength: "LOW", piiFilter: "anonymize" },
     };
     config.app.vectorSearch.enabled = true;
     config.enableCdkNag = false;
@@ -160,6 +163,7 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
             guardrailIdentifier: "kb4v3hkqvi6f",
             guardrailVersion: "1",
+            create: { enabled: false, promptAttackInputStrength: "LOW", piiFilter: "anonymize" },
         };
     });
     const asl = definition(lambdaOnly);

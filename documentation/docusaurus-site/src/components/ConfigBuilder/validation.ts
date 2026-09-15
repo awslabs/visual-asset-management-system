@@ -2434,20 +2434,73 @@ export const RULES: Rule[] = [
         message:
             'pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion must be "DRAFT" or a published version number (for example "1").',
     },
+    // (config.ts: "create.promptAttackInputStrength must be one of", "create.piiFilter must be one of",
+    // "create.enabled is true while guardrailIdentifier names an operator-owned guardrail")
+    {
+        id: "system-genai-guardrail-prompt-attack-strength",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength",
+        ],
+        // getConfig() fills an absent value with LOW, so only a present value outside the set fails.
+        appliesWhen: (c) => {
+            const strength = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength"
+            );
+            return !isAbsent(strength) && !["LOW", "MEDIUM", "HIGH"].includes(String(strength));
+        },
+        message:
+            'pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength must be "LOW", "MEDIUM" or "HIGH".',
+    },
+    {
+        id: "system-genai-guardrail-pii-filter",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter"],
+        appliesWhen: (c) => {
+            const filter = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter"
+            );
+            return !isAbsent(filter) && !["off", "anonymize", "block"].includes(String(filter));
+        },
+        message:
+            'pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter must be "off", "anonymize" or "block".',
+    },
+    {
+        id: "system-genai-guardrail-create-and-identifier",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled",
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
+        ],
+        // The analysis functions carry one guardrail identifier, so the created guardrail and an
+        // operator-owned one are exclusive. Not gated on the pipeline state, like the pair rule.
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled") === true &&
+            !isBlank(
+                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier")
+            ),
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled is true while guardrailIdentifier names an operator-owned guardrail. Turn the created guardrail off to use the operator-owned one, or clear guardrailIdentifier and guardrailVersion.",
+    },
     {
         id: "system-genai-no-guardrail",
         severity: "warning",
         fieldPaths: [
             "app.pipelines.useSystemGenAiMetadata.enabled",
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled",
             "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
         ],
         appliesWhen: (c) =>
             !!g(c, "app.pipelines.useSystemGenAiMetadata.enabled") &&
+            g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled") ===
+                false &&
             isBlank(
                 g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier")
             ),
         message:
-            "useSystemGenAiMetadata is enabled without a bedrockGuardrail. The analysis prompts (file content, rendered views, operator vocabulary) are sent to Amazon Bedrock with no guardrail; create one with prompt-attack and content filters in this account and Region and set bedrockGuardrail.guardrailIdentifier and guardrailVersion.",
+            "useSystemGenAiMetadata is enabled without a bedrockGuardrail. The analysis prompts (file content, rendered views, operator vocabulary) are sent to Amazon Bedrock with no guardrail; turn on bedrockGuardrail.create.enabled, or create one with prompt-attack and content filters in this account and Region and set bedrockGuardrail.guardrailIdentifier and guardrailVersion.",
     },
 
     // ----- Vector search (config.ts: "DynamoDB vector search is not available in the European Sovereign

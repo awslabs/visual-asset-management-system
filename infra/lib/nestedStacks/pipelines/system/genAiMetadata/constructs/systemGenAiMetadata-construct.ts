@@ -26,6 +26,7 @@ import {
 } from "../../../../../helper/security";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import { resolveSystemGenAiGuardrail } from "./systemGenAiGuardrail-construct";
 import {
     SYSTEM_GENAI_METADATA_PIPELINE_ID,
     SYSTEM_GENAI_METADATA_WORKFLOW_ID,
@@ -78,6 +79,7 @@ const FARGATE_RENDER_ATTEMPT_DURATION = cdk.Duration.hours(4);
  * Creates:
  * - SFN state machine and its vended log group
  * - six zip Lambdas and four container-image Lambdas
+ * - optionally the Amazon Bedrock guardrail (and its published version) the analysis prompts are sent with
  * - the state machine role's deployment-key grant for the Map's CMK-encrypted items and results
  * - optionally a Batch Fargate job definition, queue and compute environment
  * - the VAMS pipeline/workflow/template registration
@@ -118,6 +120,12 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
         );
 
         /**
+         * The guardrail every analysis prompt is sent with: created here when configured to be, or
+         * the operator-owned one; undefined when the pipeline runs without one.
+         */
+        const guardrail = resolveSystemGenAiGuardrail(this, props.config, kmsKey);
+
+        /**
          * Lambda task functions
          */
         const constructPipelineFunction = buildConstructPipelineFunction(
@@ -138,6 +146,7 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             props.vpc,
             props.pipelineSubnets,
             props.pipelineSecurityGroups,
+            guardrail,
             kmsKey
         );
         const generateEmbeddingFunction = buildGenerateEmbeddingFunction(
@@ -196,6 +205,7 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             props.pipelineSubnets,
             props.pipelineSecurityGroups,
             props.storageResources.eventBridge.orchestrationBus,
+            guardrail,
             kmsKey
         );
 

@@ -31,6 +31,7 @@ import {
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
+import { SystemGenAiGuardrailReference } from "../constructs/systemGenAiGuardrail-construct";
 
 /** The zip handlers of the pipeline: one module per state-machine task plus the two entry Lambdas. */
 const LAMBDA_DIR = path.join(
@@ -154,6 +155,35 @@ export function grantBedrockInvokeModel(
 /** Every function of the pipeline sits in the isolated pipeline subnets only when every Lambda does. */
 function lambdasInVpc(config: Config.Config): boolean {
     return config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
+}
+
+/**
+ * The guardrail pair the analysis handlers read (`bedrockGuardrail.py`: both variables or neither).
+ * Two empty strings when the pipeline runs without a guardrail, so the handler logs its
+ * unconfigured warning rather than failing on an absent variable.
+ */
+function guardrailEnvironment(
+    guardrail: SystemGenAiGuardrailReference | undefined
+): Record<string, string> {
+    return {
+        BEDROCK_GUARDRAIL_IDENTIFIER: guardrail?.identifier ?? "",
+        BEDROCK_GUARDRAIL_VERSION: guardrail?.version ?? "",
+    };
+}
+
+/** `bedrock:ApplyGuardrail` on the exact guardrail ARN the function's Converse calls name; nothing without one. */
+function grantApplyGuardrail(
+    fun: lambda.Function,
+    guardrail: SystemGenAiGuardrailReference | undefined
+): void {
+    if (!guardrail) return;
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["bedrock:ApplyGuardrail"],
+            resources: [guardrail.arn],
+        })
+    );
 }
 
 function vpcPlacement(
@@ -339,12 +369,12 @@ export function buildGenerateMetadataFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     pipelineSecurityGroups: ec2.ISecurityGroup[],
+    guardrail: SystemGenAiGuardrailReference | undefined,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "generateMetadata";
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
     const analysisModelId = pipeline.bedrockAnalysisModelId;
-    const guardrail = pipeline.bedrockGuardrail;
 
     const fun = new lambda.Function(scope, "SystemGenAiMetadataGenerateMetadata", {
         code: lambda.Code.fromAsset(LAMBDA_DIR),
@@ -356,8 +386,7 @@ export function buildGenerateMetadataFunction(
         ...vpcPlacement(config, vpc, subnets, pipelineSecurityGroups),
         environment: {
             BEDROCK_ANALYSIS_MODEL_ID: analysisModelId,
-            BEDROCK_GUARDRAIL_IDENTIFIER: guardrail.guardrailIdentifier,
-            BEDROCK_GUARDRAIL_VERSION: guardrail.guardrailVersion,
+            ...guardrailEnvironment(guardrail),
         },
     });
 
@@ -369,18 +398,8 @@ export function buildGenerateMetadataFunction(
 
     // The analysis model, whether a plain id or a cross-Region inference profile.
     grantBedrockInvokeModel(fun, config, [analysisModelId]);
-
-    if (guardrail.guardrailIdentifier !== "") {
-        // arn:<partition>:bedrock:<region>:<account>:guardrail/<identifier> — the one guardrail the
-        // analysis prompts are sent with.
-        fun.addToRolePolicy(
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["bedrock:ApplyGuardrail"],
-                resources: [Service("BEDROCK").ARN("guardrail", guardrail.guardrailIdentifier)],
-            })
-        );
-    }
+    // The one guardrail the analysis prompts are sent with.
+    grantApplyGuardrail(fun, guardrail);
 
     suppressCdkNagLambda(fun);
     return fun;
@@ -573,12 +592,12 @@ export function buildSegmentAnalyzeFunction(
     subnets: ec2.ISubnet[],
     pipelineSecurityGroups: ec2.ISecurityGroup[],
     orchestrationBus: events.IEventBus,
+    guardrail: SystemGenAiGuardrailReference | undefined,
     kmsKey?: kms.IKey
 ): lambda.DockerImageFunction {
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
     const analysisModelId = pipeline.bedrockAnalysisModelId;
     const embeddingModelId = config.app.vectorSearch.embeddingModelId;
-    const guardrail = pipeline.bedrockGuardrail;
 
     const fun = new lambda.DockerImageFunction(scope, "SystemGenAiMetadataSegmentAnalyze", {
         code: lambda.DockerImageCode.fromImageAsset(path.join(CONTAINERS_DIR, "media"), {
@@ -596,8 +615,7 @@ export function buildSegmentAnalyzeFunction(
             EMBEDDING_MODEL_ID: embeddingModelId,
             EMBEDDING_DIMENSIONS: String(config.app.vectorSearch.embeddingDimensions),
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
-            BEDROCK_GUARDRAIL_IDENTIFIER: guardrail.guardrailIdentifier,
-            BEDROCK_GUARDRAIL_VERSION: guardrail.guardrailVersion,
+            ...guardrailEnvironment(guardrail),
         },
     });
 
@@ -613,17 +631,7 @@ export function buildSegmentAnalyzeFunction(
         config,
         config.app.vectorSearch.enabled ? [analysisModelId, embeddingModelId] : [analysisModelId]
     );
-
-    if (guardrail.guardrailIdentifier !== "") {
-        // arn:<partition>:bedrock:<region>:<account>:guardrail/<identifier> — the one guardrail the
-        // per-segment analysis prompts are sent with.
-        fun.addToRolePolicy(
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["bedrock:ApplyGuardrail"],
-                resources: [Service("BEDROCK").ARN("guardrail", guardrail.guardrailIdentifier)],
-            })
-        );
-    }
+    // The one guardrail the per-segment analysis prompts are sent with.
+    grantApplyGuardrail(fun, guardrail);
     return fun;
 }

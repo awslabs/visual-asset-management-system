@@ -169,6 +169,11 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
                 c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
                     guardrailIdentifier: "kb4v3hkqvi6f",
                     guardrailVersion: "1",
+                    create: {
+                        enabled: false,
+                        promptAttackInputStrength: "LOW",
+                        piiFilter: "anonymize",
+                    },
                 };
             },
             mutateKey: "sysgenai-guardrail",
@@ -180,7 +185,39 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             expect(SynthResult.flatten(grant.Resource)).toContain(":guardrail/kb4v3hkqvi6f");
             expect(SynthResult.flatten(grant.Resource)).not.toContain("*");
         }
-        const without = synthTemplate(name, { mutate: enable, mutateKey: "sysgenai-on" });
+        expect(withGuardrail.countOfType("AWS::Bedrock::Guardrail")).toBe(0);
+
+        // The shipped template: the commercial one creates the guardrail and grants its ARN; the
+        // restricted-partition templates create none (Guardrails availability there is unverified).
+        const shipped = synthTemplate(name, { mutate: enable, mutateKey: "sysgenai-on" });
+        const shippedCreates =
+            TEMPLATES[name].app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled ===
+            true;
+        expect(shippedCreates).toBe(name === "commercial");
+        if (shippedCreates) {
+            const guardrail = shipped.ofType("AWS::Bedrock::Guardrail");
+            expect(guardrail).toHaveLength(1);
+            expect(shipped.countOfType("AWS::Bedrock::GuardrailVersion")).toBe(1);
+            const created = statementsWith(shipped, "bedrock:ApplyGuardrail");
+            expect(created).toHaveLength(2);
+            for (const grant of created) {
+                expect(grant.Resource).toEqual({
+                    "Fn::GetAtt": [guardrail[0].logicalId, "GuardrailArn"],
+                });
+            }
+        } else {
+            expect(shipped.countOfType("AWS::Bedrock::Guardrail")).toBe(0);
+            expect(statementsWith(shipped, "bedrock:ApplyGuardrail")).toHaveLength(0);
+        }
+
+        const without = synthTemplate(name, {
+            mutate: (c) => {
+                enable(c);
+                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = false;
+            },
+            mutateKey: "sysgenai-no-guardrail",
+        });
+        expect(without.countOfType("AWS::Bedrock::Guardrail")).toBe(0);
         expect(statementsWith(without, "bedrock:ApplyGuardrail")).toHaveLength(0);
     });
 

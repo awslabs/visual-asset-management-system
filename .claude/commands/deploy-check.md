@@ -126,7 +126,7 @@ Read `infra/config/config.json`. When `app.vectorSearch.enabled` is `true`, veri
 -   `app.pipelines.useSystemGenAiMetadata.enabled`, `.autoRegisterWithVAMS`, and `.autoRegisterAutoTriggerOnFileUpload` are all `true` (configuration validation throws otherwise)
 -   `app.vectorSearch.embeddingModelId` is non-empty and `embeddingDimensions` is a positive integer the model supports; `indexingConcurrency` is a positive integer
 -   `app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId` is non-empty, and its prefix matches the partition (`global.` only in `aws`; `us-gov.` only in `aws-us-gov`; `us.` is accepted in both — in `aws-us-gov` configuration validation emits a warning to verify the profile exists there, not a failure)
--   `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail` has both `guardrailIdentifier` and `guardrailVersion` set, or both empty
+-   `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail` has both `guardrailIdentifier` and `guardrailVersion` set, or both empty; `bedrockGuardrail.create.enabled` is not `true` while `guardrailIdentifier` is set; `create.promptAttackInputStrength` is `LOW`/`MEDIUM`/`HIGH` and `create.piiFilter` is `off`/`anonymize`/`block`
 -   The Region is not in the `aws-eusc` partition (DynamoDB vector search is unavailable there)
 -   `app.pipelines.useSystemGenAiMetadata.useFargateRenderer` is `false` unless `app.useGlobalVpc.enabled` is `true`
 
