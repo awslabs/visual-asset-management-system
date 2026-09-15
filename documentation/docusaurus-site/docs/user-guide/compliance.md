@@ -1,9 +1,9 @@
 # Compliance
 
-Compliance management enables you to enforce structural and content standards on assets using schema-driven evaluation. When the Federated Model Management (FMM) feature is enabled, you can register compliance schemas, evaluate assets against those schemas, quarantine non-compliant assets, and propagate compliance actions through asset relationships.
+Compliance management enables you to enforce structural and content standards on assets using schema-driven evaluation. When the Compliance feature is enabled, you can register compliance schemas, evaluate assets against those schemas, quarantine non-compliant assets, and propagate compliance actions through asset relationships.
 
 :::info[Feature availability]
-Compliance is only available when FMM is enabled in your VAMS deployment configuration. If you do not see the Compliance navigation items, contact your administrator.
+Compliance is only available when Compliance is enabled in your VAMS deployment configuration. If you do not see the Compliance navigation items, contact your administrator.
 :::
 
 ---

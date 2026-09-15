@@ -126,12 +126,12 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
-        // FMM (Federated Model Management) tables
-        fmmSchemaStorageTable: dynamodb.Table;
-        fmmAssetComplianceStorageTable: dynamodb.Table;
-        fmmEvaluationStorageTable: dynamodb.Table;
-        fmmCascadeStorageTable: dynamodb.Table;
-        fmmAuditStorageTable: dynamodb.Table;
+        // Compliance  tables
+        complianceSchemaStorageTable: dynamodb.Table;
+        complianceAssetStateStorageTable: dynamodb.Table;
+        complianceEvaluationStorageTable: dynamodb.Table;
+        complianceCascadeStorageTable: dynamodb.Table;
+        complianceAuditStorageTable: dynamodb.Table;
     };
 }
 
@@ -2124,10 +2124,10 @@ export function storageResourcesBuilder(
     });
 
     /////////////////////////////////////////////////////////////////////////////
-    // FMM (Federated Model Management) Tables
+    // Compliance  Tables
     /////////////////////////////////////////////////////////////////////////////
 
-    const fmmSchemaStorageTable = new dynamodb.Table(scope, "FMMSchemaStorageTable", {
+    const complianceSchemaStorageTable = new dynamodb.Table(scope, "ComplianceSchemaStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
             name: "schemaName",
@@ -2139,7 +2139,7 @@ export function storageResourcesBuilder(
         },
     });
 
-    fmmSchemaStorageTable.addGlobalSecondaryIndex({
+    complianceSchemaStorageTable.addGlobalSecondaryIndex({
         indexName: "DatabaseIdIndex",
         partitionKey: {
             name: "databaseId",
@@ -2152,9 +2152,9 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    const fmmAssetComplianceStorageTable = new dynamodb.Table(
+    const complianceAssetStateStorageTable = new dynamodb.Table(
         scope,
-        "FMMAssetComplianceStorageTable",
+        "ComplianceAssetStateStorageTable",
         {
             ...dynamodbDefaultProps,
             partitionKey: {
@@ -2168,7 +2168,7 @@ export function storageResourcesBuilder(
         }
     );
 
-    fmmAssetComplianceStorageTable.addGlobalSecondaryIndex({
+    complianceAssetStateStorageTable.addGlobalSecondaryIndex({
         indexName: "SchemaNameIndex",
         partitionKey: {
             name: "schemaName",
@@ -2181,9 +2181,9 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    const fmmEvaluationStorageTable = new dynamodb.Table(
+    const complianceEvaluationStorageTable = new dynamodb.Table(
         scope,
-        "FMMEvaluationStorageTable",
+        "ComplianceEvaluationStorageTable",
         {
             ...dynamodbDefaultProps,
             partitionKey: {
@@ -2193,7 +2193,7 @@ export function storageResourcesBuilder(
         }
     );
 
-    fmmEvaluationStorageTable.addGlobalSecondaryIndex({
+    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
         indexName: "AssetIndex",
         partitionKey: {
             name: "databaseId:assetId",
@@ -2206,7 +2206,7 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    fmmEvaluationStorageTable.addGlobalSecondaryIndex({
+    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
         indexName: "ExecutionArnIndex",
         partitionKey: {
             name: "executionArn",
@@ -2215,7 +2215,7 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    const fmmCascadeStorageTable = new dynamodb.Table(scope, "FMMCascadeStorageTable", {
+    const complianceCascadeStorageTable = new dynamodb.Table(scope, "ComplianceCascadeStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
             name: "cascadeId",
@@ -2223,7 +2223,7 @@ export function storageResourcesBuilder(
         },
     });
 
-    fmmCascadeStorageTable.addGlobalSecondaryIndex({
+    complianceCascadeStorageTable.addGlobalSecondaryIndex({
         indexName: "StateIndex",
         partitionKey: {
             name: "state",
@@ -2236,7 +2236,7 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    const fmmAuditStorageTable = new dynamodb.Table(scope, "FMMAuditStorageTable", {
+    const complianceAuditStorageTable = new dynamodb.Table(scope, "ComplianceAuditStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
             name: "entryId",
@@ -2244,7 +2244,7 @@ export function storageResourcesBuilder(
         },
     });
 
-    fmmAuditStorageTable.addGlobalSecondaryIndex({
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
         indexName: "AssetIndex",
         partitionKey: {
             name: "databaseId:assetId",
@@ -2257,7 +2257,7 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    fmmAuditStorageTable.addGlobalSecondaryIndex({
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
         indexName: "EventTypeIndex",
         partitionKey: {
             name: "eventType",
@@ -2346,12 +2346,12 @@ export function storageResourcesBuilder(
             pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
-            // FMM tables
-            fmmSchemaStorageTable: fmmSchemaStorageTable,
-            fmmAssetComplianceStorageTable: fmmAssetComplianceStorageTable,
-            fmmEvaluationStorageTable: fmmEvaluationStorageTable,
-            fmmCascadeStorageTable: fmmCascadeStorageTable,
-            fmmAuditStorageTable: fmmAuditStorageTable,
+            // Compliance tables
+            complianceSchemaStorageTable: complianceSchemaStorageTable,
+            complianceAssetStateStorageTable: complianceAssetStateStorageTable,
+            complianceEvaluationStorageTable: complianceEvaluationStorageTable,
+            complianceCascadeStorageTable: complianceCascadeStorageTable,
+            complianceAuditStorageTable: complianceAuditStorageTable,
         },
     };
 

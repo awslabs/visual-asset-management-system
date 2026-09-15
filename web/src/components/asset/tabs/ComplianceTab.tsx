@@ -43,7 +43,7 @@ const stateIndicatorMap: Record<string, { type: string; label: string }> = {
 
 export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetId, isActive }) => {
     const config = appCache.getItem("config");
-    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
 
     const [complianceState, setComplianceState] = useState<ComplianceState | null>(null);
     const [evaluations, setEvaluations] = useState<EvaluationRecord[]>([]);
@@ -53,7 +53,7 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
     const [actionMessage, setActionMessage] = useState<string | null>(null);
 
     useEffect(() => {
-        if (isActive && isFMMEnabled && databaseId && assetId) {
+        if (isActive && isComplianceEnabled && databaseId && assetId) {
             loadComplianceData();
         }
     }, [isActive, databaseId, assetId]);
@@ -116,11 +116,11 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
         }
     };
 
-    if (!isFMMEnabled) {
+    if (!isComplianceEnabled) {
         return (
             <Box padding="l">
                 <Alert type="info">
-                    Federated Model Management (FMM) is not enabled for this deployment. Contact
+                    Compliance is not enabled for this deployment. Contact
                     your administrator to enable compliance features.
                 </Alert>
             </Box>

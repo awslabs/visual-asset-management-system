@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Compliance Admin",
-        "description": "Administrative access for FMM compliance operations. Can manage compliance schemas, trigger evaluations, release quarantined assets, grant exceptions, and approve/reject cascades. Scoped to a specific database.",
+        "description": "Administrative access for Compliance compliance operations. Can manage compliance schemas, trigger evaluations, release quarantined assets, grant exceptions, and approve/reject cascades. Scoped to a specific database.",
         "version": "1.0"
     },
     "variables": [

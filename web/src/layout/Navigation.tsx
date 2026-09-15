@@ -114,7 +114,7 @@ export function Navigation({
     user: any;
 }) {
     const appConfig = appCache.getItem("config");
-    const isFMMEnabled = appConfig?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = appConfig?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
 
     const filteredNavItems = [
         {
@@ -154,7 +154,7 @@ export function Navigation({
                 },
             ],
         },
-        ...(isFMMEnabled
+        ...(isComplianceEnabled
             ? [
                   {
                       type: "section",

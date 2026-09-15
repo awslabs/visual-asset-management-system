@@ -25,7 +25,7 @@ export default function Databases() {
 
     const config = appCache.getItem("config");
     const useMapView = config?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES);
-    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
     const mapStyleUrl = config?.locationServiceApiUrl;
 
     const listDefinition = useMemo(
@@ -35,9 +35,9 @@ export default function Databases() {
                 showMapThumbnails: showMapThumbnails && useMapView,
                 MapThumbnailComponent: DatabaseMapThumbnail,
                 mapStyleUrl,
-                showCompliance: isFMMEnabled,
+                showCompliance: isComplianceEnabled,
             }),
-        [showMapThumbnails, useMapView, mapStyleUrl, isFMMEnabled]
+        [showMapThumbnails, useMapView, mapStyleUrl, isComplianceEnabled]
     );
 
     const mapThumbnailToggle =

@@ -1,22 +1,22 @@
-# Compliance (Federated Model Management)
+# Compliance 
 
-Federated Model Management (FMM) adds schema-driven compliance enforcement to VAMS. It ensures that engineering datasets across federated environments conform to defined standards by evaluating assets against registered JSON schemas, quarantining non-compliant assets, and propagating compliance changes through asset relationship graphs.
+Compliance adds schema-driven compliance enforcement to VAMS. It ensures that engineering datasets across federated environments conform to defined standards by evaluating assets against registered JSON schemas, quarantining non-compliant assets, and propagating compliance changes through asset relationship graphs.
 
-## Enabling FMM
+## Enabling Compliance
 
-FMM is an optional feature controlled by the deployment configuration. To enable it, set the following in your `config.json`:
+Compliance is an optional feature controlled by the deployment configuration. To enable it, set the following in your `config.json`:
 
 ```json
 {
     "app": {
-        "federatedModelManagement": {
+        "compliance": {
             "enabled": true
         }
     }
 }
 ```
 
-When enabled, VAMS deploys five additional Amazon DynamoDB tables, six AWS Lambda functions, and the `/compliance/*` API routes. When disabled (the default), no FMM resources are created.
+When enabled, VAMS deploys five additional Amazon DynamoDB tables, six AWS Lambda functions, and the `/compliance/*` API routes. When disabled (the default), no Compliance resources are created.
 
 ## Core concepts
 
@@ -128,7 +128,7 @@ Every tracked asset has a compliance state:
 
 An evaluation checks an asset against its assigned compliance schema. Evaluations can be triggered in four ways:
 
-1. **On upload** -- when an asset is created or updated, FMM automatically checks whether a schema is registered and triggers evaluation via an Amazon SNS subscription.
+1. **On upload** -- when an asset is created or updated, Compliance automatically checks whether a schema is registered and triggers evaluation via an Amazon SNS subscription.
 2. **On demand (UI)** -- the **Evaluate Now** button on the asset's Compliance tab triggers evaluation and cascade propagation to child assets.
 3. **On demand (API)** -- a call to `POST /compliance/evaluate/\{databaseId\}/\{assetId\}` triggers evaluation for a specific asset.
 4. **Sweep** -- a call to `POST /compliance/sweep/\{schemaName\}` or the **Sweep** button on the Compliance Schemas page triggers evaluation for all assets governed by a specific schema.
@@ -167,7 +167,7 @@ Evaluation Engine                   Step Functions                    EventBridg
      |                                    |-- execution complete ---------> |
      |                                    |                                |
      |<----------------------------------------- EventBridge rule triggers--|
-     |   fmmPipelineCallback                                               |
+     |   complianceWorkflowCallback                                               |
      |   reads compliance-output.json                                      |
      |   compares measurements vs tolerances                               |
      |   merges with metadata/relationship results                         |
@@ -207,15 +207,15 @@ Evaluation Engine                   Step Functions                    EventBridg
 | `checks[].name` | Human-readable check name |
 | `checks[].outputField` | Key in the pipeline's output `measurements` object to evaluate |
 | `checks[].tolerance` | Comparison criteria (operator + value/min/max) |
-| `inputParameters` | Optional parameters passed to the workflow as `fmmContext.inputParameters` |
+| `inputParameters` | Optional parameters passed to the workflow as `complianceContext.inputParameters` |
 
 **Workflow input context:**
 
-The evaluation engine passes an `fmmContext` object in the workflow's `inputMetadata` field:
+The evaluation engine passes an `complianceContext` object in the workflow's `inputMetadata` field:
 
 ```json
 {
-    "fmmContext": {
+    "complianceContext": {
         "evaluationId": "eval-abc123",
         "ruleName": "coord-accuracy",
         "checks": [
@@ -309,7 +309,7 @@ When an asset fails a rule with `quarantine` enforcement level, the asset enters
 
 ### Cascade execution
 
-When a parent asset is evaluated, FMM checks for child assets linked via `parentChild` relationships. If children exist, a cascade is created to propagate re-evaluation through the asset relationship DAG (directed acyclic graph) in topological order (parents before children).
+When a parent asset is evaluated, Compliance checks for child assets linked via `parentChild` relationships. If children exist, a cascade is created to propagate re-evaluation through the asset relationship DAG (directed acyclic graph) in topological order (parents before children).
 
 Cascades are triggered by:
 
@@ -332,7 +332,7 @@ The audit log can be queried by asset, by event type, or across the entire syste
 
 ## API endpoints
 
-All FMM endpoints are under the `/compliance` path prefix and require authentication.
+All Compliance endpoints are under the `/compliance` path prefix and require authentication.
 
 ### Schema management
 
@@ -390,7 +390,7 @@ All FMM endpoints are under the `/compliance` path prefix and require authentica
 
 ## Authorization model
 
-FMM compliance operations are protected by the same two-tier Casbin ABAC/RBAC system used across VAMS. Both tiers must allow access for any operation to succeed.
+Compliance compliance operations are protected by the same two-tier Casbin ABAC/RBAC system used across VAMS. Both tiers must allow access for any operation to succeed.
 
 ### Tier 1: API route access
 
@@ -431,16 +431,16 @@ For detailed permission configuration instructions, see [User Guide: Compliance 
 
 ## System pipelines and workflows
 
-FMM introduces the `isSystem` flag for pipelines and workflows. When a pipeline or workflow is marked as `isSystem: true`, Casbin ABAC policies can restrict modification or deletion to administrators only. This protects compliance-critical processing from accidental changes.
+Compliance introduces the `isSystem` flag for pipelines and workflows. When a pipeline or workflow is marked as `isSystem: true`, Casbin ABAC policies can restrict modification or deletion to administrators only. This protects compliance-critical processing from accidental changes.
 
 ## Amazon DynamoDB tables
 
-FMM creates five dedicated tables:
+Compliance creates five dedicated tables:
 
 | Table                         | Primary key                       | GSI                            | Purpose                           |
 | ----------------------------- | --------------------------------- | ------------------------------ | --------------------------------- |
-| FMM Schema Storage            | `schemaName` (PK), `internalVersion` (SK) | --                    | Schema definitions and versions   |
-| FMM Asset Compliance Storage  | `databaseId` (PK), `assetId` (SK) | `SchemaNameIndex` (PK: schemaName) | Per-asset compliance state        |
-| FMM Evaluation Storage        | `evaluationId` (PK)              | `AssetIndex` (PK: databaseId:assetId) | Evaluation records with rule results and violations |
-| FMM Cascade Storage           | `cascadeId` (PK)                  | --                             | Cascade execution state           |
-| FMM Audit Storage             | `entryId` (PK)                    | `AssetIndex` (PK: databaseId:assetId, SK: timestamp) | Full audit trail |
+| Compliance Schema Storage            | `schemaName` (PK), `internalVersion` (SK) | --                    | Schema definitions and versions   |
+| Compliance Asset State Storage  | `databaseId` (PK), `assetId` (SK) | `SchemaNameIndex` (PK: schemaName) | Per-asset compliance state        |
+| Compliance Evaluation Storage        | `evaluationId` (PK)              | `AssetIndex` (PK: databaseId:assetId) | Evaluation records with rule results and violations |
+| Compliance Cascade Storage           | `cascadeId` (PK)                  | --                             | Cascade execution state           |
+| Compliance Audit Storage             | `entryId` (PK)                    | `AssetIndex` (PK: databaseId:assetId, SK: timestamp) | Full audit trail |

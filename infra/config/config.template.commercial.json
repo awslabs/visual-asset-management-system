@@ -340,7 +340,7 @@
             "autoLoadDefaultAssetSchema": true,
             "autoLoadDefaultAssetFileSchema": true
         },
-        "federatedModelManagement": {
+        "compliance": {
             "enabled": false,
             "autoLoadDefaultSchema": true
         }

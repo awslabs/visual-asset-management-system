@@ -88,7 +88,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
 
     // Compliance schema binding
     const config = appCache.getItem("config");
-    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
@@ -181,7 +181,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     }, [tagScopeDatabaseId]);
 
     useEffect(() => {
-        if (!isFMMEnabled) return;
+        if (!isComplianceEnabled) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
             const [success, result] = await fetchComplianceSchemas();
@@ -193,7 +193,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [isFMMEnabled]);
+    }, [isComplianceEnabled]);
 
     useEffect(() => {
         // Form Validation Error Check
@@ -238,7 +238,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                 setInProgress(true);
                                 setIsFormTouched(true);
                                 await update(assetDetail, setError, setComplete, isValid);
-                                if (isFMMEnabled && isValid && assetDetail.databaseId && assetDetail.assetId) {
+                                if (isComplianceEnabled && isValid && assetDetail.databaseId && assetDetail.assetId) {
                                     if (selectedSchema?.value) {
                                         await bindSchemaToAsset(
                                             assetDetail.databaseId,
@@ -342,7 +342,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         }}
                     />
                 </FormField>
-                {isFMMEnabled && (
+                {isComplianceEnabled && (
                     <FormField
                         label="Compliance Schema"
                         description="Override the database-level compliance schema for this asset. Clear to inherit from the database."

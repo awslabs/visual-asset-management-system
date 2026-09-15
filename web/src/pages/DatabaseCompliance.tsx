@@ -38,7 +38,7 @@ const stateIndicatorMap: Record<string, { type: string; label: string }> = {
 const DatabaseCompliancePage: React.FC = () => {
     const { databaseId } = useParams();
     const config = appCache.getItem("config");
-    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
 
     const [overview, setOverview] = useState<DatabaseComplianceOverview | null>(null);
     const [databaseSchema, setDatabaseSchema] = useState<string | null>(null);
@@ -72,10 +72,10 @@ const DatabaseCompliancePage: React.FC = () => {
     }, [databaseId]);
 
     useEffect(() => {
-        if (isFMMEnabled && databaseId) {
+        if (isComplianceEnabled && databaseId) {
             loadData();
         }
-    }, [isFMMEnabled, databaseId, loadData]);
+    }, [isComplianceEnabled, databaseId, loadData]);
 
     const handleEvaluateAll = async () => {
         if (!databaseSchema) {
@@ -97,11 +97,11 @@ const DatabaseCompliancePage: React.FC = () => {
         setSweeping(false);
     };
 
-    if (!isFMMEnabled) {
+    if (!isComplianceEnabled) {
         return (
             <Box padding="l">
                 <Alert type="info">
-                    Federated Model Management (FMM) is not enabled for this deployment.
+                    Compliance is not enabled for this deployment.
                 </Alert>
             </Box>
         );

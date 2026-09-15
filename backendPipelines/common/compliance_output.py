@@ -1,8 +1,11 @@
+#  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  SPDX-License-Identifier: Apache-2.0
+
 """
-FMM Compliance Output Utility
+Compliance Output Utility
 
 Provides a standard interface for VAMS pipelines to write compliance
-measurement output that the FMM pipeline callback handler can consume.
+measurement output that the Compliance pipeline callback handler can consume.
 
 Usage in a pipeline Lambda or container:
 
@@ -16,7 +19,7 @@ Usage in a pipeline Lambda or container:
         s3_client=s3_client,
         bucket=output_bucket,
         output_metadata_path=data["outputS3AssetMetadataPath"],
-        evaluation_id=fmm_context.get("evaluationId"),
+        evaluation_id=compliance_context.get("evaluationId"),
         database_id=data["databaseId"],
         asset_id=data["assetId"],
         measurements=measurements,
@@ -37,7 +40,7 @@ The output file (compliance-output.json) follows this schema:
     }
 
 The "measurements" keys must match the "outputField" values defined in the
-compliance schema's pipeline rule checks. The FMM callback handler compares
+compliance schema's pipeline rule checks. The Compliance callback handler compares
 each measurement against the tolerance defined in the schema.
 """
 
@@ -62,13 +65,13 @@ def write_compliance_output(
 
     Writes to TWO locations for redundancy:
     1. The standard metadata output path (picked up by process-output step)
-    2. A well-known compliance path (direct lookup by FMM callback)
+    2. A well-known compliance path (direct lookup by Compliance callback)
 
     Args:
         s3_client: boto3 S3 client
         bucket: S3 bucket name (from event's bucketAsset)
         output_metadata_path: S3 URI or key prefix for metadata outputs
-        evaluation_id: FMM evaluation ID from fmmContext
+        evaluation_id: Compliance evaluation ID from complianceContext
         database_id: VAMS database ID
         asset_id: VAMS asset ID
         measurements: Dict of output field names to numeric values
@@ -114,13 +117,13 @@ def write_compliance_output(
     return primary_key
 
 
-def parse_fmm_context(event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Extract FMM context from pipeline event data if present.
+def parse_compliance_context(event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract Compliance context from pipeline event data if present.
 
-    The FMM context is embedded in the inputMetadata JSON field by the
-    evaluation engine. Falls back to checking a top-level fmmContext field.
+    The Compliance context is embedded in the inputMetadata JSON field by the
+    evaluation engine. Falls back to checking a top-level complianceContext field.
 
-    Returns None if this is not an FMM-triggered execution.
+    Returns None if this is not an Compliance-triggered execution.
     """
     input_metadata_raw = event_data.get("inputMetadata", "")
     if input_metadata_raw:
@@ -134,20 +137,20 @@ def parse_fmm_context(event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         else:
             input_metadata = {}
 
-        fmm_context = input_metadata.get("fmmContext")
-        if fmm_context and isinstance(fmm_context, dict):
-            return fmm_context
+        compliance_context = input_metadata.get("complianceContext")
+        if compliance_context and isinstance(compliance_context, dict):
+            return compliance_context
 
-    fmm_context_raw = event_data.get("fmmContext")
-    if not fmm_context_raw:
+    compliance_context_raw = event_data.get("complianceContext")
+    if not compliance_context_raw:
         return None
-    if isinstance(fmm_context_raw, str):
+    if isinstance(compliance_context_raw, str):
         try:
-            return json.loads(fmm_context_raw)
+            return json.loads(compliance_context_raw)
         except (json.JSONDecodeError, TypeError):
             return None
-    if isinstance(fmm_context_raw, dict):
-        return fmm_context_raw
+    if isinstance(compliance_context_raw, dict):
+        return compliance_context_raw
     return None
 
 

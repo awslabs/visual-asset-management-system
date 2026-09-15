@@ -445,13 +445,13 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
 
     // Compliance schema binding
     const appConfig = appCache.getItem("config");
-    const isFMMEnabled = appConfig?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = appConfig?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
 
     useEffect(() => {
-        if (!isFMMEnabled) return;
+        if (!isComplianceEnabled) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
             const [success, result] = await fetchComplianceSchemas();
@@ -463,7 +463,7 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [isFMMEnabled]);
+    }, [isComplianceEnabled]);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -652,7 +652,7 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                     />
                 </FormField>
 
-                {isFMMEnabled && (
+                {isComplianceEnabled && (
                     <FormField
                         label="Compliance Schema"
                         description="Override the database-level compliance schema for this asset. Leave empty to inherit from the database."

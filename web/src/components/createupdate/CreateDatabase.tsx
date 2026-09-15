@@ -153,16 +153,16 @@ export default function CreateDatabase({
 
     // Compliance schema binding
     const config = appCache.getItem("config");
-    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
 
     const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
 
-    // Fetch compliance schemas when FMM is enabled
+    // Fetch compliance schemas when Compliance is enabled
     useEffect(() => {
-        if (!isFMMEnabled) return;
+        if (!isComplianceEnabled) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
             const [success, result] = await fetchComplianceSchemas();
@@ -174,11 +174,11 @@ export default function CreateDatabase({
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [isFMMEnabled]);
+    }, [isComplianceEnabled]);
 
     // Load current schema binding when editing
     useEffect(() => {
-        if (!isFMMEnabled || !initState?.databaseId) return;
+        if (!isComplianceEnabled || !initState?.databaseId) return;
         const loadBinding = async () => {
             const [success, result] = await getDatabaseBindings(initState.databaseId);
             if (success && typeof result !== "string" && result.databaseSchema) {
@@ -187,7 +187,7 @@ export default function CreateDatabase({
             }
         };
         loadBinding();
-    }, [isFMMEnabled, initState?.databaseId]);
+    }, [isComplianceEnabled, initState?.databaseId]);
 
     // Fetch buckets when component loads
     useEffect(() => {
@@ -280,7 +280,7 @@ export default function CreateDatabase({
                                 apiCall
                                     .then(async (res) => {
                                         if (res && res[0]) {
-                                            if (isFMMEnabled) {
+                                            if (isComplianceEnabled) {
                                                 if (selectedSchema?.value) {
                                                     if (selectedSchema.value !== initialSchemaValue) {
                                                         await bindSchemaToDatabase(
@@ -445,7 +445,7 @@ export default function CreateDatabase({
                                 data-testid="database-file-extensions"
                             />
                         </FormField>
-                        {isFMMEnabled && (
+                        {isComplianceEnabled && (
                             <FormField
                                 label="Compliance Schema"
                                 description="Bind a compliance schema to this database. All assets in the database will inherit this schema unless overridden at the asset level."

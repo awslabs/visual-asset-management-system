@@ -343,11 +343,11 @@ export function buildDownloadAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
-            ...(config.app.federatedModelManagement?.enabled &&
-                config.app.federatedModelManagement?.quarantineBlocksDownload && {
-                    FMM_QUARANTINE_BLOCKS_DOWNLOAD: "true",
-                    FMM_ASSET_COMPLIANCE_STORAGE_TABLE_NAME:
-                        storageResources.dynamo.fmmAssetComplianceStorageTable.tableName,
+            ...(config.app.compliance?.enabled &&
+                config.app.compliance?.quarantineBlocksDownload && {
+                    COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+                    COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME:
+                        storageResources.dynamo.complianceAssetStateStorageTable.tableName,
                 }),
         },
     });
@@ -358,10 +358,10 @@ export function buildDownloadAssetFunction(
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
 
     if (
-        config.app.federatedModelManagement?.enabled &&
-        config.app.federatedModelManagement?.quarantineBlocksDownload
+        config.app.compliance?.enabled &&
+        config.app.compliance?.quarantineBlocksDownload
     ) {
-        storageResources.dynamo.fmmAssetComplianceStorageTable.grantReadData(fun);
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
     }
 
     grantReadPermissionsToAllAssetBuckets(fun);
@@ -454,11 +454,11 @@ export function buildStreamAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
-            ...(config.app.federatedModelManagement?.enabled &&
-                config.app.federatedModelManagement?.quarantineBlocksDownload && {
-                    FMM_QUARANTINE_BLOCKS_DOWNLOAD: "true",
-                    FMM_ASSET_COMPLIANCE_STORAGE_TABLE_NAME:
-                        storageResources.dynamo.fmmAssetComplianceStorageTable.tableName,
+            ...(config.app.compliance?.enabled &&
+                config.app.compliance?.quarantineBlocksDownload && {
+                    COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+                    COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME:
+                        storageResources.dynamo.complianceAssetStateStorageTable.tableName,
                 }),
         },
     });
@@ -468,9 +468,9 @@ export function buildStreamAssetFunction(
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
 
-    if (config.app.federatedModelManagement?.enabled &&
-        config.app.federatedModelManagement?.quarantineBlocksDownload) {
-        storageResources.dynamo.fmmAssetComplianceStorageTable.grantReadData(fun);
+    if (config.app.compliance?.enabled &&
+        config.app.compliance?.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
     }
 
     grantReadPermissionsToAllAssetBuckets(fun);

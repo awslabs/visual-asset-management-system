@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Compliance Readonly",
-        "description": "Read-only access for FMM compliance operations. Can view compliance schemas, evaluation state, audit logs, and cascade status. Cannot trigger evaluations, modify schemas, or release quarantined assets.",
+        "description": "Read-only access for Compliance compliance operations. Can view compliance schemas, evaluation state, audit logs, and cascade status. Cannot trigger evaluations, modify schemas, or release quarantined assets.",
         "version": "1.0"
     },
     "variables": [

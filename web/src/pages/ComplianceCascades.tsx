@@ -29,7 +29,7 @@ const statusIndicatorMap: Record<string, { type: string; label: string }> = {
 
 const ComplianceCascades: React.FC = () => {
     const config = appCache.getItem("config");
-    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
 
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -49,10 +49,10 @@ const ComplianceCascades: React.FC = () => {
     }, []);
 
     useEffect(() => {
-        if (isFMMEnabled) {
+        if (isComplianceEnabled) {
             loadData();
         }
-    }, [isFMMEnabled, loadData]);
+    }, [isComplianceEnabled, loadData]);
 
     const handleApprove = async (cascadeId: string) => {
         setActionMessage(null);
@@ -80,11 +80,11 @@ const ComplianceCascades: React.FC = () => {
         }
     };
 
-    if (!isFMMEnabled) {
+    if (!isComplianceEnabled) {
         return (
             <Box padding="l">
                 <Alert type="info">
-                    Federated Model Management (FMM) is not enabled for this deployment.
+                    Compliance is not enabled for this deployment.
                 </Alert>
             </Box>
         );

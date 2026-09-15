@@ -56,9 +56,9 @@ try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
     quarantine_blocks_download = os.environ.get(
-        "FMM_QUARANTINE_BLOCKS_DOWNLOAD", "false"
+        "COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD", "false"
     ).lower() == "true"
-    compliance_table_name = os.environ.get("FMM_ASSET_COMPLIANCE_STORAGE_TABLE_NAME")
+    compliance_table_name = os.environ.get("COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e

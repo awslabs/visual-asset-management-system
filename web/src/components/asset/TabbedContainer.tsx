@@ -38,7 +38,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     onSelectedPathChange,
 }) => {
     const config = appCache.getItem("config");
-    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
 
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
@@ -136,7 +136,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                     </Suspense>
                                 ),
                             },
-                            ...(isFMMEnabled
+                            ...(isComplianceEnabled
                                 ? [
                                       {
                                           id: "compliance",

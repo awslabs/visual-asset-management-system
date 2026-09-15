@@ -62,20 +62,20 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const [isSubscribing, setIsSubscribing] = useState<boolean>(false);
     const [userName, setUserName] = useState<string>("");
 
-    // FMM compliance badge state
+    // Compliance compliance badge state
     const config = appCache.getItem("config");
-    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
     const [complianceBadge, setComplianceBadge] = useState<ComplianceState | null>(null);
 
     useEffect(() => {
-        if (isFMMEnabled && asset?.assetId && databaseId) {
+        if (isComplianceEnabled && asset?.assetId && databaseId) {
             fetchComplianceState(databaseId, asset.assetId).then(([success, result]) => {
                 if (success && typeof result !== "string") {
                     setComplianceBadge(result);
                 }
             });
         }
-    }, [isFMMEnabled, asset?.assetId, databaseId]);
+    }, [isComplianceEnabled, asset?.assetId, databaseId]);
 
     // Asset preview thumbnail state
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
@@ -257,7 +257,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             <span style={{ fontSize: "1.2em" }}>
                                 {asset?.assetName || `${Synonyms.Asset} Details`}
                             </span>
-                            {isFMMEnabled && complianceBadge && (
+                            {isComplianceEnabled && complianceBadge && (
                                 <Badge
                                     color={
                                         complianceBadge.state === "compliant"

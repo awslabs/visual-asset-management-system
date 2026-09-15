@@ -157,7 +157,7 @@ VAMS includes pre-built permission templates for common access patterns such as 
 
 ### Compliance permission templates
 
-When FMM (Federated Model Management) is enabled, two additional templates are available:
+When Compliance  is enabled, two additional templates are available:
 
 | Template | Description |
 | --- | --- |
