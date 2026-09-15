@@ -3,56 +3,56 @@
 
 """Compliance Cascade Executor.
 
-Discovers downstream children via DAG traversal, computes topological order,
-and executes compliance evaluation on each child in dependency order.
+Discovers an asset's downstream descendants through the asset-link DAG, orders them
+topologically (parents before children) and evaluates each against its bound schema,
+recording per-node progress on the cascade row.
 """
 
 import json
-import os
-import uuid
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set
 
 import boto3
-from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 
+from common.resourceNames import ResourceKeys, get_table_name
 from customLogging.logger import safeLogger
+from handlers.compliance import complianceEvaluationStore as store
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 logger = safeLogger(service_name="ComplianceCascadeExecutor")
 
+CASCADE_STATE_EXECUTING = "executing"
+CASCADE_STATE_COMPLETED = "completed"
+
+NODE_STATE_PENDING = "pending"
+NODE_STATE_EVALUATING = "evaluating"
+NODE_STATE_SKIPPED = "skipped"
+NODE_STATE_ERROR = "error"
+
+# Bound on the descendants one cascade evaluates; a DAG larger than this is truncated and the
+# omission recorded on the cascade row, so a runaway graph cannot exhaust the Lambda timeout.
+MAX_CASCADE_NODES = 500
+
 try:
-    cascade_table_name = os.environ["COMPLIANCE_CASCADE_STORAGE_TABLE_NAME"]
-    asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    audit_table_name = os.environ["COMPLIANCE_AUDIT_STORAGE_TABLE_NAME"]
+    cascade_table_name = get_table_name(ResourceKeys.COMPLIANCE_CASCADE_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names")
     raise e
 
 cascade_table = dynamodb.Table(cascade_table_name)
-asset_links_table = dynamodb.Table(asset_links_table_name)
-audit_table = dynamodb.Table(audit_table_name)
 
 
-def discover_children(
-    database_id: str, asset_id: str
-) -> List[Dict[str, str]]:
-    """Find all direct children of an asset via the fromAssetGSI.
+def _node_key(database_id: str, asset_id: str) -> str:
+    return f"{database_id}:{asset_id}"
 
-    Returns list of dicts with databaseId and assetId for each child.
-    """
-    asset_key = f"{database_id}:{asset_id}"
-    response = asset_links_table.query(
-        IndexName="fromAssetGSI",
-        KeyConditionExpression=Key("fromAssetDatabaseId:fromAssetId").eq(
-            asset_key
-        ),
-    )
+
+def discover_children(database_id: str, asset_id: str) -> List[Dict[str, str]]:
+    """Direct children of an asset (link rows where the asset is the `from` side)."""
     children = []
-    for item in response.get("Items", []):
+    for item in store.get_child_links(database_id, asset_id):
         child_db = item.get("toAssetDatabaseId")
         child_asset = item.get("toAssetId")
         if child_db and child_asset:
@@ -60,31 +60,25 @@ def discover_children(
     return children
 
 
-def discover_all_descendants(
-    database_id: str, asset_id: str
-) -> List[Dict[str, str]]:
-    """BFS traversal to find all downstream descendants in the DAG.
-
-    Returns list of all descendants (not including the source asset).
-    """
-    visited: Set[str] = set()
-    queue: deque = deque()
+def discover_all_descendants(database_id: str, asset_id: str) -> List[Dict[str, str]]:
+    """Every downstream descendant of an asset (breadth-first; the source is excluded),
+    bounded by MAX_CASCADE_NODES."""
+    visited: Set[str] = {_node_key(database_id, asset_id)}
+    queue: deque = deque([(database_id, asset_id)])
     descendants: List[Dict[str, str]] = []
 
-    source_key = f"{database_id}:{asset_id}"
-    visited.add(source_key)
-    queue.append((database_id, asset_id))
-
-    while queue:
+    while queue and len(descendants) < MAX_CASCADE_NODES:
         current_db, current_asset = queue.popleft()
-        children = discover_children(current_db, current_asset)
-        for child in children:
-            child_key = f"{child['databaseId']}:{child['assetId']}"
-            if child_key not in visited:
-                visited.add(child_key)
-                descendants.append(child)
-                queue.append((child['databaseId'], child['assetId']))
-
+        for child in discover_children(current_db, current_asset):
+            child_key = _node_key(child["databaseId"], child["assetId"])
+            if child_key in visited:
+                continue
+            visited.add(child_key)
+            descendants.append(child)
+            queue.append((child["databaseId"], child["assetId"]))
+            if len(descendants) >= MAX_CASCADE_NODES:
+                logger.warning(f"Cascade descendant discovery stopped at the {MAX_CASCADE_NODES}-node bound")
+                break
     return descendants
 
 
@@ -93,203 +87,142 @@ def topological_sort(
     source_asset_id: str,
     descendants: List[Dict[str, str]],
 ) -> List[Dict[str, str]]:
-    """Compute execution order using Kahn's algorithm (BFS topological sort).
-
-    Returns descendants ordered so parents are processed before children.
-    """
-    all_keys = {
-        f"{d['databaseId']}:{d['assetId']}" for d in descendants
-    }
-    source_key = f"{source_database_id}:{source_asset_id}"
+    """Descendants ordered so every parent precedes its children (Kahn's algorithm over the
+    edges among the discovered nodes)."""
+    all_keys = {_node_key(d["databaseId"], d["assetId"]) for d in descendants}
+    source_key = _node_key(source_database_id, source_asset_id)
     all_keys.add(source_key)
 
     in_degree: Dict[str, int] = {k: 0 for k in all_keys}
-    adj: Dict[str, List[str]] = {k: [] for k in all_keys}
+    adjacency: Dict[str, List[str]] = {k: [] for k in all_keys}
 
     for node in descendants:
-        node_key = f"{node['databaseId']}:{node['assetId']}"
-        parents = _get_parent_keys(node["databaseId"], node["assetId"])
-        for parent_key in parents:
+        node_key = _node_key(node["databaseId"], node["assetId"])
+        for parent_key in _parent_keys(node["databaseId"], node["assetId"]):
             if parent_key in all_keys:
-                adj[parent_key].append(node_key)
+                adjacency[parent_key].append(node_key)
                 in_degree[node_key] += 1
 
-    queue: deque = deque()
-    for key, degree in in_degree.items():
-        if degree == 0:
-            queue.append(key)
-
-    sorted_keys: List[str] = []
+    queue: deque = deque(key for key, degree in in_degree.items() if degree == 0)
+    ordered: List[str] = []
     while queue:
         current = queue.popleft()
-        sorted_keys.append(current)
-        for neighbor in adj.get(current, []):
+        ordered.append(current)
+        for neighbor in adjacency.get(current, []):
             in_degree[neighbor] -= 1
             if in_degree[neighbor] == 0:
                 queue.append(neighbor)
 
     result = []
-    for key in sorted_keys:
+    for key in ordered:
         if key == source_key:
             continue
         db_id, asset_id = key.split(":", 1)
         result.append({"databaseId": db_id, "assetId": asset_id})
-
     return result
 
 
+def _parent_keys(database_id: str, asset_id: str) -> List[str]:
+    """Composite keys of an asset's parents (link rows where the asset is the `to` side)."""
+    parents = []
+    for item in store.get_parent_links(database_id, asset_id):
+        parent_db = item.get("fromAssetDatabaseId")
+        parent_asset = item.get("fromAssetId")
+        if parent_db and parent_asset:
+            parents.append(_node_key(parent_db, parent_asset))
+    return parents
+
+
 def execute_cascade(cascade_id: str) -> Dict[str, Any]:
-    """Execute an approved cascade: evaluate children in topological order.
-
-    Updates cascade record with progress and results.
-    """
-    cascade = cascade_table.get_item(
-        Key={"cascadeId": cascade_id}
-    ).get("Item")
-
+    """Execute an approved cascade: evaluate the source's descendants in topological order and
+    record progress and results on the cascade row."""
+    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
     if not cascade:
         logger.error(f"Cascade {cascade_id} not found")
-        return {"error": "Cascade not found"}
-
-    if cascade.get("state") != "executing":
-        logger.info(f"Cascade {cascade_id} not in executing state")
-        return {"error": "Cascade not in executing state"}
+        return {"cascadeId": cascade_id, "error": "Cascade not found"}
+    if cascade.get("state") != CASCADE_STATE_EXECUTING:
+        logger.info(f"Cascade {cascade_id} is not in the executing state")
+        return {"cascadeId": cascade_id, "error": "Cascade not in executing state"}
 
     source_db = cascade["triggeredByDatabaseId"]
     source_asset = cascade["triggeredByAssetId"]
 
     descendants = discover_all_descendants(source_db, source_asset)
-
     if not descendants:
-        _complete_cascade(cascade_id, [], "completed")
-        return {"cascadeId": cascade_id, "status": "completed", "evaluated": 0}
+        _complete_cascade(cascade_id, [])
+        return {"cascadeId": cascade_id, "status": CASCADE_STATE_COMPLETED, "evaluated": 0,
+                "results": []}
 
     execution_order = topological_sort(source_db, source_asset, descendants)
+    nodes = {_node_key(n["databaseId"], n["assetId"]): NODE_STATE_PENDING for n in execution_order}
 
     cascade_table.update_item(
         Key={"cascadeId": cascade_id},
-        UpdateExpression=(
-            "SET executionOrder = :order, "
-            "nodes = :nodes, "
-            "totalNodes = :total"
-        ),
+        UpdateExpression="SET executionOrder = :order, nodes = :nodes, totalNodes = :total",
         ExpressionAttributeValues={
-            ":order": json.dumps(
-                [f"{n['databaseId']}:{n['assetId']}" for n in execution_order]
-            ),
-            ":nodes": json.dumps({
-                f"{n['databaseId']}:{n['assetId']}": "pending"
-                for n in execution_order
-            }),
+            ":order": json.dumps(list(nodes.keys())),
+            ":nodes": json.dumps(nodes),
             ":total": len(execution_order),
         },
     )
 
-    from common.compliance.evaluationEngine import evaluate_asset as run_evaluation
-
     results = []
     for node in execution_order:
-        node_key = f"{node['databaseId']}:{node['assetId']}"
-        schema_name = _get_asset_schema(node["databaseId"], node["assetId"])
-
+        node_key = _node_key(node["databaseId"], node["assetId"])
+        schema_name = (store.get_compliance_record(node["databaseId"], node["assetId"]) or {}).get(
+            "schemaName", "")
         if not schema_name:
-            _update_node_state(cascade_id, node_key, "skipped")
-            results.append({"node": node_key, "status": "skipped"})
+            nodes[node_key] = NODE_STATE_SKIPPED
+            _write_nodes(cascade_id, nodes)
+            results.append({"node": node_key, "status": NODE_STATE_SKIPPED})
             continue
 
-        _update_node_state(cascade_id, node_key, "evaluating")
-
+        nodes[node_key] = NODE_STATE_EVALUATING
+        _write_nodes(cascade_id, nodes)
         try:
-            eval_result = run_evaluation(
-                node["databaseId"], node["assetId"],
-                schema_name, "cascade",
-            )
-            verdict = eval_result.get("verdict", "error")
-            _update_node_state(cascade_id, node_key, verdict)
-            results.append({"node": node_key, "status": verdict})
+            evaluation = store.run_evaluation(
+                node["databaseId"], node["assetId"], schema_name, "cascade")
+            verdict = evaluation.get("verdict", NODE_STATE_ERROR)
+            nodes[node_key] = verdict
+            results.append({"node": node_key, "status": verdict,
+                            "evaluationId": evaluation.get("evaluationId")})
         except Exception as e:
             logger.exception(f"Cascade evaluation failed for {node_key}: {e}")
-            _update_node_state(cascade_id, node_key, "error")
-            results.append({"node": node_key, "status": "error"})
+            nodes[node_key] = NODE_STATE_ERROR
+            results.append({"node": node_key, "status": NODE_STATE_ERROR})
+        _write_nodes(cascade_id, nodes)
 
-    _complete_cascade(cascade_id, results, "completed")
+    _complete_cascade(cascade_id, results)
 
-    _write_audit(
+    store.write_audit(
         source_db, source_asset,
         event_type="cascade_completed",
-        actor="system",
-        details={
-            "cascadeId": cascade_id,
-            "nodesEvaluated": len(results),
-        },
+        actor=store.SYSTEM_ACTOR,
+        cascade_id=cascade_id,
+        details={"nodesEvaluated": len(results)},
     )
 
     try:
         from handlers.compliance.complianceNotifications import notify_cascade_completed
 
-        results_summary: Dict[str, int] = {}
-        for r in results:
-            status = r.get("status", "unknown")
-            results_summary[status] = results_summary.get(status, 0) + 1
-        notify_cascade_completed(
-            source_db, source_asset, cascade_id, results_summary
-        )
+        summary: Dict[str, int] = {}
+        for result in results:
+            status = result.get("status", "unknown")
+            summary[status] = summary.get(status, 0) + 1
+        notify_cascade_completed(source_db, source_asset, cascade_id, summary)
     except Exception as e:
         logger.exception(f"Failed sending cascade completion notification: {e}")
 
     return {
         "cascadeId": cascade_id,
-        "status": "completed",
+        "status": CASCADE_STATE_COMPLETED,
         "evaluated": len(results),
         "results": results,
     }
 
 
-def _get_parent_keys(database_id: str, asset_id: str) -> List[str]:
-    """Get composite keys of all parents of an asset."""
-    asset_key = f"{database_id}:{asset_id}"
-    response = asset_links_table.query(
-        IndexName="toAssetGSI",
-        KeyConditionExpression=Key("toAssetDatabaseId:toAssetId").eq(
-            asset_key
-        ),
-    )
-    parents = []
-    for item in response.get("Items", []):
-        parent_db = item.get("fromAssetDatabaseId")
-        parent_asset = item.get("fromAssetId")
-        if parent_db and parent_asset:
-            parents.append(f"{parent_db}:{parent_asset}")
-    return parents
-
-
-def _get_asset_schema(database_id: str, asset_id: str) -> str:
-    """Look up the compliance schema for an asset."""
-    compliance_table_name = os.environ.get(
-        "COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME"
-    )
-    if not compliance_table_name:
-        return ""
-    compliance_table = dynamodb.Table(compliance_table_name)
-    response = compliance_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id}
-    )
-    item = response.get("Item")
-    if item:
-        return item.get("schemaName", "")
-    return ""
-
-
-def _update_node_state(cascade_id: str, node_key: str, state: str):
-    """Update the state of a single node within a cascade."""
-    cascade = cascade_table.get_item(
-        Key={"cascadeId": cascade_id}
-    ).get("Item")
-    if not cascade:
-        return
-
-    nodes = json.loads(cascade.get("nodes", "{}"))
-    nodes[node_key] = state
+def _write_nodes(cascade_id: str, nodes: Dict[str, str]) -> None:
+    """Store the per-node state map on the cascade row."""
     cascade_table.update_item(
         Key={"cascadeId": cascade_id},
         UpdateExpression="SET nodes = :nodes",
@@ -297,44 +230,15 @@ def _update_node_state(cascade_id: str, node_key: str, state: str):
     )
 
 
-def _complete_cascade(
-    cascade_id: str, results: List[Dict], final_state: str
-):
-    """Mark cascade as completed."""
-    now = datetime.now(timezone.utc).isoformat()
+def _complete_cascade(cascade_id: str, results: List[Dict[str, Any]]) -> None:
+    """Mark the cascade completed with its results."""
     cascade_table.update_item(
         Key={"cascadeId": cascade_id},
-        UpdateExpression=(
-            "SET #s = :state, completedAt = :now, "
-            "results = :results"
-        ),
+        UpdateExpression="SET #s = :state, completedAt = :now, results = :results",
         ExpressionAttributeNames={"#s": "state"},
         ExpressionAttributeValues={
-            ":state": final_state,
-            ":now": now,
+            ":state": CASCADE_STATE_COMPLETED,
+            ":now": datetime.now(timezone.utc).isoformat(),
             ":results": json.dumps(results),
         },
-    )
-
-
-def _write_audit(
-    database_id: str,
-    asset_id: str,
-    event_type: str,
-    actor: str,
-    details: Dict[str, Any] = None,
-):
-    """Write an audit log entry."""
-    now = datetime.now(timezone.utc).isoformat()
-    audit_table.put_item(
-        Item={
-            "entryId": str(uuid.uuid4()),
-            "databaseId:assetId": f"{database_id}:{asset_id}",
-            "timestamp": now,
-            "eventType": event_type,
-            "databaseId": database_id,
-            "assetId": asset_id,
-            "actor": actor,
-            "details": json.dumps(details or {}),
-        }
     )

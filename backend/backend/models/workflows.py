@@ -239,7 +239,6 @@ class WorkflowRecordV2(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
-    isSystem: Optional[bool] = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""
@@ -313,7 +312,6 @@ class CreateWorkflowRequestModel(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = Field(default_factory=dict)
     subDashboardUrl: Optional[str] = Field("", max_length=2048)
     enabled: Optional[bool] = True
-    isSystem: Optional[bool] = False
 
     # workflowName and category are the ABAC CONSTRAINT fields (surfaced as `name` / `category` on
     # the Tier-2 Casbin object) and both reach single-line log entries, so a control character in
@@ -398,7 +396,6 @@ class WorkflowResponseModel(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
-    isSystem: Optional[bool] = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""

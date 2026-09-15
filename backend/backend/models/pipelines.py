@@ -704,7 +704,6 @@ class CreatePipelineRequestModel(BaseModel, extra='ignore'):
     executionConfig: Dict[str, Any] = Field(default_factory=dict)
     systemConfig: Optional[Dict[str, Any]] = Field(default_factory=dict)
     enabled: Optional[bool] = True
-    isSystem: Optional[bool] = False
 
     # pipelineName and category are the ABAC CONSTRAINT fields (surfaced as `name` / `category` on
     # the Tier-2 Casbin object) and both reach single-line log entries, so a control character in
@@ -775,7 +774,6 @@ class PipelineResponseModel(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = {}
     enabled: bool = True
     archived: bool = False
-    isSystem: Optional[bool] = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""

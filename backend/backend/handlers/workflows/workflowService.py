@@ -788,8 +788,6 @@ def archive_workflow(database_id, workflow_id, username, claims_and_roles, event
         return validation_error(status_code=404, body={"message": "Workflow not found"})
     if not _enforce_workflow(claims_and_roles, item, "DELETE"):
         return authorization_error()
-    if item.get("isSystem"):
-        return validation_error(body={"message": "System-managed workflows cannot be archived"})
     if not _write_workflow_updates(database_id, workflow_id, {
         "archived": True,
         "enabled": False,

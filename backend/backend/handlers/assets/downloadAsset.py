@@ -73,7 +73,11 @@ try:
     quarantine_blocks_download = os.environ.get(
         "COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD", "false"
     ).lower() == "true"
-    compliance_table_name = os.environ.get("COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME")
+    # The compliance asset-state table is read only when the quarantine block is on.
+    compliance_asset_state_table_name = (
+        get_table_name(ResourceKeys.COMPLIANCE_ASSET_STATE_STORAGE_TABLE)
+        if quarantine_blocks_download else None
+    )
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -81,6 +85,9 @@ except Exception as e:
 # Initialize DynamoDB tables
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_storage_table_name)
+compliance_asset_state_table = (
+    dynamodb.Table(compliance_asset_state_table_name) if compliance_asset_state_table_name else None
+)
 
 #######################
 # Utility Functions
@@ -281,10 +288,9 @@ def normalize_s3_path(base_path, relative_path):
 
 def _check_quarantine_block(database_id, asset_id):
     """Block download if asset is quarantined and enforcement is enabled."""
-    if not compliance_table_name:
+    if compliance_asset_state_table is None:
         return
-    compliance_table = dynamodb.Table(compliance_table_name)
-    response = compliance_table.get_item(
+    response = compliance_asset_state_table.get_item(
         Key={"databaseId": database_id, "assetId": asset_id}
     )
     item = response.get("Item")

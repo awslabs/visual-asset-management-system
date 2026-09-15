@@ -3,65 +3,97 @@
 
 """Compliance Schema Service handler.
 
-Manages compliance schema CRUD operations:
-- GET /compliance/schemas — List all schemas
-- GET /compliance/schemas/{schemaName} — Get schema by name
-- POST /compliance/schemas — Register a new schema
-- PUT /compliance/schemas/{schemaName} — Update a schema
+- GET    /compliance/schemas               — list schemas (latest version of each)
+- POST   /compliance/schemas               — register a schema (a new version when the name exists)
+- GET    /compliance/schemas/{schemaName}  — get a schema (latest version)
+- PUT    /compliance/schemas/{schemaName}  — update a schema (writes a new version)
+- DELETE /compliance/schemas/{schemaName}  — delete an unbound schema (every version)
+
+Schema table (PK schemaName, SK internalVersion; GSI DatabaseIdIndex on databaseId/schemaName).
 """
 
 import json
-import os
 import uuid
 from datetime import datetime, timezone
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from aws_lambda_powertools.utilities.parser import ValidationError, parse
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
-from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_COMPLIANCE_SCHEMA_BY_NAME, API_COMPLIANCE_SCHEMAS
+from common.dynamodb import query_all_items, query_has_match
+from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from models.common import (
     APIGatewayProxyResponseV2,
+    VAMSGeneralErrorResponse,
     authorization_error,
+    general_error,
     internal_error,
     success,
     validation_error,
+    validation_error_message,
 )
-from models.compliance import VamsRulesV1Schema
-
-GLOBAL_DATABASE_ID = "GLOBAL"
+from models.compliance import (
+    GLOBAL_DATABASE_ID,
+    CreateSchemaRequestModel,
+    UpdateSchemaRequestModel,
+    VamsRulesV1Schema,
+)
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 logger = safeLogger(service_name="ComplianceSchemaService")
 
+claims_and_roles = {}
+
+COMPLIANCE_SCHEMA_OBJECT_TYPE = "complianceSchema"
+# The system actor: the only identity that registers or modifies system schemas.
+SYSTEM_USER = "SYSTEM_USER"
+
 VALID_JSON_SCHEMA_TYPES = {"string", "number", "integer", "boolean", "array", "object", "null"}
 
+try:
+    schema_table_name = get_table_name(ResourceKeys.COMPLIANCE_SCHEMA_STORAGE_TABLE)
+    asset_state_table_name = get_table_name(ResourceKeys.COMPLIANCE_ASSET_STATE_STORAGE_TABLE)
+    audit_table_name = get_table_name(ResourceKeys.COMPLIANCE_AUDIT_STORAGE_TABLE)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed loading resource names")
+    raise e
+
+schema_table = dynamodb.Table(schema_table_name)
+asset_state_table = dynamodb.Table(asset_state_table_name)
+audit_table = dynamodb.Table(audit_table_name)
+database_table = dynamodb.Table(database_table_name)
+
+
+#######################
+# Schema body validation
+#######################
 
 def validate_schema_body(schema_body):
-    """Validate schema_body. Supports two formats:
+    """Validate a schema body in either supported format.
 
-    1. vams-rules-v1: Structured rules format with pipeline, metadata,
-       and relationship rule types.
-    2. Legacy JSON Schema (draft-07 subset): Freeform schema validation.
+    1. vams-rules-v1: structured rules (pipeline, metadata, relationship rule types).
+    2. Legacy JSON Schema (draft-07 subset): freeform property validation.
 
-    Returns (True, None) if valid, (False, error_message) if invalid.
+    Returns (True, None) when valid, (False, error_message) otherwise.
     """
     if not isinstance(schema_body, dict):
         return False, "schemaBody must be a JSON object"
-
     if schema_body.get("schemaFormat") == "vams-rules-v1":
         return _validate_vams_rules_v1(schema_body)
-
     return _validate_json_schema(schema_body)
 
 
 def _validate_vams_rules_v1(schema_body):
-    """Validate a vams-rules-v1 schema body using Pydantic models."""
+    """Validate a vams-rules-v1 body through its Pydantic models."""
     try:
         schema = VamsRulesV1Schema(**schema_body)
         schema.parse_rules()
@@ -128,33 +160,17 @@ def _validate_json_schema(schema_body):
 
     return True, None
 
-claims_and_roles = {}
 
-try:
-    schema_table_name = os.environ["COMPLIANCE_SCHEMA_STORAGE_TABLE_NAME"]
-    compliance_table_name = os.environ["COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME"]
-    database_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+#######################
+# Lambda handler
+#######################
 
-schema_table = dynamodb.Table(schema_table_name)
-compliance_table = dynamodb.Table(compliance_table_name)
-database_table = dynamodb.Table(database_table_name)
-
-
-def lambda_handler(event, context):
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
-    response = STANDARD_JSON_RESPONSE
+    claims_and_roles = request_to_claims(event)
 
     try:
-        claims_and_roles = request_to_claims(event)
-        if "statusCode" in claims_and_roles:
-            return claims_and_roles
-
-        http_method = event["requestContext"]["http"]["method"]
-        path_params = event.get("pathParameters", {}) or {}
-        schema_name = path_params.get("schemaName")
+        method = event["requestContext"]["http"]["method"]
 
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
@@ -165,33 +181,87 @@ def lambda_handler(event, context):
         if not method_allowed_on_api:
             return authorization_error()
 
-        query_params = event.get("queryStringParameters", {}) or {}
-
-        if http_method == "GET" and schema_name:
-            response = get_schema(schema_name)
-        elif http_method == "GET":
-            response = list_schemas(
-                database_id_filter=query_params.get("databaseId")
-            )
-        elif http_method == "POST":
-            body = json.loads(event.get("body", "{}"))
-            response = register_schema(body)
-        elif http_method == "PUT" and schema_name:
-            body = json.loads(event.get("body", "{}"))
-            response = update_schema(schema_name, body)
+        if method == "GET":
+            return handle_get_request(event)
+        elif method == "POST":
+            return handle_post_request(event)
+        elif method == "PUT":
+            return handle_put_request(event)
+        elif method == "DELETE":
+            return handle_delete_request(event)
         else:
-            response["statusCode"] = 405
-            response["body"] = json.dumps({"message": "Method not allowed"})
+            return validation_error(body={"message": "Method not allowed"}, event=event)
 
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={"message": validation_error_message(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={"message": str(v)}, event=event)
     except Exception as e:
-        logger.exception("Unhandled error in Compliance Schema Service")
-        response = internal_error(body={"message": str(e)})
+        logger.exception(f"Internal error: {e}")
+        return internal_error(event=event)
 
-    return response
 
+#######################
+# Method handlers
+#######################
+
+def handle_get_request(event):
+    path = event["requestContext"]["http"]["path"]
+    path_params = event.get("pathParameters", {}) or {}
+    query_params = event.get("queryStringParameters", {}) or {}
+
+    if API_COMPLIANCE_SCHEMA_BY_NAME.matches(path):
+        return get_schema(event, path_params.get("schemaName"))
+    if API_COMPLIANCE_SCHEMAS.matches(path):
+        return list_schemas(event, query_params.get("databaseId"))
+    return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def handle_post_request(event):
+    path = event["requestContext"]["http"]["path"]
+    if API_COMPLIANCE_SCHEMAS.matches(path):
+        body = _parse_body(event)
+        return register_schema(event, parse(body, model=CreateSchemaRequestModel))
+    return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def handle_put_request(event):
+    path = event["requestContext"]["http"]["path"]
+    path_params = event.get("pathParameters", {}) or {}
+    if API_COMPLIANCE_SCHEMA_BY_NAME.matches(path):
+        body = _parse_body(event)
+        return update_schema(event, path_params.get("schemaName"),
+                             parse(body, model=UpdateSchemaRequestModel))
+    return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def handle_delete_request(event):
+    path = event["requestContext"]["http"]["path"]
+    path_params = event.get("pathParameters", {}) or {}
+    if API_COMPLIANCE_SCHEMA_BY_NAME.matches(path):
+        return delete_schema(event, path_params.get("schemaName"))
+    return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def _parse_body(event):
+    """The JSON request body as a dict; a body that is not JSON raises a validation error."""
+    raw = event.get("body") or "{}"
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise VAMSGeneralErrorResponse("Invalid JSON in request body")
+
+
+#######################
+# Business logic
+#######################
 
 def normalize_schema_item(item):
-    """Normalize a DynamoDB schema item for API response."""
+    """A schema row in its API response shape."""
     schema_body = item.get("schemaBody", "{}")
     if isinstance(schema_body, str):
         try:
@@ -205,177 +275,153 @@ def normalize_schema_item(item):
         "schemaBody": schema_body,
         "version": int(item.get("internalVersion", 1)),
         "createdAt": item.get("registeredAt"),
+        "isSystem": bool(item.get("isSystem", False)),
     }
 
 
-def list_schemas(database_id_filter=None):
-    """List schemas (latest version of each).
+def _schema_object(schema_name):
+    """The Tier-2 authorization object for a schema."""
+    return {
+        "object__type": COMPLIANCE_SCHEMA_OBJECT_TYPE,
+        "complianceSchemaName": schema_name or "",
+    }
 
-    If database_id_filter is provided, returns only schemas scoped to that
-    database plus GLOBAL schemas. Otherwise returns all schemas.
+
+def _enforce(schema_name, action):
+    """Tier-2 check on a schema. Fails closed on an empty token list."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    return CasbinEnforcer(claims_and_roles).enforce(_schema_object(schema_name), action)
+
+
+def list_schemas(event, database_id_filter=None):
+    """List the latest version of every schema, filtered to those the caller may GET.
+
+    With `databaseId`, only GLOBAL schemas and those scoped to that database are listed
+    (DatabaseIdIndex GSI); without it, every partition of the GSI is read.
     """
-    try:
-        if database_id_filter and database_id_filter != GLOBAL_DATABASE_ID:
-            items = _query_schemas_for_database(database_id_filter)
-        else:
-            response = schema_table.scan()
-            items = response.get("Items", [])
+    if database_id_filter:
+        (valid, message) = validate({
+            "databaseId": {
+                "value": database_id_filter, "validator": "ID", "allowGlobalKeyword": True,
+            },
+        })
+        if not valid:
+            return validation_error(body={"message": message}, event=event)
+        database_ids = [GLOBAL_DATABASE_ID]
+        if database_id_filter != GLOBAL_DATABASE_ID:
+            database_ids.append(database_id_filter)
+        items = _query_schemas_for_databases(database_ids)
+    else:
+        items = _query_all_schemas()
 
-        casbin_enforcer = (
-            CasbinEnforcer(claims_and_roles)
-            if claims_and_roles.get("tokens") else None
-        )
+    schemas_by_name = {}
+    for item in items:
+        name = item["schemaName"]
+        version = int(item.get("internalVersion", 1))
+        if name not in schemas_by_name or version > schemas_by_name[name]["version"]:
+            schemas_by_name[name] = normalize_schema_item(item)
 
-        schemas_by_name = {}
-        for item in items:
-            name = item["schemaName"]
-            version = int(item.get("internalVersion", 1))
-            if name not in schemas_by_name or version > schemas_by_name[name]["version"]:
-                schemas_by_name[name] = normalize_schema_item(item)
+    casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+    allowed = []
+    for schema in schemas_by_name.values():
+        # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
+        if casbin_enforcer and casbin_enforcer.enforce(_schema_object(schema["schemaName"]), "GET"):
+            allowed.append(schema)
 
-        filtered = []
-        for schema in schemas_by_name.values():
-            obj = {
-                "object__type": "complianceSchema",
-                "complianceSchemaName": schema.get("schemaName", ""),
-            }
-            if casbin_enforcer and not casbin_enforcer.enforce(obj, "GET"):
-                continue
-            filtered.append(schema)
-
-        return success(body={"schemas": filtered})
-    except Exception as e:
-        logger.exception("Error listing schemas")
-        return internal_error(body={"message": str(e)})
+    return success(body={"schemas": allowed})
 
 
-def _query_schemas_for_database(database_id):
-    """Query schemas visible to a database: GLOBAL + database-specific.
-
-    Uses the DatabaseIdIndex GSI for efficient queries.
-    """
+def _query_schemas_for_databases(database_ids):
+    """Every schema row whose databaseId is one of `database_ids` (DatabaseIdIndex, paged)."""
     items = []
-
-    global_response = schema_table.query(
-        IndexName="DatabaseIdIndex",
-        KeyConditionExpression=Key("databaseId").eq(GLOBAL_DATABASE_ID),
-    )
-    items.extend(global_response.get("Items", []))
-
-    db_response = schema_table.query(
-        IndexName="DatabaseIdIndex",
-        KeyConditionExpression=Key("databaseId").eq(database_id),
-    )
-    items.extend(db_response.get("Items", []))
-
+    for database_id in database_ids:
+        items.extend(query_all_items(
+            schema_table,
+            IndexName="DatabaseIdIndex",
+            KeyConditionExpression=Key("databaseId").eq(database_id),
+        ))
     return items
 
 
-def get_schema(schema_name):
-    """Get a schema by name (latest version or specific version)."""
-    try:
-        response = schema_table.query(
-            KeyConditionExpression=Key("schemaName").eq(schema_name),
-            ScanIndexForward=False,
-            Limit=1,
-        )
-        items = response.get("Items", [])
-        if not items:
-            return {
-                "statusCode": 404,
-                "body": json.dumps({"message": f"Schema '{schema_name}' not found"}),
-                "headers": {"Content-Type": "application/json"},
-            }
-
-        obj = {
-            "object__type": "complianceSchema",
-            "complianceSchemaName": schema_name,
-        }
-        if claims_and_roles.get("tokens"):
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(obj, "GET"):
-                return authorization_error()
-
-        return success(body=normalize_schema_item(items[0]))
-    except Exception as e:
-        logger.exception("Error getting schema")
-        return internal_error(body={"message": str(e)})
+def _query_all_schemas():
+    """Every schema row. The schema table has no constant-partition index, so the complete
+    unfiltered listing is a scan paged to exhaustion (schemas are administrator-defined and few)."""
+    return _scan_all_items(schema_table)
 
 
-def register_schema(body):
-    """Register a new compliance schema."""
-    schema_name = body.get("schemaName") or body.get("name")
-    if not schema_name:
-        return validation_error(body={"message": "Missing required field: schemaName"})
+def _scan_all_items(table, **scan_kwargs):
+    """Scan a table to exhaustion, following LastEvaluatedKey by presence."""
+    items = []
+    while True:
+        response = table.scan(**scan_kwargs)
+        items.extend(response.get("Items", []))
+        if "LastEvaluatedKey" not in response:
+            return items
+        scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
-    database_id = body.get("databaseId", GLOBAL_DATABASE_ID)
 
-    (valid_db, db_msg) = validate({
-        "databaseId": {
-            "value": database_id,
-            "validator": "ID",
-            "allowGlobalKeyword": True,
-        },
-    })
-    if not valid_db:
-        return validation_error(body={"message": db_msg})
-
-    if database_id != GLOBAL_DATABASE_ID:
-        if not _verify_database_exists(database_id):
-            return validation_error(
-                body={"message": "Database not found"}
-            )
-
-    obj = {
-        "object__type": "complianceSchema",
-        "complianceSchemaName": schema_name,
-    }
-    if claims_and_roles.get("tokens"):
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(obj, "POST"):
-            return authorization_error()
-
-    schema_body = body.get("schemaBody") or body.get("rules")
-    if not schema_body:
-        return validation_error(body={"message": "Missing required field: schemaBody"})
-
-    if isinstance(schema_body, str):
-        try:
-            schema_body = json.loads(schema_body)
-        except (json.JSONDecodeError, TypeError):
-            return validation_error(body={"message": "schemaBody must be valid JSON"})
-
-    valid, err = validate_schema_body(schema_body)
+def get_schema(event, schema_name):
+    """The latest version of one schema."""
+    (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
     if not valid:
-        return validation_error(body={"message": f"Invalid schema: {err}"})
+        return validation_error(body={"message": message}, event=event)
 
-    now = datetime.now(timezone.utc).isoformat()
+    if not _enforce(schema_name, "GET"):
+        return authorization_error()
 
-    existing = schema_table.query(
+    item = _latest_schema_item(schema_name)
+    if not item:
+        return general_error(body={"message": "Schema not found"}, event=event)
+    return success(body=normalize_schema_item(item))
+
+
+def _latest_schema_item(schema_name):
+    """The highest internalVersion row of a schema, or None."""
+    response = schema_table.query(
         KeyConditionExpression=Key("schemaName").eq(schema_name),
         ScanIndexForward=False,
         Limit=1,
     )
-    existing_items = existing.get("Items", [])
-    next_version = 1
-    if existing_items:
-        next_version = int(existing_items[0]["internalVersion"]) + 1
+    items = response.get("Items", [])
+    return items[0] if items else None
 
-    item = {
+
+def register_schema(event, request: CreateSchemaRequestModel):
+    """Register a schema. A name that already exists gains a new version."""
+    if not _enforce(request.schemaName, "POST"):
+        return authorization_error()
+
+    if request.databaseId != GLOBAL_DATABASE_ID and not _database_exists(request.databaseId):
+        return general_error(body={"message": "Database not found"}, event=event)
+
+    valid, err = validate_schema_body(request.schemaBody)
+    if not valid:
+        logger.info(f"Schema body rejected: {err}")
+        return validation_error(body={"message": f"Invalid schema: {err}"}, event=event)
+
+    # Only the system actor registers system schemas (which no other caller can later modify).
+    is_system = bool(request.isSystem) and claims_and_roles["tokens"][0] == SYSTEM_USER
+    return _write_schema_version(event, request.schemaName, request.databaseId,
+                                 request.description or "", request.schemaBody, is_system)
+
+
+def _write_schema_version(event, schema_name, database_id, description, schema_body, is_system):
+    """Write the next internalVersion row of a schema."""
+    current = _latest_schema_item(schema_name)
+    next_version = int(current["internalVersion"]) + 1 if current else 1
+    now = datetime.now(timezone.utc).isoformat()
+
+    schema_table.put_item(Item={
         "schemaName": schema_name,
         "internalVersion": next_version,
         "databaseId": database_id,
-        "description": body.get("description", ""),
-        "schemaBody": (
-            json.dumps(schema_body)
-            if isinstance(schema_body, dict) else schema_body
-        ),
+        "description": description,
+        "schemaBody": json.dumps(schema_body),
         "registeredAt": now,
-        "registeredBy": claims_and_roles.get("sub", "system"),
-        "isSystem": body.get("isSystem", False),
-    }
-
-    schema_table.put_item(Item=item)
+        "registeredBy": claims_and_roles["tokens"][0],
+        "isSystem": is_system,
+    })
 
     logger.info(f"Registered schema '{schema_name}' v{next_version}")
     return success(body={
@@ -386,54 +432,115 @@ def register_schema(body):
     })
 
 
-def update_schema(schema_name, body):
-    """Update a schema (creates a new version).
+def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
+    """Update a schema by writing a new version. A system schema is only updated by SYSTEM_USER."""
+    (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
 
-    System schemas (isSystem=True) cannot be modified unless the caller
-    registered them (i.e., is the system actor).
-    """
-    obj = {
-        "object__type": "complianceSchema",
-        "complianceSchemaName": schema_name,
-    }
-    if claims_and_roles.get("tokens"):
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(obj, "PUT"):
-            return authorization_error()
+    if not _enforce(schema_name, "PUT"):
+        return authorization_error()
 
-    existing = schema_table.query(
+    current = _latest_schema_item(schema_name)
+    if not current:
+        return general_error(body={"message": "Schema not found"}, event=event)
+
+    if current.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER:
+        return general_error(body={"message": "System schemas cannot be modified"}, event=event)
+
+    database_id = request.databaseId or current.get("databaseId", GLOBAL_DATABASE_ID)
+    if database_id != GLOBAL_DATABASE_ID and not _database_exists(database_id):
+        return general_error(body={"message": "Database not found"}, event=event)
+
+    if request.schemaBody is not None:
+        schema_body = request.schemaBody
+    else:
+        schema_body = normalize_schema_item(current)["schemaBody"]
+    valid, err = validate_schema_body(schema_body)
+    if not valid:
+        logger.info(f"Schema body rejected: {err}")
+        return validation_error(body={"message": f"Invalid schema: {err}"}, event=event)
+
+    description = request.description if request.description is not None else current.get("description", "")
+    return _write_schema_version(event, schema_name, database_id, description, schema_body,
+                                 bool(current.get("isSystem", False)))
+
+
+def delete_schema(event, schema_name):
+    """Delete every version of a schema that no database or asset is bound to."""
+    (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+
+    if not _enforce(schema_name, "DELETE"):
+        return authorization_error()
+
+    rows = query_all_items(
+        schema_table,
         KeyConditionExpression=Key("schemaName").eq(schema_name),
-        ScanIndexForward=False,
-        Limit=1,
+        ProjectionExpression="schemaName, internalVersion",
     )
-    existing_items = existing.get("Items", [])
-    if not existing_items:
-        return validation_error(
-            body={"message": f"Schema '{schema_name}' not found"}
-        )
+    if not rows:
+        return general_error(body={"message": "Schema not found"}, event=event)
 
-    current = existing_items[0]
-    if current.get("isSystem") and current.get("registeredBy") == "system":
-        caller = claims_and_roles.get("sub", "")
-        if caller != "system":
-            return validation_error(
-                body={
-                    "message": (
-                        f"Schema '{schema_name}' is a system schema"
-                        " and cannot be modified"
-                    )
-                }
-            )
+    if _schema_is_bound(schema_name):
+        logger.info(f"Schema '{schema_name}' is still bound; delete refused")
+        return general_error(
+            body={"message": "Schema is bound to a database or asset and cannot be deleted"},
+            event=event)
 
-    body["schemaName"] = schema_name
-    if "databaseId" not in body:
-        body["databaseId"] = current.get("databaseId", GLOBAL_DATABASE_ID)
-    return register_schema(body)
+    with schema_table.batch_writer() as batch:
+        for row in rows:
+            batch.delete_item(Key={
+                "schemaName": row["schemaName"], "internalVersion": row["internalVersion"],
+            })
+
+    audit_table.put_item(Item={
+        "entryId": str(uuid.uuid4()),
+        "databaseId:assetId": "*:*",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eventType": "schema_deleted",
+        "databaseId": "*",
+        "assetId": "*",
+        "actor": claims_and_roles["tokens"][0],
+        "schemaName": schema_name,
+        "details": json.dumps({"versionsDeleted": len(rows)}),
+    })
+
+    logger.info(f"Deleted schema '{schema_name}' ({len(rows)} versions)")
+    return success(body={
+        "message": "Schema deleted",
+        "schemaName": schema_name,
+        "versionsDeleted": len(rows),
+    })
 
 
-def _verify_database_exists(database_id):
-    """Check if a database exists. Returns True/False."""
-    if database_id == GLOBAL_DATABASE_ID:
+def _schema_is_bound(schema_name):
+    """Whether any asset-state row (SchemaNameIndex) or any database row references the schema.
+
+    A database binding is the `complianceSchemaName` attribute on the database row, which the
+    database table carries no index on, so that half is a scan paged to exhaustion and filtered
+    to the attribute (empty `Items` with a `LastEvaluatedKey` means "keep paging", not "unbound").
+    """
+    if query_has_match(
+        asset_state_table,
+        IndexName="SchemaNameIndex",
+        KeyConditionExpression=Key("schemaName").eq(schema_name),
+    ):
         return True
-    response = database_table.get_item(Key={"databaseId": database_id})
-    return "Item" in response
+    scan_kwargs = {
+        "FilterExpression": Attr("complianceSchemaName").eq(schema_name),
+        "ProjectionExpression": "databaseId",
+    }
+    while True:
+        response = database_table.scan(**scan_kwargs)
+        if response.get("Items"):
+            return True
+        if "LastEvaluatedKey" not in response:
+            return False
+        scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def _database_exists(database_id):
+    """Whether a database row exists."""
+    return "Item" in database_table.get_item(Key={"databaseId": database_id})

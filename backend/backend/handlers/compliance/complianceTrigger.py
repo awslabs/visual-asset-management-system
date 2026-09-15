@@ -1,19 +1,16 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""Compliance Trigger handler.
+"""Compliance Trigger handler (SNS-invoked).
 
-Subscribes to the asset and file indexer SNS topics and triggers
-compliance evaluation when assets are created or updated.
-
-This Lambda is triggered by SNS messages from the indexing system.
-It checks if the asset's database has auto-eval enabled, then verifies
-if the asset has a registered compliance schema and, if so, initiates
-a compliance evaluation.
+Subscribes to the asset and file indexer SNS topics. For each asset created or updated in a
+database with `complianceAutoEval` on, it resolves the asset's bound schema (the asset override,
+else the database binding — auto-registering the asset under it) and runs an evaluation through
+`complianceEvaluationStore.run_evaluation`. After an evaluation of an asset that has children it
+opens a cascade awaiting approval so the downstream assets can be re-evaluated.
 """
 
 import json
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -21,41 +18,45 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 
+from common.compliance import evaluationEngine as engine
+from common.resourceNames import ResourceKeys, get_table_name
 from customLogging.logger import safeLogger
+from handlers.compliance import complianceEvaluationStore as store
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 logger = safeLogger(service_name="ComplianceTrigger")
 
+SCHEMA_SOURCE_DATABASE = "database"
+SCHEMA_SOURCE_ASSET = "asset"
+CASCADE_STATE_PENDING_APPROVAL = "pending_approval"
+
+# A cascade awaiting approval expires after this many hours.
+CASCADE_APPROVAL_TIMEOUT_HOURS = 24
+
+# Suffix on the partition key of an archived asset row.
+ARCHIVED_DATABASE_SUFFIX = "#deleted"
+
 try:
-    compliance_table_name = os.environ["COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME"]
-    evaluation_table_name = os.environ["COMPLIANCE_EVALUATION_STORAGE_TABLE_NAME"]
-    audit_table_name = os.environ["COMPLIANCE_AUDIT_STORAGE_TABLE_NAME"]
-    database_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    schema_table_name = os.environ["COMPLIANCE_SCHEMA_STORAGE_TABLE_NAME"]
-    asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    cascade_table_name = os.environ["COMPLIANCE_CASCADE_STORAGE_TABLE_NAME"]
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    cascade_table_name = get_table_name(ResourceKeys.COMPLIANCE_CASCADE_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names")
     raise e
 
-compliance_table = dynamodb.Table(compliance_table_name)
-evaluation_table = dynamodb.Table(evaluation_table_name)
-audit_table = dynamodb.Table(audit_table_name)
 database_table = dynamodb.Table(database_table_name)
-schema_table = dynamodb.Table(schema_table_name)
-asset_links_table = dynamodb.Table(asset_links_table_name)
 cascade_table = dynamodb.Table(cascade_table_name)
-asset_table = dynamodb.Table(asset_table_name)
+
+# Tables the shared store resolved at import.
+asset_state_table = store.asset_state_table
+asset_table = store.asset_table
 
 
 def lambda_handler(event, context):
-    """Process SNS messages for asset/file change events."""
+    """Process the SNS records of an asset / file change event."""
     for record in event.get("Records", []):
         try:
-            sns_message = record.get("Sns", {})
-            message_body = json.loads(sns_message.get("Message", "{}"))
+            message_body = json.loads(record.get("Sns", {}).get("Message", "{}"))
             _dispatch_event(message_body)
         except Exception as e:
             logger.exception(f"Error processing SNS record: {e}")
@@ -63,7 +64,7 @@ def lambda_handler(event, context):
 
 
 def _dispatch_event(message):
-    """Route the SNS message to the appropriate handler based on format."""
+    """Route one SNS message by its shape."""
     if message.get("eventName") in ("INSERT", "MODIFY", "REMOVE"):
         _process_stream_record(message)
     elif message.get("s3") or message.get("Records"):
@@ -75,36 +76,30 @@ def _dispatch_event(message):
 
 
 def _process_stream_record(message):
-    """Handle a DynamoDB stream record from the asset indexer SNS topic."""
-    event_name = message.get("eventName")
-    if event_name == "REMOVE":
+    """A DynamoDB stream record relayed by the asset indexer topic."""
+    if message.get("eventName") == "REMOVE":
         return
 
     dynamodb_data = message.get("dynamodb", {})
     new_image = dynamodb_data.get("NewImage", {})
     keys = dynamodb_data.get("Keys", {})
 
-    database_id = (
-        new_image.get("databaseId", {}).get("S")
-        or keys.get("databaseId", {}).get("S")
-    )
-    asset_id = (
-        new_image.get("assetId", {}).get("S")
-        or keys.get("assetId", {}).get("S")
-    )
+    database_id = (new_image.get("databaseId", {}).get("S")
+                   or keys.get("databaseId", {}).get("S"))
+    asset_id = (new_image.get("assetId", {}).get("S")
+                or keys.get("assetId", {}).get("S"))
 
     if not database_id or not asset_id:
         logger.info("Stream record missing databaseId or assetId, skipping")
         return
-
-    if database_id.endswith("#deleted"):
+    if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
         return
 
     _process_compliance_event(database_id, asset_id)
 
 
 def _process_file_event(message):
-    """Handle a file indexer SNS message (S3 event format)."""
+    """A file indexer message (S3 event shape)."""
     s3_info = message.get("s3")
     if not s3_info:
         records = message.get("Records", [])
@@ -119,33 +114,30 @@ def _process_file_event(message):
 
     asset_id = _extract_asset_id_from_key(object_key, prefix)
     if not asset_id:
-        logger.info(f"Could not extract assetId from key: {object_key}")
+        logger.info("Could not extract an assetId from the object key")
         return
 
     database_id = _resolve_database_for_asset(asset_id)
     if not database_id:
-        logger.info(f"Could not resolve databaseId for asset: {asset_id}")
+        logger.info(f"Could not resolve a databaseId for asset {asset_id}")
         return
 
     _process_compliance_event(database_id, asset_id)
 
 
 def _extract_asset_id_from_key(object_key, prefix):
-    """Extract assetId from S3 key by stripping the prefix."""
-    if prefix and prefix != "/" and prefix != "":
+    """The assetId segment of an S3 key under the bucket's asset prefix."""
+    if prefix and prefix != "/":
         if not prefix.endswith("/"):
             prefix = prefix + "/"
         if object_key.startswith(prefix):
             object_key = object_key[len(prefix):]
-
     parts = object_key.split("/")
-    if parts and parts[0]:
-        return parts[0]
-    return None
+    return parts[0] if parts and parts[0] else None
 
 
 def _resolve_database_for_asset(asset_id):
-    """Look up the databaseId for an asset via the assetIdGSI."""
+    """The databaseId of an asset via the assetIdGSI (the first match; an asset id is unique)."""
     try:
         response = asset_table.query(
             IndexName="assetIdGSI",
@@ -156,55 +148,32 @@ def _resolve_database_for_asset(asset_id):
         if not items:
             return None
         database_id = items[0].get("databaseId", "")
-        if database_id.endswith("#deleted"):
-            database_id = database_id[: -len("#deleted")]
+        if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
+            database_id = database_id[: -len(ARCHIVED_DATABASE_SUFFIX)]
         return database_id or None
     except Exception as e:
-        logger.exception(f"Error resolving database for asset {asset_id}: {e}")
+        logger.exception(f"Error resolving the database for asset {asset_id}: {e}")
         return None
 
 
-def _check_auto_eval_enabled(database_id):
-    """Check if the database has complianceAutoEval enabled."""
-    try:
-        response = database_table.get_item(Key={"databaseId": database_id})
-        db_item = response.get("Item")
-        if not db_item:
-            return False
-        return db_item.get("complianceAutoEval") is True
-    except Exception as e:
-        logger.exception(
-            f"Error checking auto-eval for database {database_id}: {e}"
-        )
-        return False
+def _database_item(database_id):
+    return database_table.get_item(Key={"databaseId": database_id}).get("Item")
 
 
 def _process_compliance_event(database_id, asset_id):
-    """Check if asset has compliance schema and trigger evaluation."""
-    if not _check_auto_eval_enabled(database_id):
-        logger.info(
-            f"Database {database_id} does not have complianceAutoEval enabled, "
-            "skipping"
-        )
+    """Evaluate an asset when its database has auto-evaluation on and it has a bound schema."""
+    db_item = _database_item(database_id)
+    if not db_item or db_item.get("complianceAutoEval") is not True:
+        logger.info(f"Database {database_id} does not have complianceAutoEval enabled, skipping")
         return
 
-    compliance_record = compliance_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id}
-    ).get("Item")
-
+    compliance_record = store.get_compliance_record(database_id, asset_id)
     if not compliance_record:
-        logger.info(
-            f"Asset {database_id}:{asset_id} has no compliance record, "
-            "checking for default schema"
-        )
-        compliance_record = check_default_schema(database_id, asset_id)
+        compliance_record = check_default_schema(database_id, asset_id, db_item)
         if not compliance_record:
             return
-    elif compliance_record.get("schemaSource") == "asset":
-        logger.info(
-            f"Asset {database_id}:{asset_id} has asset-level schema override, "
-            "using asset binding"
-        )
+    elif compliance_record.get("schemaSource") == SCHEMA_SOURCE_ASSET:
+        logger.info(f"Asset {database_id}:{asset_id} has an asset-level schema override")
 
     schema_name = compliance_record.get("schemaName")
     if not schema_name:
@@ -214,16 +183,12 @@ def _process_compliance_event(database_id, asset_id):
     trigger_evaluation(database_id, asset_id, schema_name)
 
 
-def check_default_schema(database_id, asset_id):
-    """Check if the asset's database has a compliance schema bound to it.
-
-    If the database has a complianceSchemaName, auto-register the asset.
-    """
-    db_response = database_table.get_item(Key={"databaseId": database_id})
-    db_item = db_response.get("Item")
+def check_default_schema(database_id, asset_id, db_item=None):
+    """Register an asset under its database's bound schema (when the database has one) and
+    return the new asset-state row, else None."""
+    db_item = db_item or _database_item(database_id)
     if not db_item:
         return None
-
     schema_name = db_item.get("complianceSchemaName")
     if not schema_name:
         return None
@@ -233,185 +198,62 @@ def check_default_schema(database_id, asset_id):
         "databaseId": database_id,
         "assetId": asset_id,
         "schemaName": schema_name,
-        "schemaSource": "database",
-        "complianceState": "unknown",
+        "schemaSource": SCHEMA_SOURCE_DATABASE,
+        "complianceState": engine.STATE_UNKNOWN,
         "registeredAt": now,
         "updatedAt": now,
     }
-    compliance_table.put_item(Item=record)
-    logger.info(
-        f"Auto-registered asset {database_id}:{asset_id} "
-        f"with schema '{schema_name}' from database binding"
-    )
+    asset_state_table.put_item(Item=record)
+    logger.info(f"Registered asset {database_id}:{asset_id} under the database schema '{schema_name}'")
     return record
 
 
 def trigger_evaluation(database_id, asset_id, schema_name):
-    """Trigger compliance evaluation for the asset.
-
-    For vams-rules-v1 schemas, runs the evaluation engine directly.
-    For legacy schemas, creates a pending evaluation record.
-    """
-    schema_body = _load_schema_body(schema_name)
-    if schema_body and schema_body.get("schemaFormat") == "vams-rules-v1":
-        from common.compliance.evaluationEngine import (
-            evaluate_asset as run_evaluation,
-        )
-        result = run_evaluation(database_id, asset_id, schema_name, "system")
-        logger.info(
-            f"Evaluation engine completed for {database_id}:{asset_id}: "
-            f"verdict={result.get('verdict')}"
-        )
-        check_and_trigger_cascade(database_id, asset_id)
-        return
-
-    now = datetime.now(timezone.utc).isoformat()
-    evaluation_id = str(uuid.uuid4())
-
-    evaluation_table.put_item(
-        Item={
-            "evaluationId": evaluation_id,
-            "databaseId:assetId": f"{database_id}:{asset_id}",
-            "databaseId": database_id,
-            "assetId": asset_id,
-            "schemaName": schema_name,
-            "evaluatedAt": now,
-            "actor": "system",
-            "status": "pending",
-            "trigger": "sns_upload",
-        }
-    )
-
-    compliance_table.update_item(
-        Key={"databaseId": database_id, "assetId": asset_id},
-        UpdateExpression=(
-            "SET complianceState = :state, "
-            "lastEvaluationId = :evalId, "
-            "lastEvaluationAt = :now, "
-            "updatedAt = :now"
-        ),
-        ExpressionAttributeValues={
-            ":state": "pending_evaluation",
-            ":evalId": evaluation_id,
-            ":now": now,
-        },
-    )
-
-    audit_table.put_item(
-        Item={
-            "entryId": str(uuid.uuid4()),
-            "databaseId:assetId": f"{database_id}:{asset_id}",
-            "timestamp": now,
-            "eventType": "compliance_check",
-            "databaseId": database_id,
-            "assetId": asset_id,
-            "actor": "system",
-            "schemaName": schema_name,
-            "evaluationId": evaluation_id,
-            "details": json.dumps({
-                "status": "pending",
-                "trigger": "sns_upload",
-            }),
-        }
-    )
-
+    """Run an evaluation for the asset and open a cascade for its children."""
+    result = store.run_evaluation(database_id, asset_id, schema_name, store.SYSTEM_ACTOR)
     logger.info(
-        f"Triggered compliance evaluation for {database_id}:{asset_id} "
-        f"(schema: {schema_name}, evaluation: {evaluation_id})"
-    )
-
-
-def _load_schema_body(schema_name):
-    """Load schema body to determine format."""
-    response = schema_table.query(
-        KeyConditionExpression=Key("schemaName").eq(schema_name),
-        ScanIndexForward=False,
-        Limit=1,
-    )
-    items = response.get("Items", [])
-    if not items:
-        return None
-    body = items[0].get("schemaBody", "{}")
-    if isinstance(body, str):
-        try:
-            return json.loads(body)
-        except (json.JSONDecodeError, TypeError):
-            return None
-    return body
+        f"Evaluation {result.get('evaluationId')} for {database_id}:{asset_id}: "
+        f"verdict={result.get('verdict')}")
+    if not result.get("error"):
+        check_and_trigger_cascade(database_id, asset_id)
 
 
 def check_and_trigger_cascade(database_id: str, asset_id: str):
-    """If this asset has children, create a cascade for re-evaluation.
-
-    Called after evaluating a parent asset to propagate compliance
-    checks to downstream dependents.
-    """
-    asset_key = f"{database_id}:{asset_id}"
-    response = asset_links_table.query(
-        IndexName="fromAssetGSI",
-        KeyConditionExpression=Key("fromAssetDatabaseId:fromAssetId").eq(
-            asset_key
-        ),
-        Limit=1,
-    )
-    children = response.get("Items", [])
+    """Open a cascade awaiting approval when the asset has downstream children."""
+    children = store.get_child_links(database_id, asset_id)
     if not children:
         return
 
-    logger.info(
-        f"Asset {asset_key} has children, creating cascade for "
-        "downstream re-evaluation"
-    )
+    asset_key = f"{database_id}:{asset_id}"
+    logger.info(f"Asset {asset_key} has {len(children)} children; opening a cascade")
 
     now = datetime.now(timezone.utc)
     cascade_id = str(uuid.uuid4())
+    cascade_table.put_item(Item={
+        "cascadeId": cascade_id,
+        "state": CASCADE_STATE_PENDING_APPROVAL,
+        "triggeredByDatabaseId": database_id,
+        "triggeredByAssetId": asset_id,
+        "triggerReason": "Parent asset updated; downstream re-evaluation needed",
+        "createdAt": now.isoformat(),
+        "actor": store.SYSTEM_ACTOR,
+        "requireApproval": True,
+        "approvalTimeoutAt": (now + timedelta(hours=CASCADE_APPROVAL_TIMEOUT_HOURS)).isoformat(),
+        "nodes": json.dumps({}),
+        "executionOrder": json.dumps([]),
+    })
 
-    cascade_table.put_item(
-        Item={
-            "cascadeId": cascade_id,
-            "state": "pending_approval",
-            "triggeredByDatabaseId": database_id,
-            "triggeredByAssetId": asset_id,
-            "triggerReason": "Parent asset updated — downstream re-evaluation needed",
-            "createdAt": now.isoformat(),
-            "actor": "system",
-            "requireApproval": True,
-            "approvalTimeoutAt": (
-                now + timedelta(hours=24)
-            ).isoformat(),
-            "nodes": json.dumps({}),
-            "executionOrder": json.dumps([]),
-        }
-    )
-
-    audit_table.put_item(
-        Item={
-            "entryId": str(uuid.uuid4()),
-            "databaseId:assetId": asset_key,
-            "timestamp": now.isoformat(),
-            "eventType": "cascade_auto_triggered",
-            "databaseId": database_id,
-            "assetId": asset_id,
-            "actor": "system",
-            "details": json.dumps({
-                "cascadeId": cascade_id,
-                "reason": "parent_update",
-            }),
-        }
+    store.write_audit(
+        database_id, asset_id,
+        event_type="cascade_auto_triggered",
+        actor=store.SYSTEM_ACTOR,
+        cascade_id=cascade_id,
+        details={"reason": "parent_update", "childCount": len(children)},
     )
 
     try:
         from handlers.compliance.complianceNotifications import notify_cascade_pending
-
-        all_children_resp = asset_links_table.query(
-            IndexName="fromAssetGSI",
-            KeyConditionExpression=Key("fromAssetDatabaseId:fromAssetId").eq(
-                asset_key
-            ),
-            Select="COUNT",
-        )
-        child_count = all_children_resp.get("Count", 1)
-        notify_cascade_pending(database_id, asset_id, cascade_id, child_count)
+        notify_cascade_pending(database_id, asset_id, cascade_id, len(children))
     except Exception as e:
         logger.exception(f"Failed sending cascade notification: {e}")
 

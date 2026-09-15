@@ -87,6 +87,11 @@ DELIBERATE_DEPARTURES = {
     ("handlers/indexing/sqsBucketSync.py",
      "BotoConfig(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})"),
     ("handlers/workflows/sfn/deadlineCloudJobCallback.py", "events_retry_config"),
+    # The workflow.execution.completed publish on the end-state and error-handler lambdas is
+    # best-effort too: bounded so an unreachable events endpoint cannot hold the terminal-status
+    # write's lambda open.
+    ("handlers/workflows/sfn/processWorkflowExecutionOutput.py", "events_retry_config"),
+    ("handlers/workflows/sfn/handleExecutionError.py", "events_retry_config"),
     # An advisory trigger-save lookup, bounded so an unreachable table cannot hold the save open.
     ("handlers/workflows/workflowTriggerService.py", "lookup_retry_config"),
     # The executeWorkflowV2 Invoke is not idempotent: a retry would launch a duplicate execution.

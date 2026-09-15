@@ -1,170 +1,118 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""
-Compliance Output Utility
+"""Compliance output helper for VAMS pipelines.
 
-Provides a standard interface for VAMS pipelines to write compliance
-measurement output that the Compliance pipeline callback handler can consume.
+A pipeline that backs a compliance pipeline rule reports its measurements by writing ONE file,
+``compliance-output.json``, under the execution's standard RESULTS output prefix (the
+``outputs.results`` prefix of the workflow manifest, alongside the ``files`` / ``previews`` /
+``metadata`` prefixes). The workflow end-state lambda records every file under that prefix as a
+PipelineExecutionOutputResults row with its content, and the compliance workflow callback reads
+the document from that row — so the pipeline never needs the evaluation id, the asset, or any
+compliance table.
 
-Usage in a pipeline Lambda or container:
+Usage in a pipeline Lambda or container, with the workflow manifest fetched through
+``manifestHelper.fetch_manifest``::
 
     from common.compliance_output import write_compliance_output
 
-    measurements = {
-        "residual_error_mm": 0.42,
-        "scale_deviation_ppm": 0.8,
-    }
     write_compliance_output(
         s3_client=s3_client,
-        bucket=output_bucket,
-        output_metadata_path=data["outputS3AssetMetadataPath"],
-        evaluation_id=compliance_context.get("evaluationId"),
-        database_id=data["databaseId"],
-        asset_id=data["assetId"],
-        measurements=measurements,
-        status="success",
+        manifest=manifest,
+        measurements={"residual_error_mm": 0.42, "scale_deviation_ppm": 0.8},
     )
 
-The output file (compliance-output.json) follows this schema:
+Document schema::
 
     {
         "complianceOutput": true,
         "status": "success" | "error",
-        "measurements": {
-            "<outputField>": <numeric_value>,
-            ...
-        },
+        "measurements": {"<outputField>": <numeric value>, ...},
         "errors": [],
         "pipelineMetadata": {}
     }
 
-The "measurements" keys must match the "outputField" values defined in the
-compliance schema's pipeline rule checks. The Compliance callback handler compares
-each measurement against the tolerance defined in the schema.
+The ``measurements`` keys are matched against the ``outputField`` of each check in the compliance
+schema's pipeline rule; a ``status`` of ``error`` fails every check of the rule.
 """
 
 import json
-import os
 from typing import Any, Dict, List, Optional
 
+COMPLIANCE_OUTPUT_FILE_NAME = "compliance-output.json"
 
-def write_compliance_output(
-    s3_client,
-    bucket: str,
-    output_metadata_path: str,
-    evaluation_id: str,
-    database_id: str,
-    asset_id: str,
+
+def build_compliance_output(
     measurements: Dict[str, Any],
     status: str = "success",
     errors: Optional[List[str]] = None,
     pipeline_metadata: Optional[Dict[str, Any]] = None,
-) -> str:
-    """Write a compliance-output.json file to S3.
-
-    Writes to TWO locations for redundancy:
-    1. The standard metadata output path (picked up by process-output step)
-    2. A well-known compliance path (direct lookup by Compliance callback)
-
-    Args:
-        s3_client: boto3 S3 client
-        bucket: S3 bucket name (from event's bucketAsset)
-        output_metadata_path: S3 URI or key prefix for metadata outputs
-        evaluation_id: Compliance evaluation ID from complianceContext
-        database_id: VAMS database ID
-        asset_id: VAMS asset ID
-        measurements: Dict of output field names to numeric values
-        status: "success" or "error"
-        errors: List of error messages (when status is "error")
-        pipeline_metadata: Optional additional metadata about the pipeline run
-
-    Returns:
-        S3 key where the primary compliance output was written
-    """
-    output = {
+) -> Dict[str, Any]:
+    """The compliance output document for a set of measurements."""
+    return {
         "complianceOutput": True,
         "status": status,
         "measurements": measurements,
         "errors": errors or [],
         "pipelineMetadata": pipeline_metadata or {},
     }
-    body = json.dumps(output, indent=2)
 
-    metadata_bucket, metadata_key_prefix = _parse_s3_path(
-        output_metadata_path, bucket
-    )
-    primary_key = f"{metadata_key_prefix}compliance-output.json"
+
+def results_output_location(manifest: Dict[str, Any]) -> str:
+    """``s3://bucket/prefix/`` of the execution's results output, from the workflow manifest's
+    ``outputs`` block (``bucket`` + bucket-relative ``results`` prefix)."""
+    outputs = (manifest or {}).get("outputs") or {}
+    bucket = outputs.get("bucket", "")
+    prefix = (outputs.get("results", "") or "").strip("/")
+    if not bucket or not prefix:
+        raise ValueError("The workflow manifest carries no results output location")
+    return f"s3://{bucket}/{prefix}/"
+
+
+def write_compliance_output(
+    s3_client,
+    measurements: Dict[str, Any],
+    manifest: Optional[Dict[str, Any]] = None,
+    results_s3_path: Optional[str] = None,
+    status: str = "success",
+    errors: Optional[List[str]] = None,
+    pipeline_metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Write ``compliance-output.json`` under the execution's results output prefix.
+
+    Args:
+        s3_client: boto3 S3 client
+        measurements: Output field names to numeric values
+        manifest: The parsed workflow manifest; the location is its ``outputs.bucket`` +
+            ``outputs.results``. Alternatively pass ``results_s3_path``.
+        results_s3_path: The results output location as ``s3://bucket/prefix/`` (or
+            ``bucket/prefix/``) when the manifest is not at hand
+        status: ``"success"`` or ``"error"``
+        errors: Error messages when ``status`` is ``"error"``
+        pipeline_metadata: Optional free-form metadata about the pipeline run
+
+    Returns:
+        The ``s3://bucket/key`` location written.
+    """
+    location = results_s3_path or results_output_location(manifest or {})
+    bucket, key_prefix = parse_s3_path(location)
+    key = f"{key_prefix}{COMPLIANCE_OUTPUT_FILE_NAME}"
+    body = json.dumps(build_compliance_output(measurements, status, errors, pipeline_metadata), indent=2)
     s3_client.put_object(
-        Bucket=metadata_bucket,
-        Key=primary_key,
+        Bucket=bucket,
+        Key=key,
         Body=body.encode("utf-8"),
         ContentType="application/json",
     )
-
-    if evaluation_id:
-        fallback_key = (
-            f"compliance/{database_id}/{asset_id}/"
-            f"{evaluation_id}/compliance-output.json"
-        )
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=fallback_key,
-            Body=body.encode("utf-8"),
-            ContentType="application/json",
-        )
-
-    return primary_key
+    return f"s3://{bucket}/{key}"
 
 
-def parse_compliance_context(event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Extract Compliance context from pipeline event data if present.
-
-    The Compliance context is embedded in the inputMetadata JSON field by the
-    evaluation engine. Falls back to checking a top-level complianceContext field.
-
-    Returns None if this is not an Compliance-triggered execution.
-    """
-    input_metadata_raw = event_data.get("inputMetadata", "")
-    if input_metadata_raw:
-        if isinstance(input_metadata_raw, str):
-            try:
-                input_metadata = json.loads(input_metadata_raw)
-            except (json.JSONDecodeError, TypeError):
-                input_metadata = {}
-        elif isinstance(input_metadata_raw, dict):
-            input_metadata = input_metadata_raw
-        else:
-            input_metadata = {}
-
-        compliance_context = input_metadata.get("complianceContext")
-        if compliance_context and isinstance(compliance_context, dict):
-            return compliance_context
-
-    compliance_context_raw = event_data.get("complianceContext")
-    if not compliance_context_raw:
-        return None
-    if isinstance(compliance_context_raw, str):
-        try:
-            return json.loads(compliance_context_raw)
-        except (json.JSONDecodeError, TypeError):
-            return None
-    if isinstance(compliance_context_raw, dict):
-        return compliance_context_raw
-    return None
-
-
-def _parse_s3_path(path: str, default_bucket: str) -> tuple:
-    """Parse an S3 URI or key prefix into (bucket, key_prefix)."""
-    if path.startswith("s3://"):
-        without_scheme = path[5:]
-        parts = without_scheme.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-    else:
-        bucket = default_bucket
-        key = path
-
-    if not key.endswith("/"):
-        key += "/"
-    return bucket, key
+def parse_s3_path(path: str) -> tuple:
+    """``(bucket, key_prefix)`` for ``s3://bucket/prefix`` or ``bucket/prefix``; the prefix ends
+    with exactly one ``/`` (an empty prefix stays empty)."""
+    without_scheme = path[5:] if path.startswith("s3://") else path
+    parts = without_scheme.split("/", 1)
+    bucket = parts[0]
+    key = parts[1] if len(parts) > 1 else ""
+    key = key.strip("/")
+    return bucket, f"{key}/" if key else ""

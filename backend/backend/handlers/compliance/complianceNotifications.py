@@ -7,13 +7,12 @@ Publishes compliance event notifications to asset SNS topics,
 following the existing VAMS per-asset subscription pattern.
 """
 
-import json
-import os
 from typing import Dict, Optional
 
 import boto3
 from botocore.config import Config
 
+from common.resourceNames import ResourceKeys, get_table_name
 from customLogging.logger import safeLogger
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
@@ -22,9 +21,9 @@ sns_client = boto3.client("sns", config=retry_config)
 logger = safeLogger(service_name="ComplianceNotifications")
 
 try:
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names")
     raise e
 
 

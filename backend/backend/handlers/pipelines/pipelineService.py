@@ -768,8 +768,6 @@ def archive_pipeline(database_id, pipeline_id, username, claims_and_roles, event
         return validation_error(status_code=404, body={"message": "Pipeline not found"})
     if not _enforce(claims_and_roles, item, "DELETE"):
         return authorization_error()
-    if item.get("isSystem"):
-        return validation_error(body={"message": "System-managed pipelines cannot be archived"})
 
     item["archived"] = True
     item["enabled"] = False

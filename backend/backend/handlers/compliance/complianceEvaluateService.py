@@ -3,76 +3,81 @@
 
 """Compliance Evaluate Service handler.
 
-Manages compliance evaluation operations:
-- POST /compliance/evaluate/{databaseId}/{assetId} — Evaluate asset
-- POST /compliance/sweep/{schemaName} — Sweep all assets for a schema
-- GET /compliance/evaluations/{databaseId}/{assetId} — Get evaluation history
-- GET /compliance/state/{databaseId}/{assetId} — Get compliance state
+- POST /compliance/evaluate/{databaseId}/{assetId}     — evaluate an asset
+- POST /compliance/sweep/{schemaName}                  — evaluate every asset bound to a schema
+- GET  /compliance/evaluations/{databaseId}/{assetId}  — evaluation history of an asset
+- GET  /compliance/state/{databaseId}/{assetId}        — compliance state of an asset
+- GET  /compliance/state/{databaseId}                  — compliance overview of a database
+
+Evaluation runs through `handlers/compliance/complianceEvaluationStore.run_evaluation`
+(metadata and relationship rules synchronously; pipeline rules launch workflow executions that
+the workflow callback finalizes).
 """
 
+import base64
 import json
-import os
-import uuid
-from datetime import datetime, timezone
 
-import boto3
+from aws_lambda_powertools.utilities.parser import ValidationError, parse
+from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Key
-from botocore.config import Config
-
-from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import (
+    API_COMPLIANCE_EVALUATE_ASSET,
+    API_COMPLIANCE_EVALUATIONS_ASSET,
+    API_COMPLIANCE_STATE_ASSET,
+    API_COMPLIANCE_STATE_DATABASE,
+    API_COMPLIANCE_SWEEP_SCHEMA,
+)
+from common.compliance import evaluationEngine as engine
+from common.dynamodb import query_all_items
+from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
-from common.compliance.evaluationEngine import (
-    evaluate_asset as run_evaluation,
-)
+from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance.complianceTrigger import check_and_trigger_cascade
 from models.common import (
     APIGatewayProxyResponseV2,
+    VAMSGeneralErrorResponse,
     authorization_error,
+    general_error,
     internal_error,
     success,
     validation_error,
+    validation_error_message,
 )
+from models.compliance import EvaluateAssetRequestModel, SweepSchemaRequestModel
 
-retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
-dynamodb = boto3.resource("dynamodb", config=retry_config)
 logger = safeLogger(service_name="ComplianceEvaluateService")
 
 claims_and_roles = {}
 
-try:
-    schema_table_name = os.environ["COMPLIANCE_SCHEMA_STORAGE_TABLE_NAME"]
-    compliance_table_name = os.environ["COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME"]
-    evaluation_table_name = os.environ["COMPLIANCE_EVALUATION_STORAGE_TABLE_NAME"]
-    audit_table_name = os.environ["COMPLIANCE_AUDIT_STORAGE_TABLE_NAME"]
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+COMPLIANCE_EVALUATION_OBJECT_TYPE = "complianceEvaluation"
+COMPLIANCE_SCHEMA_OBJECT_TYPE = "complianceSchema"
 
-schema_table = dynamodb.Table(schema_table_name)
-compliance_table = dynamodb.Table(compliance_table_name)
-evaluation_table = dynamodb.Table(evaluation_table_name)
-audit_table = dynamodb.Table(audit_table_name)
-asset_table = dynamodb.Table(asset_table_name)
+# Page size for the evaluation-history listing (newest first).
+DEFAULT_EVALUATIONS_PAGE_SIZE = 50
+MAX_EVALUATIONS_PAGE_SIZE = 200
+
+# Bound on the assets one sweep evaluates synchronously inside the API Lambda timeout; a schema
+# bound to more assets sweeps the first MAX_SWEEP_ASSETS and reports the remainder.
+MAX_SWEEP_ASSETS = 200
+
+# Tables are resolved (and clients built) once by the shared store at import.
+asset_state_table = store.asset_state_table
+evaluation_table = store.evaluation_table
+asset_table = store.asset_table
 
 
-def lambda_handler(event, context):
+#######################
+# Lambda handler
+#######################
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
-    response = STANDARD_JSON_RESPONSE
+    claims_and_roles = request_to_claims(event)
 
     try:
-        claims_and_roles = request_to_claims(event)
-        if "statusCode" in claims_and_roles:
-            return claims_and_roles
-
-        http_method = event["requestContext"]["http"]["method"]
-        path = event["requestContext"]["http"]["path"]
-        path_params = event.get("pathParameters", {}) or {}
-        database_id = path_params.get("databaseId")
-        asset_id = path_params.get("assetId")
-        schema_name = path_params.get("schemaName")
+        method = event["requestContext"]["http"]["method"]
 
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
@@ -83,299 +88,266 @@ def lambda_handler(event, context):
         if not method_allowed_on_api:
             return authorization_error()
 
-        if http_method == "POST" and "/evaluate/" in path:
-            body = json.loads(event.get("body", "{}"))
-            response = evaluate_asset(database_id, asset_id, body)
-        elif http_method == "POST" and "/sweep/" in path:
-            body = json.loads(event.get("body", "{}"))
-            response = sweep_schema(schema_name, body)
-        elif http_method == "GET" and "/evaluations/" in path:
-            response = get_evaluations(database_id, asset_id)
-        elif http_method == "GET" and "/state/" in path and database_id and not asset_id:
-            response = get_database_compliance_overview(database_id)
-        elif http_method == "GET" and "/state/" in path:
-            response = get_compliance_state(database_id, asset_id)
+        if method == "GET":
+            return handle_get_request(event)
+        elif method == "POST":
+            return handle_post_request(event)
         else:
-            response["statusCode"] = 405
-            response["body"] = json.dumps({"message": "Method not allowed"})
+            return validation_error(body={"message": "Method not allowed"}, event=event)
 
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={"message": validation_error_message(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={"message": str(v)}, event=event)
     except Exception as e:
-        logger.exception("Unhandled error in Compliance Evaluate Service")
-        response = internal_error(body={"message": str(e)})
-
-    return response
+        logger.exception(f"Internal error: {e}")
+        return internal_error(event=event)
 
 
-def evaluate_asset(database_id, asset_id, body):
-    """Trigger compliance evaluation for an asset.
+#######################
+# Method handlers
+#######################
 
-    For vams-rules-v1 schemas, runs the evaluation engine synchronously
-    (metadata + relationship rules) and returns the result. Pipeline rules
-    are initiated asynchronously via workflow execution.
+def handle_get_request(event):
+    path = event["requestContext"]["http"]["path"]
+    path_params = event.get("pathParameters", {}) or {}
+    query_params = event.get("queryStringParameters", {}) or {}
+    if API_COMPLIANCE_EVALUATIONS_ASSET.matches(path):
+        return get_evaluations(event, path_params.get("databaseId"), path_params.get("assetId"),
+                               query_params)
+    if API_COMPLIANCE_STATE_ASSET.matches(path):
+        return get_compliance_state(event, path_params.get("databaseId"), path_params.get("assetId"))
+    if API_COMPLIANCE_STATE_DATABASE.matches(path):
+        return get_database_compliance_overview(event, path_params.get("databaseId"))
+    return validation_error(body={"message": "Method not allowed"}, event=event)
 
-    For legacy JSON Schema formats, creates a pending evaluation record.
-    """
-    if not database_id or not asset_id:
-        return validation_error(body={"message": "databaseId and assetId are required"})
 
-    obj = {
-        "object__type": "complianceEvaluation",
+def handle_post_request(event):
+    path = event["requestContext"]["http"]["path"]
+    path_params = event.get("pathParameters", {}) or {}
+    if API_COMPLIANCE_EVALUATE_ASSET.matches(path):
+        request = parse(_parse_body(event), model=EvaluateAssetRequestModel)
+        return evaluate_asset(event, path_params.get("databaseId"), path_params.get("assetId"),
+                              request)
+    if API_COMPLIANCE_SWEEP_SCHEMA.matches(path):
+        parse(_parse_body(event), model=SweepSchemaRequestModel)
+        return sweep_schema(event, path_params.get("schemaName"))
+    return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def _parse_body(event):
+    raw = event.get("body") or "{}"
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise VAMSGeneralErrorResponse("Invalid JSON in request body")
+
+
+#######################
+# Authorization helpers
+#######################
+
+def _enforce_evaluation(database_id, action, compliance_state=""):
+    """Tier-2 check on a compliance evaluation object. Fails closed on an empty token list."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    return CasbinEnforcer(claims_and_roles).enforce({
+        "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
         "databaseId": database_id,
-    }
-    if claims_and_roles.get("tokens"):
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(obj, "POST"):
-            return authorization_error()
+        "complianceState": compliance_state or "",
+    }, action)
 
-    asset_response = asset_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id}
-    )
-    if "Item" not in asset_response:
-        return validation_error(body={"message": f"Asset {database_id}:{asset_id} not found"})
 
-    compliance_state = compliance_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id}
-    )
-    current_state = compliance_state.get("Item", {})
-    schema_name = body.get("schemaName") or current_state.get("schemaName")
+def _enforce_schema(schema_name, action):
+    """Tier-2 check on a compliance schema object. Fails closed on an empty token list."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    return CasbinEnforcer(claims_and_roles).enforce({
+        "object__type": COMPLIANCE_SCHEMA_OBJECT_TYPE,
+        "complianceSchemaName": schema_name,
+    }, action)
 
-    if not schema_name:
-        return validation_error(body={
-            "message": "No schema specified and asset has no registered schema"
-        })
 
-    actor = claims_and_roles.get("sub", "system")
-
-    schema_body = _load_schema_body_for_check(schema_name)
-    if schema_body and schema_body.get("schemaFormat") == "vams-rules-v1":
-        result = run_evaluation(database_id, asset_id, schema_name, actor)
-        check_and_trigger_cascade(database_id, asset_id)
-        return success(body={
-            "message": "Evaluation completed",
-            "evaluationId": result.get("evaluationId"),
-            "schemaName": schema_name,
-            "verdict": result.get("verdict"),
-            "complianceState": result.get("complianceState"),
-            "ruleResults": result.get("ruleResults", []),
-            "pipelineRulesPending": result.get("pipelineRulesPending", 0),
-        })
-
-    now = datetime.now(timezone.utc).isoformat()
-    evaluation_id = str(uuid.uuid4())
-
-    evaluation_item = {
-        "evaluationId": evaluation_id,
-        "databaseId:assetId": f"{database_id}:{asset_id}",
-        "databaseId": database_id,
-        "assetId": asset_id,
-        "schemaName": schema_name,
-        "evaluatedAt": now,
-        "actor": actor,
-        "status": "pending",
-        "datasetPath": body.get("datasetPath", f"s3://{database_id}/{asset_id}"),
-    }
-    evaluation_table.put_item(Item=evaluation_item)
-
-    existing_source = current_state.get("schemaSource", "database")
-    compliance_table.update_item(
-        Key={"databaseId": database_id, "assetId": asset_id},
-        UpdateExpression=(
-            "SET schemaName = :schema, "
-            "complianceState = :state, "
-            "lastEvaluationId = :evalId, "
-            "lastEvaluationAt = :now, "
-            "updatedAt = :now, "
-            "schemaSource = if_not_exists(schemaSource, :source)"
-        ),
-        ExpressionAttributeValues={
-            ":schema": schema_name,
-            ":state": "pending_evaluation",
-            ":evalId": evaluation_id,
-            ":now": now,
-            ":source": existing_source,
-        },
-    )
-
-    write_audit(
-        database_id=database_id,
-        asset_id=asset_id,
-        event_type="compliance_check",
-        actor=actor,
-        schema_name=schema_name,
-        evaluation_id=evaluation_id,
-        details={"status": "pending", "trigger": "api"},
-    )
-
-    return success(body={
-        "message": "Evaluation triggered",
-        "evaluationId": evaluation_id,
-        "schemaName": schema_name,
+def _validate_database_and_asset(database_id, asset_id):
+    return validate({
+        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
+        "assetId": {"value": asset_id, "validator": "ASSET_ID"},
     })
 
 
-def _load_schema_body_for_check(schema_name):
-    """Load schema body to determine format for routing."""
-    response = schema_table.query(
-        KeyConditionExpression=Key("schemaName").eq(schema_name),
-        ScanIndexForward=False,
-        Limit=1,
-    )
-    items = response.get("Items", [])
-    if not items:
-        return None
-    body = items[0].get("schemaBody", "{}")
-    if isinstance(body, str):
-        try:
-            return json.loads(body)
-        except (json.JSONDecodeError, TypeError):
-            return None
-    return body
+#######################
+# Business logic
+#######################
 
+def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestModel):
+    """Evaluate an asset against the requested schema (or its bound schema)."""
+    (valid, message) = _validate_database_and_asset(database_id, asset_id)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
 
-def sweep_schema(schema_name, body):
-    """Trigger evaluation for all assets governed by a schema."""
+    if not _enforce_evaluation(database_id, "POST"):
+        return authorization_error()
+
+    if not store.get_asset_item(database_id, asset_id):
+        return general_error(body={"message": "Asset not found"}, event=event)
+
+    current_state = store.get_compliance_record(database_id, asset_id) or {}
+    schema_name = request.schemaName or current_state.get("schemaName")
     if not schema_name:
-        return validation_error(body={"message": "schemaName is required"})
+        return general_error(body={
+            "message": "No schema specified and the asset has no bound schema",
+        }, event=event)
 
-    obj = {
-        "object__type": "complianceSchema",
-        "complianceSchemaName": schema_name,
-    }
-    if claims_and_roles.get("tokens"):
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(obj, "POST"):
-            return authorization_error()
+    result = run_evaluation_for_asset(database_id, asset_id, schema_name,
+                                      claims_and_roles["tokens"][0])
+    if result.get("error"):
+        return general_error(body={"message": "Evaluation could not run: " + result["error"]},
+                             event=event)
 
-    response = compliance_table.query(
+    return success(body={
+        "message": "Evaluation completed",
+        "evaluationId": result.get("evaluationId"),
+        "schemaName": schema_name,
+        "verdict": result.get("verdict"),
+        "complianceState": result.get("complianceState"),
+        "ruleResults": result.get("ruleResults", []),
+        "pipelineRulesPending": result.get("pipelineRulesPending", 0),
+    })
+
+
+def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
+    """One evaluation plus the downstream cascade check; shared by evaluate and sweep."""
+    result = store.run_evaluation(database_id, asset_id, schema_name, actor)
+    if not result.get("error"):
+        check_and_trigger_cascade(database_id, asset_id)
+    return result
+
+
+def sweep_schema(event, schema_name):
+    """Evaluate every asset whose state row is bound to `schema_name` (SchemaNameIndex GSI)."""
+    (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+
+    if not _enforce_schema(schema_name, "POST"):
+        return authorization_error()
+
+    if store.load_schema_item(schema_name) is None:
+        return general_error(body={"message": "Schema not found"}, event=event)
+
+    bound_assets = query_all_items(
+        asset_state_table,
         IndexName="SchemaNameIndex",
         KeyConditionExpression=Key("schemaName").eq(schema_name),
     )
-    assets = response.get("Items", [])
+    actor = claims_and_roles["tokens"][0]
 
     triggered = []
-    for asset in assets:
-        result = evaluate_asset(
-            asset["databaseId"],
-            asset["assetId"],
-            {"schemaName": schema_name},
-        )
+    for asset in bound_assets[:MAX_SWEEP_ASSETS]:
+        result = run_evaluation_for_asset(asset["databaseId"], asset["assetId"], schema_name, actor)
         triggered.append({
             "databaseId": asset["databaseId"],
             "assetId": asset["assetId"],
+            "evaluationId": result.get("evaluationId"),
+            "verdict": result.get("verdict"),
         })
 
+    remaining = max(0, len(bound_assets) - len(triggered))
     return success(body={
         "message": f"Sweep triggered for {len(triggered)} assets",
         "schemaName": schema_name,
         "assetsTriggered": triggered,
+        "assetsRemaining": remaining,
     })
 
 
-def get_evaluations(database_id, asset_id):
-    """Get evaluation history for an asset."""
-    obj = {
-        "object__type": "complianceEvaluation",
-        "databaseId": database_id,
+def get_evaluations(event, database_id, asset_id, query_params):
+    """Evaluation history of an asset, newest first, externally paged (AssetIndex GSI)."""
+    (valid, message) = _validate_database_and_asset(database_id, asset_id)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+
+    if not _enforce_evaluation(database_id, "GET"):
+        return authorization_error()
+
+    try:
+        page_size = int(query_params.get("maxItems", str(DEFAULT_EVALUATIONS_PAGE_SIZE)))
+    except (TypeError, ValueError):
+        return validation_error(body={"message": "maxItems must be an integer"}, event=event)
+    page_size = max(1, min(page_size, MAX_EVALUATIONS_PAGE_SIZE))
+
+    query_kwargs = {
+        "IndexName": "AssetIndex",
+        "KeyConditionExpression": Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
+        "ScanIndexForward": False,
+        "Limit": page_size,
     }
-    if claims_and_roles.get("tokens"):
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(obj, "GET"):
-            return authorization_error()
+    starting_token = query_params.get("startingToken")
+    if starting_token:
+        try:
+            query_kwargs["ExclusiveStartKey"] = json.loads(
+                base64.b64decode(starting_token).decode("utf-8"))
+        except (ValueError, TypeError):
+            return validation_error(body={"message": "Invalid pagination token"}, event=event)
 
-    response = evaluation_table.query(
-        IndexName="AssetIndex",
-        KeyConditionExpression=Key("databaseId:assetId").eq(
-            f"{database_id}:{asset_id}"
-        ),
-        ScanIndexForward=False,
-        Limit=50,
-    )
-    return success(body={"evaluations": response.get("Items", [])})
+    response = evaluation_table.query(**query_kwargs)
+    result = {"evaluations": response.get("Items", [])}
+    if "LastEvaluatedKey" in response:
+        result["NextToken"] = base64.b64encode(
+            json.dumps(response["LastEvaluatedKey"], default=str).encode("utf-8")).decode("utf-8")
+    return success(body=result)
 
 
-def get_compliance_state(database_id, asset_id):
-    """Get current compliance state for an asset."""
-    obj = {
-        "object__type": "complianceEvaluation",
-        "databaseId": database_id,
-    }
-    if claims_and_roles.get("tokens"):
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(obj, "GET"):
-            return authorization_error()
+def get_compliance_state(event, database_id, asset_id):
+    """The compliance state row of an asset ("unknown" when it has none)."""
+    (valid, message) = _validate_database_and_asset(database_id, asset_id)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
 
-    response = compliance_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id}
-    )
-    item = response.get("Item")
+    item = store.get_compliance_record(database_id, asset_id)
+    if not _enforce_evaluation(database_id, "GET", (item or {}).get("complianceState", "")):
+        return authorization_error()
+
     if not item:
         return success(body={
             "databaseId": database_id,
             "assetId": asset_id,
-            "complianceState": "unknown",
+            "complianceState": engine.STATE_UNKNOWN,
             "schemaName": None,
             "schemaSource": None,
         })
     return success(body=item)
 
 
-def _batch_get_asset_names(database_id, asset_ids):
-    """Look up asset names for a list of asset IDs. Returns {assetId: assetName}."""
-    names = {}
-    if not asset_ids:
-        return names
+def get_database_compliance_overview(event, database_id):
+    """Per-state counts and every asset-state row of a database, with asset names."""
+    (valid, message) = validate({
+        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
+    })
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
 
-    for asset_id in asset_ids:
-        try:
-            resp = asset_table.get_item(
-                Key={"databaseId": database_id, "assetId": asset_id},
-                ProjectionExpression="assetId, assetName",
-            )
-            item = resp.get("Item")
-            if item:
-                names[asset_id] = item.get("assetName", "")
-        except Exception:
-            pass
+    if not _enforce_evaluation(database_id, "GET"):
+        return authorization_error()
 
-    return names
-
-
-def get_database_compliance_overview(database_id):
-    """Get compliance overview for all assets in a database."""
-    if not database_id:
-        return validation_error(body={"message": "databaseId is required"})
-
-    obj = {
-        "object__type": "complianceEvaluation",
-        "databaseId": database_id,
-    }
-    if claims_and_roles.get("tokens"):
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(obj, "GET"):
-            return authorization_error()
-
-    response = compliance_table.query(
-        KeyConditionExpression=Key("databaseId").eq(database_id),
-    )
-    items = response.get("Items", [])
-
-    asset_ids = [item["assetId"] for item in items if "assetId" in item]
-    asset_names = _batch_get_asset_names(database_id, asset_ids)
+    items = query_all_items(
+        asset_state_table, KeyConditionExpression=Key("databaseId").eq(database_id))
 
     summary = {
-        "compliant": 0,
-        "non_compliant": 0,
-        "pending_evaluation": 0,
-        "quarantined": 0,
-        "unknown": 0,
+        engine.STATE_COMPLIANT: 0,
+        engine.STATE_NON_COMPLIANT: 0,
+        engine.STATE_PENDING_EVALUATION: 0,
+        engine.STATE_QUARANTINED: 0,
+        engine.STATE_UNKNOWN: 0,
     }
     for item in items:
-        state = item.get("complianceState", "unknown")
-        if state in summary:
-            summary[state] += 1
-        else:
-            summary["unknown"] += 1
-        item["assetName"] = asset_names.get(item.get("assetId"), "")
+        state = item.get("complianceState", engine.STATE_UNKNOWN)
+        summary[state if state in summary else engine.STATE_UNKNOWN] += 1
+        item["assetName"] = _asset_name(database_id, item.get("assetId"))
 
     return success(body={
         "databaseId": database_id,
@@ -385,22 +357,12 @@ def get_database_compliance_overview(database_id):
     })
 
 
-def write_audit(database_id, asset_id, event_type, actor, schema_name=None,
-                evaluation_id=None, cascade_id=None, details=None):
-    """Write an audit log entry."""
-    now = datetime.now(timezone.utc).isoformat()
-    audit_table.put_item(
-        Item={
-            "entryId": str(uuid.uuid4()),
-            "databaseId:assetId": f"{database_id}:{asset_id}",
-            "timestamp": now,
-            "eventType": event_type,
-            "databaseId": database_id,
-            "assetId": asset_id,
-            "actor": actor,
-            "schemaName": schema_name,
-            "evaluationId": evaluation_id,
-            "cascadeId": cascade_id,
-            "details": json.dumps(details or {}),
-        }
-    )
+def _asset_name(database_id, asset_id):
+    """The asset's display name, or "" when the asset row is gone."""
+    if not asset_id:
+        return ""
+    row = asset_table.get_item(
+        Key={"databaseId": database_id, "assetId": asset_id},
+        ProjectionExpression="assetName",
+    ).get("Item")
+    return (row or {}).get("assetName", "")
