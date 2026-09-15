@@ -6,15 +6,15 @@ Before deploying Visual Asset Management System (VAMS), ensure that your develop
 
 The following software must be installed on the machine used to build and deploy VAMS.
 
-| Software                   | Minimum version       | Purpose                                              |
-| -------------------------- | --------------------- | ---------------------------------------------------- |
-| Python                     | 3.12                  | AWS Lambda runtime, backend dependencies             |
-| Docker                     | Latest stable         | Container builds for AWS Lambda layers and pipelines |
-| Node.js                    | 22.22.3               | Frontend build tooling, AWS CDK CLI                  |
-| npm                        | 11.0.0                | Package management for frontend and infrastructure   |
-| Node Version Manager (nvm) | Latest stable         | Ensures the correct Node.js version is active        |
-| AWS CLI                    | v2 (latest)           | AWS account authentication and resource management   |
-| AWS CDK CLI                | Latest stable         | Infrastructure-as-code deployment                    |
+| Software                   | Minimum version | Purpose                                              |
+| -------------------------- | --------------- | ---------------------------------------------------- |
+| Python                     | 3.12            | AWS Lambda runtime, backend dependencies             |
+| Docker                     | Latest stable   | Container builds for AWS Lambda layers and pipelines |
+| Node.js                    | 22.22.3         | Frontend build tooling, AWS CDK CLI                  |
+| npm                        | 11.0.0          | Package management for frontend and infrastructure   |
+| Node Version Manager (nvm) | Latest stable   | Ensures the correct Node.js version is active        |
+| AWS CLI                    | v2 (latest)     | AWS account authentication and resource management   |
+| AWS CDK CLI                | Latest stable   | Infrastructure-as-code deployment                    |
 
 :::tip[Verify installed versions]
 Run the following commands to confirm your tools are at the required versions:
