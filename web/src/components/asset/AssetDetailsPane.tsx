@@ -31,8 +31,18 @@ import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
-import { appCache } from "../../services/appCache";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+
+// The API route the badge reads; the badge is fetched only when the caller may call it.
+const COMPLIANCE_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
+
+const COMPLIANCE_BADGE: Record<string, { color: "green" | "red" | "grey"; label: string }> = {
+    compliant: { color: "green", label: "Compliant" },
+    non_compliant: { color: "red", label: "Non-Compliant" },
+    quarantined: { color: "red", label: "Quarantined" },
+    pending_evaluation: { color: "grey", label: "Pending" },
+};
+const UNKNOWN_BADGE = { color: "grey" as const, label: "Unknown" };
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -62,20 +72,20 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const [isSubscribing, setIsSubscribing] = useState<boolean>(false);
     const [userName, setUserName] = useState<string>("");
 
-    // Compliance compliance badge state
-    const config = appCache.getItem("config");
-    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
+    // Compliance badge state
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canReadCompliance = canCallRoute("GET", COMPLIANCE_STATE_API_ROUTE);
     const [complianceBadge, setComplianceBadge] = useState<ComplianceState | null>(null);
 
     useEffect(() => {
-        if (isComplianceEnabled && asset?.assetId && databaseId) {
+        if (canReadCompliance && asset?.assetId && databaseId) {
             fetchComplianceState(databaseId, asset.assetId).then(([success, result]) => {
                 if (success && typeof result !== "string") {
                     setComplianceBadge(result);
                 }
             });
         }
-    }, [isComplianceEnabled, asset?.assetId, databaseId]);
+    }, [canReadCompliance, asset?.assetId, databaseId]);
 
     // Asset preview thumbnail state
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
@@ -257,26 +267,21 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             <span style={{ fontSize: "1.2em" }}>
                                 {asset?.assetName || `${Synonyms.Asset} Details`}
                             </span>
-                            {isComplianceEnabled && complianceBadge && (
+                            {complianceBadge && (
                                 <Badge
                                     color={
-                                        complianceBadge.state === "compliant"
-                                            ? "green"
-                                            : complianceBadge.state === "non_compliant" ||
-                                                complianceBadge.state === "quarantined"
-                                              ? "red"
-                                              : "grey"
+                                        (
+                                            COMPLIANCE_BADGE[complianceBadge.complianceState] ||
+                                            UNKNOWN_BADGE
+                                        ).color
                                     }
                                 >
-                                    {complianceBadge.state === "compliant"
-                                        ? "Compliant"
-                                        : complianceBadge.state === "non_compliant"
-                                          ? "Non-Compliant"
-                                          : complianceBadge.state === "quarantined"
-                                            ? "Quarantined"
-                                            : complianceBadge.state === "pending_evaluation"
-                                              ? "Pending"
-                                              : "Unknown"}
+                                    {
+                                        (
+                                            COMPLIANCE_BADGE[complianceBadge.complianceState] ||
+                                            UNKNOWN_BADGE
+                                        ).label
+                                    }
                                 </Badge>
                             )}
                         </SpaceBetween>

@@ -8,8 +8,6 @@ import { Container, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
 import Synonyms from "../../synonyms";
-import { appCache } from "../../services/appCache";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
@@ -37,9 +35,6 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     assetVersionId,
     onSelectedPathChange,
 }) => {
-    const config = appCache.getItem("config");
-    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
-
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
 
@@ -136,27 +131,21 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                     </Suspense>
                                 ),
                             },
-                            ...(isComplianceEnabled
-                                ? [
-                                      {
-                                          id: "compliance",
-                                          label: "Compliance",
-                                          content: (
-                                              <Suspense
-                                                  fallback={
-                                                      <LoadingSpinner text="Loading Compliance..." />
-                                                  }
-                                              >
-                                                  <ComplianceTab
-                                                      databaseId={databaseId}
-                                                      assetId={assetId}
-                                                      isActive={activeTabId === "compliance"}
-                                                  />
-                                              </Suspense>
-                                          ),
-                                      },
-                                  ]
-                                : []),
+                            {
+                                id: "compliance",
+                                label: "Compliance",
+                                content: (
+                                    <Suspense
+                                        fallback={<LoadingSpinner text="Loading Compliance..." />}
+                                    >
+                                        <ComplianceTab
+                                            databaseId={databaseId}
+                                            assetId={assetId}
+                                            isActive={activeTabId === "compliance"}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
                         ]}
                     />
                 </div>

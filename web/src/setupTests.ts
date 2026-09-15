@@ -23,7 +23,6 @@ if (typeof (globalThis as any).TextEncoder === "undefined") {
     (globalThis as any).TextDecoder = TextDecoder;
 }
 
-
 jest.mock("maplibre-gl/dist/maplibre-gl", () => ({
     GeolocateControl: jest.fn(),
     Map: jest.fn(() => ({

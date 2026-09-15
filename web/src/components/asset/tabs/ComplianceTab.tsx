@@ -1,21 +1,26 @@
 /*
- * Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 import {
     Box,
     Button,
     Container,
     Header,
+    Link,
     SpaceBetween,
     StatusIndicator,
     Table,
     Alert,
 } from "@cloudscape-design/components";
-import { appCache } from "../../../services/appCache";
-import { featuresEnabled } from "../../../common/constants/featuresEnabled";
+import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
+import {
+    EXECUTION_DETAILS_API_ROUTE,
+    executionDetailPath,
+} from "../../filemanager/utils/executionLinks";
 import {
     fetchComplianceState,
     fetchEvaluationHistory,
@@ -25,12 +30,19 @@ import {
     ComplianceState,
     EvaluationRecord,
 } from "../../../services/ComplianceService";
+import Synonyms from "../../../synonyms";
 
 interface ComplianceTabProps {
     databaseId: string;
     assetId: string;
     isActive: boolean;
 }
+
+// API routes the tab reads and acts through; each control is shown only when its route is allowed.
+const COMPLIANCE_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
+const COMPLIANCE_EVALUATE_API_ROUTE = "/compliance/evaluate/{databaseId}/{assetId}";
+const COMPLIANCE_RELEASE_API_ROUTE = "/compliance/quarantine/{databaseId}/{assetId}/release";
+const COMPLIANCE_EXCEPTION_API_ROUTE = "/compliance/quarantine/{databaseId}/{assetId}/exception";
 
 const stateIndicatorMap: Record<string, { type: string; label: string }> = {
     unknown: { type: "stopped", label: "Unknown" },
@@ -41,9 +53,22 @@ const stateIndicatorMap: Record<string, { type: string; label: string }> = {
     pending_parent_resolution: { type: "warning", label: "Pending Parent Resolution" },
 };
 
+const verdictIndicatorMap: Record<string, { type: string; label: string }> = {
+    compliant: { type: "success", label: "Compliant" },
+    non_compliant: { type: "warning", label: "Non-Compliant" },
+    quarantined: { type: "error", label: "Quarantined" },
+    pending_pipeline: { type: "in-progress", label: "Pipeline Running" },
+    error: { type: "error", label: "Error" },
+};
+
 export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetId, isActive }) => {
-    const config = appCache.getItem("config");
-    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
+    const navigate = useNavigate();
+    const { can: canCallRoute, loading: routesLoading } = useAllowedRoutes();
+    const canViewCompliance = canCallRoute("GET", COMPLIANCE_STATE_API_ROUTE);
+    const canEvaluate = canCallRoute("POST", COMPLIANCE_EVALUATE_API_ROUTE);
+    const canRelease = canCallRoute("POST", COMPLIANCE_RELEASE_API_ROUTE);
+    const canGrantException = canCallRoute("POST", COMPLIANCE_EXCEPTION_API_ROUTE);
+    const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
 
     const [complianceState, setComplianceState] = useState<ComplianceState | null>(null);
     const [evaluations, setEvaluations] = useState<EvaluationRecord[]>([]);
@@ -53,10 +78,10 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
     const [actionMessage, setActionMessage] = useState<string | null>(null);
 
     useEffect(() => {
-        if (isActive && isComplianceEnabled && databaseId && assetId) {
+        if (isActive && canViewCompliance && databaseId && assetId) {
             loadComplianceData();
         }
-    }, [isActive, databaseId, assetId]);
+    }, [isActive, canViewCompliance, databaseId, assetId]);
 
     const loadComplianceData = async () => {
         setLoading(true);
@@ -116,12 +141,12 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
         }
     };
 
-    if (!isComplianceEnabled) {
+    if (!routesLoading && !canViewCompliance) {
         return (
             <Box padding="l">
                 <Alert type="info">
-                    Compliance is not enabled for this deployment. Contact
-                    your administrator to enable compliance features.
+                    You do not have permission to view compliance information for this{" "}
+                    {Synonyms.asset}.
                 </Alert>
             </Box>
         );
@@ -152,17 +177,25 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                             <SpaceBetween direction="horizontal" size="xs">
                                 {complianceState?.complianceState === "quarantined" && (
                                     <>
-                                        <Button onClick={handleRelease}>Release</Button>
-                                        <Button onClick={handleException}>Grant Exception</Button>
+                                        {canRelease && (
+                                            <Button onClick={handleRelease}>Release</Button>
+                                        )}
+                                        {canGrantException && (
+                                            <Button onClick={handleException}>
+                                                Grant Exception
+                                            </Button>
+                                        )}
                                     </>
                                 )}
-                                <Button
-                                    variant="primary"
-                                    loading={evaluating}
-                                    onClick={handleEvaluate}
-                                >
-                                    Evaluate Now
-                                </Button>
+                                {canEvaluate && (
+                                    <Button
+                                        variant="primary"
+                                        loading={evaluating}
+                                        onClick={handleEvaluate}
+                                    >
+                                        Evaluate Now
+                                    </Button>
+                                )}
                             </SpaceBetween>
                         }
                     >
@@ -198,7 +231,7 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                     items={evaluations}
                     empty={
                         <Box textAlign="center" padding="l">
-                            No evaluations recorded for this asset.
+                            No evaluations recorded for this {Synonyms.asset}.
                         </Box>
                     }
                     columnDefinitions={[
@@ -216,21 +249,42 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                         {
                             id: "result",
                             header: "Result",
-                            cell: (item) => (
-                                <StatusIndicator
-                                    type={item.result === "compliant" ? "success" : "error"}
-                                >
-                                    {item.result === "compliant" ? "Compliant" : "Non-Compliant"}
-                                </StatusIndicator>
-                            ),
+                            cell: (item) => {
+                                const verdict =
+                                    verdictIndicatorMap[item.verdict || item.result] ||
+                                    verdictIndicatorMap.error;
+                                return (
+                                    <StatusIndicator type={verdict.type as any}>
+                                        {verdict.label}
+                                    </StatusIndicator>
+                                );
+                            },
                         },
                         {
                             id: "violations",
                             header: "Violations",
                             cell: (item) =>
-                                item.violations?.length
-                                    ? item.violations.join(", ")
-                                    : "-",
+                                item.violations?.length ? item.violations.join(", ") : "-",
+                        },
+                        {
+                            id: "executionId",
+                            header: "Execution",
+                            cell: (item) => {
+                                const executionId = item.executionId;
+                                if (!executionId) return "-";
+                                if (!canViewExecution) return executionId;
+                                return (
+                                    <Link
+                                        href={`#${executionDetailPath(executionId)}`}
+                                        onFollow={(e) => {
+                                            e.preventDefault();
+                                            navigate(executionDetailPath(executionId));
+                                        }}
+                                    >
+                                        {executionId}
+                                    </Link>
+                                );
+                            },
                         },
                     ]}
                 />

@@ -61,9 +61,8 @@ import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUpload
 import localforage from "localforage";
 import { fetchTagsForAsset, fetchTagTypesForAsset } from "../../services/APIService";
 import { buildTagOptionGroups } from "../../common/utils/tagOptions";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
-import { appCache } from "../../services/appCache";
 import { fetchComplianceSchemas, bindSchemaToAsset } from "../../services/ComplianceService";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import type { SelectProps } from "@cloudscape-design/components";
 import { TagType } from "../Tag/TagType.interface";
 import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
@@ -80,6 +79,10 @@ import {
 import { usePageTitle } from "../../hooks/usePageTitle";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
+
+// Compliance routes behind the schema-binding field.
+const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
+const COMPLIANCE_BIND_ASSET_API_ROUTE = "/compliance/bind/{databaseId}/{assetId}";
 const assetOptions: { label: string; value: string }[] = [];
 let assetTags: string[] = [];
 
@@ -443,27 +446,34 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
     // valid on a requirement that is merely unknown.
     const [tagsLoaded, setTagsLoaded] = useState(false);
 
-    // Compliance schema binding
-    const appConfig = appCache.getItem("config");
-    const isComplianceEnabled = appConfig?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
+    // Compliance schema binding: the field is shown only when the caller may list schemas and
+    // bind one to the new asset.
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canBindComplianceSchema =
+        canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
+        canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
 
     useEffect(() => {
-        if (!isComplianceEnabled) return;
+        if (!canBindComplianceSchema) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
             const [success, result] = await fetchComplianceSchemas();
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
-                    result.map((s) => ({ label: s.schemaName, value: s.schemaName, description: s.description }))
+                    result.map((s) => ({
+                        label: s.schemaName,
+                        value: s.schemaName,
+                        description: s.description,
+                    }))
                 );
             }
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [isComplianceEnabled]);
+    }, [canBindComplianceSchema]);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -652,11 +662,11 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                     />
                 </FormField>
 
-                {isComplianceEnabled && (
+                {canBindComplianceSchema && (
                     <FormField
                         label="Compliance Schema"
-                        description="Override the database-level compliance schema for this asset. Leave empty to inherit from the database."
-                        constraintText="Optional. Asset-level binding overrides database-level."
+                        description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Leave empty to inherit from the ${Synonyms.database}.`}
+                        constraintText={`Optional. ${Synonyms.Asset}-level binding overrides ${Synonyms.database}-level.`}
                     >
                         <Select
                             selectedOption={selectedSchema}
@@ -668,7 +678,7 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                                 });
                             }}
                             options={schemaOptions}
-                            placeholder="Inherit from database"
+                            placeholder={`Inherit from ${Synonyms.database}`}
                             loadingText="Loading schemas"
                             statusType={loadingSchemas ? "loading" : "finished"}
                             filteringType="auto"

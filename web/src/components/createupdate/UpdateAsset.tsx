@@ -1,4 +1,10 @@
-import { Modal, Select, SelectProps, SpaceBetween, Multiselect } from "@cloudscape-design/components";
+import {
+    Modal,
+    Select,
+    SelectProps,
+    SpaceBetween,
+    Multiselect,
+} from "@cloudscape-design/components";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
@@ -10,15 +16,23 @@ import { useParams } from "react-router-dom";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { fetchTagsForAsset, fetchTagTypesForAsset, updateAsset } from "../../services/APIService";
-import { fetchComplianceSchemas, bindSchemaToAsset, unbindSchemaFromAsset } from "../../services/ComplianceService";
-import { appCache } from "../../services/appCache";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import {
+    fetchComplianceSchemas,
+    fetchComplianceState,
+    bindSchemaToAsset,
+    unbindSchemaFromAsset,
+} from "../../services/ComplianceService";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import { TagType } from "../../pages/Tag/TagType.interface";
 import {
     validateRequiredTagTypeSelected,
     validateNonZeroLengthTextAsYouType,
     enforceableRequiredTagTypes,
 } from "../../pages/AssetUpload/validations";
+
+// Compliance routes behind the schema-binding field.
+const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
+const COMPLIANCE_BIND_ASSET_API_ROUTE = "/compliance/bind/{databaseId}/{assetId}";
 
 interface UpdateAssetProps {
     asset: any;
@@ -86,11 +100,16 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [isFormTouched, setIsFormTouched] = useState(false);
     const [inProgress, setInProgress] = useState(false);
 
-    // Compliance schema binding
-    const config = appCache.getItem("config");
-    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
+    // Compliance schema binding: the field is shown only when the caller may list schemas and
+    // bind one to the asset. The asset-level override is loaded first so an untouched field
+    // leaves the existing binding alone.
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canBindComplianceSchema =
+        canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
+        canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
+    const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
 
     if (complete) {
@@ -181,19 +200,40 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     }, [tagScopeDatabaseId]);
 
     useEffect(() => {
-        if (!isComplianceEnabled) return;
+        if (!canBindComplianceSchema) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
             const [success, result] = await fetchComplianceSchemas();
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
-                    result.map((s) => ({ label: s.schemaName, value: s.schemaName, description: s.description }))
+                    result.map((s) => ({
+                        label: s.schemaName,
+                        value: s.schemaName,
+                        description: s.description,
+                    }))
                 );
             }
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [isComplianceEnabled]);
+    }, [canBindComplianceSchema]);
+
+    useEffect(() => {
+        if (!canBindComplianceSchema || !asset?.databaseId || !asset?.assetId) return;
+        const loadBinding = async () => {
+            const [success, result] = await fetchComplianceState(asset.databaseId, asset.assetId);
+            if (
+                success &&
+                typeof result !== "string" &&
+                result.schemaSource === "asset" &&
+                result.schemaName
+            ) {
+                setSelectedSchema({ label: result.schemaName, value: result.schemaName });
+                setInitialSchemaValue(result.schemaName);
+            }
+        };
+        loadBinding();
+    }, [canBindComplianceSchema, asset?.databaseId, asset?.assetId]);
 
     useEffect(() => {
         // Form Validation Error Check
@@ -238,14 +278,20 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                 setInProgress(true);
                                 setIsFormTouched(true);
                                 await update(assetDetail, setError, setComplete, isValid);
-                                if (isComplianceEnabled && isValid && assetDetail.databaseId && assetDetail.assetId) {
-                                    if (selectedSchema?.value) {
+                                if (
+                                    canBindComplianceSchema &&
+                                    isValid &&
+                                    assetDetail.databaseId &&
+                                    assetDetail.assetId
+                                ) {
+                                    const selectedValue = selectedSchema?.value || null;
+                                    if (selectedValue && selectedValue !== initialSchemaValue) {
                                         await bindSchemaToAsset(
                                             assetDetail.databaseId,
                                             assetDetail.assetId,
-                                            selectedSchema.value
+                                            selectedValue
                                         );
-                                    } else if (selectedSchema === null) {
+                                    } else if (!selectedValue && initialSchemaValue) {
                                         await unbindSchemaFromAsset(
                                             assetDetail.databaseId,
                                             assetDetail.assetId
@@ -342,20 +388,25 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         }}
                     />
                 </FormField>
-                {isComplianceEnabled && (
+                {canBindComplianceSchema && (
                     <FormField
                         label="Compliance Schema"
-                        description="Override the database-level compliance schema for this asset. Clear to inherit from the database."
-                        constraintText="Optional. Asset-level binding overrides database-level."
+                        description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Choose "Inherit" to use the ${Synonyms.database} schema.`}
+                        constraintText={`Optional. ${Synonyms.Asset}-level binding overrides ${Synonyms.database}-level.`}
                     >
                         <Select
                             selectedOption={selectedSchema}
                             onChange={({ detail }) => {
-                                setSelectedSchema(detail.selectedOption);
+                                setSelectedSchema(
+                                    detail.selectedOption?.value ? detail.selectedOption : null
+                                );
                                 setIsFormTouched(true);
                             }}
-                            options={schemaOptions}
-                            placeholder="Inherit from database"
+                            options={[
+                                { label: `Inherit from ${Synonyms.database}`, value: "" },
+                                ...schemaOptions,
+                            ]}
+                            placeholder={`Inherit from ${Synonyms.database}`}
                             loadingText="Loading schemas"
                             statusType={loadingSchemas ? "loading" : "finished"}
                             filteringType="auto"

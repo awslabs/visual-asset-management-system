@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -12,13 +12,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
 import Synonyms from "../synonyms";
-import { appCache } from "../services/appCache";
-import { featuresEnabled } from "../common/constants/featuresEnabled";
-import {
-    fetchCascades,
-    approveCascade,
-    rejectCascade,
-} from "../services/ComplianceService";
+import { fetchCascades, approveCascade, rejectCascade } from "../services/ComplianceService";
 
 const statusIndicatorMap: Record<string, { type: string; label: string }> = {
     pending_approval: { type: "pending", label: "Pending Approval" },
@@ -28,9 +22,6 @@ const statusIndicatorMap: Record<string, { type: string; label: string }> = {
 };
 
 const ComplianceCascades: React.FC = () => {
-    const config = appCache.getItem("config");
-    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
-
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -49,10 +40,8 @@ const ComplianceCascades: React.FC = () => {
     }, []);
 
     useEffect(() => {
-        if (isComplianceEnabled) {
-            loadData();
-        }
-    }, [isComplianceEnabled, loadData]);
+        loadData();
+    }, [loadData]);
 
     const handleApprove = async (cascadeId: string) => {
         setActionMessage(null);
@@ -80,16 +69,6 @@ const ComplianceCascades: React.FC = () => {
         }
     };
 
-    if (!isComplianceEnabled) {
-        return (
-            <Box padding="l">
-                <Alert type="info">
-                    Compliance is not enabled for this deployment.
-                </Alert>
-            </Box>
-        );
-    }
-
     return (
         <SpaceBetween size="l">
             {error && (
@@ -108,9 +87,7 @@ const ComplianceCascades: React.FC = () => {
                     <Header
                         variant="h1"
                         counter={`(${items.length})`}
-                        actions={
-                            <Button iconName="refresh" onClick={loadData} />
-                        }
+                        actions={<Button iconName="refresh" onClick={loadData} />}
                     >
                         Cascade Approval Queue
                     </Header>

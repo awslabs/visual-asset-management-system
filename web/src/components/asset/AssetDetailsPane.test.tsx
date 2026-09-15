@@ -28,6 +28,11 @@ jest.mock("../common/StatusMessage", () => ({
     useStatusMessage: () => ({ showMessage: jest.fn() }),
 }));
 
+// The compliance badge gates on this hook; a deny keeps these distribution-notice tests focused.
+jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => false }),
+}));
+
 const baseAsset = {
     assetId: "a1",
     assetName: "Widget",

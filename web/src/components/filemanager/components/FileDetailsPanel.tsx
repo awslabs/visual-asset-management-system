@@ -653,33 +653,6 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     disabledReason={automationDisabled}
                                                 />
 
-                                                <ButtonDropdown
-                                                    items={[
-                                                        {
-                                                            id: "download",
-                                                            text: "Download Files",
-                                                            iconName: "download",
-                                                        },
-                                                        {
-                                                            id: "share",
-                                                            text: "Share File(s) URL",
-                                                            iconName: "share",
-                                                        },
-                                                    ]}
-                                                    onItemClick={({ detail }) => {
-                                                        switch (detail.id) {
-                                                            case "download":
-                                                                handleMultiFileDownload();
-                                                                break;
-                                                            case "share":
-                                                                setShowShareUrlsModal(true);
-                                                                break;
-                                                        }
-                                                    }}
-                                                >
-                                                    Export
-                                                </ButtonDropdown>
-
                                                 {!isNotDistributable && (
                                                     <ButtonDropdown
                                                         items={[
@@ -1334,33 +1307,6 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             inputFiles={automationInputFiles}
                                             disabledReason={automationDisabled}
                                         />
-
-                                        <ButtonDropdown
-                                            items={[
-                                                {
-                                                    id: "download",
-                                                    text: "Download File",
-                                                    iconName: "download",
-                                                },
-                                                {
-                                                    id: "share",
-                                                    text: "Share File URL",
-                                                    iconName: "share",
-                                                },
-                                            ]}
-                                            onItemClick={({ detail }) => {
-                                                switch (detail.id) {
-                                                    case "download":
-                                                        handleDownload();
-                                                        break;
-                                                    case "share":
-                                                        setShowShareUrlsModal(true);
-                                                        break;
-                                                }
-                                            }}
-                                        >
-                                            Export
-                                        </ButtonDropdown>
 
                                         {!isNotDistributable && (
                                             <ButtonDropdown

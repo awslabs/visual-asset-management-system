@@ -361,7 +361,6 @@ docker run --rm -v "$B:/app" -w /app node:22 bash -c "npm install --no-audit --n
 
 ### **Rule 10: React 18 (Upgraded)**
 
-
 This project uses React 18.3 (upgraded from 17.0.2). The entry point (`index.tsx`) uses `createRoot`. React 18 APIs (`useId`, `useTransition`, `useDeferredValue`) are allowed in the orchestration module but should be used sparingly elsewhere to maintain consistency with the existing codebase conventions.
 
 ### **Rule 11: Use appCache, Not Amplify Cache**

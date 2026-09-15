@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -28,8 +28,12 @@ import {
     ComplianceSchema,
 } from "../services/ComplianceService";
 import ComplianceSchemaEditor from "../components/compliance/ComplianceSchemaEditor";
+import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchemaRules";
 
-const SCHEMA_TEMPLATES: Record<string, { label: string; description: string; body: Record<string, any> }> = {
+const SCHEMA_TEMPLATES: Record<
+    string,
+    { label: string; description: string; body: Record<string, any> }
+> = {
     blank: {
         label: "Blank schema",
         description: "Start from scratch with an empty object schema",
@@ -40,6 +44,46 @@ const SCHEMA_TEMPLATES: Record<string, { label: string; description: string; bod
             additionalProperties: true,
         },
     },
+    pipelineRules: {
+        label: "Pipeline and metadata rules (vams-rules-v1)",
+        description:
+            "Runs a workflow and checks its output against tolerances; also validates metadata",
+        body: {
+            schemaFormat: "vams-rules-v1",
+            rules: {
+                "output-within-tolerance": {
+                    ...EXAMPLE_PIPELINE_RULE,
+                    pipelineRef: {
+                        databaseId: "GLOBAL",
+                        workflowId: "quality-check-workflow",
+                        pipelineDatabaseId: "GLOBAL",
+                        pipelineId: "quality-check-pipeline",
+                    },
+                    checks: [
+                        {
+                            name: "polygon-budget",
+                            description:
+                                "Polygon count reported by the pipeline stays under budget",
+                            outputField: "polygonCount",
+                            tolerance: { operator: "lte", value: 500000 },
+                        },
+                    ],
+                },
+                "required-metadata": {
+                    ruleType: "metadata",
+                    enforcement: "warn",
+                    metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "asset-metadata" },
+                    checks: [
+                        {
+                            name: "required-fields-present",
+                            validateRequired: true,
+                            validateTypes: true,
+                        },
+                    ],
+                },
+            },
+        },
+    },
     engineering: {
         label: "Engineering Asset Standard",
         description: "Requires name, owner, classification, and retention",
@@ -47,14 +91,24 @@ const SCHEMA_TEMPLATES: Record<string, { label: string; description: string; bod
             type: "object",
             required: ["name", "owner", "classification", "retention_days"],
             properties: {
-                name: { type: "string", minLength: 1, maxLength: 256, description: "Asset name or identifier" },
+                name: {
+                    type: "string",
+                    minLength: 1,
+                    maxLength: 256,
+                    description: "Asset name or identifier",
+                },
                 owner: { type: "string", description: "Owner email address" },
                 classification: {
                     type: "string",
                     enum: ["public", "internal", "confidential", "restricted"],
                     description: "Data classification level",
                 },
-                retention_days: { type: "integer", minimum: 1, maximum: 3650, description: "Retention period in days" },
+                retention_days: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 3650,
+                    description: "Retention period in days",
+                },
                 department: { type: "string", description: "Owning department or team" },
                 version: { type: "string", description: "Asset version string" },
             },
@@ -73,7 +127,12 @@ const SCHEMA_TEMPLATES: Record<string, { label: string; description: string; bod
                     enum: ["unclassified", "cui", "confidential", "secret", "top_secret"],
                     description: "Security classification level",
                 },
-                handling_instructions: { type: "string", minLength: 10, maxLength: 2000, description: "Handling instructions" },
+                handling_instructions: {
+                    type: "string",
+                    minLength: 10,
+                    maxLength: 2000,
+                    description: "Handling instructions",
+                },
                 data_steward: { type: "string", description: "Data steward email" },
                 dissemination_controls: {
                     type: "array",
@@ -91,7 +150,12 @@ const SCHEMA_TEMPLATES: Record<string, { label: string; description: string; bod
             type: "object",
             required: ["polygon_count", "coordinate_system", "units"],
             properties: {
-                polygon_count: { type: "integer", minimum: 1, maximum: 50000000, description: "Total polygon count" },
+                polygon_count: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 50000000,
+                    description: "Total polygon count",
+                },
                 coordinate_system: {
                     type: "string",
                     enum: ["wgs84", "utm", "local", "enu", "ecef"],
@@ -102,9 +166,22 @@ const SCHEMA_TEMPLATES: Record<string, { label: string; description: string; bod
                     enum: ["meters", "centimeters", "millimeters", "feet", "inches"],
                     description: "Measurement units",
                 },
-                lod_levels: { type: "integer", minimum: 1, maximum: 10, description: "Number of LOD variants" },
-                texture_resolution_max: { type: "integer", minimum: 64, maximum: 16384, description: "Max texture resolution in px" },
-                has_collision_mesh: { type: "boolean", description: "Whether collision mesh is included" },
+                lod_levels: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 10,
+                    description: "Number of LOD variants",
+                },
+                texture_resolution_max: {
+                    type: "integer",
+                    minimum: 64,
+                    maximum: 16384,
+                    description: "Max texture resolution in px",
+                },
+                has_collision_mesh: {
+                    type: "boolean",
+                    description: "Whether collision mesh is included",
+                },
             },
             additionalProperties: true,
         },
@@ -116,28 +193,49 @@ const SCHEMA_TEMPLATES: Record<string, { label: string; description: string; bod
             type: "object",
             required: ["retention_days", "disposal_method", "data_owner"],
             properties: {
-                retention_days: { type: "integer", minimum: 30, maximum: 36500, description: "Minimum retention in days" },
+                retention_days: {
+                    type: "integer",
+                    minimum: 30,
+                    maximum: 36500,
+                    description: "Minimum retention in days",
+                },
                 disposal_method: {
                     type: "string",
                     enum: ["delete", "archive", "anonymize", "transfer"],
                     description: "Disposal method after retention expires",
                 },
                 data_owner: { type: "string", description: "Accountable person or team email" },
-                legal_hold: { type: "boolean", description: "Under legal hold (prevents disposal)" },
-                regulation: { type: "string", description: "Applicable regulation (e.g., GDPR, HIPAA)" },
-                archive_tier: { type: "string", enum: ["hot", "warm", "cold", "glacier"], description: "Storage tier" },
+                legal_hold: {
+                    type: "boolean",
+                    description: "Under legal hold (prevents disposal)",
+                },
+                regulation: {
+                    type: "string",
+                    description: "Applicable regulation (e.g., GDPR, HIPAA)",
+                },
+                archive_tier: {
+                    type: "string",
+                    enum: ["hot", "warm", "cold", "glacier"],
+                    description: "Storage tier",
+                },
             },
             additionalProperties: true,
         },
     },
 };
 
-const TEMPLATE_OPTIONS = Object.entries(SCHEMA_TEMPLATES).map(([value, { label, description }]) => ({
-    value,
-    label,
-    description,
-}));
+const TEMPLATE_OPTIONS = Object.entries(SCHEMA_TEMPLATES).map(
+    ([value, { label, description }]) => ({
+        value,
+        label,
+        description,
+    })
+);
 
+const DEFAULT_TEMPLATE_KEY = "engineering";
+const DEFAULT_TEMPLATE_OPTION =
+    TEMPLATE_OPTIONS.find((o) => o.value === DEFAULT_TEMPLATE_KEY) || TEMPLATE_OPTIONS[0];
+const DEFAULT_TEMPLATE_BODY = JSON.stringify(SCHEMA_TEMPLATES[DEFAULT_TEMPLATE_KEY].body, null, 2);
 
 export default function ComplianceSchemas() {
     usePageTitle("Compliance Schemas");
@@ -152,8 +250,8 @@ export default function ComplianceSchemas() {
     const [editingSchema, setEditingSchema] = useState<ComplianceSchema | null>(null);
     const [formName, setFormName] = useState("");
     const [formDescription, setFormDescription] = useState("");
-    const [formBody, setFormBody] = useState(JSON.stringify(SCHEMA_TEMPLATES.engineering.body, null, 2));
-    const [selectedTemplate, setSelectedTemplate] = useState(TEMPLATE_OPTIONS[1]);
+    const [formBody, setFormBody] = useState(DEFAULT_TEMPLATE_BODY);
+    const [selectedTemplate, setSelectedTemplate] = useState(DEFAULT_TEMPLATE_OPTION);
     const [formError, setFormError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
 
@@ -181,9 +279,7 @@ export default function ComplianceSchemas() {
                 dismissible: true,
                 id: Date.now().toString(),
                 onDismiss: () =>
-                    setFlashMessages((msgs) =>
-                        msgs.filter((m) => m.id !== Date.now().toString())
-                    ),
+                    setFlashMessages((msgs) => msgs.filter((m) => m.id !== Date.now().toString())),
             },
         ]);
     };
@@ -192,8 +288,8 @@ export default function ComplianceSchemas() {
         setEditingSchema(null);
         setFormName("");
         setFormDescription("");
-        setSelectedTemplate(TEMPLATE_OPTIONS[1]);
-        setFormBody(JSON.stringify(SCHEMA_TEMPLATES.engineering.body, null, 2));
+        setSelectedTemplate(DEFAULT_TEMPLATE_OPTION);
+        setFormBody(DEFAULT_TEMPLATE_BODY);
         setFormError(null);
         setModalVisible(true);
     };
@@ -340,10 +436,7 @@ export default function ComplianceSchemas() {
                                 width: 150,
                                 cell: (item) => (
                                     <SpaceBetween direction="horizontal" size="xs">
-                                        <Button
-                                            variant="link"
-                                            onClick={() => openEditModal(item)}
-                                        >
+                                        <Button variant="link" onClick={() => openEditModal(item)}>
                                             Edit
                                         </Button>
                                         <Button
@@ -377,9 +470,7 @@ export default function ComplianceSchemas() {
                     }
                 >
                     <SpaceBetween size="m">
-                        {formError && (
-                            <Box color="text-status-error">{formError}</Box>
-                        )}
+                        {formError && <Box color="text-status-error">{formError}</Box>}
                         <FormField label="Schema Name">
                             <Input
                                 value={formName}
@@ -411,12 +502,9 @@ export default function ComplianceSchemas() {
                         </FormField>
                         <FormField
                             label="Schema Body"
-                            description="Define the JSON Schema that assets must conform to. Use the JSON editor for full control or the Visual Builder for guided property creation."
+                            description="Either a vams-rules-v1 rule set (pipeline, metadata and relationship rules that are evaluated) or a JSON Schema that asset metadata must conform to. Use the JSON editor for full control or the Visual Builder for guided editing."
                         >
-                            <ComplianceSchemaEditor
-                                value={formBody}
-                                onChange={setFormBody}
-                            />
+                            <ComplianceSchemaEditor value={formBody} onChange={setFormBody} />
                         </FormField>
                     </SpaceBetween>
                 </Modal>

@@ -1,12 +1,11 @@
 /*
- * Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import React, { useEffect, useState, useCallback } from "react";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
-import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
@@ -14,8 +13,6 @@ import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
 import Link from "@cloudscape-design/components/link";
 import Synonyms from "../synonyms";
-import { appCache } from "../services/appCache";
-import { featuresEnabled } from "../common/constants/featuresEnabled";
 import {
     fetchQuarantinedAssets,
     releaseFromQuarantine,
@@ -23,9 +20,6 @@ import {
 } from "../services/ComplianceService";
 
 const ComplianceQuarantine: React.FC = () => {
-    const config = appCache.getItem("config");
-    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
-
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -45,10 +39,8 @@ const ComplianceQuarantine: React.FC = () => {
     }, []);
 
     useEffect(() => {
-        if (isComplianceEnabled) {
-            loadData();
-        }
-    }, [isComplianceEnabled, loadData]);
+        loadData();
+    }, [loadData]);
 
     const handleRelease = async (item: any) => {
         setActionMessage(null);
@@ -75,16 +67,6 @@ const ComplianceQuarantine: React.FC = () => {
             setError(message);
         }
     };
-
-    if (!isComplianceEnabled) {
-        return (
-            <Box padding="l">
-                <Alert type="info">
-                    Compliance is not enabled for this deployment.
-                </Alert>
-            </Box>
-        );
-    }
 
     return (
         <SpaceBetween size="l">

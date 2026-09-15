@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -17,8 +17,6 @@ import BreadcrumbGroup from "@cloudscape-design/components/breadcrumb-group";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 import Link from "@cloudscape-design/components/link";
 import Synonyms from "../synonyms";
-import { appCache } from "../services/appCache";
-import { featuresEnabled } from "../common/constants/featuresEnabled";
 import {
     fetchDatabaseComplianceOverview,
     sweepSchema,
@@ -37,9 +35,6 @@ const stateIndicatorMap: Record<string, { type: string; label: string }> = {
 
 const DatabaseCompliancePage: React.FC = () => {
     const { databaseId } = useParams();
-    const config = appCache.getItem("config");
-    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
-
     const [overview, setOverview] = useState<DatabaseComplianceOverview | null>(null);
     const [databaseSchema, setDatabaseSchema] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -53,11 +48,15 @@ const DatabaseCompliancePage: React.FC = () => {
         setError(null);
 
         try {
-            const [overviewSuccess, overviewResult] = await fetchDatabaseComplianceOverview(databaseId);
+            const [overviewSuccess, overviewResult] = await fetchDatabaseComplianceOverview(
+                databaseId
+            );
             if (overviewSuccess && typeof overviewResult !== "string") {
                 setOverview(overviewResult);
             } else {
-                setError(typeof overviewResult === "string" ? overviewResult : "Failed to load overview");
+                setError(
+                    typeof overviewResult === "string" ? overviewResult : "Failed to load overview"
+                );
             }
 
             const [bindingSuccess, bindingResult] = await getDatabaseBindings(databaseId);
@@ -72,10 +71,10 @@ const DatabaseCompliancePage: React.FC = () => {
     }, [databaseId]);
 
     useEffect(() => {
-        if (isComplianceEnabled && databaseId) {
+        if (databaseId) {
             loadData();
         }
-    }, [isComplianceEnabled, databaseId, loadData]);
+    }, [databaseId, loadData]);
 
     const handleEvaluateAll = async () => {
         if (!databaseSchema) {
@@ -88,7 +87,10 @@ const DatabaseCompliancePage: React.FC = () => {
 
         const [success, result] = await sweepSchema(databaseSchema);
         if (success) {
-            const msg = typeof result === "object" && result?.message ? result.message : "Evaluation sweep triggered";
+            const msg =
+                typeof result === "object" && result?.message
+                    ? result.message
+                    : "Evaluation sweep triggered";
             setActionMessage(msg);
             await loadData();
         } else {
@@ -96,16 +98,6 @@ const DatabaseCompliancePage: React.FC = () => {
         }
         setSweeping(false);
     };
-
-    if (!isComplianceEnabled) {
-        return (
-            <Box padding="l">
-                <Alert type="info">
-                    Compliance is not enabled for this deployment.
-                </Alert>
-            </Box>
-        );
-    }
 
     const summary = overview?.summary;
     const totalTracked = overview?.totalAssets || 0;
@@ -171,19 +163,25 @@ const DatabaseCompliancePage: React.FC = () => {
                     <div>
                         <Box variant="awsui-key-label">Non-Compliant</Box>
                         <Box variant="awsui-value-large">
-                            <StatusIndicator type="warning">{summary?.non_compliant || 0}</StatusIndicator>
+                            <StatusIndicator type="warning">
+                                {summary?.non_compliant || 0}
+                            </StatusIndicator>
                         </Box>
                     </div>
                     <div>
                         <Box variant="awsui-key-label">Quarantined</Box>
                         <Box variant="awsui-value-large">
-                            <StatusIndicator type="error">{summary?.quarantined || 0}</StatusIndicator>
+                            <StatusIndicator type="error">
+                                {summary?.quarantined || 0}
+                            </StatusIndicator>
                         </Box>
                     </div>
                     <div>
                         <Box variant="awsui-key-label">Pending</Box>
                         <Box variant="awsui-value-large">
-                            <StatusIndicator type="in-progress">{summary?.pending_evaluation || 0}</StatusIndicator>
+                            <StatusIndicator type="in-progress">
+                                {summary?.pending_evaluation || 0}
+                            </StatusIndicator>
                         </Box>
                     </div>
                     <div>
@@ -199,7 +197,8 @@ const DatabaseCompliancePage: React.FC = () => {
                     items={overview?.assets || []}
                     empty={
                         <Box textAlign="center" padding="l">
-                            No {Synonyms.assets} are being tracked for compliance in this {Synonyms.database}.
+                            No {Synonyms.assets} are being tracked for compliance in this{" "}
+                            {Synonyms.database}.
                         </Box>
                     }
                     columnDefinitions={[
@@ -223,7 +222,9 @@ const DatabaseCompliancePage: React.FC = () => {
                             id: "complianceState",
                             header: "State",
                             cell: (item: any) => {
-                                const indicator = stateIndicatorMap[item.complianceState] || stateIndicatorMap.unknown;
+                                const indicator =
+                                    stateIndicatorMap[item.complianceState] ||
+                                    stateIndicatorMap.unknown;
                                 return (
                                     <StatusIndicator type={indicator.type as any}>
                                         {indicator.label}
@@ -248,9 +249,7 @@ const DatabaseCompliancePage: React.FC = () => {
                             id: "updatedAt",
                             header: "Last Updated",
                             cell: (item: any) =>
-                                item.updatedAt
-                                    ? new Date(item.updatedAt).toLocaleString()
-                                    : "-",
+                                item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-",
                             sortingField: "updatedAt",
                         },
                     ]}

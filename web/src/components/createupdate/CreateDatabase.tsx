@@ -19,10 +19,19 @@ import {
 } from "@cloudscape-design/components";
 import { useState, useEffect } from "react";
 import { createDatabase, updateDatabase, fetchBuckets } from "../../services/APIService";
-import { fetchComplianceSchemas, bindSchemaToDatabase, unbindSchemaFromDatabase, getDatabaseBindings } from "../../services/ComplianceService";
-import { appCache } from "../../services/appCache";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import {
+    fetchComplianceSchemas,
+    bindSchemaToDatabase,
+    unbindSchemaFromDatabase,
+    getDatabaseBindings,
+} from "../../services/ComplianceService";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import Synonyms from "../../synonyms";
+
+// Compliance routes behind the schema-binding field; the field is shown only when the caller
+// may list schemas and bind one to the database.
+const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
+const COMPLIANCE_BIND_DATABASE_API_ROUTE = "/compliance/bind/{databaseId}";
 
 interface CreateDatabaseProps {
     open: boolean;
@@ -152,33 +161,38 @@ export default function CreateDatabase({
     const [formError, setFormError] = useState("");
 
     // Compliance schema binding
-    const config = appCache.getItem("config");
-    const isComplianceEnabled = config?.featuresEnabled?.includes(featuresEnabled.COMPLIANCE);
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canBindComplianceSchema =
+        canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
+        canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
 
     const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
 
-    // Fetch compliance schemas when Compliance is enabled
     useEffect(() => {
-        if (!isComplianceEnabled) return;
+        if (!canBindComplianceSchema) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
             const [success, result] = await fetchComplianceSchemas();
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
-                    result.map((s) => ({ label: s.schemaName, value: s.schemaName, description: s.description }))
+                    result.map((s) => ({
+                        label: s.schemaName,
+                        value: s.schemaName,
+                        description: s.description,
+                    }))
                 );
             }
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [isComplianceEnabled]);
+    }, [canBindComplianceSchema]);
 
     // Load current schema binding when editing
     useEffect(() => {
-        if (!isComplianceEnabled || !initState?.databaseId) return;
+        if (!canBindComplianceSchema || !initState?.databaseId) return;
         const loadBinding = async () => {
             const [success, result] = await getDatabaseBindings(initState.databaseId);
             if (success && typeof result !== "string" && result.databaseSchema) {
@@ -187,7 +201,7 @@ export default function CreateDatabase({
             }
         };
         loadBinding();
-    }, [isComplianceEnabled, initState?.databaseId]);
+    }, [canBindComplianceSchema, initState?.databaseId]);
 
     // Fetch buckets when component loads
     useEffect(() => {
@@ -280,16 +294,28 @@ export default function CreateDatabase({
                                 apiCall
                                     .then(async (res) => {
                                         if (res && res[0]) {
-                                            if (isComplianceEnabled) {
+                                            if (canBindComplianceSchema) {
+                                                let bindResult: [boolean, string] | null = null;
                                                 if (selectedSchema?.value) {
-                                                    if (selectedSchema.value !== initialSchemaValue) {
-                                                        await bindSchemaToDatabase(
+                                                    if (
+                                                        selectedSchema.value !== initialSchemaValue
+                                                    ) {
+                                                        bindResult = await bindSchemaToDatabase(
                                                             formState.databaseId,
                                                             selectedSchema.value
                                                         );
                                                     }
                                                 } else if (initialSchemaValue) {
-                                                    await unbindSchemaFromDatabase(formState.databaseId);
+                                                    bindResult = await unbindSchemaFromDatabase(
+                                                        formState.databaseId
+                                                    );
+                                                }
+                                                if (bindResult && !bindResult[0]) {
+                                                    setReload(true);
+                                                    setFormError(
+                                                        `${Synonyms.Database} saved, but the compliance schema binding failed: ${bindResult[1]}`
+                                                    );
+                                                    return;
                                                 }
                                             }
                                             setOpen(false);
@@ -445,7 +471,7 @@ export default function CreateDatabase({
                                 data-testid="database-file-extensions"
                             />
                         </FormField>
-                        {isComplianceEnabled && (
+                        {canBindComplianceSchema && (
                             <FormField
                                 label="Compliance Schema"
                                 description="Bind a compliance schema to this database. All assets in the database will inherit this schema unless overridden at the asset level."
@@ -453,8 +479,17 @@ export default function CreateDatabase({
                             >
                                 <Select
                                     selectedOption={selectedSchema}
-                                    onChange={({ detail }) => setSelectedSchema(detail.selectedOption?.value ? detail.selectedOption : null)}
-                                    options={[{ label: "None (no compliance schema)", value: "" }, ...schemaOptions]}
+                                    onChange={({ detail }) =>
+                                        setSelectedSchema(
+                                            detail.selectedOption?.value
+                                                ? detail.selectedOption
+                                                : null
+                                        )
+                                    }
+                                    options={[
+                                        { label: "None (no compliance schema)", value: "" },
+                                        ...schemaOptions,
+                                    ]}
                                     placeholder="Select a compliance schema"
                                     loadingText="Loading schemas"
                                     statusType={loadingSchemas ? "loading" : "finished"}
