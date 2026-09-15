@@ -53,10 +53,11 @@ The complete list of third-party dependencies and their licenses is maintained i
 Certain optional components use LGPL-2.1 licensed libraries:
 
 -   **OpenCascade.js** -- Dynamically loaded for CAD format support in the Three.js Viewer (STEP, IGES, BREP). Disabled by default and loaded on-demand from a CDN only when explicitly enabled.
--   **CadQuery** -- Used in the CAD/Mesh Metadata Extraction pipeline and the 3D Preview Thumbnail pipeline for STEP/STP file tessellation.
+-   **CadQuery / OCP (Open CASCADE)** -- Used in the SYSTEM GenAI metadata pipeline's 3D render image and the 3D Preview Thumbnail pipeline for STEP/STP/IGES/BREP tessellation and attribute extraction (Apache-2.0 bindings over LGPL-2.1 Open CASCADE).
+-   **IfcOpenShell** (LGPL-3.0) -- Used in the SYSTEM GenAI metadata pipeline's 3D render image to read IFC schema, project, and entity counts.
 
 :::note
-LGPL-2.1 license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
+LGPL license terms apply only when these optional features are enabled. The SYSTEM GenAI metadata pipeline is enabled by default in the commercial configuration template; review the license requirements with your legal team before deploying it or enabling CAD-related viewer features.
 :::
 
 ### Coordinate Transform Pipeline Library Notice
@@ -65,6 +66,20 @@ The Coordinate Transform pipeline depends on the open-source [laspy](https://git
 
 :::note
 The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0 licenses already used throughout VAMS and does not introduce any copyleft (LGPL/GPL) requirements. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed.
+:::
+
+### SYSTEM GenAI Metadata Pipeline Library Notice
+
+The SYSTEM GenAI metadata pipeline ships three AWS Lambda container images built in the deploying account. Their licensed components are recorded in the repository's `NOTICE.md`; the ones that carry copyleft terms are:
+
+-   **Blender** (GPL-3.0-or-later) -- The Blender renderer image downloads a Blender 4.x LTS release archive at build time, verifies its checksum, and invokes the `blender` executable as a subprocess to import mesh and USD files and render views. Blender is not linked into VAMS code and no Blender source is modified.
+-   **FFmpeg** (LGPL-2.1-or-later; GPL for builds that enable GPL components) -- The media extractor image installs `imageio-ffmpeg` (BSD-2-Clause), which bundles a static FFmpeg binary that the pipeline invokes as a subprocess to read video metadata and extract keyframes. The license of the bundled binary is determined by the `imageio-ffmpeg` release's build.
+-   **IfcOpenShell** (LGPL-3.0) and **CadQuery / OCP** (Apache-2.0 bindings over LGPL-2.1 Open CASCADE) -- used by the 3D render image; recorded under [Optional LGPL-Licensed Components](#optional-lgpl-licensed-components) above.
+
+No Python library imported by the three images carries a GPL license. The remaining libraries are permissively licensed: tinytag (MIT; the media extractor image reads audio tags and durations with it), defusedxml (PSF-2.0; SVG parsing without entity expansion), python-docx, python-pptx, and openpyxl (MIT; the media extractor image reads Word, PowerPoint, and Excel text and document properties with them) with their dependencies lxml (BSD-3-Clause), XlsxWriter (BSD-2-Clause), and et_xmlfile (MIT), trimesh, PyVista, Pillow (MIT-CMU), pypdfium2 (Apache-2.0 or BSD-3-Clause, bundling PDFium under BSD-3-Clause), charset-normalizer, ezdxf, networkx, numpy, scipy, laspy, pye57, DracoPy, VTK (BSD-3-Clause), and OpenUSD (`usd-core`, modified Apache-2.0).
+
+:::note[Amazon Bedrock model terms]
+The pipeline invokes the Amazon Bedrock models named in `app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId` and `app.vectorSearch.embeddingModelId`. Use of a model is governed by the model provider's terms accepted in the AWS account (for Anthropic models, a one-time use-case submission per account or organization). Content sent to the models is described in [Security Architecture](../architecture/security.md#data-sent-to-amazon-bedrock).
 :::
 
 ### Gaussian Splat Toolbox Pipeline Model Notice

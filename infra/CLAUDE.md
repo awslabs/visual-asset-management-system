@@ -47,16 +47,16 @@ infra/
       s3AssetBuckets.ts         # Global asset bucket registry
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
       service-helper.ts         # ServiceFormatter: ARN(), Endpoint, Principal
-    lambdaBuilder/              # 17 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
+    lambdaBuilder/              # 18 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
                                 # config, pipeline, workflow, role, userRole, tag, tagType, subscription, sendEmail,
-                                # metadataSchema, assetsLink, searchIndexBucketSync)
+                                # metadataSchema, assetsLink, searchIndexBucketSync, vectorSearch)
     nestedStacks/
       vpc/vpcBuilder-nestedStack.ts      # VPC, subnets, VPC endpoints
       storage/
         storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
         customResources/populateS3AssetBucketsTable.ts
       resourceNames/
-        resourceNamesBuilder-nestedStack.ts  # 64 SSM String parameters, one per registry descriptor
+        resourceNamesBuilder-nestedStack.ts  # 66 SSM String parameters, one per registry descriptor
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
       auth/
         authBuilder-nestedStack.ts       # Cognito user pool, identity pool, SAML, external OAuth
@@ -75,15 +75,17 @@ infra/
         staticWebBuilder-nestedStack.ts    # S3 + CloudFront or ALB web hosting
         constructs/                        # cloudfront-s3-website, alb-s3-website-albDeploy, gateway-albDeploy, custom-cognito-config
       searchAndIndexing/
-        searchBuilder-nestedStack.ts       # OpenSearch serverless or provisioned
-        constructs/                        # opensearch-serverless, opensearch-provisioned, schemaDeploy/deployschema.ts
+        searchBuilder-nestedStack.ts       # OpenSearch serverless or provisioned; vector indexing when vectorSearch.enabled
+        constructs/                        # opensearch-serverless, opensearch-provisioned, schemaDeploy/deployschema.ts,
+                                           # vectorIndexing-construct (queues, embedding-ready rule, indexer/reindexer/launcher)
       pipelines/                           # Pipeline stacks — see pipelines/CLAUDE.md
         pipelineBuilder-nestedStack.ts     # Pipeline orchestrator
         constructs/                        # batch-fargate-pipeline, batch-gpu-pipeline,
                                            # securitygroup-gateway-pipeline, vamsSchemaRegistration
-        conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
+        conversion/{3dBasic,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
-        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,nvidia/{cosmos,gr00t}}/
+        3dRecon/splatToolbox/  genAi/nvidia/{cosmos,gr00t}/
+        system/genAiMetadata/               # SYSTEM GenAI metadata pipeline (ids in infra/common/systemPipelines.ts)
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
@@ -98,7 +100,7 @@ infra/
                                  # against the synthesized templates
     pipelines/batchLogRegistrationEnvFargate.test.ts  # Per-pipeline synth: registering-lambda env + every
                                  # producer-declared *_STATE_NAME is a key of the ASL States
-                                 # (3dThumbnail, pcPotreeViewer, metadata3dLabeling, coordinateTransform)
+                                 # (3dThumbnail, pcPotreeViewer, system/genAiMetadata, coordinateTransform)
     pipelines/batchLogRegistrationEnvGpu.test.ts  # Same for splatToolbox, cosmos x4 (the COSMOS_BATCH_STATE_NAME
                                  # env value is the joined name), gr00t, isaacLabTraining
     pipelines/containerLogRegistrationEnvEcs.test.ts  # Same for rapidPipeline, modelOps
@@ -114,6 +116,7 @@ infra/
     tools/ssm_resource_lookup.py                 # Resolves resource names from the SSM parameters
     v2.4_to_v2.5/upgrade/                        # Backfills databaseId + databaseId:assetId on asset versions
     v2.5_to_v2.6/upgrade/                        # Transforms pipeline/workflow/execution rows into the V2 tables
+    v2.6_to_v2.7/upgrade/                        # Deletes orphaned trigger rows, backfills the vector index, reports retired-pipeline references
 ```
 
 ---
@@ -129,11 +132,13 @@ CoreVAMSStack (root)
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch — foundation)
-  |     +-- ResourceNamesBuilder (publishes 64 SSM parameters)
+  |     +-- ResourceNamesBuilder (publishes 66 SSM parameters)
   |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
   |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
-  |     +-- SearchBuilder (OpenSearch)                           -> storage, resourceNames
+  |     +-- SearchBuilder (OpenSearch, vector indexing)          -> storage, resourceNames, ApiBuilder2
+  |     |                                                           (its system-workflow launcher invokes
+  |     |                                                            an ApiBuilder2 Lambda by name)
   |     +-- PipelineBuilder (all use-case pipelines)             -> storage, ApiBuilder2
   |     |                                                           (its vamsSchema registration custom
   |     |                                                            resources invoke an ApiBuilder2 Lambda)
@@ -149,7 +154,7 @@ CoreVAMSStack (root)
 
 ### Cross-Stack Shared Interfaces
 
-**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 46 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`). There is no `sqs` member: the two Amazon SQS queues the builder creates buffer S3 object-created/deleted notifications for the indexers and are wired locally, and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
+**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 48 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`; `vectorEmbeddingsStorageTable` carries its vector index and the index's filter-attribute definitions only when `app.vectorSearch.enabled`, and `workflowExecutionLocksStorageTable` is the one table with a TTL attribute, `expiresAt`). There is no `sqs` member: the two Amazon SQS queues the builder creates buffer S3 object-created/deleted notifications for the indexers and are wired locally, and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
 
 **`authResources`** (`authBuilder-nestedStack.ts`): `roles.unAuthenticatedRole`; `cognito.{userPool, webClientUserPool, userPoolId, identityPoolId, webClientId}`.
 
@@ -182,7 +187,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu, deployDeferredIndexSchema), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
--   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
+-   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCoordinateTransform, usePreviewPcPotreeViewer, usePreview3dThumbnail, useSplatToolbox, useSystemGenAiMetadata (enabled, bedrockAnalysisModelId, useFargateRenderer, lambdaLimits, bedrockGuardrail), useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining, useNvidiaCosmos, useNvidiaCosmos3, useNvidiaGr00t
 -   `app.addons`: useGarnetFramework, usePhysnaSync
 -   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
 -   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE, apiGatewayTimeoutTime default 29 / max 300 — integration timeout in seconds, applied as `timeoutInMillis` on every route integration in `buildOpenApiSpec.ts`; above 29 requires an approved account `L-E5AE38E3` quota increase)
@@ -193,13 +198,13 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 
 ### Feature Flags (common/vamsAppFeatures.ts)
 
-`VAMS_APP_FEATURES` enum: `GOVCLOUD`, `ALLOWUNSAFEEVAL`, `LOCATIONSERVICES`, `ALBDEPLOY`, `CLOUDFRONTDEPLOY`, `NOOPENSEARCH`, `AUTHPROVIDER_COGNITO`, `AUTHPROVIDER_COGNITO_SAML`, `AUTHPROVIDER_COGNITO_OIDC`, `AUTHPROVIDER_EXTERNALOAUTHIDP`, `PHYSNA_ADDON`, `DEADLINECLOUD_PIPELINES`. Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`.
+`VAMS_APP_FEATURES` enum: `GOVCLOUD`, `ALLOWUNSAFEEVAL`, `LOCATIONSERVICES`, `ALBDEPLOY`, `CLOUDFRONTDEPLOY`, `NOOPENSEARCH`, `AUTHPROVIDER_COGNITO`, `AUTHPROVIDER_COGNITO_SAML`, `AUTHPROVIDER_COGNITO_OIDC`, `AUTHPROVIDER_EXTERNALOAUTHIDP`, `PHYSNA_ADDON`, `DEADLINECLOUD_PIPELINES`, `VECTORSEARCH` (pushed when `app.vectorSearch.enabled`; independent of `NOOPENSEARCH` — a deployment may publish both, either, or neither). Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`.
 
 ---
 
 ## Lambda Builder Pattern
 
-All 17 lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. Every function builder:
+All 18 lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. Every function builder:
 
 ### Standard Function Signature + Configuration
 
@@ -274,8 +279,8 @@ The two API builder stacks stay split, and consolidating them would remove headr
 | Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
 | ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
 | CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 71                             |
-| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.49 MB, `apiBuilder2` ~0.29 MB                  |
-| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 122 path-tree nodes (100 OpenAPI paths) across **both** stacks |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.49 MB, `apiBuilder2` ~0.30 MB                  |
+| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 123 path-tree nodes (101 OpenAPI paths) across **both** stacks |
 
 Two consequences worth holding onto:
 
@@ -294,7 +299,7 @@ The path tree counts **nodes, not routes**: `/database/{databaseId}/assets` is t
 **A fourth ceiling governs the storage stack: 200 Outputs per template, not adjustable.**
 `StorageResourcesBuilder` emits 133 of them where the next highest stack emits 32 — every table a
 sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a
-`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 64 as its own
+`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 66 as its own
 Parameters. Exceeding 200 is rejected at ValidateTemplate, the same class of failure that forced the
 API stack split, so roughly 30 more cross-stack-referenced storage resources would hit it.
 `test/api/apiStackCeilings.test.ts` fails above 170, which leaves headroom to design a split rather than
@@ -504,7 +509,7 @@ A **private** OpenSearch Serverless collection (`allowPublic = false`) is reache
 -   **NEXTGEN** (`nextGen = true`) — hostname `\{collection-id\}.aoss.\{region\}.on.aws`. Reached through a **standard EC2 interface endpoint** (service `com.amazonaws.\{region\}.aoss-data`, `privateDnsEnabled: true`).
 -   **CLASSIC** (`nextGen = false`) — hostname `\{collection-id\}.\{region\}.aoss.amazonaws.com`. Reached through the OpenSearch Serverless-managed endpoint (`opensearchserverless.CfnVpcEndpoint`) with its own Route 53 private hosted zone.
 
-The chosen endpoint's id populates the network policy `SourceVPCEs`. Only OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, schema-deploy custom resource) run in the VPC — `useForAllLambdas` is not required. Schema-deploy uses a 14-min timeout + readiness poll because a fresh collection/endpoint plus NEXTGEN scale-to-zero cold start (10–30s) can take minutes to become reachable. Backend Lambdas sign SigV4 with service name `aoss` when `OPENSEARCH_TYPE=serverless`.
+The chosen endpoint's id populates the network policy `SourceVPCEs`. Only OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, schema-deploy custom resource) and — when `app.vectorSearch.enabled` — the four vector Lambdas (`vectorIndexer`, `vectorReindexer`, `systemWorkflowLauncher`, `vectorSearchService`, built by `lib/lambdaBuilder/vectorSearchFunctions.ts`) run in the VPC — `useForAllLambdas` is not required. The vector Lambdas take the same placement decision as the search Lambdas through `lib/helper/searchPlacement.ts::searchLambdasInVpc` (provisioned OpenSearch, a private Serverless collection, or `useForAllLambdas`), so a private collection also puts them in the VPC and the Amazon Bedrock Runtime interface endpoint is created alongside. Schema-deploy uses a 14-min timeout + readiness poll because a fresh collection/endpoint plus NEXTGEN scale-to-zero cold start (10–30s) can take minutes to become reachable. Backend Lambdas sign SigV4 with service name `aoss` when `OPENSEARCH_TYPE=serverless`.
 
 **`addVpcEndpoints` gating (NEXTGEN only).** NEXTGEN's endpoint is a standard EC2 interface endpoint, so it follows `useGlobalVpc.addVpcEndpoints`. The construct computes `createEndpointResources = useVPCEndpoint && (!nextGen || addVpcEndpoints)`:
 
@@ -581,7 +586,7 @@ These axes are independent. **Retained + auto-named** resources (asset, auxiliar
 
 **The VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`): `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. **Not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
 
-**SSM String parameters** (64 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables and the 6 pipeline/workflow V2 data-model tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
+**SSM String parameters** (66 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables, the 6 pipeline/workflow V2 data-model tables, and the vector embeddings and workflow execution locks tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
 
 ### 5. Service Helper Usage
 

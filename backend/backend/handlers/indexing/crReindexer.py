@@ -64,15 +64,22 @@ from decimal import Decimal
 import boto3
 from botocore.exceptions import ClientError
 from botocore.config import Config
-from boto3.dynamodb.conditions import Key
-
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
 )
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
 from common.dynamoDbMetadataKeys import REINDEX_METADATA_RECORD_KEY
-from common.validators import validate
+from common.indexing.fileEnumeration import (
+    extract_asset_id_from_key,
+    is_excluded_s3_key,
+    is_folder_marker,
+    is_valid_asset_id,
+    list_objects_kwargs,
+    normalize_base_prefix,
+    relative_file_key,
+    resolve_live_database_id,
+    scan_bucket_registrations,
+)
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="CrReindexer")
@@ -832,18 +839,8 @@ class ReindexUtility:
     
     def _scan_s3_buckets_table(self) -> List[Dict]:
         """Scan the S3 buckets table and return all bucket configurations."""
-        table = dynamodb_resource.Table(self.s3_buckets_table_name)
-        
         try:
-            response = table.scan()
-            buckets = response.get('Items', [])
-            
-            while 'LastEvaluatedKey' in response:
-                response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
-                buckets.extend(response.get('Items', []))
-            
-            return buckets
-            
+            return scan_bucket_registrations(dynamodb_resource.Table(self.s3_buckets_table_name))
         except ClientError as e:
             logger.error(f"Error scanning S3 buckets table: {e}")
             raise
@@ -973,26 +970,12 @@ class ReindexUtility:
     @staticmethod
     def _extract_asset_id_from_key(object_key: str, base_prefix: str) -> Optional[str]:
         """Return the asset ID (first path segment beneath base_prefix), mirroring sqsBucketSync."""
-        if not base_prefix or base_prefix == '/':
-            parts = object_key.split('/')
-            return parts[0] if parts and parts[0] else None
-
-        prefix = base_prefix if base_prefix.endswith('/') else base_prefix + '/'
-        if object_key.startswith(prefix):
-            parts = object_key[len(prefix):].split('/')
-            return parts[0] if parts and parts[0] else None
-
-        return None
+        return extract_asset_id_from_key(object_key, base_prefix)
 
     @staticmethod
     def _is_valid_asset_id(asset_id: str) -> bool:
         """Validate an asset ID with the common ASSET_ID validator (as sqsBucketSync does)."""
-        try:
-            (valid, _) = validate({'assetId': {'value': asset_id, 'validator': 'ASSET_ID'}})
-            return valid
-        except Exception as e:
-            logger.warning(f"Error validating asset ID {asset_id}: {e}")
-            return False
+        return is_valid_asset_id(asset_id)
 
     def _resolve_database_id(self, bucket_id: Optional[str], asset_id: str) -> Optional[str]:
         """Resolve the active databaseId for (bucketId, assetId) via BucketIdGSI; cached, ignores archived."""
@@ -1005,16 +988,9 @@ class ReindexUtility:
 
         database_id = None
         try:
-            table = dynamodb_resource.Table(self.asset_table_name)
-            response = table.query(
-                IndexName="BucketIdGSI",
-                KeyConditionExpression=Key('bucketId').eq(bucket_id) & Key('assetId').eq(asset_id)
+            database_id = resolve_live_database_id(
+                dynamodb_resource.Table(self.asset_table_name), bucket_id, asset_id
             )
-            for item in response.get('Items', []):
-                candidate = item.get('databaseId', '')
-                if candidate and not candidate.endswith('#deleted'):  # skip archived assets
-                    database_id = candidate
-                    break
         except Exception as e:
             logger.warning(f"Error resolving databaseId for asset {asset_id} in bucket {bucket_id}: {e}")
 
@@ -1031,15 +1007,6 @@ class ReindexUtility:
         bucket_id: Optional[str] = None
     ) -> Dict:
         """Process all objects in a bucket and update AssetsMetadata table."""
-        # Excluded patterns and prefixes from fileIndexer
-        excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
-        # '.previewFile.' files must be excluded here. The reindexer "touches" the
-        # metadata table to trigger indexing, which fires the DynamoDB metadata-stream
-        # path in fileIndexer (handle_metadata_stream). That path does NOT perform the
-        # base-file rewrite that the S3-event path does, so touching a '.previewFile.'
-        # record would index the preview file as its own standalone document. Skip them.
-        excluded_patterns = [PREVIEW_FILE_PATTERN]
-        
         results = {
             'success': 0,
             'failed': 0,
@@ -1055,19 +1022,12 @@ class ReindexUtility:
             files_batch = []
             current_timestamp = datetime.now(timezone.utc).isoformat()
 
-            # Normalize base prefix - remove leading slash if present
-            if base_prefix.startswith('/'):
-                base_prefix = base_prefix[1:]
+            base_prefix = normalize_base_prefix(base_prefix)
             
             # List all objects in the bucket recursively
             paginator = s3_client.get_paginator('list_objects_v2')
             
-            # Use empty prefix to list all objects in bucket
-            pagination_config = {'Bucket': bucket_name}
-            if base_prefix and base_prefix != '/':
-                pagination_config['Prefix'] = base_prefix
-            
-            for page in paginator.paginate(**pagination_config):
+            for page in paginator.paginate(**list_objects_kwargs(bucket_name, base_prefix)):
                 if self.out_of_time():
                     logger.error(
                         f"Stopping file reindex of {bucket_name} mid-scan: "
@@ -1085,28 +1045,11 @@ class ReindexUtility:
                 results['objects_scanned'] += len(objects)
 
                 for obj in objects:
-                    # Skip folder markers
-                    if obj['Key'].endswith('/'):
-                        continue
-                    
-                    # Check for excluded patterns in the key
                     s3_key = obj['Key']
-                    
-                    # Skip if key contains any excluded patterns
-                    if any(pattern in s3_key for pattern in excluded_patterns):
-                        results['skipped_excluded'] += 1
+                    if is_folder_marker(s3_key):
                         continue
-                    
-                    # Check if any path component is a reserved excluded folder.
-                    path_parts = s3_key.split('/')
-                    skip_file = False
-                    for part in path_parts:
-                        if part in excluded_prefixes:
-                            results['skipped_excluded'] += 1
-                            skip_file = True
-                            break
-                    
-                    if skip_file:
+                    if is_excluded_s3_key(s3_key):
+                        results['skipped_excluded'] += 1
                         continue
                     
                     # Stop if we've reached the limit
@@ -1150,20 +1093,7 @@ class ReindexUtility:
                             results['skipped_no_asset'] += 1
                             continue
 
-                        # Calculate relative path from base prefix and asset ID
-                        # Start with the full S3 key
-                        relative_path = obj['Key']
-                        
-                        # Remove base prefix if present
-                        if base_prefix and relative_path.startswith(base_prefix):
-                            relative_path = relative_path[len(base_prefix):].lstrip('/')
-                        
-                        # Remove asset ID prefix if present (the file is stored under assetId/)
-                        if relative_path.startswith(f"{asset_id}/"):
-                            relative_path = relative_path[len(asset_id) + 1:]  # +1 to remove the trailing slash
-                        
-                        # Prepend with forward slash for metadata storage
-                        file_path = f"/{relative_path}"
+                        file_path = relative_file_key(obj['Key'], base_prefix, asset_id)
                         
                         files_batch.append({
                             'databaseId': database_id,

@@ -65,6 +65,9 @@ export const RESOURCE_PARAM_KEYS = {
         pipelineTemplateTagSchemaStorage: "dynamoTables/pipelineTemplateTagSchemaStorage",
         workflowStorageV2: "dynamoTables/workflowStorageV2",
         workflowTriggersStorage: "dynamoTables/workflowTriggersStorage",
+        // Vector search + workflow coordination tables
+        vectorEmbeddingsStorage: "dynamoTables/vectorEmbeddingsStorage",
+        workflowExecutionLocksStorage: "dynamoTables/workflowExecutionLocksStorage",
     },
     // Deprecated tables retained for data migration only (no handler reads them)
     dynamoTablesLegacy: {
@@ -79,6 +82,7 @@ export const RESOURCE_PARAM_KEYS = {
     // Lambda function names consumed by data-migration tooling
     lambdaFunctions: {
         crOsReindexer: "lambdaFunctions/crOsReindexer",
+        vectorReindexer: "lambdaFunctions/vectorReindexer",
     },
     s3Buckets: {
         assetAuxiliary: "s3Buckets/assetAuxiliary",

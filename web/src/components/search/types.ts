@@ -30,6 +30,7 @@ export interface SearchFilters {
     };
     includeMetadataInKeywordSearch?: boolean;
     showResultExplanation?: boolean;
+    includeSegments?: boolean; // `Search inside files` (NLP mode); false only when cleared
     bool_has_asset_children?: {
         value: boolean;
     } | null;
@@ -106,8 +107,36 @@ export interface SearchExplanation {
     };
 }
 
+/**
+ * The segment vector that scored best for a hit: a video time window (`videoTime`, with a
+ * millisecond range) or a document content chunk (`textChunk`, range `null`). `null` on the hit
+ * when the whole-file vector won.
+ */
+export interface NlpSegmentRef {
+    segmentKey: string;
+    segmentKind: string;
+    segmentLabel: string;
+    segmentStartMs: number | null;
+    segmentEndMs: number | null;
+}
+
+/** Per-hit vector details the NLP search returns beside `_score`; never part of `_source`. */
+export interface NlpVectorInfo {
+    distance: number;
+    embeddingModelId: string;
+    sourceModalities: string[];
+    indexedAt: string;
+    fileClass: string;
+    /** Segment vectors collapsed into this hit; `0` when only the whole-file vector matched. */
+    segmentHits: number;
+    bestSegment: NlpSegmentRef | null;
+}
+
 export interface SearchResult {
     _id: string;
+    _score?: number;
+    _index_type?: string;
+    _vector?: NlpVectorInfo;
     _source: {
         str_assetid?: string;
         str_assetname?: string;
@@ -147,6 +176,56 @@ export interface SearchResponse {
     aggregationTotal?: number;
 }
 
+export type SearchMode = "keyword" | "nlp";
+
+/** Body of `POST /search/nlp`. The OpenSearch-only constraints are ignored (with a warning) when OpenSearch is off. */
+export interface NlpSearchRequest {
+    query: string;
+    entityTypes?: ("asset" | "file")[];
+    databaseIds?: string[];
+    includeArchived?: boolean;
+    includeSegments?: boolean;
+    fileClasses?: string[];
+    fileExtensions?: string[];
+    size?: number;
+    filters?: object[];
+    metadataQuery?: string;
+    metadataSearchMode?: string;
+    geoSearch?: GeoSearchFilter;
+    tags?: string[];
+    enrich?: boolean;
+}
+
+export interface NlpSearchSummary {
+    query: string;
+    embeddingModelId: string;
+    databasesSearched: number;
+    candidatesEvaluated: number;
+    /** Segment items folded into their file's hit. */
+    itemsCollapsed: number;
+    /** File classes the query's type words named; their hits are listed first. */
+    classIntent: string[];
+    truncated: boolean;
+}
+
+/**
+ * One advisory attached to an otherwise successful natural-language response. `code` is one of a
+ * fixed set (`truncated:window`, `truncated:targets`, `databases:none_accessible`,
+ * `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full` — a segment
+ * search window filled while the answer is not already truncated); `message` is the text shown
+ * to the user.
+ */
+export interface NlpSearchWarning {
+    code: string;
+    message: string;
+}
+
+/** The `POST /search` envelope plus the `nlp` summary and `warnings` the NLP route adds. */
+export interface NlpSearchResponse extends SearchResponse {
+    nlp: NlpSearchSummary;
+    warnings: NlpSearchWarning[];
+}
+
 export interface SearchPreferences {
     viewMode: "table" | "card" | "map";
     assetTableColumns: string[]; // Columns for asset view
@@ -160,6 +239,7 @@ export interface SearchPreferences {
     filterPresets: FilterPreset[];
     lastUsedFilters: SearchFilters;
     sidebarWidth?: number; // Width of the search sidebar (resizable)
+    searchMode?: SearchMode; // Keyword vs natural-language search when both engines are enabled
 }
 
 export interface FilterPreset {
@@ -388,6 +468,14 @@ export const FIELD_MAPPINGS: FieldMapping = {
         filterable: true,
         searchable: false,
     },
+    // Natural-language search only: the hit's `_score` (1 - cosine distance) shown as a percentage
+    relevance: {
+        label: "Relevance",
+        type: "number",
+        sortable: true,
+        filterable: false,
+        searchable: false,
+    },
 
     // Metadata fields (dynamic)
     "MD_*": {
@@ -455,4 +543,5 @@ export const DEFAULT_PREFERENCES: SearchPreferences = {
         },
     },
     sidebarWidth: 400, // Default sidebar width
+    searchMode: "keyword",
 };

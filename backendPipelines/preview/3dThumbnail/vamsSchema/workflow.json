@@ -1,6 +1,7 @@
 {
     "workflowName": "3D Preview Thumbnail",
-    "category": "Preview",
+    "category": "SYSTEM - Preview",
+    "isSystem": true,
     "description": "Automated workflow for 3D file preview thumbnail generation (GIF/JPG/PNG).",
     "systemConfig": {
         "inputFileArity": "one",

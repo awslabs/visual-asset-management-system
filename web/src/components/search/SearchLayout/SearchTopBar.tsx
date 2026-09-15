@@ -4,7 +4,24 @@
  */
 
 import React from "react";
-import { Box, Button, Input, SpaceBetween, Header, Badge } from "@cloudscape-design/components";
+import Badge from "@cloudscape-design/components/badge";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Header from "@cloudscape-design/components/header";
+import Input from "@cloudscape-design/components/input";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import type { SearchMode } from "../types";
+
+/**
+ * The keyword / natural-language switch. Absent when only OpenSearch is on; read-only (pinned to
+ * natural language) when only vector search is on; live when both engines are enabled.
+ */
+export interface SearchModeControl {
+    mode: SearchMode;
+    onChange: (mode: SearchMode) => void;
+    readOnly: boolean;
+}
 
 interface SearchTopBarProps {
     query: string;
@@ -16,6 +33,7 @@ interface SearchTopBarProps {
     hasActiveFilters?: boolean;
     title?: string;
     description?: string;
+    searchModeControl?: SearchModeControl;
 }
 
 const SearchTopBar: React.FC<SearchTopBarProps> = ({
@@ -28,6 +46,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     hasActiveFilters = false,
     title = "Search",
     description,
+    searchModeControl,
 }) => {
     const handleKeyDown = (event: any) => {
         if (event.detail.key === "Enter") {
@@ -35,17 +54,43 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
         }
     };
 
+    const placeholder =
+        searchModeControl?.mode === "nlp"
+            ? "Describe what you are looking for..."
+            : "Search by keywords (wildcard)...";
+
     return (
         <Box padding={{ vertical: "m", horizontal: "l" }}>
-            {/* Header with inline search input + Search and Clear All Filters buttons in the actions slot */}
+            {/* Header with the mode switch, inline search input, Search and Clear All Filters in the actions slot */}
             <Header
                 variant="h1"
                 description={description}
                 actions={
                     <SpaceBetween direction="horizontal" size="xs">
+                        {searchModeControl && (
+                            <SegmentedControl
+                                label="Search mode"
+                                selectedId={searchModeControl.mode}
+                                onChange={({ detail }) =>
+                                    searchModeControl.onChange(detail.selectedId as SearchMode)
+                                }
+                                options={[
+                                    {
+                                        text: "Keyword",
+                                        id: "keyword",
+                                        disabled: searchModeControl.readOnly,
+                                    },
+                                    {
+                                        text: "Natural language",
+                                        id: "nlp",
+                                        disabled: searchModeControl.readOnly,
+                                    },
+                                ]}
+                            />
+                        )}
                         <div style={{ width: "320px" }}>
                             <Input
-                                placeholder="Search by keywords (wildcard)..."
+                                placeholder={placeholder}
                                 type="search"
                                 value={query}
                                 onChange={(e) => onQueryChange(e.detail.value)}

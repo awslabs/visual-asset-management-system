@@ -24,6 +24,7 @@ from common.dynamodb import validate_pagination_info
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
+from common.workflows import executionLocks as el
 from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
 from common.apiRoutes import (
@@ -195,6 +196,7 @@ try:
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
     workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
     pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    workflow_execution_locks_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE)
     # Index of 'executions that wrote to this asset', written at launch; removed here alongside the
     # execution's other rows on permanent delete.
     # Re-run delegates to the asset-less V2 execute handler (invoked as a lambda cross-call so the
@@ -1901,6 +1903,14 @@ def abort_execution(event, execution_id):
         main_item['lastSfnSyncCheckDate'] = now
         _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
                                      only_if_not_terminal=True)
+
+    # The run is terminal, so a perInputFileVersion launch may now take the same file versions. A no-op
+    # for every other restriction; best-effort (an unreleased row expires through the table's TTL).
+    el.release_locks_for_execution(
+        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_database,
+        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
+        workflow_database_id=main_item.get('workflowDatabaseId', ''),
+        workflow_id=main_item.get('workflowId', ''))
 
     logger.info(f"Aborted execution {execution_id}")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.

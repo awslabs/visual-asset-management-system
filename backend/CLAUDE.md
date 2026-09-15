@@ -39,6 +39,12 @@ backend/
 │   │   ├── dynamodb.py                             # query_all_items, query_has_match,
 │   │   │                                           #   to_update_expr, get_asset_object_from_id
 │   │   ├── resourceNames.py                        # SSM resource-name resolver + ResourceKeys
+│   │   ├── databaseAccess.py                       # DatabaseAccessManager (accessible-database scan + Casbin)
+│   │   ├── indexing/documentIds.py                 # OpenSearch doc ids + vector fileVersionKey / segment keys
+│   │   ├── indexing/fileEnumeration.py             # enumerate_latest_live_files (reindexers)
+│   │   ├── vectorsearch/embeddings.py              # Bedrock embedding adapters; vendored byte-identical into the system pipeline
+│   │   ├── vectorsearch/vectorStore.py             # VectorStore protocol + DynamoDbVectorStore (SearchVectors, MAX_TOP_K)
+│   │   ├── vectorsearch/fileClassIntent.py         # FILE_CLASSES phrases + query file-type intent (soft boost)
 │   │   ├── s3.py                                   # S3 file validation + paged list helpers
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns (mirror web/src/common/constants/fileFormats.ts)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
@@ -47,6 +53,8 @@ backend/
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
+│   │       ├── executionLocks.py                   #   perInputFileVersion lock rows (conditional put/delete, TTL, row-derived release)
+│   │       ├── systemRecords.py                    #   isSystem import marker + read-only guard messages
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
@@ -69,6 +77,9 @@ backend/
 │   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,
 │   │   │                                           #   registerPipelineExecution, workflowTriggerDispatch,
 │   │   │                                           #   deadlineCloudJobCallback
+│   │   ├── vectorsearch/                           # vectorIndexer (single writer of the vector table),
+│   │   │                                           #   vectorReindexer (clear/enqueue/both), systemWorkflowLauncher
+│   │   │                                           #   (paced SQS → executeWorkflow), vectorSearchService (POST /search/nlp)
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
 │   │   └── assetLinks, comments, config, databases, indexing, metadata,
@@ -813,6 +824,8 @@ asset_table = dynamodb.Table(asset_table_name)
 
 **Legacy env-var overrides** (for pipeline handlers and testing): `ASSET_STORAGE_TABLE_NAME`, `DATABASE_STORAGE_TABLE_NAME`, `S3_ASSET_AUXILIARY_BUCKET`, `AUDIT_LOG_*`, etc. Non-pipeline handlers resolve these via SSM unless the legacy env var is explicitly set.
 
+**Vector-search handler variables** (`handlers/vectorsearch/`, all indexed with `os.environ[...]` at module level, so each is set only by the builder named — copying the read into a handler built elsewhere raises `KeyError` at import): `VECTOR_INDEX_NAME`, `EMBEDDING_MODEL_ID` (`app.vectorSearch.embeddingModelId`) and `EMBEDDING_DIMENSIONS` (`app.vectorSearch.embeddingDimensions`, read with `int()`) come from `vectorIndexEnvironment()` in `infra/lib/lambdaBuilder/vectorSearchFunctions.ts` on `vectorIndexer`, `vectorReindexer` and `vectorSearchService`; `VECTOR_INDEXER_QUEUE_URL` (`vectorIndexer`) is the indexer's own SQS queue. `GENAI_METADATA_WORKFLOW_ID` and `GENAI_METADATA_WORKFLOW_DATABASE_ID` name the SYSTEM GenAI metadata workflow the reindexer re-launches (the shared literals of `infra/common/systemPipelines.ts`, `SYSTEM_GENAI_METADATA_WORKFLOW_ID` / `SYSTEM_WORKFLOW_DATABASE_ID`) and are set on `vectorReindexer` and `systemWorkflowLauncher` by `vectorIndexing-construct.ts`; `WORKFLOW_LAUNCH_QUEUE_URL` (`vectorReindexer`) is the launch queue the reindexer enqueues one message per file version onto, and `EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME` (`systemWorkflowLauncher`) is the function that queue's consumer cross-calls. The search Lambda also carries `OPENSEARCH_DISABLED` (`"true"` when no OpenSearch engine is deployed — `/search/nlp` then skips its OpenSearch enrichment step and reports OpenSearch-only filter fields under an `opensearch:fields_ignored` warning) alongside the `OPENSEARCH_*` variables the keyword search Lambda uses.
+
 ---
 
 ## File Security
@@ -864,7 +877,7 @@ New-handler / model / test skeletons: `backend/HANDLER_TEMPLATES.md`. Gold Stand
 
 ## Key Dependencies
 
-Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.45 / `botocore` 1.43.45 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
+Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.89 / `botocore` 1.43.89 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix; botocore **≥1.43.89** is the floor for the DynamoDB `SearchVectors` operation, pinned by `tests/common/test_vector_api_floor.py`), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
 
 Dev only: `moto` 5.1.0 (AWS mocks), `pytest` 9.0.3, `mypy` 1.0.0, `flake8` 6.0.0.
 

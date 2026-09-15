@@ -52,6 +52,7 @@ import govcloudTemplate from "../../config/config.template.govcloud.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import cdkJson from "../../cdk.json";
 import { newTestApp } from "./testApp";
+import { vectorIndexNameFor } from "./vectorIndexName";
 import { SplatToolboxConstruct } from "../../lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct";
 
 export type TemplateName = "commercial" | "govcloud" | "eusovereign";
@@ -153,8 +154,11 @@ function escapeRegExp(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** A deployable Config from a shipped template, with the placeholders getConfig() would fill. */
-function buildConfig(name: TemplateName, mutate?: (c: any) => void): Config.Config {
+/**
+ * A deployable Config from a shipped template, with the placeholders getConfig() would fill.
+ * Exported so the fill can be asserted without a synth; `synthTemplate` is the caller that matters.
+ */
+export function buildConfig(name: TemplateName, mutate?: (c: any) => void): Config.Config {
     const t = TARGET[name];
     const config = JSON.parse(JSON.stringify(RAW[name])) as Config.Config;
     const stackName = `vams-t1-${name}`;
@@ -188,10 +192,16 @@ function buildConfig(name: TemplateName, mutate?: (c: any) => void): Config.Conf
     internal.openSearchFileIndexName = "files";
     internal.resourceNamesSSMParamPrefix = `/${stackName}/resourceNames`;
     internal.openSearchDomainEndpointSSMParam = `/${stackName}/aos/endPoint`;
+    internal.openSearchAssetIndexNameSSMParam = `/${stackName}/aos/assetIndexName`;
+    internal.openSearchFileIndexNameSSMParam = `/${stackName}/aos/fileIndexName`;
     internal.locationServiceApiKeyArnSSMParam = `/${stackName}/location/apiKeyArn`;
     internal.webUrlDeploymentSSMParam = `/${stackName}/web/deployedUrl`;
 
     mutate?.(internal);
+    // Derived after the mutator so an arm that enables or re-points vector search names the index
+    // from the block it synthesizes with. getConfig() derives this field the same way and never
+    // reads it from config.json, so the block is the only input here too.
+    internal.vectorIndexName = vectorIndexNameFor(internal.app?.vectorSearch);
     assertNoUntrackedDockerAsset(config);
     return config;
 }

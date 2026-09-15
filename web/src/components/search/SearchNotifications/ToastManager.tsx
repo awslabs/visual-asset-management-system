@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Flashbar, FlashbarProps } from "@cloudscape-design/components";
+import Flashbar, { FlashbarProps } from "@cloudscape-design/components/flashbar";
 import { ToastNotification } from "../types";
 
 interface ToastManagerProps {

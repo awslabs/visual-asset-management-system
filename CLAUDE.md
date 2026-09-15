@@ -10,7 +10,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, and more
+-   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, SYSTEM GenAI metadata generation (Amazon Bedrock analysis, attributes, and vector-search embeddings for every viewer-supported file), Gaussian splatting, point cloud, SYSTEM 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, and more
 
 ### **Version Info**
 
@@ -55,20 +55,21 @@ root/
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
 │   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
 │   ├── genAi/
-│   │   ├── nvidia/
-│   │   │   ├── cosmos/
-│   │   │   │   ├── 3/         # NVIDIA Cosmos 3 (omni generation)
-│   │   │   │   ├── predict/   # NVIDIA Cosmos Predict (Text2World, Video2World)
-│   │   │   │   ├── reason/    # NVIDIA Cosmos Reason (video captioning)
-│   │   │   │   └── transfer/  # NVIDIA Cosmos Transfer (control-signal video restyle)
-│   │   │   └── gr00t/         # NVIDIA GR00T N1.5 fine-tuning
-│   │   └── metadata3dLabeling/
+│   │   └── nvidia/
+│   │       ├── cosmos/
+│   │       │   ├── 3/         # NVIDIA Cosmos 3 (omni generation)
+│   │       │   ├── predict/   # NVIDIA Cosmos Predict (Text2World, Video2World)
+│   │       │   ├── reason/    # NVIDIA Cosmos Reason (video captioning)
+│   │       │   └── transfer/  # NVIDIA Cosmos Transfer (control-signal video restyle)
+│   │       └── gr00t/         # NVIDIA GR00T N1.5 fine-tuning
+│   ├── system/
+│   │   └── genAiMetadata/     # SYSTEM - GenAI metadata pipeline (lambda/, containers/{blender,media}, vamsSchema/)
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
 │   └── CLAUDE.md              # Documentation development guide
 ├── .kiro/steering/            # Detailed workflow docs (Kiro steering, supplementary)
 ├── .claude/commands/          # Claude Code skills (slash commands)
-└── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.5_to_v2.6)
+└── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.6_to_v2.7)
 ```
 
 ---
@@ -111,6 +112,8 @@ CDK config (infra/config/config.json)
 ### **Pipeline Architecture**
 
 Four creatable execution types: **Lambda** (sync/async invoke), **SQS** (async queue), **EventBridge** (async event), and **DeadlineCloud** (AWS Deadline Cloud job). SQS and EventBridge are async-only with optional Step Functions Task Token callback. DeadlineCloud is async-only with a **mandatory** callback (`waitForCallback` must be `Enabled`), is built by `DeadlineCloudTaskBuilder` + the `deadlineCloudJobCallback` lambda, and is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled` — accepted only in the commercial `aws` partition, and rejected at pipeline create when the deployment has not enabled it.
+
+Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true`; the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). The two shipped system pipelines are `system-genai-metadata` (`SYSTEM - GenAI`, `backendPipelines/system/genAiMetadata/`) and `preview-3d-thumbnail` (`SYSTEM - Preview`). The `perInputFileVersion` workflow concurrency restriction (`common/workflows/executionLocks.py`) rejects a second execution over the same file version with `400` while one is running.
 
 ```
 S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBridge → AWS Batch containers (optional)
@@ -229,6 +232,8 @@ if (config.featuresEnabled.includes("NEW_FEATURE")) {
 }
 ```
 
+`VECTORSEARCH` is the worked example: `core-stack.ts` pushes it beside `NOOPENSEARCH` when `config.app.vectorSearch.enabled`, the CLI mirrors it as `FEATURE_VECTORSEARCH` (a bidirectional contract test pins the mirror), the web reads `featuresEnabled.VECTORSEARCH`, and the two switches are independent — `NOOPENSEARCH` still means "no OpenSearch" and says nothing about vector search.
+
 ### **Pattern 4: Resource Names Resolve via SSM Parameter Store**
 
 DynamoDB table names, non-asset S3 bucket names, and audit log group names are **never** hardcoded. Non-pipeline backend Lambdas resolve these from SSM Parameter Store at runtime, with environment variable overrides for development and testing.
@@ -267,7 +272,7 @@ const arn = `arn:aws:s3:::my-bucket`; // VIOLATION - breaks in GovCloud (arn:aws
 
 ### **Pattern 6: GovCloud Constraints**
 
-When `config.app.govCloud.enabled` is true: no CloudFront (use ALB for static web distribution); no Location Service (conditionally exclude); FIPS endpoints required (use service-helper); certain VPC endpoints are conditional (check partition before creating); no `unsafe-eval` (stricter CSP unless explicitly overridden).
+When `config.app.govCloud.enabled` is true: no CloudFront (use ALB for static web distribution); no Location Service (conditionally exclude); FIPS endpoints required (use service-helper); certain VPC endpoints are conditional (check partition before creating); no `unsafe-eval` (stricter CSP unless explicitly overridden); no DynamoDB vector search in the AWS European Sovereign Cloud (`vectorSearch.enabled` must be false there — `getConfig()` throws — and it defaults to false whenever `govCloud.enabled` is true).
 
 ---
 
@@ -583,6 +588,7 @@ VAMS uses single-table design with composite keys. Common patterns:
 -   **PK**: Entity type + ID (e.g., `ASSET#uuid`)
 -   **SK**: Sort key for queries (e.g., `VERSION#v1`)
 -   **GSI**: Global secondary indexes for cross-entity queries
+-   **Vector index**: the vector embeddings table carries a DynamoDB vector index (`vec-<slug(embeddingModelId)>-<dims>`, cosine, seven `INLINE_FILTER` string attributes including `segmentKind`) queried with `SearchVectors`; one Lambda (`handlers/vectorsearch/vectorIndexer.py`) is its only writer
 
 ### **S3 Bucket Organization**
 

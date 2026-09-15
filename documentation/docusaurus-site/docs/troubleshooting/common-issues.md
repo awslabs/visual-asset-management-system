@@ -355,6 +355,25 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 2. Verify the Amazon OpenSearch cluster health in the AWS Management Console.
 3. If necessary, trigger a re-index by setting `reindexOnCdkDeploy: true` in the configuration and redeploying, or by using the manual re-index tool in `infra/deploymentDataMigration/`.
 
+### Natural-Language Search Does Not Return a Newly Uploaded File
+
+A file appears in the asset list and in keyword search but a natural-language query that clearly describes it returns nothing.
+
+**Symptoms:**
+
+-   The file was uploaded minutes ago.
+-   Keyword search finds it by name; natural-language search does not rank it.
+
+**Resolution:**
+
+Natural-language search reads embeddings produced by the SYSTEM GenAI metadata pipeline, which runs as a workflow execution after upload — rendering, analysis, and embedding take from one to several minutes per file. Check the file's asset **Executions** tab:
+
+1. **No execution** — the pipeline's file-upload trigger is off or the extension is not allow-listed. Confirm `app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload` is `true` and that the file type has a viewer.
+2. **Execution FAILED with `BedrockAccessDenied` or `BedrockModelError`** — the analysis model is not enabled for the account (see [Prerequisites](../deployment/prerequisites.md#amazon-bedrock-model-access)). Attributes were still written; no embedding was produced. Enable the model and re-run the execution, or run the vector reindexer.
+3. **Execution SUCCEEDED** — allow up to a minute for the vector indexer to consume the `vector.embedding.ready` event, then retry. If the vector indexer's dead-letter queue holds messages, the document was rejected — most often because `app.vectorSearch.embeddingModelId` or `embeddingDimensions` changed after the pipeline produced the embedding; follow the model-change procedure in [Vector search](../concepts/vector-search.md#changing-the-embedding-model).
+
+A `503` from `POST /search/nlp` means the vector index is still being built after it was created or re-created; wait until `DescribeTable` shows it `ACTIVE`.
+
 ---
 
 ## Pipeline Issues

@@ -17,6 +17,8 @@ import {
     buildAssetIndexingFunction,
     buildReindexerFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+import { buildVectorSearchFunction } from "../../lambdaBuilder/vectorSearchFunctions";
+import { VectorIndexingConstruct } from "./constructs/vectorIndexing-construct";
 import { RouteRegistry, attachFunctionToApi } from "../apiLambda/apiRouteRegistry";
 import { NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -35,6 +37,8 @@ import { NAG_REASON_LAMBDA_BASIC_EXECUTION } from "../../helper/security";
 export class SearchBuilderNestedStack extends NestedStack {
     public reindexerFunctionName = "";
     public searchFunction: lambda.Function;
+    /** The POST /search/nlp Lambda; built only when vector search is enabled. */
+    public vectorSearchFunction?: lambda.Function;
 
     constructor(
         parent: Construct,
@@ -44,7 +48,8 @@ export class SearchBuilderNestedStack extends NestedStack {
         storageResources: storageResources,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
-        subnets: ec2.ISubnet[]
+        subnets: ec2.ISubnet[],
+        executeWorkflowV2FunctionName: string
     ) {
         super(parent, name);
 
@@ -55,7 +60,8 @@ export class SearchBuilderNestedStack extends NestedStack {
             storageResources,
             lambdaCommonBaseLayer,
             vpc,
-            subnets
+            subnets,
+            executeWorkflowV2FunctionName
         );
     }
 
@@ -66,7 +72,8 @@ export class SearchBuilderNestedStack extends NestedStack {
         storageResources: storageResources,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
-        subnets: ec2.ISubnet[]
+        subnets: ec2.ISubnet[],
+        executeWorkflowV2FunctionName: string
     ): lambda.Function {
         const searchFun = buildSearchFunction(
             scope,
@@ -94,6 +101,24 @@ export class SearchBuilderNestedStack extends NestedStack {
             method: apigwv2.HttpMethod.POST,
             registry: registry,
         });
+
+        // Natural-language search over the vector embeddings table; the route exists only with the feature.
+        if (config.app.vectorSearch.enabled) {
+            const vectorSearchFun = buildVectorSearchFunction(
+                scope,
+                storageResources,
+                config,
+                lambdaCommonBaseLayer,
+                vpc,
+                subnets
+            );
+            attachFunctionToApi(scope, vectorSearchFun, {
+                routePath: "/search/nlp",
+                method: apigwv2.HttpMethod.POST,
+                registry: registry,
+            });
+            this.vectorSearchFunction = vectorSearchFun;
+        }
 
         let fileIndexingFunction: lambda.Function | undefined = undefined;
         let assetIndexingFunction: lambda.Function | undefined = undefined;
@@ -298,6 +323,11 @@ export class SearchBuilderNestedStack extends NestedStack {
             //grant search function access to collection and VPCe
             aoss.grantCollectionAccess(searchFun);
             aoss.grantVPCeAccess(searchFun);
+            if (this.vectorSearchFunction) {
+                // Enrichment through the /search code needs the same collection access.
+                aoss.grantCollectionAccess(this.vectorSearchFunction);
+                aoss.grantVPCeAccess(this.vectorSearchFunction);
+            }
 
             // Grant OpenSearch access to reindexer
             aoss.grantCollectionAccess(reindexerFunction);
@@ -492,9 +522,29 @@ export class SearchBuilderNestedStack extends NestedStack {
 
             //grant search function access to AOS
             aos.grantOSDomainAccess(searchFun);
+            if (this.vectorSearchFunction) {
+                // Enrichment through the /search code needs the same domain access.
+                aos.grantOSDomainAccess(this.vectorSearchFunction);
+            }
 
             // Grant OpenSearch access to reindexer
             aos.grantOSDomainAccess(reindexerFunction);
+        }
+
+        /////////////////////////////////////////////////////////////////////////////
+        // Vector indexing (independent of the OpenSearch flavour: its topics exist regardless)
+        /////////////////////////////////////////////////////////////////////////////
+
+        let vectorIndexing: VectorIndexingConstruct | undefined = undefined;
+        if (config.app.vectorSearch.enabled) {
+            vectorIndexing = new VectorIndexingConstruct(scope, "VectorIndexing", {
+                config: config,
+                storageResources: storageResources,
+                lambdaCommonBaseLayer: lambdaCommonBaseLayer,
+                vpc: vpc,
+                subnets: subnets,
+                executeWorkflowV2FunctionName: executeWorkflowV2FunctionName,
+            });
         }
 
         /////////////////////////////////////////////////////////////////////////////
@@ -534,6 +584,14 @@ export class SearchBuilderNestedStack extends NestedStack {
             new ssm.StringParameter(scope, "ResourceNameParamCrOsReindexer", {
                 parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer}`,
                 stringValue: reindexerFunction.functionName,
+            });
+        }
+
+        // Same reasoning for the vector reindexer: read by the data-migration tooling only.
+        if (vectorIndexing) {
+            new ssm.StringParameter(scope, "ResourceNameParamVectorReindexer", {
+                parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.vectorReindexer}`,
+                stringValue: vectorIndexing.vectorReindexerFunction.functionName,
             });
         }
 

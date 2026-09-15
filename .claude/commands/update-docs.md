@@ -38,3 +38,7 @@ Update VAMS documentation based on recent code changes.
 -   `CHANGELOG.md` → `docs/additional/revisions.md`
 -   `backendPipelines/`, `infra/lib/nestedStacks/pipelines/` → `docs/pipelines/` pages (+ `docs/deployment/configuration-reference.md` for pipeline config options)
 -   `infra/lib/nestedStacks/storage/` (S3 buckets, DynamoDB tables, log groups) → also `docs/deployment/uninstall.md` (removal policy + custom-name collision flags)
+-   `backend/backend/handlers/vectorsearch/`, `backend/backend/common/vectorsearch/`, `infra/lib/nestedStacks/searchAndIndexing/` (vector indexing construct) → `docs/concepts/vector-search.md`, `docs/api/search.md`, `docs/architecture/details.md` (indexing flow)
+-   `backendPipelines/system/`, `infra/lib/nestedStacks/pipelines/system/` → `docs/pipelines/system-pipelines.md`, `docs/pipelines/system-genai-metadata.md`
+-   `infra/common/vamsAppFeatures.ts` → the feature-flag tables in `docs/overview/features.md` and `docs/architecture/details.md` (every enum member must appear in both)
+-   `backend/backend/common/workflows/systemRecords.py` → `docs/pipelines/system-pipelines.md`, `docs/concepts/pipelines-and-workflows.md`, `docs/api/pipelines.md`, `docs/api/workflows.md`

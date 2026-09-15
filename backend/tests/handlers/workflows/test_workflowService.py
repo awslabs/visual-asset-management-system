@@ -58,6 +58,16 @@ def bind_real_to_update_expr():
         yield
 
 
+@pytest.fixture(autouse=True)
+def stub_triggers_table():
+    """The archive route deletes the workflow's trigger rows after its own write; these tests are about
+    the workflow row, so the triggers table answers an empty partition."""
+    table = MagicMock()
+    table.query.return_value = {"Items": []}
+    with patch(f"{MOD}._triggers_table", return_value=table):
+        yield table
+
+
 def _written(table):
     """The attributes the last update_item call SET, as {attributeName: value}. Update and archive
     write a targeted SET built by to_update_expr, so the names/values arrive as #f/:v placeholders."""

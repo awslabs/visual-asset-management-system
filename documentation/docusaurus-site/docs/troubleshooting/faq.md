@@ -87,9 +87,10 @@ For full environment migration, use the data migration scripts provided in `infr
 Yes. Amazon OpenSearch is optional. When neither OpenSearch Serverless nor OpenSearch Provisioned is enabled:
 
 -   The `NOOPENSEARCH` feature flag is set automatically.
--   The web application hides search-specific UI elements.
+-   The web application hides keyword search, metadata filtering, and map view.
 -   Asset and file listing uses Amazon DynamoDB queries with pagination instead of full-text search.
--   Advanced search features (full-text search, metadata field filtering, relevance ranking) are not available.
+-   Advanced keyword features (full-text search, metadata field filtering, relevance ranking) are not available.
+-   Natural-language search remains available when `app.vectorSearch.enabled` is `true`: the search page shows the asset list tab and a Search tab in natural-language mode, with database, file-type, and archived filters. See [Vector search](../concepts/vector-search.md).
 
 ---
 

@@ -58,6 +58,7 @@ One folder per domain. The current domains:
 -   `assetLinks/` — Asset relationship management
 -   `comments/` — Comment CRUD
 -   `config/` — System configuration
+-   `vectorsearch/` — Vector search: `vectorIndexer.py` (single writer of the vector embeddings table, driven by `vector.embedding.ready` events and file/asset lifecycle records), `vectorReindexer.py` (`clear`/`enqueue`/`both`), `systemWorkflowLauncher.py` (paced SQS consumer that invokes `executeWorkflow` as `SYSTEM_USER`), `vectorSearchService.py` (`POST /search/nlp`). Shared code: `common/vectorsearch/{embeddings,vectorStore,fileClassIntent}.py`, `common/indexing/{documentIds,fileEnumeration}.py`, `common/databaseAccess.py`, `common/workflows/{executionLocks,systemRecords}.py`
 -   `databases/` — Database CRUD
 -   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
 -   `metadata/` — Metadata CRUD
@@ -942,9 +943,9 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth.
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.49 MB template and `apiBuilder2` emits 71 in ~0.29 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.49 MB template and `apiBuilder2` emits 71 in ~0.30 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
-A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
+A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 123 nodes from 101 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
 ```typescript
 // ✅ CORRECT - Register API routes
@@ -1333,6 +1334,13 @@ class Test[Domain]Handler:
 
                 assert response['statusCode'] == 403
 ```
+
+**Vector-search test doubles** (mirrors `backend/tests/CLAUDE.md`, "Use the shared Stubber helper in `tests/vectorStub.py`"):
+
+-   Vector-search code talks to two APIs that `moto` cannot serve: DynamoDB `SearchVectors` and Amazon Bedrock Runtime. `tests/vectorStub.py` wraps `botocore.stub.Stubber` for both — `stubbed_dynamodb(expected_calls)` and `stubbed_bedrock_runtime(expected_calls)` are context managers that yield a real botocore client with the scripted responses queued, so a test exercises request serialization against the live service model rather than a `MagicMock` that accepts anything. Write one Stubber contract test per vector operation the code performs; the helper's own checks are mutation-verified in `tests/test_vectorStub.py`.
+-   **Never `create_table(VectorIndexes=…)` under moto.** moto's DynamoDB does not implement vector indexes; the call either raises on the unknown parameter or silently creates a table without the index. Use moto for plain DynamoDB, S3, SQS, SNS, SSM, and Step Functions plumbing and the Stubber helper for the vector and Bedrock calls.
+-   **Bedrock is fakes only.** No test invokes a model; `stubbed_bedrock_runtime` and the house `_boto_client` fake are the only two doubles, and a handler's Bedrock error path is exercised by scripting the `ClientError` code (`AccessDeniedException`, `ThrottlingException`, `ValidationException`) into the stub.
+-   The service-model floor that makes `SearchVectors` stubbable is pinned by `tests/common/test_vector_api_floor.py`, which fails loudly (never skips) when the installed botocore lacks the operation, so a dependency downgrade shows up as one clear failure rather than as a hundred `ParamValidationError`s.
 
 ### **Rule 11: Poetry-Managed Requirements Files Are Generated — Never Edit Directly**
 

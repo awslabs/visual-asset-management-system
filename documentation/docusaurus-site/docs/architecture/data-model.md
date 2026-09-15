@@ -197,6 +197,26 @@ Stores system-generated file attributes (distinct from user-defined metadata).
 | `DatabaseIdAssetIdFilePathIndex` | `databaseId:assetId:filePath` | `attributeKey` | ALL        |
 | `DatabaseIdAssetIdIndex`         | `databaseId:assetId`          | `attributeKey` | ALL        |
 
+### Vector Embeddings Storage Table
+
+Stores one item per embedded file version, plus one item per segment (a video time window or a text chunk) a run published for that version, written only by the vector indexer in the search stack. The table exists in every deployment; its vector index exists only while `app.vectorSearch.enabled` is true.
+
+| Attribute                                                                                                | Type           | Key           | Notes                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------- | -------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId:assetId`                                                                                     | String         | Partition Key | Composite key, so one query covers every item of an asset                                                                                                                                                                                                                                                                                                                                                                        |
+| `fileVersionKey`                                                                                         | String         | Sort Key      | `<key path>#<versionId>` on a whole-file item, `<key path>#<versionId>#<segmentKey>` on a segment item — the file path, hash-bounded so the value stays within the 1,024-byte sort-key limit, then `#` and the S3 version id (`null` on unversioned buckets), then the segment's fixed-width key; `begins_with` on `<key path>#` groups one file's items across versions and on `<key path>#<versionId>#` one version's segments |
+| `databaseId`, `isLatest`, `isArchived`, `fileClass`, `fileExt`, `embeddingModelId`, `segmentKind`        | String         |               | Inline-filter attributes of the vector index. Every item writes all seven — `isLatest`/`isArchived` as `"true"`/`"false"`, `fileExt` as `none` when the file has no extension, `segmentKind` as `none` on a whole-file item and `videoTime` or `textChunk` on a segment — because the index filters by equality only                                                                                                             |
+| `assetId`, `filePath`, `versionId`, `contentType`, `indexedAt`, `previewFileKey`                         | String         |               | Projected into the index for display and joins; `indexedAt` is ISO-8601                                                                                                                                                                                                                                                                                                                                                          |
+| `segmentKey`, `segmentLabel`                                                                             | String         |               | Projected into the index; empty on a whole-file item. A segment's key is `t` and its start millisecond (`t0000083456`) or `c` and its chunk index (`c000012`); the label is its display form (`00:01:23.456–00:01:33.456`, `chunk 12/200 · page 7`)                                                                                                                                                                              |
+| `fileSize`                                                                                               | Number         |               | Projected into the index                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `segmentStartMs`, `segmentEndMs`                                                                         | Number         |               | Projected into the index; the time window of a `videoTime` segment, `null` otherwise                                                                                                                                                                                                                                                                                                                                             |
+| `sourceModalities`                                                                                       | List of String |               | Projected into the index; which inputs (text, images, attributes) the embedding was built from                                                                                                                                                                                                                                                                                                                                   |
+| `embedding`                                                                                              | List of Number |               | The vector, rounded to nine significant digits; indexed, never returned by a search                                                                                                                                                                                                                                                                                                                                              |
+| `embeddingDimensions`, `segmentCount`                                                                    | Number         |               | Stored on the item only; `segmentCount` is the number of segments the producing run set out to publish for the file version (the planned window count or the chunk count, carried by the whole-file item and every segment item alike; `0` for a run without segments)                                                                                                                                                           |
+| `sourceText`, `contentEtag`, `bucketId`, `analysisModelId`, `pipelineExecutionId`, `workflowExecutionId` | String         |               | Stored on the item only; `sourceText` holds at most 8,000 characters of the embedded text                                                                                                                                                                                                                                                                                                                                        |
+
+**Vector index:** `vec-<embedding model slug>-<dimensions>` on `embedding`, `COSINE` distance, `INCLUDE` projection of the identity, filter, segment, and display attributes above. The seven filter attributes are fixed when the index is created. The index name is derived from `app.vectorSearch.embeddingModelId` and `embeddingDimensions`, so a model change creates a new index and the existing items are cleared and re-embedded rather than migrated. No DynamoDB Streams, TTL, or global secondary indexes.
+
 ### Metadata Schema Storage Table (V2)
 
 Defines metadata schemas that govern which metadata keys are expected for a given entity type.
@@ -301,6 +321,8 @@ Stores pipeline definitions scoped to a database. The `(databaseId, pipelineId)`
 
 The `allListPartition` attribute holds the constant value `pipeline` on every row, so the global "all pipelines" list resolves as a single newest-first query instead of a table scan.
 
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a pipeline it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
+
 ### Workflow Storage Table (V2)
 
 Stores workflow definitions scoped to a database.
@@ -319,6 +341,8 @@ Stores workflow definitions scoped to a database.
 | `WorkflowsByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) workflow list as a query |
 
 The `allListPartition` attribute holds the constant value `workflow` on every row.
+
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a workflow it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
 
 ### Workflow Triggers Storage Table
 
@@ -446,6 +470,19 @@ only one of them pins a version:
 `preview`), `relativeFilePath`, `s3Bucket`, `s3Key`, `s3VersionId`, size and content type; `Output*Metadata`
 and `Output*Results` records carry metadata written back to the asset and results text from a results-only
 run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
+
+### Workflow Execution Locks Storage Table
+
+Holds one row per lock a running execution acquired under the `perInputFileVersion` concurrency restriction. Rows are written with a conditional put when the execution launches and deleted when it ends; the TTL attribute covers a release path that never ran.
+
+| Attribute             | Type   | Key           | Notes                                                                                               |
+| --------------------- | ------ | ------------- | --------------------------------------------------------------------------------------------------- |
+| `lockKey`             | String | Partition Key | Identifies the workflow, input file, and S3 version the lock covers                                 |
+| `workflowExecutionId` | String |               | The execution holding the lock                                                                      |
+| `acquiredAt`          | String |               | ISO-8601 acquisition time                                                                           |
+| `expiresAt`           | Number |               | Epoch seconds; the table's TTL attribute, so a lock whose release path never ran expires on its own |
+
+No DynamoDB Streams or global secondary indexes.
 
 ### Authorization Tables
 

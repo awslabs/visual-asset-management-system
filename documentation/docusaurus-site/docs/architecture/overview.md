@@ -135,9 +135,10 @@ graph TD
     Storage["StorageResourcesBuilder<br/>(DynamoDB, S3, SNS, SQS, KMS)"]
     Auth["AuthBuilder<br/>(Cognito / OAuth)"]
     API["REST API Builder<br/>(SpecRestApi + Authorizer)"]
-    APIBuilder["ApiBuilder<br/>(All API Route Wiring)"]
+    APIBuilder["ApiBuilder<br/>(API Route Wiring)"]
+    APIBuilder2["ApiBuilder2<br/>(Tags, Auth, Pipelines, Workflows, Executions)"]
     StaticWeb["StaticWeb<br/>(CloudFront or ALB)"]
-    Search["SearchBuilder<br/>(OpenSearch)"]
+    Search["SearchBuilder<br/>(OpenSearch, vector indexing, /search/nlp)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
     Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync)"]
     Location["LocationService<br/>(Conditional)"]
@@ -150,7 +151,8 @@ graph TD
     Auth --> API
     API --> APIBuilder
     API --> StaticWeb
-    API --> Search
+    APIBuilder --> APIBuilder2
+    APIBuilder2 --> Search
     API --> Pipelines
     API --> Addons
     Core --> Location
@@ -158,7 +160,7 @@ graph TD
 ```
 
 :::tip[Stack Dependencies]
-All nested stacks that consume `storageResources` declare an explicit dependency on the `StorageResourcesBuilder` stack using `addDependency()`. This ensures correct deployment ordering regardless of how AWS CloudFormation resolves implicit references.
+All nested stacks that consume `storageResources` declare an explicit dependency on the `StorageResourcesBuilder` stack using `addDependency()`. `SearchBuilder` additionally depends on `ApiBuilder2`, whose `executeWorkflow` function name the vector indexing construct's system-workflow launcher invokes. This ensures correct deployment ordering regardless of how AWS CloudFormation resolves implicit references.
 :::
 
 ## Next Steps

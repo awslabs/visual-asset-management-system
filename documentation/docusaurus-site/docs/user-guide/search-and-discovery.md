@@ -1,12 +1,23 @@
 # Search and Discovery
 
-VAMS provides a powerful search interface for locating assets and files across all databases. The search system is powered by Amazon OpenSearch Service and supports full-text queries, metadata filtering, and geospatial map visualization.
+The **Assets and Files** page is where you locate assets and files across every database you can access. It hosts search providers as tabs: an asset list that is always available, and a **Search** tab — available when your deployment has Amazon OpenSearch Service, natural-language search, or both — that offers keyword search with full-text queries, metadata filtering, and geospatial map visualization, and natural-language search that ranks files by what they show or contain.
 
 ![Asset search page showing table view with filters and search bar](/img/asset_search_table_20260323_v2.5.png)
 
+<!-- TODO(owner): screenshot: asset_search_table_2026MMDD_v2.7.png — the Assets and Files page with the Asset List / Search tab strip and the Keyword / Natural language toggle (replaces the v2.5 capture above) -->
+
+## Search tabs
+
+| Tab            | Available when                                          | What it offers                                                                                                         |
+| -------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Asset List** | Always                                                  | A paginated table of the assets you are authorized to see, with database locking, column preferences, and bulk actions |
+| **Search**     | Amazon OpenSearch or natural-language search is enabled | Keyword search over assets and files, natural-language search over files, filters, and table, card, and map views      |
+
+The page opens on the **Search** tab when it is available and on **Asset List** otherwise. The active tab is kept in the page URL (`?tab=asset-list`, `?tab=unified-search`), so a bookmark or shared link opens the same tab. A database-scoped link (`/#/search/{databaseId}/assets`) locks both tabs to that database.
+
 ## Search modes
 
-The search page supports two entity types that you can toggle between using the mode selector in the sidebar.
+The Search tab supports two entity types that you can toggle between using the mode selector in the sidebar.
 
 | Entity type | Description                                                                                              | Selection                             |
 | ----------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------- |
@@ -17,7 +28,9 @@ The search page supports two entity types that you can toggle between using the 
 When you switch between Assets and Files mode, filters that do not apply to the new mode are automatically removed. For example, file extension filters are removed when switching to Assets mode.
 :::
 
-## Text search
+## Keyword search
+
+When both Amazon OpenSearch and natural-language search are enabled, a **Keyword / Natural language** control above the search bar selects how the query is interpreted; the choice is remembered in your preferences. Keyword search is the only mode when natural-language search is not enabled.
 
 The search bar at the top of the page performs a general text query across all indexed fields. Type any term and press **Enter** or choose the search button. The search runs against asset names, descriptions, tags, metadata values, file paths, and other indexed fields simultaneously.
 
@@ -26,6 +39,25 @@ The text query is combined with all other active filters using **AND** logic —
 Results include a relevance score. Choose the information icon next to any result to see which fields matched and why the result was returned.
 
 ![File search page showing file results in table view](/img/file_search_table_20260323_v2.5.png)
+
+<!-- TODO(owner): screenshot: file_search_table_2026MMDD_v2.7.png — the Search tab in Files mode with keyword results (replaces the v2.5 capture above) -->
+
+## Natural language search
+
+Choose **Natural language** to describe what you are looking for instead of naming it — "a rusted pump housing", "drone footage of a bridge deck", "a floor plan with two stairwells". VAMS embeds your description with an Amazon Bedrock model and ranks files by the similarity of the text embedded for each file: the metadata the pipeline generated from renders, keyframes, and extracted text, the metadata already recorded on the file, its asset, and its database, the file's attributes, and the extracted text itself. Natural-language mode searches **files**; in Assets mode the results are grouped by asset and each asset is ranked by its best-matching file.
+
+<!-- TODO(owner): screenshot: search_nlp_mode_2026MMDD_v2.7.png — the Search tab in Natural language mode with the reduced filter sidebar, the Search inside files checkbox, and the Relevance column -->
+
+-   Only the latest live version of each file is searched, and archived files are excluded unless **Include archived** is on.
+-   The **Relevance** column shows the similarity as a percentage; the modality popover beside it lists which parts of the embedded text contributed to the match: `asset-metadata`, `file-identity`, `genai-metadata`, `file-attributes`, `existing-file-metadata`, `existing-asset-metadata`, `existing-database-metadata`, `existing-file-attributes`, and `file-text`. A video analyzed in time windows or a document embedded in content chunks is listed once however many of them match; the popover then also names the best-matching window or chunk and how many matched. A match on a time window also lists `segment-frames`; a match on a content chunk lists `asset-metadata`, `file-identity`, `genai-metadata`, and `file-text`.
+-   **Search inside files**, on by default, also matches a video's time windows and a document's content chunks, so a scene deep in an hour of footage or a topic on page 150 finds its file; clear it to rank whole files only. A file larger than 50 MiB carries only its whole-file vector and no content chunks.
+-   Naming a file type in your description — "video of a loading bay", "pdf about torque settings" — lists files of that type first without hiding the others.
+-   The match is computed over the asset's name, description, and tags, the file's generated `genai_*` block (title, description, keywords, category, style, materials, colors, objects, orientation, size estimate, text summary), the metadata already recorded on the file, its asset, and its database, and its attribute facts such as dimensions, counts, duration, and resolution. A metadata edit reaches natural-language results only after the pipeline runs again on that file version — a re-run of the execution or a reindex. The typed `ext_*` fields the pipeline promotes from those attributes are shown on the file's **Metadata** tab and, when Amazon OpenSearch is enabled, are available to the metadata filters.
+-   Results are the top matches, not an exhaustive list: the page shows up to 100 candidates with client-side paging and notes "Showing the top N semantic matches; more may exist" when more could match.
+-   The **Database**, **File type**, and **Include archived** filters apply in this mode in every deployment. When Amazon OpenSearch is also enabled, metadata, tag, and geospatial filters narrow the natural-language results too; without OpenSearch those filters are hidden.
+-   A new or re-uploaded file becomes searchable once the SYSTEM GenAI metadata pipeline has analyzed it, which takes from one to several minutes after upload.
+
+Natural-language search is available when your deployment enables vector search (the `VECTORSEARCH` feature). See [Vector search](../concepts/vector-search.md) for what is embedded and how results are ranked.
 
 ## Filters
 
@@ -205,7 +237,7 @@ Permanently deleting an archived asset cannot be undone. The asset and all its f
 
 ## Limited search mode
 
-If your deployment has Amazon OpenSearch Service disabled (the `NOOPENSEARCH` feature flag is active), the search page falls back to a basic asset listing mode. In this mode, full-text search, metadata filtering, and map view are unavailable. Only a paginated table of assets is displayed.
+If your deployment has Amazon OpenSearch Service disabled (the `NOOPENSEARCH` feature flag is active), keyword search, metadata filtering, and map view are unavailable. When vector search is also disabled, the page shows only the **Asset List** tab — a paginated table of assets. When vector search is enabled, the **Search** tab remains available in natural-language mode with the database, file-type, and archived filters and the **Search inside files** checkbox, and its table shows the asset name, database, file path, extension, size, archived status, and relevance columns.
 
 :::tip[CLI alternative]
 Search operations can also be performed via the command line. See [CLI Search Commands](../cli/commands/search.md).

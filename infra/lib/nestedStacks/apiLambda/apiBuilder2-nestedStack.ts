@@ -82,6 +82,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
     // Name of the V2 vamsSchema import custom-resource lambda. Consumed by pipeline nested stacks to
     // register their built-in pipeline/workflow into the V2 tables at deploy (via VamsSchemaRegistration).
     public importGlobalPipelineWorkflowV2FunctionName = "";
+    // Name of the asset-less execute-workflow lambda. Consumed by the search nested stack's system-workflow
+    // launcher, which invokes it by a name-composed ARN so no function object crosses the stack boundary.
+    public executeWorkflowV2FunctionName = "";
 
     constructor(parent: Construct, name: string, props: ApiBuilder2NestedStackProps) {
         super(parent, name);
@@ -494,6 +497,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
+        this.executeWorkflowV2FunctionName = executeWorkflowV2.functionName;
 
         // Wire the execution service's re-run path: it invokes executeWorkflowV2 (as the calling
         // user) to launch a fresh execution reconstructed from the stored records. A scoped

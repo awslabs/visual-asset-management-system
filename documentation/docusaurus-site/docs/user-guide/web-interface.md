@@ -48,13 +48,13 @@ Each database record displays the following information:
 
 ## Asset Search Page
 
-The **Assets and Files** page is the primary interface for discovering and browsing assets. It supports multiple view modes and powerful filtering capabilities.
+The **Assets and Files** page is the primary interface for discovering and browsing assets. It hosts two tabs: **Asset List**, always available, lists the assets you are authorized to see; **Search**, available when Amazon OpenSearch or natural-language search is enabled, offers keyword and natural-language queries with filters and multiple view modes. The active tab is carried in the URL (`?tab=`).
 
 ![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20260323_v2.5.png)
 
 ### View Modes
 
-VAMS provides three ways to browse assets:
+VAMS provides three ways to browse assets on the Search tab:
 
 | View Mode      | Description                                                                                               |
 | -------------- | --------------------------------------------------------------------------------------------------------- |
@@ -64,12 +64,13 @@ VAMS provides three ways to browse assets:
 
 ### Search and Filtering
 
-The search page provides several mechanisms for finding assets:
+The Search tab provides several mechanisms for finding assets:
 
+-   **Keyword** / **Natural language** -- When both engines are enabled, choose how the query is read: keyword matching across indexed fields, or a natural-language description ranked by semantic similarity of each file's generated metadata, text, and renders. With only one engine enabled the control is fixed to that engine.
 -   **Text search** -- Enter keywords to search across asset names and properties.
 -   **Database filter** -- Filter assets to a specific database by navigating from the Databases page or using the database selector.
 -   **Column customization** -- Show or hide table columns to focus on the properties that matter to you.
--   **Property filtering** -- Use the filter bar to build complex queries combining multiple properties with AND/OR logic.
+-   **Property filtering** -- Use the filter bar to build complex queries combining multiple properties with AND/OR logic (keyword mode, or natural-language mode with Amazon OpenSearch enabled).
 
 ### Preview Thumbnails
 
@@ -162,9 +163,11 @@ The wizard consists of five steps:
 
 ### Pipelines Page
 
-The **Pipelines** page lists all registered processing pipelines. Pipelines define individual processing steps such as 3D model conversion, point cloud processing, preview thumbnail generation, or AI-based labeling.
+The **Pipelines** page lists all registered processing pipelines. Pipelines define individual processing steps such as 3D model conversion, point cloud processing, preview thumbnail generation, or GenAI metadata generation.
 
-Each pipeline entry shows its name and id, its execution type, its owning database, its category, and how many configuration templates it carries, together with **Disabled** or **Archived** where either applies. Entries are grouped by category or by database, and the list can be filtered by execution type, status, and database.
+Each pipeline entry shows its name and id, its execution type, its owning database, its category, and how many configuration templates it carries, together with **Disabled**, **Archived**, or **System** where any applies. Entries are grouped by category or by database, and the list can be filtered by execution type, status, and database. A **System** pipeline is owned by the deployment: its entry opens read-only, only its `enabled` switch can be changed, its templates can have their configuration body and tag schema edited but cannot be added or deleted, and the Edit and Archive actions are hidden.
+
+<!-- TODO(owner): screenshot: pipelines_page_system_badge_2026MMDD_v2.7.png — the Pipelines page with a SYSTEM - GenAI entry carrying the System badge -->
 
 Each entry's **⋮** actions menu holds **Edit**, **Templates**, and **Archive**, limited to the actions your permissions allow. **Create Pipeline** in the page header starts a new one. Deleting a template from the **Templates** list reports a warning, kept on the list, when an auto-triggered workflow's trigger had chosen it as this pipeline's default.
 
@@ -176,7 +179,7 @@ The **Workflows** page lets you create and manage workflows that chain multiple 
 
 ![Workflows page listing workflows with pipeline, execution, and trigger counts](/img/workflows_page_20260803_v2.6.png)
 
-Each entry shows the workflow's name and id, its database and category, how many pipelines it runs, how many executions it has, and how many triggers it defines — with the number currently enabled called out when some are off. Filters narrow the list by status, by whether the workflow has an enabled trigger, and by database.
+Each entry shows the workflow's name and id, its database and category, how many pipelines it runs, how many executions it has, and how many triggers it defines — with the number currently enabled called out when some are off — together with **Disabled**, **Archived**, or **System** where any applies. Filters narrow the list by status, by whether the workflow has an enabled trigger, and by database. A **System** workflow opens read-only: only its `enabled` switch and its triggers' `enabled` switches can be changed.
 
 Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions**, and **Archive**, limited to the actions your permissions allow.
 
@@ -211,15 +214,16 @@ VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility ac
 
 ### URL Patterns
 
-| Target                | URL Pattern                                                                                                             |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Database list         | `https://<VAMS_WEBSITE>/#/databases/`                                                                                   |
-| Specific database     | `https://<VAMS_WEBSITE>/#/databases/<databaseId>`                                                                       |
-| Asset detail          | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>`                                                      |
-| File viewer           | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>`                               |
-| File at version       | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?version=<fileVersionId>`       |
-| File at asset version | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
-| Upload page           | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
+| Target                    | URL Pattern                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Database list             | `https://<VAMS_WEBSITE>/#/databases/`                                                                                   |
+| Specific database         | `https://<VAMS_WEBSITE>/#/databases/<databaseId>`                                                                       |
+| Search page, specific tab | `https://<VAMS_WEBSITE>/#/search?tab=asset-list` or `?tab=unified-search`                                               |
+| Asset detail              | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>`                                                      |
+| File viewer               | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>`                               |
+| File at version           | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?version=<fileVersionId>`       |
+| File at asset version     | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
+| Upload page               | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
 
 ### File Path Encoding
 

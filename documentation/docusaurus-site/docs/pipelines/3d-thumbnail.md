@@ -1,6 +1,6 @@
 # 3D Preview Thumbnail Pipeline
 
-The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, and USD file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb inside an AWS Batch Fargate container.
+The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, and USD file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb inside an AWS Batch Fargate container. It is a [system pipeline](system-pipelines.md) in the `SYSTEM - Preview` category: registered from its `vamsSchema` bundle, read-only through the API except for its `enabled` switches and its template's configuration body and tag schema, and re-asserted by each deployment.
 
 ## Supported Formats
 
@@ -13,20 +13,20 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 | OBJ         | `.obj`    | Trimesh                                     |
 | GLB         | `.glb`    | Trimesh                                     |
 | GLTF        | `.gltf`   | Trimesh (with external dependency download) |
-| FBX         | `.fbx`    | Trimesh                                     |
+| FBX         | `.fbx`    | Trimesh, with Open3D as the fallback loader |
 | DRC (Draco) | `.drc`    | Trimesh                                     |
 
 ### Point Cloud Formats
 
-| Format | Extension | Library        |
-| ------ | --------- | -------------- |
-| LAS    | `.las`    | laspy          |
-| LAZ    | `.laz`    | laspy + laszip |
-| E57    | `.e57`    | pye57          |
-| PTX    | `.ptx`    | Open3D         |
-| PCD    | `.pcd`    | Open3D         |
-| FLS    | `.fls`    | Open3D         |
-| FWS    | `.fws`    | Open3D         |
+| Format | Extension | Library                                                      |
+| ------ | --------- | ------------------------------------------------------------ |
+| LAS    | `.las`    | laspy                                                        |
+| LAZ    | `.laz`    | laspy + lazrs                                                |
+| E57    | `.e57`    | pye57                                                        |
+| PTX    | `.ptx`    | Built-in text reader                                         |
+| PCD    | `.pcd`    | Built-in reader (`ascii`, `binary`, `binary_compressed`)     |
+| FLS    | `.fls`    | No open reader; the run fails and names the conversion route |
+| FWS    | `.fws`    | No open reader; the run fails and names the conversion route |
 
 ### CAD Formats
 
@@ -128,11 +128,11 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                                | Default | Description                                                              |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Enables the global VPC. |
-| `autoRegisterWithVAMS`                | `false` | Automatically register the pipeline and workflow during CDK deployment.  |
-| `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when supported 3D files are uploaded. |
+| Option                                | Default | Description                                                                           |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`. |
+| `autoRegisterWithVAMS`                | `true`  | Register the pipeline, its workflow, its template, and its trigger during deployment. |
+| `autoRegisterAutoTriggerOnFileUpload` | `false` | Arm the file-upload trigger. Each deployment re-asserts this value on the trigger.    |
 
 :::warning[License Notice]
 This pipeline is disabled by default because it depends on libraries with LGPL licenses (CadQuery/Open CASCADE for STEP file support). Review the `requirements.txt` file in the container directory and consult your legal team before enabling this pipeline. Other format handlers use MIT-licensed or Apache-licensed libraries.
@@ -185,10 +185,14 @@ The container image is built during CDK deployment from `backendPipelines/previe
 -   **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, FBX, DRC (MIT license)
 -   **laspy** -- LAS/LAZ point cloud reading (BSD license)
 -   **pye57** -- E57 point cloud reading (MIT license)
--   **Open3D** -- Additional point cloud formats: PTX, PCD, FLS, FWS (MIT license)
+-   **Open3D** -- FBX loading when Trimesh cannot read the file (MIT license)
 -   **CadQuery** -- STEP/STP CAD file support (LGPL license)
 -   **OpenUSD (pxr)** -- USD format support (Modified Apache 2.0 license)
 -   **Xvfb** -- Virtual framebuffer for headless rendering
+
+### Lambda image
+
+The same `preview_pipeline` package is also built as an AWS Lambda container image from `Dockerfile.lambda` in the same directory. That image is the 3D render branch of the SYSTEM - GenAI Metadata Generation pipeline: it loads a file with the format handlers above, extracts `sys_*` attributes, and renders still frames for the analysis model. It differs from the Fargate image in three ways. Every dependency is pinned to an exact version in `requirements.lambda.txt`, and Open3D is not installed because that pipeline routes FBX files to its Blender image. Xvfb is started by the handler into `/tmp` rather than by the image entrypoint. All working directories live under `/tmp`, the only writable path in AWS Lambda. The 3D Preview Thumbnail pipeline itself does not use this image.
 
 ## How It Works
 
@@ -202,4 +206,5 @@ The container image is built during CDK deployment from `backendPipelines/previe
 
 -   [Pipeline System Overview](overview.md)
 -   [Potree Point Cloud Viewer Pipeline](potree-viewer.md) -- interactive point cloud visualization (complementary to thumbnail previews)
--   [CAD/Mesh Metadata Extraction Pipeline](cad-mesh-extraction.md) -- extracts metadata from similar file formats
+-   [SYSTEM - GenAI Metadata Generation Pipeline](system-genai-metadata.md) -- shares this pipeline's renderers to extract attributes and generate metadata for the same file formats
+-   [System pipelines](system-pipelines.md) -- the rules that apply to this pipeline's records

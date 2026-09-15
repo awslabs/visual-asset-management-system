@@ -119,6 +119,14 @@ Pipeline containers must preserve the input file's relative subdirectory path wh
 
 ---
 
+### Natural-Language Search Limits
+
+Each vector query evaluates at most **100 candidates** per call (the DynamoDB `SearchVectors` `TopK` ceiling) and the API has no cursor; when a whole-file search window fills, the response reports `nlp.truncated: true` and `hits.total.relation: "gte"`, and the web interface notes that more matches may exist; a full segment window — which one long, chunked document can fill on its own — is reported as the `segments:window_full` warning instead, and only when no whole-file window filled. Only the latest live version of a file is searchable, although embeddings are stored per version. Changing `app.vectorSearch.embeddingDimensions` on a populated index is unsupported — follow the model-change procedure in [Vector search](../concepts/vector-search.md#changing-the-embedding-model), which clears the table first. Lambda functions reach Amazon Bedrock over standard (non-FIPS) endpoints even when `app.useFips` is `true`.
+
+### SYSTEM GenAI Metadata Pipeline Size Limits
+
+Files above `app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxInputFileSizeMb` (default 2048) and point clouds above `lambdaLimits.maxPointCloudPoints` (default 20,000,000) are analyzed attributes-only unless `useFargateRenderer` is enabled, which adds an AWS Batch renderer and requires a VPC. Proprietary CAD formats receive `sys_file` attributes and metadata derived from the file name and asset context only. Content chunks are produced for document, text, and data files up to 50 MiB; a larger file keeps its whole-file vector only. Per-window video analysis is capped at 360 windows per file.
+
 ## Web Application Limitations
 
 ### Safari Browser Support for WASM Viewers
@@ -164,15 +172,16 @@ The web application file selector for asset uploads supports folder selection in
 
 When deploying to AWS GovCloud (US) regions or the AWS European Sovereign Cloud, the following services are not available. Configuration validation rejects a deployment that enables any of them, naming the field.
 
-| Feature                                    | Restriction                                                                                     |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| Amazon CloudFront                          | Not available; use ALB deployment mode                                                          |
-| Amazon Location Service                    | Not available; map features are disabled                                                        |
-| AWS Deadline Cloud                         | Not available; `app.pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                |
-| Amazon Cognito SAML and OIDC federation    | Not available (both use the Cognito hosted UI); use the external OAuth identity provider option |
-| OpenSearch Serverless (next-generation)    | Not available; `app.openSearch.useServerless.nextGen` must be `false`                           |
-| OpenSearch Serverless (European Sovereign) | Not offered in the `aws-eusc` partition at all; use `app.openSearch.useProvisioned` there       |
-| Amazon Cognito Advanced Security           | Not available; security check is suppressed                                                     |
+| Feature                                    | Restriction                                                                                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| Amazon CloudFront                          | Not available; use ALB deployment mode                                                                                          |
+| Amazon Location Service                    | Not available; map features are disabled                                                                                        |
+| AWS Deadline Cloud                         | Not available; `app.pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                                                |
+| Amazon Cognito SAML and OIDC federation    | Not available (both use the Cognito hosted UI); use the external OAuth identity provider option                                 |
+| OpenSearch Serverless (next-generation)    | Not available; `app.openSearch.useServerless.nextGen` must be `false`                                                           |
+| OpenSearch Serverless (European Sovereign) | Not offered in the `aws-eusc` partition at all; use `app.openSearch.useProvisioned` there                                       |
+| DynamoDB vector search                     | Not available in the `aws-eusc` partition; `app.vectorSearch.enabled` must be `false`. Defaults to `false` in AWS GovCloud (US) |
+| Amazon Cognito Advanced Security           | Not available; security check is suppressed                                                                                     |
 
 A VPC is also required in these partitions (`app.useGlobalVpc.enabled` must be `true`). See [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints) for the authoritative per-field list.
 

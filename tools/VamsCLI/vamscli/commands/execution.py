@@ -68,7 +68,7 @@ def execution():
 @click.option('-w', '--workflow-id', help='Filter by workflow ID')
 @click.option('--workflow-database-id', help='Filter by workflow database ID')
 @click.option('--status', help='Filter by execution status (e.g. RUNNING, SUCCEEDED, FAILED)')
-@click.option('--trigger-type', help='Filter by trigger type (Manual / File-Upload)')
+@click.option('--trigger-type', help='Filter by trigger type (Manual / File-Upload / System-Reindex)')
 @click.option('--group-id', help='Filter by executionGroupId')
 @click.option('--triggered-by', help='Filter by the user ID that triggered the execution')
 @click.option('--filter-start-date',

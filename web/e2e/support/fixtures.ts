@@ -134,6 +134,76 @@ export async function expectTableRendered(page: Page): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Search page
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The feature switches the app cached from /api/secure-config after login. Reading them from the
+ * app's own cache lets a spec assert what the deployment implies instead of assuming a fixture.
+ * `null` when nothing is cached yet; `[]` when the cache holds a config with no switches.
+ */
+export async function readFeaturesEnabled(page: Page): Promise<string[] | null> {
+    return page.evaluate(() => {
+        const raw = window.localStorage.getItem("vams_cache_config");
+        if (!raw) return null;
+        const config = JSON.parse(raw);
+        const value = config?.featuresEnabled;
+        if (Array.isArray(value)) return value.filter((v: unknown) => typeof v === "string");
+        if (typeof value === "string") {
+            return value
+                .split(",")
+                .map((v: string) => v.trim())
+                .filter(Boolean);
+        }
+        return [];
+    });
+}
+
+/** The search page's provider tab strip. */
+export function searchTabs(page: Page): Locator {
+    return page.getByRole("tablist").first();
+}
+
+/**
+ * Navigate to the search page — optionally database-locked and optionally straight to a provider
+ * tab (`?tab=`) — and wait for its tab strip and an h1. Waits on structure, never on data: the
+ * unified tab's h1 comes from SearchTopBar and the asset-list tab's from ListPage, and either
+ * satisfies the wait.
+ */
+export async function gotoSearch(
+    page: Page,
+    options: { databaseId?: string; tab?: string } = {}
+): Promise<void> {
+    const path = options.databaseId ? `/#/databases/${options.databaseId}/assets/` : "/#/assets/";
+    const query = options.tab ? `?tab=${encodeURIComponent(options.tab)}` : "";
+    await page.goto(`${path}${query}`, { waitUntil: "domcontentloaded" });
+    await expect(searchTabs(page)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible({
+        timeout: 60_000,
+    });
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+}
+
+/**
+ * Assert the active search tab rendered rows or one of its empty states — the search table's
+ * "No matches" or the asset list's "No assets to display." — never that specific data exists.
+ * `expectTableRendered`'s `/no .*found/i` matches neither, which is why this exists.
+ */
+export async function expectSearchRendered(page: Page): Promise<number> {
+    const rows = tableRows(page);
+    await expect
+        .poll(
+            async () =>
+                (await rows.count()) > 0 ||
+                (await page.getByText(/No matches/).count()) > 0 ||
+                (await page.getByText(/^No .+ to display\.$/).count()) > 0,
+            { timeout: 60_000 }
+        )
+        .toBe(true);
+    return rows.count();
+}
+
+// ---------------------------------------------------------------------------------------------
 // Asset file viewer
 // ---------------------------------------------------------------------------------------------
 

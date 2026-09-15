@@ -316,12 +316,13 @@ Pipelines that require internet access (for example, AWS Marketplace integration
 
 The VAMS workflow generates several Amazon S3 paths that are passed to each pipeline step. Using the correct path for each output type is critical for the workflow's process-output step to function correctly.
 
-| Path variable                          | Bucket           | Purpose                                                            | Versioned |
-| -------------------------------------- | ---------------- | ------------------------------------------------------------------ | --------- |
-| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.X`)    | Yes       |
-| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images only (whole-asset representative image) | Yes       |
-| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                            | Yes       |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data       | No        |
+| Path variable                          | Bucket                                 | Purpose                                                                                    | Versioned               |
+| -------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------- |
+| `outputS3AssetFilesPath`               | Asset bucket                           | File-level outputs: new files, file previews (`.previewFile.X`)                            | Yes                     |
+| `outputS3AssetPreviewPath`             | Asset bucket                           | Asset-level preview images only (whole-asset representative image)                         | Yes                     |
+| `outputS3AssetMetadataPath`            | Asset bucket                           | Metadata files produced by the pipeline                                                    | Yes                     |
+| `outputS3AssetResultsPath`             | Workflow execution bucket (run prefix) | Structured result documents recorded on the execution; `execution.status.json` is reserved | n/a (execution records) |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket                       | Temporary working files or special non-versioned viewer data                               | No                      |
 
 :::note[Key distinction]
 `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the entire asset. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
@@ -332,6 +333,7 @@ The VAMS workflow generates several Amazon S3 paths that are passed to each pipe
 -   **`outputS3AssetFilesPath`** -- Use for all standard pipeline outputs: converted files, generated thumbnails (`.previewFile.X`), and any new files that should be tracked as part of the asset.
 -   **`outputS3AssetPreviewPath`** -- Use only for a single representative preview image of the entire asset. Do not use for file-level previews.
 -   **`outputS3AssetMetadataPath`** -- Use for metadata JSON files (for example, `asset.metadata.json`) that the process-output step reads to update asset metadata in VAMS.
+-   **`outputS3AssetResultsPath`** -- Use for structured documents that describe the run rather than the asset (a summary, a report, the reserved `execution.status.json`). Each object is recorded as a results row on the execution and nothing under it is written to the asset. See [Writing outputs](#writing-outputs).
 -   **`inputOutputS3AssetAuxiliaryFilesPath`** -- Use for temporary files during processing or for special non-versioned data that the frontend reads directly (for example, Potree octree viewer files).
 
 ## Preserving relative paths in output
@@ -444,10 +446,11 @@ resolved["assetId"], resolved["databaseId"]         # asset identity
 resolved["outputS3AssetFilesPath"]                  # file-level outputs
 resolved["outputS3AssetPreviewPath"]                # asset-level previews
 resolved["outputS3AssetMetadataPath"]               # metadata outputs
+resolved["outputS3AssetResultsPath"]                # structured result documents (see Writing outputs)
 resolved["inputOutputS3AssetAuxiliaryFilesPath"]    # temporary working files
 ```
 
-Two behaviors are worth knowing:
+Three behaviors are worth knowing:
 
 -   **`assetId` and `databaseId` come from the manifest's first input file.** For a pipeline with
     `inputFileArity: "none"` there are no input files, so they fall back to the execution's output
@@ -456,6 +459,13 @@ Two behaviors are worth knowing:
     accessors -- `asset_metadata_for`, `file_metadata_for`, `file_attributes_for`, and
     `database_metadata_for` -- to resolve records for a specific `(databaseId, assetId, fileKey)`
     rather than indexing the envelope directly.
+-   **Each `inputFiles` entry is self-locating.** It carries the file's asset-relative `relativePath`;
+    its S3 location by bucket name (`bucket`, `key`, and `versionId` -- empty on an unversioned
+    bucket); its asset identity (`databaseId`, `assetId`, `assetRootS3Key`); its auxiliary-bucket
+    preview prefix (`auxPreviewPrefix`); and `bucketId`, the asset bucket's registration id. Read S3
+    with `bucket`. `bucketId` is for a consumer downstream of the pipeline that must resolve the
+    registered bucket row itself -- the vector indexer does, from the embedding event a pipeline
+    publishes -- and is `""` only on an entry no asset row produced.
 
 ### The metadata envelope
 
@@ -517,15 +527,15 @@ Write to the resolved output locations, preserving each input file's relative pa
 The workflow's process-output step then moves the results onto the asset. Metadata write-back has its
 own file convention:
 
-| Output          | Location                      | Naming                                                     |
-| --------------- | ----------------------------- | ---------------------------------------------------------- |
-| Files           | `outputS3AssetFilesPath`      | Preserve the input's relative path                         |
-| File previews   | `outputS3AssetFilesPath`      | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
-| Asset preview   | `outputS3AssetPreviewPath`    | Any allowed image name                                     |
-| File metadata   | `outputS3AssetMetadataPath`   | `{targetFilePath}.metadata.json`                           |
-| File attributes | `outputS3AssetMetadataPath`   | `{targetFilePath}.attribute.json`                          |
-| Asset metadata  | `outputS3AssetMetadataPath`   | `asset.metadata.json` (reserved basename)                  |
-| Results         | The manifest's results prefix | Any name                                                   |
+| Output          | Location                    | Naming                                                     |
+| --------------- | --------------------------- | ---------------------------------------------------------- |
+| Files           | `outputS3AssetFilesPath`    | Preserve the input's relative path                         |
+| File previews   | `outputS3AssetFilesPath`    | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
+| Asset preview   | `outputS3AssetPreviewPath`  | Any allowed image name                                     |
+| File metadata   | `outputS3AssetMetadataPath` | `{targetFilePath}.metadata.json`                           |
+| File attributes | `outputS3AssetMetadataPath` | `{targetFilePath}.attribute.json`                          |
+| Asset metadata  | `outputS3AssetMetadataPath` | `asset.metadata.json` (reserved basename)                  |
+| Results         | `outputS3AssetResultsPath`  | Any name except the reserved `execution.status.json`       |
 
 Metadata and attribute files share one body:
 `{"metadata": [{"metadataKey": "...", "metadataValue": "..."}], "updateType": "update"}`, adding
@@ -546,6 +556,34 @@ output base-execution path extension -- not the absolute Amazon S3 key. Metadata
 ingestion failed is rejected and the execution is recorded as failed, so metadata values never
 accumulate against files that did not land.
 :::
+
+:::note[Reporting a failure after the outputs are written]
+A pipeline that has already written its outputs and then meets a failure it wants recorded -- a denied
+model call after the attribute file landed, for example -- writes `execution.status.json` directly under
+`outputS3AssetResultsPath` with the body `{"status": "FAILED", "error": "<code>", "cause": "<text>"}`
+(`cause` up to 1,024 characters) and returns normally: no raise, and on a task-token pipeline still
+`SendTaskSuccess`. The process-output step ingests every output as usual, then reads the status object
+and records the execution `FAILED` with `executionError` set to `<error>: <cause>`. Any other `status`,
+or no object, leaves the outcome to the write-back result. The object is also recorded as an ordinary
+results row, so the report is readable from the execution record. A status object that is not a JSON
+object is itself recorded as a failure. A crash that raises keeps the existing contract -- the task fails
+and staged outputs are not ingested -- so use the status object for failures the pipeline chooses to
+record.
+:::
+
+### Publishing embeddings for vector search
+
+A pipeline can contribute embeddings to [natural-language search](../concepts/vector-search.md) without touching the vector table: the SYSTEM GenAI metadata pipeline does it, and any pipeline whose role holds `events:PutEvents` on the VAMS orchestration bus can do the same. Write the embedding document to the auxiliary bucket under the execution's temporary prefix, then publish one event per file version:
+
+| Field        | Value                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Source`     | The manifest's `systemConfig.orchestrationEventPrefix`                                                                                                                                                                                                                                                                                                                                                                 |
+| `DetailType` | `vector.embedding.ready`                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Detail`     | `schemaVersion: 1`, `databaseId`, `assetId`, `filePath`, `versionId`, `contentEtag`, `bucketId`, `fileClass`, `fileExt`, `fileSize`, `contentType`, `embeddingModelId`, `embeddingDimensions`, `analysisModelId`, `sourceModalities`, `pipelineExecutionId`, `workflowExecutionId`, `generatedAt`, `documentS3Location`, `segmentKey`, `segmentKind`, `segmentLabel`, `segmentStartMs`, `segmentEndMs`, `segmentCount` |
+
+The document at `documentS3Location` carries the same fields plus `embedding` (the vector) and `sourceText`. The vector indexer reads it, writes the item, marks the file's other versions as not latest, and deletes the document; it drops a document whose `embeddingModelId` or `embeddingDimensions` differ from the deployed index, so read both from the deployment's `app.vectorSearch` configuration. Never publish the vector inside the event itself.
+
+A pipeline may publish **several vectors for one file version** — a time window of a video, a chunk of a document — by giving each document and event a distinct `segmentKey` (at most 32 bytes; a fixed-width key that sorts in content order, such as `t` plus a 10-digit start millisecond or `c` plus a 6-digit 1-based ordinal), a `segmentKind` of `videoTime` or `textChunk`, a human-readable `segmentLabel`, `segmentStartMs` and `segmentEndMs` for `videoTime` (null otherwise), and the run's total in `segmentCount`. Publish the whole-file vector with `segmentKey` empty, `segmentKind` `none`, and the same `pipelineExecutionId` as its segments: when the indexer writes a whole-file document it deletes the same version's segment vectors that carry a **different** `pipelineExecutionId`, so an earlier run's windows or chunks do not outlive the run that replaced them. A `Detail` without the six fields is indexed as a whole-file vector (`segmentKey` empty, `segmentKind` `none`, `segmentCount` 0); a key over 32 bytes or an unknown kind is logged and dropped. Search collapses a file's vectors to one hit — see [Vector search](../concepts/vector-search.md) — and the SYSTEM GenAI metadata pipeline's [video windows](system-genai-metadata.md#video-windows) and [content chunks](system-genai-metadata.md#content-chunks) are the worked example.
 
 ## Callbacks
 
@@ -948,14 +986,15 @@ partition. Include the block for the execution type with its resource fields lef
 
 `systemConfig` is the admin-only contract that governs how the pipeline may be run:
 
-| Field                         | Purpose                                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                  |
-| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                        |
-| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata). Every key defaults to `true`. |
-| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                          |
-| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                    |
-| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                  |
+| Field                         | Purpose                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                                                                                                                                                                                                                            |
+| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                                                                                                                                                                                                                                  |
+| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata). Every key defaults to `true`.                                                                                                                                                                                                           |
+| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                                                                                                                                                                                                                                    |
+| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                                                                                                                                                                                                                              |
+| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                                                                                                                                                                                                                            |
+| `isSystem`                    | `true` marks the pipeline (and, in `workflow.json`, the workflow) as a system record — read-only through the API except for `enabled` and template content. Honoured only when the bundle is registered by the deployment's importer; an API caller who sends `isSystem` creates an ordinary record. See [System pipelines](system-pipelines.md). |
 
 **Declare only what differs from the defaults.** Registration completes the block before storing it: every
 field the bundle omits is filled with its documented default, and nested maps such as `assetScope` and
@@ -1425,6 +1464,7 @@ Use this checklist when building a new pipeline:
 -   [ ] VPC endpoint conditions updated if pipeline uses AWS Batch, Amazon ECS, or Amazon ECR
 -   [ ] CDK Nag suppressions added with detailed justification
 -   [ ] Configuration documented in the [Configuration Reference](../deployment/configuration-reference.md)
+-   [ ] If the pipeline contributes embeddings, it publishes `vector.embedding.ready` with the documented `Detail` fields and holds `events:PutEvents` on the orchestration bus — see [Publishing embeddings for vector search](#publishing-embeddings-for-vector-search)
 
 ## Related pages
 

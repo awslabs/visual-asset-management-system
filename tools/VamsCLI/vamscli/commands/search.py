@@ -7,7 +7,7 @@ from io import StringIO
 from typing import Dict, Any, List, Optional
 import click
 
-from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, requires_feature, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_info
 from ..utils.exceptions import (
@@ -15,7 +15,13 @@ from ..utils.exceptions import (
     InvalidSearchParametersError, SearchQueryError, SearchMappingError
 )
 from ..utils.features import is_feature_enabled
-from ..constants import FEATURE_NOOPENSEARCH
+from ..constants import FEATURE_NOOPENSEARCH, FEATURE_VECTORSEARCH
+
+# Bounds of the POST /search/nlp request model (backend/backend/models/vectorsearch.py:
+# MAX_QUERY_LENGTH, MAX_DATABASE_IDS, MAX_SIZE), applied before the request is sent.
+NLP_MAX_QUERY_LENGTH = 1000
+NLP_MAX_DATABASE_IDS = 100
+NLP_MAX_SIZE = 100
 
 
 def _load_json_input(json_input_path: str) -> Dict[str, Any]:
@@ -301,6 +307,49 @@ def _format_csv_output(result: Dict[str, Any], entity_type: str) -> str:
     return output.getvalue()
 
 
+def _format_nlp_table_output(result: Dict[str, Any]) -> str:
+    """
+    Format natural-language search hits as a table.
+
+    Projects each hit onto score / database / asset / file / class, plus a segment column
+    (the best-matching window or chunk label) when any hit was found through an in-file segment.
+    """
+    hits = result.get("hits", {}).get("hits", [])
+    if not hits:
+        return "No results found."
+
+    show_segment = any((hit.get("_vector") or {}).get("bestSegment") for hit in hits)
+    headers = ["score", "database", "asset", "file", "class"] + (["segment"] if show_segment else [])
+
+    rows = []
+    for hit in hits:
+        source = hit.get("_source", {}) or {}
+        vector = hit.get("_vector", {}) or {}
+        score = hit.get("_score")
+        row = {
+            "score": f"{score:.3f}" if isinstance(score, (int, float)) else "",
+            "database": str(source.get("str_databaseid", "")),
+            "asset": str(source.get("str_assetname") or source.get("str_assetid", "")),
+            "file": str(source.get("str_key", "")),
+            "class": str(vector.get("fileClass", "")),
+        }
+        if show_segment:
+            row["segment"] = str((vector.get("bestSegment") or {}).get("segmentLabel", ""))
+        rows.append(row)
+
+    col_widths = {h: len(h) for h in headers}
+    for row in rows:
+        for header in headers:
+            col_widths[header] = max(col_widths[header], len(row[header]))
+
+    output = [
+        " | ".join(h.ljust(col_widths[h]) for h in headers),
+        "-+-".join("-" * col_widths[h] for h in headers),
+    ]
+    output.extend(" | ".join(row[h].ljust(col_widths[h]) for h in headers) for row in rows)
+    return "\n".join(output)
+
+
 def _format_mapping_table(mapping: Dict[str, Any]) -> str:
     """
     Format search mapping as a table.
@@ -411,6 +460,8 @@ def search():
     
     Note: Search functionality requires OpenSearch to be enabled. If search is disabled
     (NOOPENSEARCH feature is enabled), use 'vamscli assets list' instead.
+    The 'nlp' subcommand is the exception: it is gated by the VECTORSEARCH feature switch and
+    works whether or not OpenSearch is deployed.
     
     The search system uses separate indexes for assets and files, allowing for optimized
     queries and better performance.
@@ -419,6 +470,7 @@ def search():
         vamscli search assets -q "model" --filters 'str_databaseid:"my-db"'
         vamscli search files --filters 'str_fileext:"gltf"'
         vamscli search simple -q "training" --entity-types asset
+        vamscli search nlp -q "rusty pipe near the north tank"
         vamscli search mapping
     """
     pass
@@ -987,5 +1039,161 @@ def mapping(ctx: click.Context, output_format: str, json_output: bool):
             json_output,
             error_type="Search Mapping Error",
             helpful_message="Check if search is properly configured."
+        )
+        raise click.ClickException(str(e))
+
+
+def _validate_nlp_query(ctx: click.Context, param: click.Parameter, value: str) -> str:
+    """Mirror the route model's 1-1000 character bound so the request is refused before it is sent."""
+    if len(value) > NLP_MAX_QUERY_LENGTH:
+        raise click.BadParameter(
+            f"query is {len(value)} characters; the limit is {NLP_MAX_QUERY_LENGTH}")
+    if not value.strip():
+        raise click.BadParameter("query must not be blank")
+    return value
+
+
+def _validate_nlp_databases(ctx: click.Context, param: click.Parameter, value: tuple) -> tuple:
+    """Mirror the route model's ceiling on databaseIds."""
+    if len(value) > NLP_MAX_DATABASE_IDS:
+        raise click.BadParameter(
+            f"{len(value)} databases given; at most {NLP_MAX_DATABASE_IDS} may be searched at once")
+    return value
+
+
+@search.command()
+@click.option('-q', '--query', required=True, callback=_validate_nlp_query,
+              help='Natural-language description of what to find (1-1000 characters)')
+@click.option('--entity-type', type=click.Choice(['file', 'asset']), default='file',
+              help='One hit per file (default) or file hits grouped by asset')
+@click.option('-d', '--database', 'databases', multiple=True, callback=_validate_nlp_databases,
+              help='Restrict to a database ID (repeatable, at most 100)')
+@click.option('--include-archived', is_flag=True, help='Include archived files')
+@click.option('--size', type=click.IntRange(1, NLP_MAX_SIZE), default=25,
+              help='Number of hits to return (1-100, default: 25)')
+@click.option('--file-class', 'file_classes', multiple=True,
+              help='Hard filter on the indexed file class, e.g. video, document (repeatable)')
+@click.option('--file-ext', 'file_exts', multiple=True,
+              help='Hard filter on the file extension, e.g. glb (repeatable)')
+@click.option('--no-segments', is_flag=True,
+              help='Match whole-file vectors only; skip video windows and text chunks')
+@click.option('--filters', '--filter', 'filters',
+              help='OpenSearch filters in JSON array or query string format '
+                   '(ignored with a warning when OpenSearch is disabled)')
+@click.option('--metadata-query',
+              help='Metadata field search, key:value (OpenSearch-only, like --filters)')
+@click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
+              help='Output format (default: table)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+@requires_feature(FEATURE_VECTORSEARCH,
+                  "Natural-language search is not enabled for this environment "
+                  "(the VECTORSEARCH feature switch is off). Use 'vamscli search assets' "
+                  "or 'vamscli search files' instead.")
+def nlp(ctx: click.Context, query: str, entity_type: str, databases: tuple, include_archived: bool,
+        size: int, file_classes: tuple, file_exts: tuple, no_segments: bool,
+        filters: Optional[str], metadata_query: Optional[str], output_format: str, json_output: bool):
+    """
+    Search files by meaning, using a natural-language query (vector search).
+
+    Ranks indexed file versions by how closely their embedding matches the query; _score is
+    1 - distance. Works with or without OpenSearch (the NOOPENSEARCH switch does not apply);
+    requires the VECTORSEARCH feature. --filters and --metadata-query are OpenSearch-only
+    constraints and are ignored, with a warning in the response, when OpenSearch is disabled.
+
+    The reported total is a lower bound (shown as "N+") when the index window filled; narrow the
+    search with -d, --file-class or --file-ext rather than raising --size (100 is the ceiling).
+
+    Examples:
+        vamscli search nlp -q "rusty pipe near the north tank"
+        vamscli search nlp -q "forklift safety training video" -d plant-a -d plant-b --size 10
+        vamscli search nlp -q "hydraulic schematic" --file-class document --no-segments
+        vamscli search nlp -q "turbine blade" --entity-type asset --json-output
+    """
+    # Setup/auth and the feature gate already validated by the decorators
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    # Handle legacy output format
+    if output_format == 'json':
+        json_output = True
+
+    try:
+        output_status("Building natural-language search request...", json_output)
+
+        search_request: Dict[str, Any] = {
+            "query": query,
+            "entityTypes": [entity_type],
+            "size": size,
+            "includeArchived": include_archived,
+        }
+        if databases:
+            search_request["databaseIds"] = list(databases)
+        if file_classes:
+            search_request["fileClasses"] = list(file_classes)
+        if file_exts:
+            search_request["fileExtensions"] = list(file_exts)
+        if no_segments:
+            search_request["includeSegments"] = False
+        if filters:
+            search_request["filters"] = _parse_filters(filters)
+        if metadata_query:
+            search_request["metadataQuery"] = metadata_query
+            search_request["metadataSearchMode"] = "both"
+
+        output_status("Executing search...", json_output)
+
+        result = api_client.search_nlp(search_request)
+
+        # Handle output format
+        if json_output:
+            output_result(result, json_output)
+        elif output_format == 'table':
+            total_info = result.get("hits", {}).get("total", {}) or {}
+            total = total_info.get("value", 0)
+            bound = "+" if total_info.get("relation") == "gte" else ""
+            noun = "assets" if entity_type == "asset" else "files"
+
+            def format_nlp_table(data):
+                """Format natural-language search results for CLI display."""
+                lines = [f"\nFound {total}{bound} {noun}\n", _format_nlp_table_output(data)]
+                for warning in data.get("warnings", []) or []:
+                    # The route sends {code, message}; the message is what a person can act on.
+                    if isinstance(warning, dict):
+                        code, message = warning.get("code", ""), warning.get("message", "")
+                        text = f"{code}: {message}" if code and message else (code or message)
+                    else:
+                        text = str(warning)
+                    lines.append(f"Warning: {text}")
+                return '\n'.join(lines)
+
+            output_result(
+                result,
+                json_output,
+                success_message=f"✓ Search completed. Found {total}{bound} {noun}.",
+                cli_formatter=format_nlp_table
+            )
+        elif output_format == 'csv':
+            # CSV output goes directly to stdout without formatting
+            click.echo(_format_csv_output(result, entity_type))
+
+        return result
+
+    except SearchUnavailableError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Search Unavailable",
+            helpful_message="The vector index is still being built. Retry in a few minutes."
+        )
+        raise click.ClickException(str(e))
+    except InvalidSearchParametersError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Invalid Parameters",
+            helpful_message="Check your search parameters and try again."
         )
         raise click.ClickException(str(e))

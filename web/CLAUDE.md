@@ -107,7 +107,8 @@ web/
                                 #   executionLinks.ts — workflow-execution provenance → execution
                                 #   detail route + the Tier-1 route the link is gated on
       list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
-      search/                 # ModernSearchContainer.tsx - main search UI
+      search/                 # ModernSearchContainer.tsx - unified keyword / natural-language search
+                              #   (the body of the search page's "Search" tab; see 8.1)
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
@@ -116,7 +117,7 @@ web/
       AssetDownload.tsx AssetUpload/
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      search/                 # SearchPage.tsx
+      search/                 # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost
       Subscription/ Tag/
 
       # Orchestration route shells — each reads route params and renders the matching
@@ -132,6 +133,14 @@ web/
       core/                     # PluginRegistry.ts, StylesheetManager.ts, types.ts
       components/               # Shared viewer UI components
       viewers/                  # Individual viewer plugins + manifest.ts
+
+    searchPlugin/           # Search page provider host (tab strip) — see 8.1
+      index.ts
+      config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
+      core/                     # SearchProviderRegistry.ts, providerAvailability.ts,
+                                #   useSearchProvidersReady.ts, types.ts
+      components/SearchTabsHost.tsx
+      providers/                # manifest.ts + AssetListProvider/, UnifiedSearchProvider/
 
     common/                 # Shared utilities and helpers
       GlobalHeader.tsx common-components.tsx
@@ -830,6 +839,17 @@ The 3D/media viewer system is a plugin-based architecture under `src/visualizerP
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
 
+### 8.1 Search Provider Registry
+
+The search page is a tab strip of **search providers** under `src/searchPlugin/`, built the same way as the viewer plugins: a JSON catalog (`config/searchProviderConfig.json`), a manifest (`providers/manifest.ts`) so Vite sees every provider chunk, a singleton `core/SearchProviderRegistry.ts` (lazy `import.meta.glob` loading; availability read from `appCache` config), a pure `core/providerAvailability.ts` Jest can import, `core/useSearchProvidersReady.ts`, and `components/SearchTabsHost.tsx` (Cloudscape `Tabs`, the active tab in the `?tab=` hash query, lazy bodies that receive `databaseId` and `isActive`). Availability is `{ "always": true }` or `{ "anyOf": [ { "featureEnabled": X } | { "featureDisabled": X } ] }` over `featuresEnabled`; the lowest priority number is the default tab. There is no runtime registration API — adding a provider is a source change in the three places `manifest.ts` lists, plus a row here.
+
+| ID               | Name       | Priority | Availability                                |
+| ---------------- | ---------- | -------- | ------------------------------------------- |
+| `asset-list`     | Asset List | 100      | always                                      |
+| `unified-search` | Search     | 10       | VECTORSEARCH enabled or NOOPENSEARCH absent |
+
+`config/searchProviderConfig.test.ts` fails when this table and the catalog disagree. The Search provider offers a `Keyword | Natural language` mode toggle when both engines are enabled, a reduced filter sidebar (database, file type, archived, **Search inside files**) when `NOOPENSEARCH` is present, and relevance as a percentage with a modality popover on natural-language hits. Pipeline, workflow, and trigger records with `isSystem: true` show a **System** badge and open read-only except for their `enabled` switches and template `configBody`/`tagSchema`.
+
 ---
 
 ## 9. Configuration System
@@ -877,6 +897,7 @@ Known feature flags:
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, and Three.js CAD formats (WASM loaders use eval)
+-   `VECTORSEARCH` -- Natural-language (vector) search: enables the NLP mode of the unified search tab and `POST /search/nlp`; with `NOOPENSEARCH` also present the tab runs in its reduced (NLP-only) form
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1242,6 +1263,7 @@ When in doubt about patterns, reference these well-structured files:
 | Viewer config        | `src/visualizerPlugin/config/viewerConfig.json`   |
 | Complex component    | `src/components/asset/ViewAsset.tsx`              |
 | Search UI            | `src/components/search/ModernSearchContainer.tsx` |
+| Search provider host | `src/searchPlugin/components/SearchTabsHost.tsx`  |
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | File operations      | `src/services/FileOperationsService.ts`           |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |

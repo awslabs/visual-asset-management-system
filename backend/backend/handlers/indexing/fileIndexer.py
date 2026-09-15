@@ -9,7 +9,6 @@ SPDX-License-Identifier: Apache-2.0
 import os
 import boto3
 import json
-import hashlib
 import time
 import random
 from datetime import datetime
@@ -34,6 +33,7 @@ from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse, MAX_S3_KEY_LENGTH
 from common.indexing.geoLocation import build_geo_location
+from common.indexing.documentIds import MAX_OPENSEARCH_DOCUMENT_ID_BYTES, build_file_document_id
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 
@@ -921,30 +921,6 @@ def build_file_document(request: FileIndexRequest, asset_details: Dict[str, Any]
 #######################
 # OpenSearch Operations
 #######################
-
-# OpenSearch refuses a document _id longer than 512 bytes.
-MAX_OPENSEARCH_DOCUMENT_ID_BYTES = 512
-
-
-def build_file_document_id(database_id: str, asset_id: str, file_path: str) -> str:
-    """Build the OpenSearch _id of a file document.
-
-    The id is ``{databaseId}#{assetId}#{filePath}``. S3 allows an object key of
-    up to 1024 bytes while OpenSearch refuses an _id over 512 bytes, so an id
-    that does not fit is shortened to a byte-truncated prefix plus a digest of
-    the full id. The digest is derived from the three components alone, so the
-    index and delete paths address the same document for any path length.
-    """
-    doc_id = f"{database_id}#{asset_id}#{file_path}"
-    encoded = doc_id.encode('utf-8')
-    if len(encoded) <= MAX_OPENSEARCH_DOCUMENT_ID_BYTES:
-        return doc_id
-
-    digest = hashlib.sha256(encoded).hexdigest()
-    prefix_budget = MAX_OPENSEARCH_DOCUMENT_ID_BYTES - len(digest) - 1
-    prefix = encoded[:prefix_budget].decode('utf-8', errors='ignore')
-    return f"{prefix}#{digest}"
-
 
 def _is_invalid_geo_shape_error(error: Exception) -> bool:
     """Detect OpenSearch's mapper_parsing_exception for an invalid geo_shape.
