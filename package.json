@@ -3,7 +3,8 @@
     "version": "2.6.1",
     "license": "Apache-2.0",
     "engines": {
-        "node": ">=22.0.0"
+        "node": ">=22.0.0",
+        "npm": ">=11.0.0"
     },
     "scripts": {
         "buildanddeploy.dev": "npm run build && npm run deploy.dev",
