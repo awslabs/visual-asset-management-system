@@ -181,58 +181,113 @@ class TestValidation:
 
     @pytest.mark.parametrize("method", ["GET", "PUT", "DELETE"])
     def test_a_bad_schema_name_is_rejected(self, method):
+        bad = "bad<schema-name>"
         response, tables = _run(
-            rest_event(method, "/compliance/schemas/x", {"schemaName": "x"}, body={}),
+            rest_event(method, f"/compliance/schemas/{bad}", {"schemaName": bad}, body={}),
             schema_rows=[schema_row()])
         assert response["statusCode"] == 400
+        assert bad not in response["body"]
         tables["schema"].query.assert_not_called()
 
     def test_a_bad_database_filter_is_rejected(self):
+        bad = "bad<database-id>!"
         response, _ = _run(rest_event("GET", "/compliance/schemas",
-                                      query_params={"databaseId": "bad id!"}))
+                                      query_params={"databaseId": bad}))
         assert response["statusCode"] == 400
+        assert bad not in response["body"]
 
     def test_a_body_that_is_not_json_is_rejected(self):
         response, _ = _run(rest_event("POST", "/compliance/schemas", body="{not json"))
         assert response["statusCode"] == 400
         assert "Invalid JSON" in body_of(response)["message"]
 
-    @pytest.mark.parametrize("body", [
-        {"schemaBody": RULES_SCHEMA_BODY},
-        {"schemaName": "x", "schemaBody": RULES_SCHEMA_BODY},
-        {"schemaName": SCHEMA, "schemaBody": "not-an-object"},
-        {"schemaName": SCHEMA, "schemaBody": {}},
-        {"schemaName": SCHEMA, "schemaBody": RULES_SCHEMA_BODY, "databaseId": "b"},
+    @pytest.mark.parametrize("body,bad", [
+        ({"schemaBody": RULES_SCHEMA_BODY}, None),
+        ({"schemaName": "zq", "schemaBody": RULES_SCHEMA_BODY}, "zq"),
+        ({"schemaName": SCHEMA, "schemaBody": "not-an-object"}, "not-an-object"),
+        ({"schemaName": SCHEMA, "schemaBody": {}}, None),
+        ({"schemaName": SCHEMA, "schemaBody": RULES_SCHEMA_BODY, "databaseId": "zq"}, "zq"),
     ], ids=["missing-name", "short-name", "string-body", "empty-body", "short-database"])
-    def test_a_bad_register_body_is_rejected_by_the_model(self, body):
+    def test_a_bad_register_body_is_rejected_by_the_model(self, body, bad):
         response, tables = _run(rest_event("POST", "/compliance/schemas", body=body))
         assert response["statusCode"] == 400
+        if bad is not None:
+            assert bad not in response["body"]
         tables["schema"].put_item.assert_not_called()
 
     def test_a_rules_body_with_an_unknown_rule_type_is_rejected(self):
         body = {"schemaFormat": "vams-rules-v1",
-                "rules": {"r": {"ruleType": "nope", "enforcement": "warn"}}}
+                "rules": {"secret-rule-name": {"ruleType": "not<a-rule-type>", "enforcement": "warn"}}}
         response, tables = _run(rest_event("POST", "/compliance/schemas",
                                            body={"schemaName": SCHEMA, "schemaBody": body}))
         assert response["statusCode"] == 400
         assert "Invalid schema" in body_of(response)["message"]
+        assert "secret-rule-name" not in response["body"]
+        assert "not<a-rule-type>" not in response["body"]
+        tables["schema"].put_item.assert_not_called()
+
+    def test_a_rules_body_whose_rule_is_not_an_object_is_rejected(self):
+        body = {"schemaFormat": "vams-rules-v1", "rules": {"secret-rule-name": "secret<value>"}}
+        response, tables = _run(rest_event("POST", "/compliance/schemas",
+                                           body={"schemaName": SCHEMA, "schemaBody": body}))
+        assert response["statusCode"] == 400
+        assert "secret-rule-name" not in response["body"]
+        assert "secret<value>" not in response["body"]
         tables["schema"].put_item.assert_not_called()
 
     def test_a_rules_body_whose_rule_fails_its_model_is_rejected(self):
         body = {"schemaFormat": "vams-rules-v1", "rules": {
-            "p": {"ruleType": "pipeline", "enforcement": "warn",
-                  "pipelineRef": {"databaseId": "GLOBAL", "workflowId": "wf-1"},
-                  "checks": [{"name": "c", "outputField": "x",
-                              "tolerance": {"operator": "lte", "value": 1}}]}}}
-        response, _ = _run(rest_event("POST", "/compliance/schemas",
-                                      body={"schemaName": SCHEMA, "schemaBody": body}))
+            "fine-rule": RULES_SCHEMA_BODY["rules"]["has-parent"],
+            "secret-rule-name": {"ruleType": "pipeline", "enforcement": "warn",
+                                 "pipelineRef": {"databaseId": "GLOBAL", "workflowId": "wf-1"},
+                                 "checks": [{"name": "c", "outputField": "x",
+                                             "tolerance": {"operator": "lte", "value": 1}}]}}}
+        response, tables = _run(rest_event("POST", "/compliance/schemas",
+                                           body={"schemaName": SCHEMA, "schemaBody": body}))
         assert response["statusCode"] == 400
+        message = body_of(response)["message"]
+        assert "secret-rule-name" not in response["body"]
+        assert "PipelineRule" not in message
+        assert "validation error" not in message
+        assert "rules[1]" in message
+        assert "pipelineDatabaseId" in message
+        tables["schema"].put_item.assert_not_called()
 
-    def test_a_legacy_json_schema_body_with_a_bad_type_is_rejected(self):
-        body = {"type": "object", "properties": {"x": {"type": "float"}}}
+    def test_a_rules_body_error_does_not_name_the_model_class(self):
+        body = {"schemaFormat": "vams-rules-v1", "rules": "not<an-object>"}
         response, _ = _run(rest_event("POST", "/compliance/schemas",
                                       body={"schemaName": SCHEMA, "schemaBody": body}))
         assert response["statusCode"] == 400
+        assert "VamsRulesV1Schema" not in response["body"]
+        assert "validation error" not in response["body"]
+        assert "not<an-object>" not in response["body"]
+
+    @pytest.mark.parametrize("body,bad", [
+        ({"type": "not<a-type>"}, "not<a-type>"),
+        ({"type": ["object", "not<a-type>"]}, "not<a-type>"),
+        ({"type": "object", "properties": {"secret<property>": {"type": "not<a-type>"}}},
+         "secret<property>"),
+        ({"type": "object", "properties": {"secret<property>": {"type": "not<a-type>"}}},
+         "not<a-type>"),
+        ({"type": "object", "properties": {"secret<property>": {"type": ["not<a-type>"]}}},
+         "secret<property>"),
+        ({"type": "object", "properties": {"secret<property>": "not<an-object>"}}, "secret<property>"),
+        ({"type": "object", "properties": {"secret<property>": "not<an-object>"}}, "not<an-object>"),
+        ({"type": "object", "properties": {"secret<property>": {"enum": "a"}}}, "secret<property>"),
+        ({"type": "object", "properties": {"secret<property>": {"minimum": "1"}}}, "secret<property>"),
+        ({"type": "object", "properties": {"secret<property>": {"maximum": "1"}}}, "secret<property>"),
+        ({"type": "object", "properties": {"a": {}}, "required": ["secret<field>"]}, "secret<field>"),
+        ({"type": "array", "items": {"type": "not<a-type>"}}, "not<a-type>"),
+    ], ids=["type", "type-array", "property-type/name", "property-type/type", "property-type-array",
+            "property-not-object/name", "property-not-object/value", "enum", "minimum", "maximum",
+            "required", "items"])
+    def test_a_legacy_json_schema_body_with_a_bad_type_is_rejected(self, body, bad):
+        response, tables = _run(rest_event("POST", "/compliance/schemas",
+                                           body={"schemaName": SCHEMA, "schemaBody": body}))
+        assert response["statusCode"] == 400
+        assert "Invalid schema" in body_of(response)["message"]
+        assert bad not in response["body"]
+        tables["schema"].put_item.assert_not_called()
 
     def test_registering_under_a_missing_database_is_refused(self):
         response, tables = _run(

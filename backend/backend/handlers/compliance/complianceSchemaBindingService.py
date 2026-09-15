@@ -3,7 +3,7 @@
 
 """Compliance Schema Binding Service handler.
 
-- GET    /compliance/bind/{databaseId}            — database binding and asset overrides
+- GET    /compliance/bind/{databaseId}            — database binding and asset overrides (paged)
 - PUT    /compliance/bind/{databaseId}            — bind a schema to a database
 - DELETE /compliance/bind/{databaseId}            — remove the database binding
 - PUT    /compliance/bind/{databaseId}/{assetId}  — bind a schema to an asset (override)
@@ -14,8 +14,13 @@ A database binding lives on the database row (`complianceSchemaName`, `complianc
 ("database" or "asset"). An asset-level binding always overrides the database binding: a
 database rebinding touches only rows with schemaSource "database", and removing an asset
 override falls the asset back to the database schema (or removes its row when there is none).
+
+Every path is authorized against two objects: the compliance schema being bound (or currently
+bound), and the target — the `database` row for database paths, the `asset` row for asset paths —
+so schema permissions alone never reach a database or asset the caller may not touch.
 """
 
+import base64
 import json
 from datetime import datetime, timezone
 
@@ -52,9 +57,17 @@ logger = safeLogger(service_name="ComplianceSchemaBindingService")
 claims_and_roles = {}
 
 COMPLIANCE_SCHEMA_OBJECT_TYPE = "complianceSchema"
+DATABASE_OBJECT_TYPE = "database"
+ASSET_OBJECT_TYPE = "asset"
 SCHEMA_SOURCE_DATABASE = "database"
 SCHEMA_SOURCE_ASSET = "asset"
 STATE_PENDING_EVALUATION = "pending_evaluation"
+
+# Page bounds for the asset-override listing. The full set is read (its count is reported), then
+# offset-sliced to one page in assetId order; the token carries the offset of the next page.
+DEFAULT_LIST_PAGE_SIZE = 100
+MAX_LIST_PAGE_SIZE = 500
+INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
 
 try:
     asset_state_table_name = get_table_name(ResourceKeys.COMPLIANCE_ASSET_STATE_STORAGE_TABLE)
@@ -118,8 +131,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 def handle_get_request(event):
     path = event["requestContext"]["http"]["path"]
     path_params = event.get("pathParameters", {}) or {}
+    query_params = event.get("queryStringParameters", {}) or {}
     if API_COMPLIANCE_BIND_DATABASE.matches(path):
-        return get_bindings(event, path_params.get("databaseId"))
+        return get_bindings(event, path_params.get("databaseId"), query_params)
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -171,6 +185,29 @@ def _enforce(schema_name, action):
     }, action)
 
 
+def _enforce_database(db_item, database_id, action):
+    """Tier-2 check on the database a binding targets. The stored row is annotated and evaluated as
+    stored (so ABAC constraints on its attributes apply); when there is none, the requested id
+    stands in so an unauthorized caller is refused rather than told the database is absent. Fails
+    closed on an empty token list."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    database = dict(db_item) if db_item else {"databaseId": database_id}
+    database["object__type"] = DATABASE_OBJECT_TYPE
+    return CasbinEnforcer(claims_and_roles).enforce(database, action)
+
+
+def _enforce_asset(asset_item, database_id, asset_id, action):
+    """Tier-2 check on the asset a binding targets, shaped like `_enforce_database`: the stored
+    asset row (tags, assetType, assetName, ...) annotated as an `asset`, or the requested ids when
+    the row is absent. Fails closed on an empty token list."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    asset = dict(asset_item) if asset_item else {"databaseId": database_id, "assetId": asset_id}
+    asset["object__type"] = ASSET_OBJECT_TYPE
+    return CasbinEnforcer(claims_and_roles).enforce(asset, action)
+
+
 def _validate_database(database_id):
     return validate({
         "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
@@ -185,6 +222,47 @@ def _validate_database_and_asset(database_id, asset_id):
 
 
 #######################
+# Paging helpers
+#######################
+
+def _page_arguments(event, query_params):
+    """(page_size, offset, None) from `maxItems` / `startingToken`, or (None, None, response) when
+    either is malformed. The token is Base64 JSON `{"offset": n}`."""
+    try:
+        page_size = int(query_params.get("maxItems", str(DEFAULT_LIST_PAGE_SIZE)))
+    except (TypeError, ValueError):
+        return None, None, validation_error(body={"message": "maxItems must be an integer"}, event=event)
+    page_size = max(1, min(page_size, MAX_LIST_PAGE_SIZE))
+
+    offset = 0
+    starting_token = query_params.get("startingToken")
+    if starting_token:
+        offset = _decode_offset_token(starting_token)
+        if offset is None:
+            return None, None, validation_error(
+                body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+    return page_size, offset, None
+
+
+def _decode_offset_token(token):
+    """The non-negative offset an offset token carries, or None when the token is malformed."""
+    try:
+        decoded = json.loads(base64.b64decode(token, validate=True).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    offset = decoded.get("offset")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return None
+    return offset
+
+
+def _encode_offset_token(offset):
+    return base64.b64encode(json.dumps({"offset": offset}).encode("utf-8")).decode("utf-8")
+
+
+#######################
 # Business logic
 #######################
 
@@ -195,7 +273,12 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce(request.schemaName, "PUT"):
+        return authorization_error()
+    db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item")
+    if not _enforce_database(db_item, database_id, "PUT"):
         return authorization_error()
 
     visible, exists = _schema_visibility(request.schemaName, database_id)
@@ -207,7 +290,6 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
                        "database-scoped schemas can be assigned.",
         }, event=event)
 
-    db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item")
     if not db_item:
         return general_error(body={"message": "Database not found"}, event=event)
 
@@ -254,15 +336,17 @@ def unbind_schema_from_database(event, database_id):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item")
-    if not db_item:
-        if not _enforce("", "DELETE"):
-            return authorization_error()
-        return general_error(body={"message": "Database not found"}, event=event)
-
-    old_schema = db_item.get("complianceSchemaName")
+    if not _enforce_database(db_item, database_id, "DELETE"):
+        return authorization_error()
+    old_schema = (db_item or {}).get("complianceSchemaName")
     if not _enforce(old_schema or "", "DELETE"):
         return authorization_error()
+
+    if not db_item:
+        return general_error(body={"message": "Database not found"}, event=event)
 
     if not old_schema:
         return success(body={
@@ -302,7 +386,12 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce(request.schemaName, "PUT"):
+        return authorization_error()
+    asset_item = store.get_asset_item(database_id, asset_id)
+    if not _enforce_asset(asset_item, database_id, asset_id, "PUT"):
         return authorization_error()
 
     visible, exists = _schema_visibility(request.schemaName, database_id)
@@ -314,7 +403,7 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
                        "database-scoped schemas can be assigned.",
         }, event=event)
 
-    if not store.get_asset_item(database_id, asset_id):
+    if not asset_item:
         return general_error(body={"message": "Asset not found"}, event=event)
 
     now = datetime.now(timezone.utc).isoformat()
@@ -354,6 +443,11 @@ def unbind_schema_from_asset(event, database_id, asset_id):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    asset_item = store.get_asset_item(database_id, asset_id)
+    if not _enforce_asset(asset_item, database_id, asset_id, "DELETE"):
+        return authorization_error()
     existing = store.get_compliance_record(database_id, asset_id)
     current_schema = (existing or {}).get("schemaName", "")
     if not _enforce(current_schema, "DELETE"):
@@ -399,21 +493,31 @@ def unbind_schema_from_asset(event, database_id, asset_id):
     })
 
 
-def get_bindings(event, database_id):
-    """The database binding plus every asset-level override in the database."""
+def get_bindings(event, database_id, query_params):
+    """The database binding plus one page of the asset-level overrides in the database.
+
+    The overrides are read to exhaustion (the response reports their total), ordered by assetId and
+    offset-sliced to `maxItems`; `NextToken` is present while more remain.
+    """
     (valid, message) = _validate_database(database_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item")
-    if not db_item:
-        if not _enforce("", "GET"):
-            return authorization_error()
-        return general_error(body={"message": "Database not found"}, event=event)
-
-    db_schema = db_item.get("complianceSchemaName")
+    if not _enforce_database(db_item, database_id, "GET"):
+        return authorization_error()
+    db_schema = (db_item or {}).get("complianceSchemaName")
     if not _enforce(db_schema or "", "GET"):
         return authorization_error()
+
+    if not db_item:
+        return general_error(body={"message": "Database not found"}, event=event)
+
+    page_size, offset, error = _page_arguments(event, query_params)
+    if error:
+        return error
 
     asset_overrides = []
     for item in _database_asset_state_rows(database_id):
@@ -423,14 +527,18 @@ def get_bindings(event, database_id):
                 "schemaName": item.get("schemaName"),
                 "complianceState": item.get("complianceState"),
             })
+    asset_overrides.sort(key=lambda override: override["assetId"])
 
-    return success(body={
+    body = {
         "databaseId": database_id,
         "databaseSchema": db_schema,
         "complianceAutoEval": bool(db_item.get("complianceAutoEval", False)),
-        "assetOverrides": asset_overrides,
+        "assetOverrides": asset_overrides[offset:offset + page_size],
         "assetOverrideCount": len(asset_overrides),
-    })
+    }
+    if offset + page_size < len(asset_overrides):
+        body["NextToken"] = _encode_offset_token(offset + page_size)
+    return success(body=body)
 
 
 #######################

@@ -91,6 +91,19 @@ class TestAuthorization:
         assert response["statusCode"] == 403
         table.query.assert_not_called()
 
+    @pytest.mark.parametrize("path,params", [(LIST_PATH, None), (ASSET_PATH, ASSET_PARAMS)])
+    def test_tier_one_with_empty_tokens_denies_even_when_the_api_check_would_pass(self, path, params):
+        instance = enforcer(api=True, obj=True)
+        table = MagicMock()
+        table.query.return_value = {"Items": [_entry()]}
+        with patch(f"{MOD}.request_to_claims", claims_for()), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
+                patch(f"{MOD}.audit_table", table):
+            response = svc.lambda_handler(rest_event("GET", path, params), MagicMock())
+        assert response["statusCode"] == 403
+        instance.enforce.assert_not_called()
+        table.query.assert_not_called()
+
     def test_tier_two_denial_on_the_asset_history_reads_nothing(self):
         response, table = _run(rest_event("GET", ASSET_PATH, ASSET_PARAMS), obj=False)
         assert response["statusCode"] == 403
@@ -126,29 +139,65 @@ class TestAuthorization:
 @pytest.mark.unit
 class TestValidation:
 
-    @pytest.mark.parametrize("path,params", [
-        (f"/compliance/audit/x/{ASSET}", {"databaseId": "x", "assetId": ASSET}),
-        (f"/compliance/audit/{DB}/bad<id>", {"databaseId": DB, "assetId": "bad<id>"}),
+    BAD_DB = "bad<database-id>"
+    BAD_ASSET = "bad<asset-id>"
+
+    @pytest.mark.parametrize("path,params,bad", [
+        (f"/compliance/audit/{BAD_DB}/{ASSET}", {"databaseId": BAD_DB, "assetId": ASSET}, BAD_DB),
+        (f"/compliance/audit/{DB}/{BAD_ASSET}", {"databaseId": DB, "assetId": BAD_ASSET}, BAD_ASSET),
     ])
-    def test_a_bad_path_parameter_is_rejected(self, path, params):
+    def test_a_bad_path_parameter_is_rejected(self, path, params, bad):
         response, table = _run(rest_event("GET", path, params))
         assert response["statusCode"] == 400
+        assert bad not in response["body"]
         table.query.assert_not_called()
 
-    @pytest.mark.parametrize("path,params,query", [
-        (LIST_PATH, None, {"limit": "many"}),
-        (LIST_PATH, None, {"maxItems": "1.5"}),
-        (LIST_PATH, None, {"startingToken": "%%%"}),
-        (LIST_PATH, None, {"eventType": "x" * 300}),
-        (LIST_PATH, None, {"startDate": "d" * 300}),
-        (ASSET_PATH, ASSET_PARAMS, {"limit": "many"}),
-        (ASSET_PATH, ASSET_PARAMS, {"maxItems": "1.5"}),
-        (ASSET_PATH, ASSET_PARAMS, {"startingToken": "%%%"}),
-        (ASSET_PATH, ASSET_PARAMS, {"endDate": "d" * 300}),
+    @pytest.mark.parametrize("path,params,query,bad", [
+        (LIST_PATH, None, {"limit": "many"}, "many"),
+        (LIST_PATH, None, {"maxItems": "1.5"}, "1.5"),
+        (LIST_PATH, None, {"startingToken": "%%%"}, "%%%"),
+        (LIST_PATH, None, {"eventType": "x" * 300}, "x" * 300),
+        (LIST_PATH, None, {"startDate": "d" * 300}, "d" * 300),
+        (ASSET_PATH, ASSET_PARAMS, {"limit": "many"}, "many"),
+        (ASSET_PATH, ASSET_PARAMS, {"maxItems": "1.5"}, "1.5"),
+        (ASSET_PATH, ASSET_PARAMS, {"startingToken": "%%%"}, "%%%"),
+        (ASSET_PATH, ASSET_PARAMS, {"endDate": "d" * 300}, "d" * 300),
     ])
-    def test_a_bad_query_parameter_is_rejected(self, path, params, query):
+    def test_a_bad_query_parameter_is_rejected(self, path, params, query, bad):
         response, table = _run(rest_event("GET", path, params, query_params=query))
         assert response["statusCode"] == 400
+        assert bad not in response["body"]
+        table.query.assert_not_called()
+
+    @pytest.mark.parametrize("path,params", [(LIST_PATH, None), (ASSET_PATH, ASSET_PARAMS)])
+    @pytest.mark.parametrize("token", [_token([1]), _token("key"), _token({}), _token(None)],
+                             ids=["list", "string", "empty-object", "null"])
+    def test_a_token_that_is_not_an_object_is_rejected(self, path, params, token):
+        response, table = _run(rest_event("GET", path, params, query_params={"startingToken": token}))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Invalid pagination token"
+        table.query.assert_not_called()
+
+    @pytest.mark.parametrize("query,token", [
+        ({}, {"partition": "not-an-event-type", "key": None}),
+        ({}, {"partition": "not-an-event-type", "key": {"eventType": "x", "timestamp": "t"}}),
+        ({}, {"key": {"eventType": "compliance_check", "timestamp": "t"}}),
+        ({}, {"partition": "compliance_check", "key": "not-an-object"}),
+        ({}, {"partition": "compliance_check", "key": [1]}),
+        ({"eventType": "compliance_check"}, {"partition": "exception_granted", "key": None}),
+        ({"eventType": "compliance_check"}, {"eventType": "compliance_check", "timestamp": "t"}),
+    ], ids=["unknown-partition", "unknown-partition-with-key", "no-partition", "string-key",
+            "list-key", "partition-outside-the-filter", "bare-key-under-filter"])
+    def test_a_listing_token_outside_the_walk_is_rejected_before_any_read(self, query, token):
+        """A token naming a partition the walk does not contain (or lacking the partition shape)
+        never reaches ExclusiveStartKey, where DynamoDB would fail it as an internal error."""
+        bad_partition = token.get("partition")
+        response, table = _run(rest_event("GET", LIST_PATH, query_params=dict(
+            query, startingToken=_token(token))))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Invalid pagination token"
+        if bad_partition:
+            assert bad_partition not in response["body"]
         table.query.assert_not_called()
 
     def test_the_page_size_is_clamped(self):
@@ -158,6 +207,12 @@ class TestValidation:
         _, table = _run(rest_event("GET", ASSET_PATH, ASSET_PARAMS, query_params={"maxItems": "-3"}),
                         pages=[{"Items": []}])
         assert table.query.call_args.kwargs["Limit"] == 1
+
+    def test_the_default_and_maximum_page_sizes_are_the_contract_values(self):
+        assert svc.DEFAULT_AUDIT_PAGE_SIZE == 100
+        assert svc.MAX_AUDIT_PAGE_SIZE == 500
+        _, table = _run(rest_event("GET", ASSET_PATH, ASSET_PARAMS), pages=[{"Items": []}])
+        assert table.query.call_args.kwargs["Limit"] == 100
 
 
 @pytest.mark.unit
@@ -189,6 +244,35 @@ class TestAssetHistoryPaging:
 
 @pytest.mark.unit
 class TestCrossAssetListing:
+
+    def test_the_token_round_trips_and_the_pages_partition_the_full_set(self):
+        """Page two resumes the partition page one stopped in, from its key; the two pages together
+        are exactly the entries of the walk."""
+        entries = [dict(_entry(), entryId=f"e{i}") for i in range(3)]
+        last_key = {"eventType": "compliance_check", "timestamp": "t2", "entryId": "e1"}
+
+        def pages(**kwargs):
+            if kwargs["KeyConditionExpression"]._values[1] != "compliance_check":
+                return {"Items": []}
+            if "ExclusiveStartKey" not in kwargs:
+                return {"Items": entries[:2], "LastEvaluatedKey": last_key}
+            assert kwargs["ExclusiveStartKey"] == last_key
+            return {"Items": entries[2:]}
+
+        response, _ = _run(rest_event("GET", LIST_PATH, query_params={"limit": "2"}), pages=pages)
+        page_one = body_of(response)
+        assert [e["entryId"] for e in page_one["entries"]] == ["e0", "e1"]
+        assert _decode(page_one["NextToken"]) == {"partition": "compliance_check", "key": last_key}
+
+        response, table = _run(
+            rest_event("GET", LIST_PATH,
+                       query_params={"limit": "2", "startingToken": page_one["NextToken"]}),
+            pages=pages)
+        page_two = body_of(response)
+        assert [e["entryId"] for e in page_two["entries"]] == ["e2"]
+        assert "NextToken" not in page_two
+        assert table.query.call_args_list[0].kwargs["ExclusiveStartKey"] == last_key
+        assert [e["entryId"] for e in page_one["entries"] + page_two["entries"]] == ["e0", "e1", "e2"]
 
     def test_a_filtered_listing_pages_one_partition_and_carries_it_in_the_token(self):
         last_key = {"eventType": "compliance_check", "timestamp": "t", "entryId": "e"}

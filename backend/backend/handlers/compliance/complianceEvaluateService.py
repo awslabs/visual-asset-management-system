@@ -58,6 +58,13 @@ COMPLIANCE_SCHEMA_OBJECT_TYPE = "complianceSchema"
 DEFAULT_EVALUATIONS_PAGE_SIZE = 50
 MAX_EVALUATIONS_PAGE_SIZE = 200
 
+# Page bounds for the database overview. The state rows are read to exhaustion (the per-state
+# summary and total cover the whole database), then offset-sliced to one page in assetId order;
+# the token carries the offset of the next page.
+DEFAULT_OVERVIEW_PAGE_SIZE = 100
+MAX_OVERVIEW_PAGE_SIZE = 500
+INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
+
 # Bound on the assets one sweep evaluates synchronously inside the API Lambda timeout; a schema
 # bound to more assets sweeps the first MAX_SWEEP_ASSETS and reports the remainder.
 MAX_SWEEP_ASSETS = 200
@@ -120,7 +127,7 @@ def handle_get_request(event):
     if API_COMPLIANCE_STATE_ASSET.matches(path):
         return get_compliance_state(event, path_params.get("databaseId"), path_params.get("assetId"))
     if API_COMPLIANCE_STATE_DATABASE.matches(path):
-        return get_database_compliance_overview(event, path_params.get("databaseId"))
+        return get_database_compliance_overview(event, path_params.get("databaseId"), query_params)
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -189,6 +196,8 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce_evaluation(database_id, "POST"):
         return authorization_error()
 
@@ -228,11 +237,14 @@ def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
 
 
 def sweep_schema(event, schema_name):
-    """Evaluate every asset whose state row is bound to `schema_name` (SchemaNameIndex GSI)."""
+    """Evaluate every asset whose state row is bound to `schema_name` (SchemaNameIndex GSI) and
+    whose database the caller may evaluate; the rest are counted as `skipped` and never listed."""
     (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce_schema(schema_name, "POST"):
         return authorization_error()
 
@@ -246,22 +258,37 @@ def sweep_schema(event, schema_name):
     )
     actor = claims_and_roles["tokens"][0]
 
+    # The evaluation object depends only on the database, so one verdict serves every asset in it.
+    database_allowed = {}
     triggered = []
-    for asset in bound_assets[:MAX_SWEEP_ASSETS]:
-        result = run_evaluation_for_asset(asset["databaseId"], asset["assetId"], schema_name, actor)
+    skipped = 0
+    remaining = 0
+    for asset in bound_assets:
+        if len(triggered) >= MAX_SWEEP_ASSETS:
+            remaining += 1
+            continue
+        database_id = asset["databaseId"]
+        if database_id not in database_allowed:
+            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
+        if not database_allowed[database_id]:
+            skipped += 1
+            continue
+        result = run_evaluation_for_asset(database_id, asset["assetId"], schema_name, actor)
         triggered.append({
-            "databaseId": asset["databaseId"],
+            "databaseId": database_id,
             "assetId": asset["assetId"],
             "evaluationId": result.get("evaluationId"),
             "verdict": result.get("verdict"),
         })
 
-    remaining = max(0, len(bound_assets) - len(triggered))
+    logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered, {skipped} skipped, "
+                f"{remaining} remaining")
     return success(body={
         "message": f"Sweep triggered for {len(triggered)} assets",
         "schemaName": schema_name,
         "assetsTriggered": triggered,
         "assetsRemaining": remaining,
+        "skipped": skipped,
     })
 
 
@@ -271,6 +298,8 @@ def get_evaluations(event, database_id, asset_id, query_params):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce_evaluation(database_id, "GET"):
         return authorization_error()
 
@@ -288,11 +317,10 @@ def get_evaluations(event, database_id, asset_id, query_params):
     }
     starting_token = query_params.get("startingToken")
     if starting_token:
-        try:
-            query_kwargs["ExclusiveStartKey"] = json.loads(
-                base64.b64decode(starting_token).decode("utf-8"))
-        except (ValueError, TypeError):
-            return validation_error(body={"message": "Invalid pagination token"}, event=event)
+        exclusive_start_key = _decode_key_token(starting_token)
+        if exclusive_start_key is None:
+            return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+        query_kwargs["ExclusiveStartKey"] = exclusive_start_key
 
     response = evaluation_table.query(**query_kwargs)
     result = {"evaluations": response.get("Items", [])}
@@ -309,6 +337,8 @@ def get_compliance_state(event, database_id, asset_id):
         return validation_error(body={"message": message}, event=event)
 
     item = store.get_compliance_record(database_id, asset_id)
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce_evaluation(database_id, "GET", (item or {}).get("complianceState", "")):
         return authorization_error()
 
@@ -323,16 +353,24 @@ def get_compliance_state(event, database_id, asset_id):
     return success(body=item)
 
 
-def get_database_compliance_overview(event, database_id):
-    """Per-state counts and every asset-state row of a database, with asset names."""
+def get_database_compliance_overview(event, database_id, query_params):
+    """Per-state counts over every asset-state row of a database, plus one page of the rows (assetId
+    order) with asset names. The counts cover the whole database; `NextToken` is present while more
+    rows remain."""
     (valid, message) = validate({
         "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
     })
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce_evaluation(database_id, "GET"):
         return authorization_error()
+
+    page_size, offset, error = _overview_page_arguments(event, query_params)
+    if error:
+        return error
 
     items = query_all_items(
         asset_state_table, KeyConditionExpression=Key("databaseId").eq(database_id))
@@ -347,14 +385,67 @@ def get_database_compliance_overview(event, database_id):
     for item in items:
         state = item.get("complianceState", engine.STATE_UNKNOWN)
         summary[state if state in summary else engine.STATE_UNKNOWN] += 1
+
+    items.sort(key=lambda item: item.get("assetId", ""))
+    page = items[offset:offset + page_size]
+    for item in page:
         item["assetName"] = _asset_name(database_id, item.get("assetId"))
 
-    return success(body={
+    body = {
         "databaseId": database_id,
         "totalAssets": len(items),
         "summary": summary,
-        "assets": items,
-    })
+        "assets": page,
+    }
+    if offset + page_size < len(items):
+        body["NextToken"] = _encode_offset_token(offset + page_size)
+    return success(body=body)
+
+
+def _overview_page_arguments(event, query_params):
+    """(page_size, offset, None) from `maxItems` / `startingToken`, or (None, None, response) when
+    either is malformed. The token is Base64 JSON `{"offset": n}`."""
+    try:
+        page_size = int(query_params.get("maxItems", str(DEFAULT_OVERVIEW_PAGE_SIZE)))
+    except (TypeError, ValueError):
+        return None, None, validation_error(body={"message": "maxItems must be an integer"}, event=event)
+    page_size = max(1, min(page_size, MAX_OVERVIEW_PAGE_SIZE))
+
+    offset = 0
+    starting_token = query_params.get("startingToken")
+    if starting_token:
+        offset = _decode_offset_token(starting_token)
+        if offset is None:
+            return None, None, validation_error(
+                body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+    return page_size, offset, None
+
+
+def _decode_offset_token(token):
+    """The non-negative offset an offset token carries, or None when the token is malformed."""
+    try:
+        decoded = json.loads(base64.b64decode(token, validate=True).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    offset = decoded.get("offset")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return None
+    return offset
+
+
+def _encode_offset_token(offset):
+    return base64.b64encode(json.dumps({"offset": offset}).encode("utf-8")).decode("utf-8")
+
+
+def _decode_key_token(token):
+    """The DynamoDB key a Base64 JSON token carries, or None when the token is malformed."""
+    try:
+        decoded = json.loads(base64.b64decode(token, validate=True).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    return decoded if isinstance(decoded, dict) and decoded else None
 
 
 def _asset_name(database_id, asset_id):

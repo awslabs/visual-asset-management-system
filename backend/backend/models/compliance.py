@@ -251,10 +251,14 @@ class VamsRulesV1Schema(BaseModel, extra='ignore'):
             raise ValueError(message)
         for rule_name, rule_def in rules.items():
             if not isinstance(rule_def, dict):
-                raise ValueError(f"Rule '{rule_name}' must be an object")
+                logger.info(f"vams-rules-v1 rule '{rule_name}' is not an object")
+                raise ValueError("Every rule must be an object")
             rule_type = rule_def.get("ruleType")
             if rule_type not in RULE_TYPE_MODELS:
-                raise ValueError(f"Rule '{rule_name}' has invalid ruleType: {rule_type}")
+                logger.info(f"vams-rules-v1 rule '{rule_name}' has unsupported ruleType '{rule_type}'")
+                raise ValueError(
+                    "Every rule must declare a ruleType of "
+                    + ", ".join(RULE_TYPE_MODELS))
         return values
 
     def parse_rules(self) -> Dict[str, ComplianceRule]:

@@ -45,8 +45,9 @@ claims_and_roles = {}
 COMPLIANCE_EVALUATION_OBJECT_TYPE = "complianceEvaluation"
 
 # Page bounds for audit listings (newest first).
-DEFAULT_AUDIT_PAGE_SIZE = 50
+DEFAULT_AUDIT_PAGE_SIZE = 100
 MAX_AUDIT_PAGE_SIZE = 500
+INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
 
 # Every event type the compliance handlers write; the unfiltered listing reads the
 # EventTypeIndex partition of each in turn.
@@ -147,7 +148,7 @@ def _enforce(database_id, action):
 
 def _page_arguments(event, params):
     """(page_size, exclusive_start_key) from `limit` / `maxItems` and `startingToken`, or a
-    validation response when they are malformed."""
+    validation response when they are malformed. A token must decode to a non-empty JSON object."""
     raw_size = params.get("maxItems", params.get("limit", str(DEFAULT_AUDIT_PAGE_SIZE)))
     try:
         page_size = int(raw_size)
@@ -159,9 +160,12 @@ def _page_arguments(event, params):
     starting_token = params.get("startingToken")
     if starting_token:
         try:
-            exclusive_start_key = json.loads(base64.b64decode(starting_token).decode("utf-8"))
+            exclusive_start_key = json.loads(base64.b64decode(starting_token, validate=True).decode("utf-8"))
         except (ValueError, TypeError):
-            return None, None, validation_error(body={"message": "Invalid pagination token"}, event=event)
+            exclusive_start_key = None
+        if not isinstance(exclusive_start_key, dict) or not exclusive_start_key:
+            return None, None, validation_error(
+                body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
     return page_size, exclusive_start_key, None
 
 
@@ -206,6 +210,8 @@ def get_asset_audit(event, database_id, asset_id, params):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce(database_id, "GET"):
         return authorization_error()
 
@@ -260,13 +266,16 @@ def query_audit(event, params):
     else:
         partitions = list(AUDIT_EVENT_TYPES)
 
-    # A token for the multi-partition walk is {"partition": <eventType>, "key": <LastEvaluatedKey>}.
-    start_partition = None
-    if exclusive_start_key and isinstance(exclusive_start_key, dict) and "partition" in exclusive_start_key:
+    # A token for this listing is {"partition": <eventType>, "key": <LastEvaluatedKey> | null}. A
+    # partition outside the walk (or a key that is not an object) never reaches DynamoDB.
+    if exclusive_start_key is not None:
         start_partition = exclusive_start_key.get("partition")
-        exclusive_start_key = exclusive_start_key.get("key")
-        if start_partition in partitions:
-            partitions = partitions[partitions.index(start_partition):]
+        start_key = exclusive_start_key.get("key")
+        if start_partition not in partitions or not (start_key is None or isinstance(start_key, dict)):
+            logger.info("Audit pagination token rejected: unknown partition or malformed key")
+            return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+        partitions = partitions[partitions.index(start_partition):]
+        exclusive_start_key = start_key or None
 
     entries = []
     next_token = None

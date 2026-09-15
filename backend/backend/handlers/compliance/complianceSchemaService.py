@@ -41,6 +41,7 @@ from models.common import (
 )
 from models.compliance import (
     GLOBAL_DATABASE_ID,
+    RULE_TYPE_MODELS,
     CreateSchemaRequestModel,
     UpdateSchemaRequestModel,
     VamsRulesV1Schema,
@@ -93,25 +94,49 @@ def validate_schema_body(schema_body):
 
 
 def _validate_vams_rules_v1(schema_body):
-    """Validate a vams-rules-v1 body through its Pydantic models."""
+    """Validate a vams-rules-v1 body through its Pydantic models.
+
+    The message returned names fields by their published names only (via
+    `validation_error_message`) and locates a failing rule by its position, never by the
+    caller-supplied rule name; the full pydantic error is logged.
+    """
     try:
         schema = VamsRulesV1Schema(**schema_body)
-        schema.parse_rules()
-        return True, None
+    except ValidationError as v:
+        logger.warning(f"vams-rules-v1 body rejected: {v}")
+        return False, validation_error_message(v)
     except (ValueError, TypeError) as e:
-        return False, str(e)
+        logger.warning(f"vams-rules-v1 body rejected: {e}")
+        return False, "Schema body is not a valid vams-rules-v1 document"
+
+    for position, (rule_name, rule_def) in enumerate(schema.rules.items()):
+        try:
+            RULE_TYPE_MODELS[rule_def["ruleType"]](**rule_def)
+        except ValidationError as v:
+            logger.warning(f"vams-rules-v1 rule '{rule_name}' at position {position} rejected: {v}")
+            return False, f"rules[{position}]: {validation_error_message(v)}"
+        except (ValueError, TypeError) as e:
+            logger.warning(f"vams-rules-v1 rule '{rule_name}' at position {position} rejected: {e}")
+            return False, f"rules[{position}]: rule definition is not valid"
+    return True, None
 
 
 def _validate_json_schema(schema_body):
-    """Validate a legacy JSON Schema (draft-07 subset)."""
+    """Validate a legacy JSON Schema (draft-07 subset).
+
+    Messages describe the rule that failed without echoing the submitted type, property or
+    field names; those are logged.
+    """
     schema_type = schema_body.get("type")
     if schema_type is not None:
         if isinstance(schema_type, list):
             for t in schema_type:
                 if t not in VALID_JSON_SCHEMA_TYPES:
-                    return False, f"Invalid type '{t}' in type array"
+                    logger.info(f"JSON Schema body rejected: unsupported type '{t}' in type array")
+                    return False, "'type' array contains an unsupported JSON Schema type"
         elif schema_type not in VALID_JSON_SCHEMA_TYPES:
-            return False, f"Invalid type '{schema_type}'"
+            logger.info(f"JSON Schema body rejected: unsupported type '{schema_type}'")
+            return False, "'type' is not a supported JSON Schema type"
 
     properties = schema_body.get("properties")
     if properties is not None:
@@ -119,21 +144,29 @@ def _validate_json_schema(schema_body):
             return False, "'properties' must be an object"
         for prop_name, prop_def in properties.items():
             if not isinstance(prop_def, dict):
-                return False, f"Property '{prop_name}' definition must be an object"
+                logger.info(f"JSON Schema body rejected: property '{prop_name}' is not an object")
+                return False, "Every property definition must be an object"
             prop_type = prop_def.get("type")
             if prop_type is not None:
                 if isinstance(prop_type, list):
                     for t in prop_type:
                         if t not in VALID_JSON_SCHEMA_TYPES:
-                            return False, f"Property '{prop_name}' has invalid type '{t}'"
+                            logger.info(f"JSON Schema body rejected: property '{prop_name}' has "
+                                        f"unsupported type '{t}'")
+                            return False, "A property 'type' array contains an unsupported JSON Schema type"
                 elif prop_type not in VALID_JSON_SCHEMA_TYPES:
-                    return False, f"Property '{prop_name}' has invalid type '{prop_type}'"
+                    logger.info(f"JSON Schema body rejected: property '{prop_name}' has unsupported "
+                                f"type '{prop_type}'")
+                    return False, "A property 'type' is not a supported JSON Schema type"
             if "enum" in prop_def and not isinstance(prop_def["enum"], list):
-                return False, f"Property '{prop_name}' enum must be an array"
+                logger.info(f"JSON Schema body rejected: property '{prop_name}' enum is not an array")
+                return False, "A property 'enum' must be an array"
             if "minimum" in prop_def and not isinstance(prop_def["minimum"], (int, float)):
-                return False, f"Property '{prop_name}' minimum must be a number"
+                logger.info(f"JSON Schema body rejected: property '{prop_name}' minimum is not a number")
+                return False, "A property 'minimum' must be a number"
             if "maximum" in prop_def and not isinstance(prop_def["maximum"], (int, float)):
-                return False, f"Property '{prop_name}' maximum must be a number"
+                logger.info(f"JSON Schema body rejected: property '{prop_name}' maximum is not a number")
+                return False, "A property 'maximum' must be a number"
 
     required = schema_body.get("required")
     if required is not None:
@@ -145,7 +178,9 @@ def _validate_json_schema(schema_body):
         if properties is not None:
             for req_field in required:
                 if req_field not in properties:
-                    return False, f"Required field '{req_field}' not defined in properties"
+                    logger.info(f"JSON Schema body rejected: required field '{req_field}' is not a "
+                                f"defined property")
+                    return False, "Every 'required' entry must name a defined property"
 
     if "items" in schema_body:
         items = schema_body["items"]
@@ -367,6 +402,8 @@ def get_schema(event, schema_name):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce(schema_name, "GET"):
         return authorization_error()
 
@@ -389,6 +426,8 @@ def _latest_schema_item(schema_name):
 
 def register_schema(event, request: CreateSchemaRequestModel):
     """Register a schema. A name that already exists gains a new version."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce(request.schemaName, "POST"):
         return authorization_error()
 
@@ -438,6 +477,8 @@ def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce(schema_name, "PUT"):
         return authorization_error()
 
@@ -472,6 +513,8 @@ def delete_schema(event, schema_name):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     if not _enforce(schema_name, "DELETE"):
         return authorization_error()
 

@@ -2,21 +2,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """complianceSchemaBindingService: dispatch of the five method+path pairs, both authorization
-tiers, input validation, and the binding semantics (a database binding marks every asset without an
-override pending; an asset override wins; removing an override falls back to the database
-binding)."""
+tiers (every path is enforced against the schema AND the database or asset it targets), input
+validation, the binding semantics (a database binding marks every asset without an override pending;
+an asset override wins; removing an override falls back to the database binding), and the paged
+asset-override listing."""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from backend.tests.handlers.compliance._harness import (
-    ASSET, DB, SCHEMA, USER, body_of, claims_for, enforcer, rest_event, schema_row,
+    ASSET, DB, SCHEMA, USER, body_of, claims_for, decode_token, encode_token, enforcer,
+    enforcer_for_object_types, rest_event, schema_row,
 )
 from handlers.compliance import complianceSchemaBindingService as svc
 
 MOD = "handlers.compliance.complianceSchemaBindingService"
 STORE = "handlers.compliance.complianceEvaluationStore"
+
+# The stored asset row, as the asset table holds it: the attributes ABAC constraints match on.
+ASSET_ROW = {"databaseId": DB, "assetId": ASSET, "assetName": "Turbine", "assetType": "glb",
+             "tags": ["rotor"]}
+DATABASE_ROW = {"databaseId": DB, "description": "Turbines", "complianceSchemaName": SCHEMA,
+                "complianceAutoEval": True}
 
 
 def _tables(schema_rows=None, database_item=None, state_rows=None, asset_rows=None):
@@ -34,22 +42,32 @@ def _tables(schema_rows=None, database_item=None, state_rows=None, asset_rows=No
 
 
 def _run(event, tokens=(USER,), api=True, obj=True, asset_exists=True, compliance_record=None,
-         **table_kwargs):
+         casbin=None, **table_kwargs):
     schema_table, database_table, state_table, asset_table = _tables(**table_kwargs)
+    casbin = casbin if casbin is not None else enforcer(api=api, obj=obj)
     with patch(f"{MOD}.request_to_claims", claims_for(*tokens)), \
-            patch(f"{MOD}.CasbinEnforcer", return_value=enforcer(api=api, obj=obj)), \
+            patch(f"{MOD}.CasbinEnforcer", return_value=casbin), \
             patch(f"{MOD}.schema_table", schema_table), \
             patch(f"{MOD}.database_table", database_table), \
             patch(f"{MOD}.asset_state_table", state_table), \
             patch(f"{MOD}.asset_table", asset_table), \
             patch(f"{STORE}.get_asset_item",
-                  return_value={"assetId": ASSET} if asset_exists else None), \
+                  return_value=dict(ASSET_ROW) if asset_exists else None), \
             patch(f"{STORE}.get_compliance_record", return_value=compliance_record), \
             patch(f"{STORE}.update_asset_state") as update_state, \
             patch(f"{STORE}.write_audit") as write_audit:
         response = svc.lambda_handler(event, MagicMock())
     return response, {"schema": schema_table, "database": database_table, "state": state_table,
-                      "asset": asset_table, "update_state": update_state, "audit": write_audit}
+                      "asset": asset_table, "update_state": update_state, "audit": write_audit,
+                      "casbin": casbin}
+
+
+def _assert_nothing_written(tables):
+    tables["database"].update_item.assert_not_called()
+    tables["update_state"].assert_not_called()
+    tables["state"].delete_item.assert_not_called()
+    tables["state"].batch_writer.assert_not_called()
+    tables["audit"].assert_not_called()
 
 
 DB_PATH = f"/compliance/bind/{DB}"
@@ -57,6 +75,16 @@ ASSET_PATH = f"/compliance/bind/{DB}/{ASSET}"
 DB_PARAMS = {"databaseId": DB}
 ASSET_PARAMS = {"databaseId": DB, "assetId": ASSET}
 BIND_BODY = {"schemaName": SCHEMA}
+
+DB_PATHS = [
+    ("GET", DB_PATH, DB_PARAMS, None),
+    ("PUT", DB_PATH, DB_PARAMS, BIND_BODY),
+    ("DELETE", DB_PATH, DB_PARAMS, None),
+]
+ASSET_PATHS = [
+    ("PUT", ASSET_PATH, ASSET_PARAMS, BIND_BODY),
+    ("DELETE", ASSET_PATH, ASSET_PARAMS, None),
+]
 
 
 @pytest.mark.unit
@@ -77,6 +105,7 @@ class TestRouteDispatch:
         assert body["assetOverrides"] == [
             {"assetId": "a", "schemaName": "s2", "complianceState": "compliant"}]
         assert body["assetOverrideCount"] == 1
+        assert "NextToken" not in body
 
     def test_put_database_binds(self):
         response, _ = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
@@ -122,53 +151,132 @@ class TestAuthorization:
         assert response["statusCode"] == 403
         tables["database"].get_item.assert_not_called()
 
-    @pytest.mark.parametrize("method,path,params,body", [
-        ("GET", DB_PATH, DB_PARAMS, None),
-        ("PUT", DB_PATH, DB_PARAMS, BIND_BODY),
-        ("DELETE", DB_PATH, DB_PARAMS, None),
-        ("PUT", ASSET_PATH, ASSET_PARAMS, BIND_BODY),
-        ("DELETE", ASSET_PATH, ASSET_PARAMS, None),
-    ])
+    @pytest.mark.parametrize("method,path,params,body", DB_PATHS + ASSET_PATHS)
+    def test_tier_one_with_empty_tokens_denies_even_when_the_api_check_would_pass(
+            self, method, path, params, body):
+        response, tables = _run(rest_event(method, path, params, body=body), tokens=(), api=True,
+                                database_item=dict(DATABASE_ROW),
+                                compliance_record={"schemaName": SCHEMA, "schemaSource": "asset"})
+        assert response["statusCode"] == 403
+        tables["casbin"].enforce.assert_not_called()
+        tables["database"].get_item.assert_not_called()
+        _assert_nothing_written(tables)
+
+    @pytest.mark.parametrize("method,path,params,body", DB_PATHS + ASSET_PATHS)
     def test_tier_two_denial_writes_nothing(self, method, path, params, body):
         response, tables = _run(
             rest_event(method, path, params, body=body), obj=False,
-            database_item={"databaseId": DB, "complianceSchemaName": SCHEMA},
+            database_item=dict(DATABASE_ROW),
             compliance_record={"schemaName": SCHEMA, "schemaSource": "asset"})
         assert response["statusCode"] == 403
-        tables["database"].update_item.assert_not_called()
-        tables["update_state"].assert_not_called()
-        tables["state"].delete_item.assert_not_called()
-        tables["audit"].assert_not_called()
+        _assert_nothing_written(tables)
 
-    def test_tier_two_object_names_the_schema_being_bound(self):
-        instance = enforcer()
-        schema_table, database_table, state_table, asset_table = _tables(
-            database_item={"databaseId": DB})
-        with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
-                patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
-                patch(f"{MOD}.schema_table", schema_table), \
-                patch(f"{MOD}.database_table", database_table), \
-                patch(f"{MOD}.asset_state_table", state_table), \
-                patch(f"{MOD}.asset_table", asset_table), \
-                patch(f"{STORE}.write_audit"):
-            svc.lambda_handler(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY), MagicMock())
-        instance.enforce.assert_called_once_with(
-            {"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "PUT")
+    @pytest.mark.parametrize("method,path,params,body", DB_PATHS)
+    def test_schema_permission_alone_does_not_reach_the_database(self, method, path, params, body):
+        """The schema object grants; the database object denies: refused before any read of the
+        database's asset rows or any write."""
+        response, tables = _run(
+            rest_event(method, path, params, body=body),
+            casbin=enforcer_for_object_types("complianceSchema"),
+            database_item=dict(DATABASE_ROW), asset_rows=[{"assetId": "a"}, {"assetId": "b"}],
+            state_rows=[{"assetId": "a", "schemaSource": "database"}])
+        assert response["statusCode"] == 403
+        tables["state"].query.assert_not_called()
+        tables["asset"].query.assert_not_called()
+        _assert_nothing_written(tables)
 
-    def test_unbinding_a_database_checks_the_currently_bound_schema(self):
-        instance = enforcer()
-        schema_table, database_table, state_table, asset_table = _tables(
-            database_item={"databaseId": DB, "complianceSchemaName": "old-schema"})
-        with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
-                patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
-                patch(f"{MOD}.schema_table", schema_table), \
-                patch(f"{MOD}.database_table", database_table), \
-                patch(f"{MOD}.asset_state_table", state_table), \
-                patch(f"{MOD}.asset_table", asset_table), \
-                patch(f"{STORE}.write_audit"):
-            svc.lambda_handler(rest_event("DELETE", DB_PATH, DB_PARAMS), MagicMock())
-        instance.enforce.assert_called_once_with(
-            {"object__type": "complianceSchema", "complianceSchemaName": "old-schema"}, "DELETE")
+    @pytest.mark.parametrize("method,path,params,body", ASSET_PATHS)
+    def test_schema_permission_alone_does_not_reach_the_asset(self, method, path, params, body):
+        response, tables = _run(
+            rest_event(method, path, params, body=body),
+            casbin=enforcer_for_object_types("complianceSchema"),
+            database_item=dict(DATABASE_ROW),
+            compliance_record={"schemaName": SCHEMA, "schemaSource": "asset"})
+        assert response["statusCode"] == 403
+        _assert_nothing_written(tables)
+
+    @pytest.mark.parametrize("method,path,params,body", DB_PATHS)
+    def test_database_permission_alone_does_not_reach_the_schema(self, method, path, params, body):
+        response, tables = _run(
+            rest_event(method, path, params, body=body),
+            casbin=enforcer_for_object_types("database"), database_item=dict(DATABASE_ROW))
+        assert response["statusCode"] == 403
+        _assert_nothing_written(tables)
+
+    @pytest.mark.parametrize("method,path,params,body", ASSET_PATHS)
+    def test_asset_permission_alone_does_not_reach_the_schema(self, method, path, params, body):
+        response, tables = _run(
+            rest_event(method, path, params, body=body),
+            casbin=enforcer_for_object_types("asset"), database_item=dict(DATABASE_ROW),
+            compliance_record={"schemaName": SCHEMA, "schemaSource": "asset"})
+        assert response["statusCode"] == 403
+        _assert_nothing_written(tables)
+
+    @pytest.mark.parametrize("method,path,params,body", DB_PATHS)
+    def test_both_grants_reach_the_operation(self, method, path, params, body):
+        response, _ = _run(
+            rest_event(method, path, params, body=body),
+            casbin=enforcer_for_object_types("complianceSchema", "database"),
+            database_item=dict(DATABASE_ROW))
+        assert response["statusCode"] == 200, response
+
+    def test_binding_a_database_checks_the_schema_and_the_stored_database_row(self):
+        _, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
+                         database_item=dict(DATABASE_ROW))
+        calls = [c.args for c in tables["casbin"].enforce.call_args_list]
+        assert calls == [
+            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "PUT"),
+            (dict(DATABASE_ROW, object__type="database"), "PUT"),
+        ]
+
+    def test_unbinding_a_database_checks_the_stored_row_and_the_currently_bound_schema(self):
+        row = dict(DATABASE_ROW, complianceSchemaName="old-schema")
+        _, tables = _run(rest_event("DELETE", DB_PATH, DB_PARAMS), database_item=row)
+        calls = [c.args for c in tables["casbin"].enforce.call_args_list]
+        assert calls == [
+            (dict(row, object__type="database"), "DELETE"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": "old-schema"}, "DELETE"),
+        ]
+
+    def test_reading_the_bindings_checks_the_stored_database_row(self):
+        _, tables = _run(rest_event("GET", DB_PATH, DB_PARAMS), database_item=dict(DATABASE_ROW))
+        calls = [c.args for c in tables["casbin"].enforce.call_args_list]
+        assert calls == [
+            (dict(DATABASE_ROW, object__type="database"), "GET"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "GET"),
+        ]
+
+    @pytest.mark.parametrize("method,path,params,body", ASSET_PATHS)
+    def test_asset_paths_check_the_stored_asset_row(self, method, path, params, body):
+        """The asset object carries the row as stored (tags, assetType, assetName), so ABAC
+        constraints on those attributes apply, plus the `asset` annotation."""
+        _, tables = _run(rest_event(method, path, params, body=body),
+                         compliance_record={"schemaName": SCHEMA, "schemaSource": "asset"},
+                         database_item={"databaseId": DB})
+        asset_calls = [c.args for c in tables["casbin"].enforce.call_args_list
+                       if c.args[0].get("object__type") == "asset"]
+        assert asset_calls == [(dict(ASSET_ROW, object__type="asset"), method)]
+
+    def test_a_missing_database_is_refused_before_its_absence_is_reported(self):
+        response, _ = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
+                           casbin=enforcer_for_object_types("complianceSchema"))
+        assert response["statusCode"] == 403
+
+    def test_a_missing_database_is_checked_by_its_requested_id(self):
+        _, tables = _run(rest_event("GET", DB_PATH, DB_PARAMS))
+        assert tables["casbin"].enforce.call_args_list[0].args == (
+            {"databaseId": DB, "object__type": "database"}, "GET")
+
+    def test_a_missing_asset_is_refused_before_its_absence_is_reported(self):
+        response, _ = _run(rest_event("PUT", ASSET_PATH, ASSET_PARAMS, body=BIND_BODY),
+                           casbin=enforcer_for_object_types("complianceSchema"), asset_exists=False)
+        assert response["statusCode"] == 403
+
+    def test_a_missing_asset_is_checked_by_its_requested_ids(self):
+        _, tables = _run(rest_event("PUT", ASSET_PATH, ASSET_PARAMS, body=BIND_BODY),
+                         asset_exists=False)
+        assert tables["casbin"].enforce.call_args_list[1].args == (
+            {"databaseId": DB, "assetId": ASSET, "object__type": "asset"}, "PUT")
 
 
 @pytest.mark.unit
@@ -176,32 +284,59 @@ class TestValidation:
 
     @pytest.mark.parametrize("method,body", [("GET", None), ("PUT", BIND_BODY), ("DELETE", None)])
     def test_a_bad_database_id_is_rejected(self, method, body):
+        bad = "bad<database-id>"
         response, tables = _run(
-            rest_event(method, "/compliance/bind/x", {"databaseId": "x"}, body=body))
+            rest_event(method, f"/compliance/bind/{bad}", {"databaseId": bad}, body=body))
         assert response["statusCode"] == 400
+        assert bad not in response["body"]
         tables["database"].get_item.assert_not_called()
 
     @pytest.mark.parametrize("method,body", [("PUT", BIND_BODY), ("DELETE", None)])
     def test_a_bad_asset_id_is_rejected(self, method, body):
-        bad = "bad<asset>"
+        bad = "bad<asset-id>"
         response, tables = _run(
             rest_event(method, f"/compliance/bind/{DB}/{bad}", {"databaseId": DB, "assetId": bad},
                        body=body))
         assert response["statusCode"] == 400
+        assert bad not in response["body"]
         tables["update_state"].assert_not_called()
 
-    @pytest.mark.parametrize("body", [{}, {"schemaName": "x"}, {"schemaName": "bad name!"}],
-                             ids=["missing", "short", "invalid-chars"])
-    def test_a_bad_bind_body_is_rejected(self, body):
+    @pytest.mark.parametrize("body,bad", [
+        ({}, None), ({"schemaName": "zq"}, "zq"), ({"schemaName": "bad name!"}, "bad name!"),
+    ], ids=["missing", "short", "invalid-chars"])
+    def test_a_bad_bind_body_is_rejected(self, body, bad):
         response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=body),
                                 database_item={"databaseId": DB})
         assert response["statusCode"] == 400
+        if bad is not None:
+            assert bad not in response["body"]
         tables["database"].update_item.assert_not_called()
 
     def test_a_body_that_is_not_json_is_rejected(self):
         response, _ = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body="{oops"))
         assert response["statusCode"] == 400
         assert "Invalid JSON" in body_of(response)["message"]
+
+    def test_a_bad_page_size_is_rejected(self):
+        response, tables = _run(rest_event("GET", DB_PATH, DB_PARAMS, query_params={"maxItems": "ten"}),
+                                database_item=dict(DATABASE_ROW))
+        assert response["statusCode"] == 400
+        assert "ten" not in response["body"]
+        tables["state"].query.assert_not_called()
+
+    @pytest.mark.parametrize("token", [
+        "!!not-base64!!", encode_token([1]), encode_token("offset"), encode_token({}),
+        encode_token({"offset": -1}), encode_token({"offset": "3"}), encode_token({"offset": True}),
+        encode_token({"offset": 1.5}),
+    ], ids=["not-base64", "list", "string", "no-offset", "negative", "string-offset", "bool",
+            "float"])
+    def test_a_malformed_pagination_token_is_rejected(self, token):
+        response, tables = _run(
+            rest_event("GET", DB_PATH, DB_PARAMS, query_params={"startingToken": token}),
+            database_item=dict(DATABASE_ROW))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Invalid pagination token"
+        tables["state"].query.assert_not_called()
 
 
 @pytest.mark.unit
@@ -356,3 +491,56 @@ class TestAssetBinding:
         tables["state"].delete_item.assert_not_called()
         tables["update_state"].assert_not_called()
         tables["audit"].assert_not_called()
+
+
+@pytest.mark.unit
+class TestOverrideListingPaging:
+    """The asset-override listing pages with maxItems / startingToken / NextToken; the count
+    covers the full set on every page."""
+
+    OVERRIDES = [{"assetId": f"asset-{i}", "schemaSource": "asset", "schemaName": f"s{i}",
+                  "complianceState": "compliant"} for i in (4, 1, 3, 0, 2)]
+    ROWS = OVERRIDES + [{"assetId": "inherited", "schemaSource": "database"}]
+
+    def _page(self, query_params):
+        response, _ = _run(rest_event("GET", DB_PATH, DB_PARAMS, query_params=query_params),
+                           database_item=dict(DATABASE_ROW), state_rows=list(self.ROWS))
+        assert response["statusCode"] == 200, response
+        return body_of(response)
+
+    def test_the_token_round_trips_and_the_pages_partition_the_full_set(self):
+        page_one = self._page({"maxItems": "2"})
+        assert [o["assetId"] for o in page_one["assetOverrides"]] == ["asset-0", "asset-1"]
+        assert page_one["assetOverrideCount"] == 5
+        assert decode_token(page_one["NextToken"]) == {"offset": 2}
+
+        page_two = self._page({"maxItems": "2", "startingToken": page_one["NextToken"]})
+        assert [o["assetId"] for o in page_two["assetOverrides"]] == ["asset-2", "asset-3"]
+        assert page_two["assetOverrideCount"] == 5
+
+        page_three = self._page({"maxItems": "2", "startingToken": page_two["NextToken"]})
+        assert [o["assetId"] for o in page_three["assetOverrides"]] == ["asset-4"]
+        assert "NextToken" not in page_three
+
+        union = page_one["assetOverrides"] + page_two["assetOverrides"] + page_three["assetOverrides"]
+        assert sorted(o["assetId"] for o in union) == sorted(o["assetId"] for o in self.OVERRIDES)
+
+    def test_a_page_that_ends_exactly_on_the_set_has_no_token(self):
+        page = self._page({"maxItems": "5"})
+        assert len(page["assetOverrides"]) == 5
+        assert "NextToken" not in page
+
+    def test_an_offset_past_the_end_yields_an_empty_page(self):
+        page = self._page({"startingToken": encode_token({"offset": 50})})
+        assert page["assetOverrides"] == []
+        assert page["assetOverrideCount"] == 5
+        assert "NextToken" not in page
+
+    def test_the_page_size_is_clamped_to_the_named_bounds(self):
+        page = self._page({"maxItems": "0"})
+        assert len(page["assetOverrides"]) == 1
+        assert decode_token(page["NextToken"]) == {"offset": 1}
+        assert svc.DEFAULT_LIST_PAGE_SIZE == 100
+        assert svc.MAX_LIST_PAGE_SIZE == 500
+        page = self._page({"maxItems": "100000"})
+        assert len(page["assetOverrides"]) == 5

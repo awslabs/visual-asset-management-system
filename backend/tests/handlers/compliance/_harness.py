@@ -7,6 +7,7 @@ Import as `from backend.tests.handlers.compliance._harness import ...`. The `sys
 registration this directory depends on lives in `conftest.py`, which pytest loads first.
 """
 
+import base64
 import importlib.util
 import json
 import os
@@ -33,6 +34,43 @@ DB = "db1"
 ASSET = "asset.glb"
 SCHEMA = "schema-1"
 CASCADE_ID = "5b1e2c3d-0000-4000-8000-000000000001"
+
+# The compliance asset-state table as the CDK defines it (storageBuilder-nestedStack.ts): PK
+# databaseId / SK assetId, GSI SchemaNameIndex (schemaName, complianceState) and GSI
+# ComplianceStateIndex (complianceState, databaseId), both projecting ALL. `create_table(**...)`
+# kwargs for a moto-backed DynamoDB resource; the name is the one the root harness seeds.
+COMPLIANCE_ASSET_STATE_TABLE_DEFINITION = {
+    "TableName": os.environ.get("COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME", "t-compliance-asset-state"),
+    "KeySchema": [
+        {"AttributeName": "databaseId", "KeyType": "HASH"},
+        {"AttributeName": "assetId", "KeyType": "RANGE"},
+    ],
+    "AttributeDefinitions": [
+        {"AttributeName": "databaseId", "AttributeType": "S"},
+        {"AttributeName": "assetId", "AttributeType": "S"},
+        {"AttributeName": "schemaName", "AttributeType": "S"},
+        {"AttributeName": "complianceState", "AttributeType": "S"},
+    ],
+    "GlobalSecondaryIndexes": [
+        {
+            "IndexName": "SchemaNameIndex",
+            "KeySchema": [
+                {"AttributeName": "schemaName", "KeyType": "HASH"},
+                {"AttributeName": "complianceState", "KeyType": "RANGE"},
+            ],
+            "Projection": {"ProjectionType": "ALL"},
+        },
+        {
+            "IndexName": "ComplianceStateIndex",
+            "KeySchema": [
+                {"AttributeName": "complianceState", "KeyType": "HASH"},
+                {"AttributeName": "databaseId", "KeyType": "RANGE"},
+            ],
+            "Projection": {"ProjectionType": "ALL"},
+        },
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+}
 
 # A vams-rules-v1 body carrying one rule of each kind. The metadata rule references a metadata
 # schema; the relationship rule wants one parentChild parent; the pipeline rule executes a GLOBAL
@@ -107,6 +145,25 @@ def enforcer(api=True, obj=True):
     instance.enforceAPI.return_value = api
     instance.enforce.return_value = obj
     return instance
+
+
+def enforcer_for_object_types(*allowed_object_types):
+    """A CasbinEnforcer stand-in that passes Tier-1 and grants Tier-2 only to objects whose
+    `object__type` is one of `allowed_object_types` -- the shape that proves a second object is
+    enforced independently of the first."""
+    instance = enforcer()
+    instance.enforce.side_effect = (
+        lambda obj, action: obj.get("object__type") in allowed_object_types)
+    return instance
+
+
+def encode_token(value):
+    """A pagination token as the handlers emit one: Base64 of the JSON value."""
+    return base64.b64encode(json.dumps(value).encode("utf-8")).decode("utf-8")
+
+
+def decode_token(token):
+    return json.loads(base64.b64decode(token))
 
 
 def body_of(response):
