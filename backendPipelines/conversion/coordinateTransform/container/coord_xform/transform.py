@@ -8,6 +8,15 @@ from coord_xform.config import PipelineConfig
 from coord_xform.models import CameraExtrinsics, PointChunk, TransformResult
 
 
+class NonFiniteCoordinateError(ValueError):
+    """The reprojection produced a NaN or infinite coordinate.
+
+    pyproj marks a point it cannot transform -- most often one outside the target CRS's area of use --
+    as inf rather than raising, and a NaN or inf coordinate defeats every downstream bounds and offset
+    computation without naming itself. Rejected at the transform so the failure names the cause.
+    """
+
+
 class CoordinateTransformer:
     """Handles CRS reprojection and scale factor correction."""
 
@@ -55,6 +64,7 @@ class CoordinateTransformer:
         tx, ty, tz = self._transformer.transform(x, y, z)
 
         transformed_xyz = np.column_stack([tx, ty, tz])
+        self._reject_non_finite(chunk.xyz, transformed_xyz, "points")
 
         if self._scale_factor != 1.0:
             transformed_xyz[:, 0] *= self._scale_factor
@@ -107,6 +117,31 @@ class CoordinateTransformer:
 
         return residual_mm
 
+    def _reject_non_finite(
+        self,
+        source_xyz: NDArray[np.float64],
+        transformed_xyz: NDArray[np.float64],
+        subject: str,
+    ) -> None:
+        """Raise if any transformed row holds a NaN or infinite coordinate.
+
+        The values are never coerced: replacing a non-finite coordinate with a number would relocate
+        the point to the target CRS origin and let the run report success.
+        """
+        finite_rows = np.all(np.isfinite(transformed_xyz), axis=1)
+        bad_count = int(np.count_nonzero(~finite_rows))
+        if bad_count == 0:
+            return
+
+        first_bad = int(np.argmax(~finite_rows))
+        raise NonFiniteCoordinateError(
+            f"{bad_count} of {finite_rows.shape[0]} {subject} reprojected to a non-finite "
+            f"coordinate from {self._config.source.crs} to {self._config.target.crs}; the first "
+            f"offending input coordinate {source_xyz[first_bad].tolist()} produced "
+            f"{transformed_xyz[first_bad].tolist()}. A point outside the target CRS's area of "
+            "use is the usual cause."
+        )
+
     def _is_cross_unit_transform(self) -> bool:
         """Check if source and target CRS use different linear units."""
         source_axis = self._source_crs.axis_info
@@ -123,6 +158,7 @@ class CoordinateTransformer:
         tx, ty, tz = self._transformer.transform(x, y, z)
 
         transformed_pos = np.array([tx, ty, tz], dtype=np.float64)
+        self._reject_non_finite(pos, transformed_pos.reshape(1, 3), "camera positions")
 
         if self._scale_factor != 1.0:
             transformed_pos[0] *= self._scale_factor

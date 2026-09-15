@@ -44,9 +44,12 @@ def extract_cad_metadata(file_path: str) -> Dict[str, Any]:
         
     except Exception as e:
         logger.exception(f"Error extracting CAD metadata: {str(e)}")
-        # Return basic file info even if extraction fails
-        return {
-        }
+        # A model that cannot be imported fails the extraction. Answering with no metadata is
+        # indistinguishable from a model that carries none, so the pipeline would write an empty
+        # attribute update and report success. The per-section helpers below are the opposite case:
+        # the model imported, so each one records its own failure as an extraction_error value the
+        # operator can see against the file.
+        raise RuntimeError(f"Could not extract CAD metadata from {file_name}: {e}") from e
 
 def extract_step_metadata(model: cq.Shape, file_path: str) -> Dict[str, Any]:
     """

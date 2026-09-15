@@ -81,7 +81,10 @@ function validateDescriptionLength(description: string) {
     if (description === undefined) return null;
     const min = 4,
         max = 256;
-    return description.length >= min && description.length <= max
+    // The API removes surrounding whitespace before applying its own length constraint, so
+    // the trimmed length is what decides whether a value is accepted.
+    const trimmed = description.trim();
+    return trimmed.length >= min && trimmed.length <= max
         ? null
         : `Between ${min} and ${max} characters`;
 }
@@ -207,6 +210,39 @@ export default function CreateConstraint({
         loadObjectTypes();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
+
+    // The object-type matrix is fetched only once the modal is open, so the form state built
+    // on that same transition has no valid-field list to filter against. Prune the
+    // out-of-matrix (deprecated) criteria once the matrix lands. Pruning in place rather than
+    // rebuilding from initState keeps anything already typed into the form.
+    useEffect(() => {
+        if (!open || objectTypeData.length === 0) {
+            return;
+        }
+        setFormState((previous) => {
+            const validFields = previous.objectType
+                ? fieldNamesToObjectTypeMapping[previous.objectType]
+                : undefined;
+            if (!validFields) {
+                return previous;
+            }
+            const validFieldValues = validFields.map((field) => field.value);
+            const criteriaAnd = (previous.criteriaAnd ?? []).filter((item) =>
+                validFieldValues.includes(item.field)
+            );
+            const criteriaOr = (previous.criteriaOr ?? []).filter((item) =>
+                validFieldValues.includes(item.field)
+            );
+            if (
+                criteriaAnd.length === (previous.criteriaAnd?.length ?? 0) &&
+                criteriaOr.length === (previous.criteriaOr?.length ?? 0)
+            ) {
+                return previous;
+            }
+            return { ...previous, criteriaAnd, criteriaOr };
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, objectTypeData]);
 
     // Fetch the full API route list (not cached) when authoring an 'api'
     // constraint, so the Route Path criteria value offers valid routes.

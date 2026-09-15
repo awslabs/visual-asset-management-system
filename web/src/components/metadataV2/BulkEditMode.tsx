@@ -112,7 +112,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
             .map((row) => ({
                 ...row,
                 editKey: row.metadataKey,
-                editValue: row.metadataValue,
+                editValue: row.metadataValue ?? "",
                 editType: row.metadataValueType,
             }));
         setEditedRows(bulkRows);

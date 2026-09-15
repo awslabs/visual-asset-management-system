@@ -48,7 +48,8 @@ const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
                         console.error("Error downloading audio file:", response);
                         throw new Error("Failed to download audio file");
                     } else {
-                        console.log("Successfully loaded audio URL:", response[1]);
+                        // Presigned URL — log the key, not the signed URL.
+                        console.log("Successfully loaded audio file:", assetKey);
                         setAudioUrl(response[1]);
                     }
                 } else {

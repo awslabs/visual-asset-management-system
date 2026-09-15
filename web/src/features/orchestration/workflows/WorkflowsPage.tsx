@@ -12,7 +12,7 @@ import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterB
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
-import ExecuteWizard from "../wizard/ExecuteWizard";
+import ExecuteWorkflowModal from "../executions/ExecuteWorkflowModal";
 import { btnPrimary, btnSecondary, control } from "../components/controlStyles";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import type { Workflow } from "../types";
@@ -363,6 +363,11 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                             ? w.databaseId || "Unknown database"
                             : w.category || "Uncategorized"
                     }
+                    // Stable identity per card (matching PipelinesPage). Each card owns an
+                    // uncontrolled actions menu, so with index keys a refetch that removes or reorders
+                    // a workflow inside its category re-points an OPEN menu at whichever workflow
+                    // lands on that index.
+                    getKey={(w) => `${w.databaseId}:${w.workflowId}`}
                     renderItem={renderWorkflowCard}
                 />
             )}
@@ -395,11 +400,13 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
             )}
 
             {executeWorkflow && (
-                <ExecuteWizard
+                <ExecuteWorkflowModal
                     open={!!executeWorkflow}
                     onClose={() => setExecuteWorkflow(null)}
-                    workflow={executeWorkflow}
-                    databaseId={executeWorkflow.databaseId}
+                    presetWorkflow={{
+                        databaseId: executeWorkflow.databaseId,
+                        workflowId: executeWorkflow.workflowId,
+                    }}
                 />
             )}
 

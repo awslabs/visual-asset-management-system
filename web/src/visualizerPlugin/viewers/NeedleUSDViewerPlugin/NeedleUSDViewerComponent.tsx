@@ -45,6 +45,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
     // Loading cancellation flag
     const loadingCancelledRef = useRef(false);
+    // Aborted on unmount so closing the viewer mid-download stops the transfer instead of letting it
+    // run to completion for a file nobody is looking at.
+    const downloadAbortRef = useRef<AbortController | null>(null);
 
     // Console override for WASM error capture (scoped to component lifecycle)
     const originalConsoleWarnRef = useRef<typeof console.warn | null>(null);
@@ -641,6 +644,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     extractFromBinary(content, sourceFilePath, dependencies);
                 }
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.warn(`Error extracting dependencies from ${sourceFilePath}:`, error);
             }
 
@@ -700,6 +706,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     try {
                         USD.FS_unlink(fullPath);
                     } catch (unlinkError) {
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         console.warn(`    Failed to unlink ${fullPath}:`, unlinkError);
                         // Continue anyway - the createDataFile might still work
                     }
@@ -754,8 +764,14 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
                 }
 
+                // Created lazily on the first download of a load pass; cleanup aborts and clears it,
+                // so a remount gets a fresh controller.
+                if (!downloadAbortRef.current) {
+                    downloadAbortRef.current = new AbortController();
+                }
                 const response = await fetch(assetUrl, {
                     headers: { Authorization: authHeader },
+                    signal: downloadAbortRef.current.signal,
                 });
 
                 if (!response.ok) {
@@ -772,6 +788,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 return await response.arrayBuffer();
             } catch (error) {
                 if (isMainFile) throw error;
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.warn(`Error loading dependency: ${fileKey}`, error);
                 return null;
             }
@@ -1260,6 +1279,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                         fileInfos.push({ fileKey, fileName, directory, fileGroup });
                     } catch (fileError: any) {
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         console.error(`Error loading ${fileKey}:`, fileError);
                         errors.push({
                             file: fileKey,
@@ -1436,6 +1459,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                                         }
                                     }
                                 } catch (storeError: any) {
+                                    // Console logging only: a % specifier in the interpolated value
+                                    // can at most garble this one log line; nothing is executed,
+                                    // stored or returned from it.
+                                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                     console.warn(`Error storing ${assetPath} in WASM:`, storeError);
                                     console.warn(
                                         `  Error details: errno=${storeError?.errno}, message=${storeError?.message}`
@@ -1735,7 +1762,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 animate();
 
                 setSceneReady(true);
-                window.addEventListener("resize", () => {
+
+                // Held on the instance so cleanup can detach it; an inline listener could never be
+                // removed and kept the camera, renderer and container alive after unmount.
+                const handleResize = () => {
                     if (containerRef.current) {
                         camera.aspect =
                             containerRef.current.clientWidth / containerRef.current.clientHeight;
@@ -1745,7 +1775,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             containerRef.current.clientHeight
                         );
                     }
-                });
+                };
+                viewerInstanceRef.current.resizeHandler = handleResize;
+                window.addEventListener("resize", handleResize);
 
                 setIsLoading(false);
             } catch (error) {
@@ -1762,6 +1794,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             // Cancel any ongoing loading operations
             loadingCancelledRef.current = true;
+            downloadAbortRef.current?.abort();
+            downloadAbortRef.current = null;
 
             // Cancel animation frame
             if (animationFrameRef.current !== null) {
@@ -1775,6 +1809,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 // Remove event listeners
                 if (clickHandler && renderer?.domElement) {
                     renderer.domElement.removeEventListener("click", clickHandler);
+                }
+
+                if (viewerInstanceRef.current.resizeHandler) {
+                    window.removeEventListener("resize", viewerInstanceRef.current.resizeHandler);
                 }
 
                 // Dispose controls

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 interface CesiumSceneGraphProps {
     tilesets: any[];
@@ -76,6 +76,13 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
     // Tick to re-render the tree as tiles stream in/out (the tile tree is read live)
     const [, setRefreshTick] = useState(0);
     const [tilesetVisible, setTilesetVisible] = useState<Record<number, boolean>>({});
+    // Row that owns the tree's tab stop (roving tabindex).
+    const [activeNode, setActiveNode] = useState<number | null>(null);
+    const treeRef = useRef<HTMLDivElement>(null);
+
+    // The tileset rows are always rendered, so the first one is a safe default
+    // owner of the tree's single tab stop.
+    const tabStopNode = activeNode ?? (tilesets.length > 0 ? getNodeId(tilesets[0]) : null);
 
     // Refresh the tree as tiles load and expand tileset roots by default
     useEffect(() => {
@@ -119,6 +126,8 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
     }, [selectedTiles, tilesets]);
 
     const toggleExpand = useCallback((nodeId: number) => {
+        // Keep the tab stop on a row that stays rendered when a subtree closes.
+        setActiveNode(nodeId);
         setExpandedNodes((prev) => {
             const next = new Set(prev);
             if (next.has(nodeId)) {
@@ -129,6 +138,82 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
             return next;
         });
     }, []);
+
+    const setExpandedState = useCallback((nodeId: number, open: boolean) => {
+        setActiveNode(nodeId);
+        setExpandedNodes((prev) => {
+            const next = new Set(prev);
+            if (open) {
+                next.add(nodeId);
+            } else {
+                next.delete(nodeId);
+            }
+            return next;
+        });
+    }, []);
+
+    // Move the tab stop and the focus to the row `delta` positions away in
+    // document order — the rendered rows are the visible ones.
+    const moveFocus = useCallback((from: HTMLElement, delta: number) => {
+        const rows = Array.from(
+            treeRef.current?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? []
+        );
+        const next = rows[rows.indexOf(from) + delta];
+        if (!next) return;
+        const nextId = Number(next.dataset.nodeId);
+        if (Number.isFinite(nextId)) setActiveNode(nextId);
+        next.focus();
+    }, []);
+
+    /**
+     * Up/Down move between rows, Right/Left expand and collapse, Enter/Space
+     * activate the row's primary action.
+     */
+    const handleRowKeyDown = useCallback(
+        (
+            event: React.KeyboardEvent<HTMLDivElement>,
+            nodeId: number,
+            hasChildren: boolean,
+            isExpanded: boolean,
+            activate: () => void
+        ) => {
+            const row = event.currentTarget;
+            switch (event.key) {
+                case "Enter":
+                case " ":
+                    event.preventDefault();
+                    activate();
+                    break;
+                case "ArrowDown":
+                    event.preventDefault();
+                    moveFocus(row, 1);
+                    break;
+                case "ArrowUp":
+                    event.preventDefault();
+                    moveFocus(row, -1);
+                    break;
+                case "ArrowRight":
+                    event.preventDefault();
+                    if (hasChildren && !isExpanded) {
+                        setExpandedState(nodeId, true);
+                    } else {
+                        moveFocus(row, 1);
+                    }
+                    break;
+                case "ArrowLeft":
+                    event.preventDefault();
+                    if (hasChildren && isExpanded) {
+                        setExpandedState(nodeId, false);
+                    } else {
+                        moveFocus(row, -1);
+                    }
+                    break;
+                default:
+                    break;
+            }
+        },
+        [moveFocus, setExpandedState]
+    );
 
     const toggleTilesetVisibility = useCallback((tileset: any, index: number) => {
         tileset.show = !tileset.show;
@@ -159,9 +244,16 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
         const isHovered = hoveredNode === nodeId;
 
         return (
-            <div key={nodeId}>
+            // role="none" keeps this layout wrapper out of the tree structure so
+            // the rows read as direct children of role="tree".
+            <div key={nodeId} role="none">
                 <div
                     data-tile-node-id={nodeId}
+                    data-node-id={nodeId}
+                    role="treeitem"
+                    aria-expanded={hasChildren ? isExpanded : undefined}
+                    aria-selected={isSelected}
+                    tabIndex={nodeId === tabStopNode ? 0 : -1}
                     style={{
                         padding: "3px 6px",
                         paddingLeft: `${depth * 14 + 6}px`,
@@ -180,6 +272,12 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                     }}
                     onClick={(e) => onTileClick(tile, e.ctrlKey)}
                     onDoubleClick={() => onZoomToTile(tile)}
+                    onFocus={() => setActiveNode(nodeId)}
+                    onKeyDown={(event) =>
+                        handleRowKeyDown(event, nodeId, hasChildren, isExpanded, () =>
+                            onTileClick(tile, event.ctrlKey)
+                        )
+                    }
                     onMouseEnter={() => setHoveredNode(nodeId)}
                     onMouseLeave={() => setHoveredNode(null)}
                 >
@@ -194,20 +292,31 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                             display: "inline-block",
                             userSelect: "none",
                         }}
+                        aria-hidden="true"
                     >
                         {hasChildren ? (isExpanded ? "▼" : "▶") : ""}
                     </span>
-                    <span
+                    <button
+                        type="button"
                         onClick={(e) => {
                             e.stopPropagation();
                             onToggleTileVisibility(tile);
                         }}
-                        style={{ marginRight: "5px", cursor: "pointer", fontSize: "0.9em" }}
+                        style={{
+                            marginRight: "5px",
+                            cursor: "pointer",
+                            fontSize: "0.9em",
+                            background: "none",
+                            border: "none",
+                            padding: 0,
+                            color: "inherit",
+                        }}
                         title={isHidden ? "Show" : "Hide"}
+                        aria-label={`${isHidden ? "Show" : "Hide"} ${getTileLabel(tile)}`}
                     >
-                        {isHidden ? "👁️‍🗨️" : "👁️"}
-                    </span>
-                    <span style={{ marginRight: "5px", fontSize: "0.9em" }}>
+                        <span aria-hidden="true">{isHidden ? "👁️‍🗨️" : "👁️"}</span>
+                    </button>
+                    <span style={{ marginRight: "5px", fontSize: "0.9em" }} aria-hidden="true">
                         {getTileIcon(tile)}
                     </span>
                     <span
@@ -228,7 +337,7 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                     )}
                 </div>
                 {hasChildren && isExpanded && (
-                    <div>
+                    <div role="group">
                         {children
                             .slice(0, MAX_CHILDREN_RENDERED)
                             .map((child: any) => renderTileNode(child, depth + 1))}
@@ -261,8 +370,12 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
         const stats = tileset.statistics;
 
         return (
-            <div key={nodeId}>
+            <div key={nodeId} role="none">
                 <div
+                    data-node-id={nodeId}
+                    role="treeitem"
+                    aria-expanded={root ? isExpanded : undefined}
+                    tabIndex={nodeId === tabStopNode ? 0 : -1}
                     style={{
                         padding: "4px 6px",
                         cursor: "pointer",
@@ -277,21 +390,42 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                         opacity: isVisible ? 1 : 0.5,
                     }}
                     onClick={() => toggleExpand(nodeId)}
+                    onFocus={() => setActiveNode(nodeId)}
+                    onKeyDown={(event) =>
+                        handleRowKeyDown(event, nodeId, !!root, isExpanded, () =>
+                            toggleExpand(nodeId)
+                        )
+                    }
                 >
-                    <span style={{ marginRight: "4px", width: "12px", userSelect: "none" }}>
+                    <span
+                        style={{ marginRight: "4px", width: "12px", userSelect: "none" }}
+                        aria-hidden="true"
+                    >
                         {root ? (isExpanded ? "▼" : "▶") : ""}
                     </span>
-                    <span
+                    <button
+                        type="button"
                         onClick={(e) => {
                             e.stopPropagation();
                             toggleTilesetVisibility(tileset, index);
                         }}
-                        style={{ marginRight: "5px", cursor: "pointer" }}
+                        style={{
+                            marginRight: "5px",
+                            cursor: "pointer",
+                            background: "none",
+                            border: "none",
+                            padding: 0,
+                            color: "inherit",
+                            font: "inherit",
+                        }}
                         title={isVisible ? "Hide tileset" : "Show tileset"}
+                        aria-label={`${isVisible ? "Hide" : "Show"} tileset ${label}`}
                     >
-                        {isVisible ? "👁️" : "👁️‍🗨️"}
+                        <span aria-hidden="true">{isVisible ? "👁️" : "👁️‍🗨️"}</span>
+                    </button>
+                    <span style={{ marginRight: "5px" }} aria-hidden="true">
+                        📄
                     </span>
-                    <span style={{ marginRight: "5px" }}>📄</span>
                     <span
                         style={{
                             flex: 1,
@@ -342,6 +476,7 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
             >
                 {selectedTiles.length > 0 && (
                     <button
+                        type="button"
                         onClick={onClearSelection}
                         style={{
                             background: "rgba(156, 39, 176, 0.3)",
@@ -354,11 +489,12 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                             fontWeight: "bold",
                         }}
                     >
-                        ✕ Clear Selection ({selectedTiles.length})
+                        <span aria-hidden="true">✕</span> Clear Selection ({selectedTiles.length})
                     </button>
                 )}
                 <div style={{ display: "flex", gap: "6px" }}>
                     <button
+                        type="button"
                         onClick={() => setAllVisibility(true)}
                         style={{
                             flex: 1,
@@ -371,9 +507,10 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                             fontSize: "0.8em",
                         }}
                     >
-                        👁️ Show All
+                        <span aria-hidden="true">👁️</span> Show All
                     </button>
                     <button
+                        type="button"
                         onClick={() => setAllVisibility(false)}
                         style={{
                             flex: 1,
@@ -386,9 +523,10 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                             fontSize: "0.8em",
                         }}
                     >
-                        👁️‍🗨️ Hide All
+                        <span aria-hidden="true">👁️‍🗨️</span> Hide All
                     </button>
                     <button
+                        type="button"
                         onClick={() => setRefreshTick((t) => t + 1)}
                         style={{
                             background: "rgba(255, 255, 255, 0.1)",
@@ -400,8 +538,9 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                             fontSize: "0.8em",
                         }}
                         title="Refresh tree (tiles stream in as the camera moves)"
+                        aria-label="Refresh tree"
                     >
-                        🔄
+                        <span aria-hidden="true">🔄</span>
                     </button>
                 </div>
             </div>
@@ -416,9 +555,12 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                     scrollbarWidth: "thin",
                     scrollbarColor: "rgba(255, 255, 255, 0.5) transparent",
                 }}
+                ref={treeRef}
             >
                 {tilesets.length > 0 ? (
-                    tilesets.map((tileset, index) => renderTilesetNode(tileset, index))
+                    <div role="tree" aria-label="Scene graph">
+                        {tilesets.map((tileset, index) => renderTilesetNode(tileset, index))}
+                    </div>
                 ) : (
                     <div style={{ padding: "16px", textAlign: "center", color: "#999" }}>
                         No tilesets loaded
@@ -479,6 +621,7 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                         </div>
                     )}
                     <button
+                        type="button"
                         onClick={() => onZoomToTile(selectedTile)}
                         style={{
                             marginTop: "8px",
@@ -492,7 +635,7 @@ const CesiumSceneGraph: React.FC<CesiumSceneGraphProps> = ({
                             fontSize: "0.9em",
                         }}
                     >
-                        🔍 Zoom to Tile
+                        <span aria-hidden="true">🔍</span> Zoom to Tile
                     </button>
                 </div>
             )}

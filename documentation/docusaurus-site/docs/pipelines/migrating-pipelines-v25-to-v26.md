@@ -20,6 +20,19 @@ invokes. If every pipeline in your deployment is a VAMS built-in, the data migra
 nothing here applies.
 :::
 
+:::tip[An AI coding agent can help with the porting]
+If you are working in a clone of this repository with [Claude Code](../developer/agentic-development.md),
+the **`/add-pipeline`** slash command scaffolds a pipeline against the **current** v2.6 contract. That is
+useful here in two ways: as a reference implementation to port your v2.5 code toward, and — when a
+pipeline has diverged far enough that porting it in place is more work than re-wrapping it — as the
+starting point for a fresh wrapper around the processing service you already have. The service itself
+does not change; what changes is the `vamsExecute` and `constructPipeline` layer around it.
+
+Read the porting order below first. The command produces v2.6-shaped scaffolding, but it cannot know
+which of your pipeline's behaviours were load-bearing, and the manifest, task-token, and sub-process
+registration changes on this page are the ones a mechanical port most often gets wrong.
+:::
+
 ## What the data migration already did
 
 Before changing any code, know what is already true after the migration runs:
@@ -107,6 +120,13 @@ sfn.send_task_failure(taskToken=task_token, error="PipelineFailure", cause="See 
 :::danger[Always report failure]
 A pipeline that returns nothing does not fail the workflow — it hangs until the task timeout, which may
 be hours. Send `SendTaskFailure` on every error path, including the ones you consider impossible.
+
+The path most easily missed is a nested `RequestResponse` invoke: a function that raised still returns
+`StatusCode` 200, with the failure in `FunctionError`. If your entry point checks only the status, a failed
+launch reads as a successful one, so no path reports the token at all. Check both, and let a nested
+function's own failed callback propagate rather than catching it — that propagation is what tells the
+caller to report the token itself. See
+[Every failure route reports the token](custom-pipelines.md#every-failure-route-reports-the-token).
 :::
 
 Set `taskTimeout` to something your work can actually finish within, and use `taskHeartbeatTimeout` for
@@ -131,19 +151,41 @@ events_client.put_events(Entries=[{
         "pipelineExecutionId": pipeline_execution_id,
         "subExecution": {"resourceType": "stepFunctionsExecution",
                          "stateMachineArn": state_machine_arn,
-                         "executionArn": sub_execution_arn},
-        "logs": [{"logGroupArn": log_group_arn, "logGroupName": log_group_name}],
+                         "executionArn": sub_execution_arn,
+                         "label": "Thumbnail processing"},
+        "logs": [
+            {"logGroupArn": log_group_arn, "logGroupName": log_group_name,
+             "sourceType": "stateMachine", "label": "Thumbnail state machine"},
+            {"logGroupArn": batch_log_group_arn, "logGroupName": batch_log_group_name,
+             "logStreamPrefix": f"{job_definition_name}/default/",
+             "stageName": "ThumbnailBatchJob", "sourceType": "batch",
+             "label": "ThumbnailBatchJob container"},
+        ],
     }),
 }])
 ```
 
 ### What to register
 
-| Register this                          | So that                                                                                                 |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| A nested Step Functions execution      | Aborting the VAMS execution stops your sub-workflow, and its history appears in the execution's logs.   |
-| A log group your process writes to     | Its events appear under the step's logs, without the operator needing to know where your pipeline logs. |
-| A long-running compute job (see below) | Aborting the VAMS execution terminates the job instead of leaving it running — and billing.             |
+| Register this                          | So that                                                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A nested Step Functions execution      | Aborting the VAMS execution stops your sub-workflow, its history appears in the execution's logs, and the execution view reports each of its stages with a status. |
+| A log group your process writes to     | It is listed as a log source of the step — labelled, tied to its stage, readable alone — without the operator needing to know where your pipeline logs.            |
+| A long-running compute job (see below) | Aborting the VAMS execution terminates the job instead of leaving it running — and billing, and its container log stream is resolved from the job.                 |
+
+The optional `stageName` (the exact ASL state name, 1–80 printable characters), `label` (1–128 characters), and
+`sourceType` (`stateMachine`, `lambda`, `batch`, `ecs`, `container`, or `custom`) on a `logs[]` entry — and
+`stageName` / `label` on `subExecution` — are what let the execution view label each source and tie it to a
+stage; an entry without them is still read, labelled by its log group's name. Register an AWS Batch
+container log as the group the job definition writes to, with `logStreamPrefix` set to
+`<jobDefinitionName>/default/`: a Fargate job definition that routes its output through the `awslogs`
+driver writes to the group it names (the built-in Fargate pipelines use a VAMS-owned
+`/aws/vendedlogs/Pipelines/<Name><hash>` group), while a job definition with no log configuration, such as
+the built-in GPU pipelines, writes to AWS Batch's default `/aws/batch/job`. The event's `Source` must end in
+`.pipeline.<pipelineExecutionId>` for the
+pipeline execution it names (the prefix on the payload already does). See
+[Registering sub-processes and logs](custom-pipelines.md#registering-sub-processes-and-logs) for the full
+contract.
 
 The `resourceType` field is what makes this extensible: the registration path validates and stores
 whichever locator keys you report (`executionArn`, `jobId`, `jobArn`, `taskArn`, `clusterArn`, `farmId`,
@@ -260,6 +302,7 @@ vamscli pipeline template list -d GLOBAL -p my-pipeline
 -   [ ] `assetId` taken from `resolved["assetId"]`, never off the payload or derived from S3 path segments
 -   [ ] Multi-file input either handled or excluded by declaring `inputFileArity: "one"`
 -   [ ] `SendTaskSuccess` on completion and `SendTaskFailure` on **every** error path
+-   [ ] Nested `RequestResponse` invokes checked for `FunctionError` as well as `StatusCode`
 -   [ ] `taskTimeout` realistic; `taskHeartbeatTimeout` set for long-running work
 -   [ ] Nested state machines, log groups, and self-submitted compute jobs registered
 -   [ ] For self-submitted AWS Batch jobs: registered as `resourceType: "batchJob"` so abort terminates them

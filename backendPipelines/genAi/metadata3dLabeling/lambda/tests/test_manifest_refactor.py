@@ -36,16 +36,44 @@ for k, v in {
     "AWS_DEFAULT_REGION": "us-east-1",
     "AWS_REGION": "us-east-1",
     "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:1:stateMachine:GenAiMetadata3dLabeling",
-    "ALLOWED_INPUT_FILEEXTENSIONS": ".glb,.gltf,.obj,.stl,.fbx",
+    "ALLOWED_INPUT_FILEEXTENSIONS": ".glb,.fbx,.obj,.stl,.ply,.usd,.dae,.abc",
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
     "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/GenAiMetadata3dLabeling",
     "STATE_MACHINE_LOG_GROUP_ARN":
         "arn:aws:logs:us-east-1:1:log-group:/aws/vendedlogs/GenAiMetadata3dLabeling:*",
     "BEDROCK_MODEL_ID": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "BATCH_JOB_LOG_GROUP_NAME": "/aws/batch/job",
+    "BATCH_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+    "BATCH_JOB_DEFINITION_NAME": "BlenderRendererJobDefabc1234567",
+    "METADATA_GENERATION_LOG_GROUP_NAME": "/aws/lambda/vams-test-metadataGenerationPipeline",
+    "METADATA_GENERATION_LOG_GROUP_ARN":
+        "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/vams-test-metadataGenerationPipeline",
 }.items():
     os.environ.setdefault(k, v)
 
 import manifestHelper as mh  # noqa: E402
+
+
+def _repo_root():
+    """Walk up to the repo root rather than counting `..` segments — pipeline directories sit at
+    differing depths, and a miscounted relative path fails as a missing file."""
+    path = _LAMBDA_DIR
+    while path != os.path.dirname(path):
+        if os.path.isdir(os.path.join(path, "infra")) and os.path.isdir(
+                os.path.join(path, "backend", "backend", "common")):
+            return path
+        path = os.path.dirname(path)
+    raise RuntimeError("repo root not found from " + _LAMBDA_DIR)
+
+
+def _backend_validators():
+    """The backend's real validators module, so registered values are checked against the regexes
+    registerPipelineExecution applies rather than a copy of them. Appended to the END of sys.path so
+    nothing under backend/backend shadows this pipeline's own modules."""
+    backend_pkg = os.path.join(_repo_root(), "backend", "backend")
+    if backend_pkg not in sys.path:
+        sys.path.append(backend_pkg)
+    return importlib.import_module("common.validators")
 
 
 # ============================ vamsExecute ============================
@@ -303,6 +331,57 @@ class TestOpenPipeline:
             resp = mod.lambda_handler(self._event(), MagicMock())
         # Registration raised, but the pipeline start still succeeds.
         assert resp["statusCode"] == 200
+
+    def test_registers_a_log_source_for_the_batch_stage_and_the_lambda_stage(self):
+        mod = self._load()
+        start = self._mock_start()
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(self._event(), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "3D metadata labeling processing"
+        sfn_log, batch_log, lambda_log = detail["logs"]
+        assert sfn_log["sourceType"] == "stateMachine"
+        assert sfn_log["label"] == "3D metadata labeling state machine"
+        assert batch_log == {
+            "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+            "logGroupName": "/aws/batch/job",
+            "logStreamName": "",
+            "logStreamPrefix": "BlenderRendererJobDefabc1234567/default/",
+            "stageName": "BlenderRendererBatchJob",
+            "sourceType": "batch",
+            "label": "BlenderRendererBatchJob container",
+        }
+        assert lambda_log == {
+            "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/vams-test-metadataGenerationPipeline",
+            "logGroupName": "/aws/lambda/vams-test-metadataGenerationPipeline",
+            "logStreamName": "",
+            "logStreamPrefix": "",
+            "stageName": "MetadataGenerationLambdaFunctionTask",
+            "sourceType": "lambda",
+            "label": "MetadataGenerationLambdaFunctionTask function",
+        }
+        validators = _backend_validators()
+        for entry in (batch_log, lambda_log):
+            assert validators.validate_cloudwatch_log_group_arn("logGroupArn", entry["logGroupArn"])[0]
+        assert validators.validate_log_stream_name("logStreamPrefix", batch_log["logStreamPrefix"])[0]
+        assert not validators.validate_cloudwatch_log_group_arn(
+            "logGroupArn", "arn:aws:logs:us-east-1:123456789012:log-group//aws/batch/job")[0]
+
+    def test_each_stage_log_source_is_skipped_independently_when_unconfigured(self):
+        with patch.dict(os.environ):
+            for key in ("BATCH_JOB_LOG_GROUP_NAME", "BATCH_JOB_LOG_GROUP_ARN",
+                        "BATCH_JOB_DEFINITION_NAME"):
+                os.environ.pop(key, None)
+            mod = self._load()
+        start = self._mock_start()
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(self._event(), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert [log["sourceType"] for log in detail["logs"]] == ["stateMachine", "lambda"]
 
 
 # ============================ constructPipeline ============================

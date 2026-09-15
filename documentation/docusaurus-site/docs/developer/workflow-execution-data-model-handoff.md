@@ -95,7 +95,7 @@ only the specific failure message (the Step Functions error and cause) and is se
 terminal status.
 
 `executionError` is the broadly visible message. Full log retrieval is scoped to a separate, narrower
-route (`GET /workflows/executions/\{executionId\}/logs`), which the shipped Database User and read-only
+route (`GET /workflows/executions/{executionId}/logs`), which the shipped Database User and read-only
 permission templates deny; both fields are passed through log redaction before they leave the handler.
 
 ## Which record populates when
@@ -139,21 +139,45 @@ Treat them as reserved rather than as a data source.
 
 A pipeline step may report the lower-level resources it created — its Step Functions sub-execution and its
 CloudWatch log locations — by putting an event on the orchestration event bus under the source prefix
-`\{eventSourcePrefix\}.execution.\{executionId\}.pipeline.\{pipelineExecutionId\}` with the detail type
+`{eventSourcePrefix}.execution.{executionId}.pipeline.{pipelineExecutionId}` with the detail type
 `pipeline.execution.register`. A standing Amazon EventBridge rule routes the event to
 `registerPipelineExecution`, which appends the reported resources to the targeted pipeline row's
-`registeredSubExecutions` and `registeredLogs` lists.
+`registeredSubExecutions` and `registeredLogs` lists. The handler accepts an event only when its `Source`
+ends in `.pipeline.{pipelineExecutionId}` for the `pipelineExecutionId` the detail names, so a pipeline
+can attach resources to its own execution alone. Log entries are deduplicated by location — the log group
+(ARN without a trailing `:*`, or name), stream name, and stream prefix — and a redelivery that carries a
+`stageName`, `label`, or `sourceType` the stored entry lacks merges them in; at most 50 log entries and 50
+sub-executions are stored per row.
 
 Registration is optional and additive — it does not replace the task-token callback a pipeline already
 uses — but it is what makes two capabilities work:
 
 -   **Abort reaches inside a pipeline.** `abort_execution` stops each still-running step's registered
-    sub-processes before stopping the outer state machine. Each entry is typed by `resourceType`; Step
-    Functions executions are stopped, and any other type is registered but returns a non-fatal warning so
-    the caller knows the sub-process was left running.
+    sub-processes before stopping the outer state machine, and the error handler does the same for the
+    in-flight steps of a run that fails. Each entry is typed by `resourceType`; Step Functions executions,
+    AWS Batch jobs and AWS Deadline Cloud farm jobs are stopped, and any other type is registered but
+    returns a non-fatal warning so the caller knows the sub-process was left running.
 -   **Full-mode log retrieval finds the right log group.** Each `registeredLogs` entry carries
-    `logGroupArn`, `logGroupName`, `logStreamName` and `logStreamPrefix`, so a full-mode log read pulls from
-    the pipeline's own CloudWatch location rather than only the workflow log group.
+    `logGroupArn`, `logGroupName`, `logStreamName`, `logStreamPrefix`, `stageName`, `label`, and
+    `sourceType` (the last three are `""` when the producer did not send them; `sourceType` is one of
+    `stateMachine`, `lambda`, `batch`, `ecs`, `container`, `custom`), so a full-mode log read pulls from the
+    pipeline's own CloudWatch location rather than only the workflow log group. The details route lists every
+    entry — together with the step's derived invocation log and a registered sub-state-machine's logging
+    destination — as `availableLogs`, each with a `logId` (the first 16 hex characters of the SHA-256 of
+    the UTF-8 JSON array `[kind, logGroupArn without a trailing ":*", logStreamName, logStreamPrefix]`,
+    with `""` for an absent stream or prefix — `log_id()` in `common/workflows/availableLogs.py`, the only
+    place the encoding lives), and the logs route reports the same list with a read status as `logSources` and
+    reads one entry alone when given `logId`. An entry with an exact stream is read without
+    the execution-scope terms only when the stream starts with a prefix registered on the same pipeline
+    execution or was itself registered with that stream.
+-   **Stage status is derived, never stored.** `registeredSubExecutions` holds locators only. When a details
+    request carries `includeSubExecutions=true`, `executionService` describes the registered state machine
+    (memoised per invocation), walks its definition into an ordered stage frame, and attributes the execution
+    history's events to those stages to produce `subExecutions[].stages` with a status per stage. The reads
+    are bounded (definition ≤ 256 KiB, ≤ 50 stages, depth ≤ 3, ≤ 5 history pages per sub-execution and 20
+    per request) and best-effort — a Step Functions or AWS Batch error yields `UNKNOWN` plus a
+    `subExecutionWarnings` entry, never a failed request — and the CloudWatch `nextToken` of a logs request is
+    never passed to `get_execution_history`.
 
 ## Adding a read or write path
 
@@ -164,8 +188,8 @@ uses — but it is what makes two capabilities work:
    which sets the matching `*Truncated` flag and leaves the complete body in Amazon S3.
 3. Enforce both authorization tiers. Execution reads and aborts authorize through
    `authorize_execution_access`, which requires `GET` on the workflow, the matching action on every asset
-   the run read (or wrote to, for a run with no inputs), and `GET` on every database the run captured
-   metadata from.
+   the run read and on the asset it wrote to, and `GET` on every database the run captured metadata
+   from.
 4. Never return a partially populated collection without flagging it. Every response that bounds a
    collection names what it dropped in `truncatedCollections` so the caller can page the remainder through
-   `GET /workflows/executions/\{executionId\}/details/metadata`.
+   `GET /workflows/executions/{executionId}/details/metadata`.

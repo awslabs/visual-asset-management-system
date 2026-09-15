@@ -5,10 +5,40 @@
 
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
 import viewerConfig from "../config/viewerConfig.json";
+import { CompareContext } from "./compareShape";
+import {
+    admitsCompareSelection,
+    admitsVisualizeSelection,
+    availableViewerModes,
+    ViewerModeAvailability,
+} from "./viewerSelection";
 import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
 import { appCache } from "../../services/appCache";
 import { StylesheetManager } from "./StylesheetManager";
 import React from "react";
+
+// Compare classification lives in ./compareShape and the per-viewer admission predicates for both
+// selection paths in ./viewerSelection (pure, unit-testable); re-exported here so existing callers
+// keep importing them from the registry.
+export {
+    deriveCompareShape,
+    deriveCrossAsset,
+    deriveCompareContext,
+    admitsCompareShape,
+    seedCompareFromSingleFile,
+} from "./compareShape";
+export type { CompareShape, CompareContext } from "./compareShape";
+export {
+    admitsCompareSelection,
+    admitsVisualizeSelection,
+    isCompareOnlyViewer,
+    hasVisualizeViewer,
+    hasCompareViewer,
+    availableViewerModes,
+    compareContextForSelection,
+    LONE_FILE_COMPARE_CONTEXT,
+} from "./viewerSelection";
+export type { ViewerModeAvailability } from "./viewerSelection";
 
 export interface ViewerPlugin {
     config: ViewerPluginConfig;
@@ -21,6 +51,10 @@ export interface ViewerPluginMetadata {
     config: ViewerPluginConfig;
     isLoaded: boolean;
 }
+
+/** Which surface is asking for viewers. "visualize" is the default single/multi-file render path;
+ *  "compare" surfaces only compare-capable viewers. */
+export type ViewerMode = "visualize" | "compare";
 
 export class PluginRegistry {
     private static instance: PluginRegistry;
@@ -169,6 +203,9 @@ export class PluginRegistry {
 
             return allFeaturesEnabled;
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Error checking feature restrictions for plugin ${config.id}:`, error);
             return false;
         }
@@ -199,6 +236,9 @@ export class PluginRegistry {
             this.pluginMetadata.set(config.id, metadata);
             console.log(`Registered plugin metadata: ${config.name} (${config.id})`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Failed to register plugin metadata ${config.id}:`, error);
             // Don't throw here - continue with other plugins
         }
@@ -237,6 +277,9 @@ export class PluginRegistry {
                 try {
                     dependencyManager = await this.loadDependencyManager(config.dependencyManager);
                 } catch (error) {
+                    // Console logging only: a % specifier in the interpolated value can at most
+                    // garble this one log line; nothing is executed, stored or returned from it.
+                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     console.warn(`Failed to load dependency manager for ${config.id}:`, error);
                 }
             }
@@ -255,6 +298,9 @@ export class PluginRegistry {
             console.log(`Successfully loaded plugin: ${config.name} (${pluginId})`);
             return plugin;
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Failed to load plugin ${pluginId}:`, error);
             throw error;
         }
@@ -293,6 +339,9 @@ export class PluginRegistry {
 
             console.log(`Successfully unloaded plugin: ${pluginId}`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Error unloading plugin ${pluginId}:`, error);
             throw error;
         }
@@ -301,7 +350,9 @@ export class PluginRegistry {
     getCompatibleViewers(
         fileExtensions: string[],
         isMultiFile: boolean,
-        isPreview = false
+        isPreview = false,
+        mode: ViewerMode = "visualize",
+        compareContext?: CompareContext
     ): ViewerPluginMetadata[] {
         if (!this.initialized) {
             console.warn("PluginRegistry not initialized. Call initialize() first.");
@@ -315,7 +366,22 @@ export class PluginRegistry {
                 .sort((a, b) => a.config.priority - b.config.priority);
         }
 
-        // For non-preview mode, return all compatible viewer metadata EXCEPT preview viewers
+        // Compare mode: surface only viewers that opt in via compareMode.enabled and admit the
+        // current selection (file count window + same-key-versions vs distinct-keys gating). The
+        // visualize path below is untouched.
+        if (mode === "compare") {
+            return Array.from(this.pluginMetadata.values())
+                .filter((metadata) => {
+                    if (metadata.config.isPreviewViewer) {
+                        return false;
+                    }
+                    return admitsCompareSelection(metadata.config, fileExtensions, compareContext);
+                })
+                .sort((a, b) => a.config.priority - b.config.priority);
+        }
+
+        // For non-preview mode, return all compatible viewer metadata EXCEPT preview viewers and
+        // compare-only viewers (see admitsVisualizeSelection).
         return Array.from(this.pluginMetadata.values())
             .filter((metadata) => {
                 // Skip preview viewer for non-preview files
@@ -323,34 +389,33 @@ export class PluginRegistry {
                     return false;
                 }
 
-                return this.canHandle(metadata.config, fileExtensions, isMultiFile);
+                return admitsVisualizeSelection(metadata.config, fileExtensions, isMultiFile);
             })
             .sort((a, b) => a.config.priority - b.config.priority);
     }
 
-    private canHandle(
-        config: ViewerPluginConfig,
-        fileExtensions: string[],
-        isMultiFile: boolean
-    ): boolean {
-        // Check if viewer supports multi-file when needed
-        const multiFileSupport = !isMultiFile || config.supportsMultiFile;
-        if (!multiFileSupport) {
-            return false;
-        }
-
-        // Check if viewer supports any of the file extensions
-        const extensionMatch = fileExtensions.some(
-            (ext) =>
-                config.supportedExtensions.includes(ext.toLowerCase()) ||
-                config.supportedExtensions.includes("*") // Support wildcard for preview viewer
-        );
-
-        return extensionMatch;
-    }
-
     getViewer(id: string): ViewerPlugin | undefined {
         return this.plugins.get(id);
+    }
+
+    /**
+     * Which of the two host surfaces can open a selection, over the REGISTERED (enabled, feature-
+     * gated) viewers. This is what a Visualize/Compare toggle and the "View/Compare Selected"
+     * actions consult; it never offers a mode for which `getCompatibleViewers` would return nothing.
+     * A lone file is judged for compare as two versions of itself (see `availableViewerModes`), so
+     * a single text file offers both modes and the host seeds the pair.
+     * Reports both modes unavailable until `initialize()` has run.
+     */
+    getAvailableModes(
+        fileExtensions: string[],
+        isMultiFile: boolean,
+        compareContext?: CompareContext
+    ): ViewerModeAvailability {
+        if (!this.initialized) {
+            return { visualize: false, compare: false };
+        }
+        const configs = Array.from(this.pluginMetadata.values()).map((m) => m.config);
+        return availableViewerModes(configs, fileExtensions, isMultiFile, compareContext);
     }
 
     getViewerMetadata(id: string): ViewerPluginMetadata | undefined {
@@ -445,6 +510,9 @@ export class PluginRegistry {
                     this.unloadPluginSync(plugin.config.id);
                 }
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error cleaning up plugin ${plugin.config.id}:`, error);
             }
         });
@@ -491,6 +559,9 @@ export class PluginRegistry {
 
             console.log(`Successfully unloaded plugin (sync): ${pluginId}`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Error unloading plugin ${pluginId}:`, error);
         }
     }

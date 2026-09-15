@@ -41,6 +41,13 @@ os.environ['AUTH_TABLE_NAME'] = 'example-auth-table'
 os.environ['CONSTRAINTS_TABLE_NAME'] = 'test-constraint-table'
 os.environ['USER_ROLES_TABLE_NAME'] = 'example-user-roles-table'
 
+# The subscription handlers resolve these at module load and RAISE when they cannot, so the test
+# environment has to supply them or importing any of the three fails at collection. The break-glass env
+# override is the documented path for pytest (backend/CLAUDE.md Rule 10 resolution order); without it a
+# handler that correctly fails closed is indistinguishable from one that is broken.
+os.environ['SUBSCRIPTIONS_STORAGE_TABLE_NAME'] = 'subscriptionsStorageTable'
+os.environ['USER_STORAGE_TABLE_NAME'] = 'userStorageTable'
+
 # Pipeline/workflow V2 data-model tables (break-glass env overrides so V2 handlers resolve test
 # names without an SSM call at import).
 os.environ['PIPELINE_STORAGE_TABLE_V2_NAME'] = 'pipelineStorageTableV2'
@@ -121,6 +128,13 @@ common_log_redaction_early = import_module_from_path_early(
     os.path.join(os.path.dirname(__file__), 'backend', 'common', 'logRedaction.py')
 )
 sys.modules['common.logRedaction'] = common_log_redaction_early
+
+# tagScope is imported at module level by the tag/tagType handlers.
+common_tag_scope_early = import_module_from_path_early(
+    'common.tagScope',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'tagScope.py')
+)
+sys.modules['common.tagScope'] = common_tag_scope_early
 
 # Set up mock imports
 import pytest
@@ -225,6 +239,13 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'syncTracking.py')
     )
     sys.modules['common.syncTracking'] = sync_tracking_module
+
+    # tagScope is a real module (tag/tag-type scope helpers); load it
+    tag_scope_module = import_module_from_path(
+        'common.tagScope',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'tagScope.py')
+    )
+    sys.modules['common.tagScope'] = tag_scope_module
 
     # common.auth modules are pure logic with no AWS state dependencies - load real modules
     auth_pkg_module = import_module_from_path(

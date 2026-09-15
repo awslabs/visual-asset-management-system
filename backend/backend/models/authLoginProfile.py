@@ -12,7 +12,7 @@ logger = safeLogger(service_name="AuthLoginProfileModels")
 
 class UpdateLoginProfileRequestModel(BaseModel, extra='ignore'):
     """Optional request body for POST /auth/loginProfile/{userId}."""
-    email: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
+    email: Optional[str] = Field(None, max_length=256)
 
     @root_validator
     def validate_fields(cls, values):

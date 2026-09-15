@@ -178,9 +178,20 @@ class ApiClient {
                 throw await parseErrorResponse(response);
             }
             if (response.status === 401 || response.status === 403) {
-                const alive = await ensureValidSession();
+                // A 401 is the authorizer rejecting the token, so force a refresh before
+                // judging the session: the token can be valid when the header is built and
+                // expired by the time the authorizer validates it (clock skew, slow request),
+                // in which case the locally stored expiry still reads as valid. A 403 is a
+                // Casbin decision on an accepted token, so never refresh for it.
+                const forceRefresh = response.status === 401 && !retried;
+                const alive = await ensureValidSession(forceRefresh);
                 if (!alive) {
                     logoutExpired();
+                } else if (forceRefresh) {
+                    // Re-issue once through request() so the Authorization header is rebuilt
+                    // from the refreshed token rather than replaying the rejected one. Safe to
+                    // repeat any verb: a 401 means the handler never ran.
+                    return this.request(method, path, options, true);
                 }
                 // Alive: a real Casbin permission denial — fall through and surface it.
             }

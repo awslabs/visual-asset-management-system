@@ -38,10 +38,35 @@ for k, v in {
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
     "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/SplatToolbox",
     "STATE_MACHINE_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:1:log-group:/aws/vendedlogs/SplatToolbox:*",
+    "BATCH_JOB_LOG_GROUP_NAME": "/aws/batch/job",
+    "BATCH_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+    "BATCH_JOB_DEFINITION_NAME": "SplatToolboxGpuJob-vams_vams-test",
 }.items():
     os.environ.setdefault(k, v)
 
 import manifestHelper as mh  # noqa: E402
+
+
+def _repo_root():
+    """Walk up to the repo root rather than counting `..` segments — pipeline directories sit at
+    differing depths, and a miscounted relative path fails as a missing file."""
+    path = _LAMBDA_DIR
+    while path != os.path.dirname(path):
+        if os.path.isdir(os.path.join(path, "infra")) and os.path.isdir(
+                os.path.join(path, "backend", "backend", "common")):
+            return path
+        path = os.path.dirname(path)
+    raise RuntimeError("repo root not found from " + _LAMBDA_DIR)
+
+
+def _backend_validators():
+    """The backend's real validators module, so registered values are checked against the regexes
+    registerPipelineExecution applies rather than a copy of them. Appended to the END of sys.path so
+    nothing under backend/backend shadows this pipeline's own modules."""
+    backend_pkg = os.path.join(_repo_root(), "backend", "backend")
+    if backend_pkg not in sys.path:
+        sys.path.append(backend_pkg)
+    return importlib.import_module("common.validators")
 
 
 # ============================ vamsExecute ============================
@@ -231,6 +256,47 @@ class TestOpenPipeline:
             resp = mod.lambda_handler(self._event(), MagicMock())
         assert resp["statusCode"] == 200
 
+    def test_registers_the_batch_container_log_source_for_its_stage(self):
+        mod = self._load()
+        start = self._mock_start()
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(self._event(), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "Splat Toolbox processing"
+        sfn_log, batch_log = detail["logs"]
+        assert sfn_log["sourceType"] == "stateMachine"
+        assert sfn_log["label"] == "Splat Toolbox state machine"
+        assert batch_log == {
+            "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+            "logGroupName": "/aws/batch/job",
+            "logStreamName": "",
+            "logStreamPrefix": "SplatToolboxGpuJob-vams_vams-test/default/",
+            "stageName": "SplatToolboxBatchJob",
+            "sourceType": "batch",
+            "label": "SplatToolboxBatchJob container",
+        }
+        validators = _backend_validators()
+        assert validators.validate_cloudwatch_log_group_arn("logGroupArn", batch_log["logGroupArn"])[0]
+        assert validators.validate_log_stream_name("logStreamPrefix", batch_log["logStreamPrefix"])[0]
+        assert not validators.validate_cloudwatch_log_group_arn(
+            "logGroupArn", "arn:aws:logs:us-east-1:123456789012:log-group//aws/batch/job")[0]
+
+    def test_container_log_source_is_skipped_when_the_batch_env_is_absent(self):
+        with patch.dict(os.environ):
+            for key in ("BATCH_JOB_LOG_GROUP_NAME", "BATCH_JOB_LOG_GROUP_ARN",
+                        "BATCH_JOB_DEFINITION_NAME"):
+                os.environ.pop(key, None)
+            mod = self._load()
+        start = self._mock_start()
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(self._event(), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert [log["sourceType"] for log in detail["logs"]] == ["stateMachine"]
+
 
 # ============================ constructPipeline ============================
 
@@ -252,9 +318,7 @@ class TestConstructPipeline:
             "inputConfigurationS3Location": "s3://abkt/.../config.json",
             "externalSfnTaskToken": "tok",
         }
-        with patch.object(mod.s3_client, "head_object", side_effect=Exception("no lock")), \
-                patch.object(mod.s3_client, "put_object", MagicMock()):
-            out = mod.lambda_handler(event, MagicMock())
+        out = mod.lambda_handler(event, MagicMock())
         assert out["inputMetadataS3Location"] == "s3://abkt/.../metadata.json"
         assert out["inputConfigurationS3Location"] == "s3://abkt/.../config.json"
         assert "inputMetadata" not in out
@@ -287,8 +351,8 @@ class TestContainerReadsFromS3:
         spec.loader.exec_module(module)
         return module, container_root
 
-    def test_set_config_parameters_metadata_priority_and_filtering(self):
-        mod, container_root = self._container_main()
+    def test_set_config_parameters_metadata_priority_and_filtering(self, monkeypatch, tmp_path):
+        mod, _container_root = self._container_main()
         captured = {}
 
         class FakeEnv(dict):
@@ -296,18 +360,19 @@ class TestContainerReadsFromS3:
                 captured[k] = v
                 dict.__setitem__(self, k, v)
 
+        # set_config_parameters reads 'config.json' relative to cwd, which in the image is the
+        # upstream-staged copy under CODE_PATH. Supply the keys this test declares rather than
+        # depending on a repo file.
+        (tmp_path / "config.json").write_text(
+            json.dumps({"MODEL": "splatfacto", "MAX_NUM_IMAGES": "300"}), encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
         real = mod.os.environ
         mod.os.environ = FakeEnv(real)
         try:
-            # cwd must hold config.json (container root); set_config_parameters opens 'config.json'.
-            cwd = os.getcwd()
-            os.chdir(container_root)
-            try:
-                mod.set_config_parameters(
-                    {"MAX_NUM_IMAGES": 100, "NOT_A_KEY": "x"},
-                    {"MODEL": "splatfacto-big", "MAX_NUM_IMAGES": 500})
-            finally:
-                os.chdir(cwd)
+            mod.set_config_parameters(
+                {"MAX_NUM_IMAGES": 100, "NOT_A_KEY": "x"},
+                {"MODEL": "splatfacto-big", "MAX_NUM_IMAGES": 500})
         finally:
             mod.os.environ = real
         assert captured.get("MODEL") == "splatfacto-big"

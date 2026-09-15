@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import ModelTree from "./components/ModelTree";
 import Properties from "./components/Properties";
 import Tools from "./components/Tools";
@@ -32,14 +32,38 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
 }) => {
     // Tools is the default tab (camera + section + measure are the most-used).
     const [activeTab, setActiveTab] = useState<TabKey>("tools");
+    const tabRefs = useRef<Partial<Record<TabKey, HTMLButtonElement | null>>>({});
 
     if (!instance?.components || !instance?.world) {
         return null;
     }
 
+    const tabOrder: TabKey[] = ["modelTree", "properties", "tools"];
+
+    // Left/Right move between tabs and activate, per the ARIA tabs pattern.
+    const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, key: TabKey) => {
+        const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+        if (delta === 0) return;
+        event.preventDefault();
+        const index = tabOrder.indexOf(key);
+        const next = tabOrder[(index + delta + tabOrder.length) % tabOrder.length];
+        setActiveTab(next);
+        tabRefs.current[next]?.focus();
+    };
+
     const tabButton = (key: TabKey, icon: string, label: string, color: string) => (
         <button
+            type="button"
+            role="tab"
+            id={`thatopenwebifc-tab-${key}`}
+            aria-selected={activeTab === key}
+            aria-controls={`thatopenwebifc-tabpanel-${key}`}
+            tabIndex={activeTab === key ? 0 : -1}
+            ref={(el) => {
+                tabRefs.current[key] = el;
+            }}
             onClick={() => setActiveTab(key)}
+            onKeyDown={(event) => handleTabKeyDown(event, key)}
             style={{
                 flex: 1,
                 minWidth: "70px",
@@ -59,7 +83,9 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
             }}
             title={label}
         >
-            <span style={{ fontSize: "1.4em", lineHeight: 1 }}>{icon}</span>
+            <span style={{ fontSize: "1.4em", lineHeight: 1 }} aria-hidden="true">
+                {icon}
+            </span>
             <span>{label}</span>
         </button>
     );
@@ -93,6 +119,7 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
             >
                 {onClose && (
                     <button
+                        type="button"
                         onClick={onClose}
                         style={{
                             background: "none",
@@ -103,11 +130,16 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
                             padding: "16px 12px",
                         }}
                         title="Hide panel (Esc)"
+                        aria-label="Hide panel"
                     >
-                        ×
+                        <span aria-hidden="true">×</span>
                     </button>
                 )}
-                <div style={{ display: "flex", flex: 1, overflowX: "auto" }}>
+                <div
+                    style={{ display: "flex", flex: 1, overflowX: "auto" }}
+                    role="tablist"
+                    aria-label="IFC viewer panels"
+                >
                     {tabButton("modelTree", "🌳", "Model", "#4CAF50")}
                     {tabButton("properties", "📋", "Properties", "#FF9800")}
                     {tabButton("tools", "⚙️", "Tools", "#2196F3")}
@@ -123,6 +155,9 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
                         flexDirection: "column",
                         overflow: "hidden",
                     }}
+                    role="tabpanel"
+                    id="thatopenwebifc-tabpanel-modelTree"
+                    aria-labelledby="thatopenwebifc-tab-modelTree"
                 >
                     <ModelTree
                         instance={instance}
@@ -133,12 +168,22 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
                 </div>
             )}
             {activeTab === "properties" && (
-                <div style={{ flex: 1, overflowY: "auto", padding: "16px" }}>
+                <div
+                    style={{ flex: 1, overflowY: "auto", padding: "16px" }}
+                    role="tabpanel"
+                    id="thatopenwebifc-tabpanel-properties"
+                    aria-labelledby="thatopenwebifc-tab-properties"
+                >
                     <Properties selectedElement={selectedElement} />
                 </div>
             )}
             {activeTab === "tools" && (
-                <div style={{ flex: 1, overflowY: "auto", padding: "16px" }}>
+                <div
+                    style={{ flex: 1, overflowY: "auto", padding: "16px" }}
+                    role="tabpanel"
+                    id="thatopenwebifc-tabpanel-tools"
+                    aria-labelledby="thatopenwebifc-tab-tools"
+                >
                     <Tools instance={instance} bundle={bundle} />
                 </div>
             )}

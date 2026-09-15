@@ -9,9 +9,14 @@ Determines which extractor to use based on file extension.
 import os
 from typing import Dict, Callable, Any, Optional
 
-# Define supported formats
+# Define supported formats. Every mesh format listed is one trimesh loads with the container's
+# pinned dependencies (requirements.txt): COLLADA (`.dae`) needs pycollada and `.3mf` / `.xaml` /
+# `.3dxml` need lxml and networkx, and with none of those installed trimesh registers an exception
+# wrapper in place of each loader. CADQuery's own dependency closure supplies neither pair. The
+# registered inputFileFilters in vamsSchema/pipeline.json and the workflow trigger declare this same
+# list to VAMS.
 CAD_FORMATS = ['.step', '.stp', '.dxf']
-MESH_FORMATS = ['.stl', '.obj', '.ply', '.gltf', '.glb', '.3mf', '.xaml', '.3dxml', '.dae', '.xyz']
+MESH_FORMATS = ['.stl', '.obj', '.ply', '.gltf', '.glb', '.xyz']
 SUPPORTED_FORMATS = CAD_FORMATS + MESH_FORMATS
 
 def get_handler_for_format(file_path: str) -> Optional[str]:

@@ -248,21 +248,23 @@ class TestListValuedRegexOperatorsOnSingleValuedFields:
 @pytest.mark.unit
 class TestSingleStringValuesAreUnchanged:
     """POSITIVE CONTROL for the whole change. The shipped ``deny-tagged-assets.json`` template and
-    every seeded constraint use a single STRING value, so the emitted rule text for a scalar must be
-    exactly what it was -- the expansion is additive."""
+    every seeded constraint use a single STRING value, so a scalar must still compare exactly one
+    alternative -- the expansion is additive. The rule text is pinned exactly, in the bracketed form
+    the generator emits for every clause (see ``test_constraint_comma_value``): the value itself is
+    interpolated verbatim and only the enclosing group is added."""
 
     @pytest.mark.parametrize("operator,expected", [
-        ("equals", "regexMatch(r.obj.assetName, '^Secret\\\\Z')"),
-        ("contains", "regexMatch(r.obj.assetName, '(?s:.*)Secret(?s:.*)')"),
+        ("equals", "(regexMatch(r.obj.assetName, '^Secret\\\\Z'))"),
+        ("contains", "(regexMatch(r.obj.assetName, '(?s:.*)Secret(?s:.*)'))"),
         ("does_not_contain", "!(regexMatch(r.obj.assetName, '(?s:.*)Secret(?s:.*)'))"),
-        ("starts_with", "regexMatch(r.obj.assetName, '^Secret.*')"),
-        ("ends_with", "regexMatch(r.obj.assetName, '(?s:.*)Secret\\\\Z')"),
+        ("starts_with", "(regexMatch(r.obj.assetName, '^Secret.*'))"),
+        ("ends_with", "(regexMatch(r.obj.assetName, '(?s:.*)Secret\\\\Z'))"),
     ])
     def test_scalar_regex_operator_rule_text_is_exact(self, operator, expected):
         assert _rule("assetName", operator, "Secret") == expected
 
-    def test_scalar_membership_rule_text_is_a_bare_membership_test(self):
-        assert _rule("tags", "is_one_of", "locked") == "'locked' in r.obj.tags"
+    def test_scalar_membership_rule_text_is_a_bracketed_membership_test(self):
+        assert _rule("tags", "is_one_of", "locked") == "('locked' in r.obj.tags)"
 
     def test_scalar_negated_membership_scopes_the_negation_to_the_membership_test(self):
         """The negation must apply to the membership test and nothing else, which is what the
@@ -273,7 +275,8 @@ class TestSingleStringValuesAreUnchanged:
         assert _decide(rule, tags=["locked"]) is False
 
     def test_a_single_element_list_emits_the_same_rule_as_the_scalar(self):
-        """A one-element list is the scalar case, so it must not acquire a wrapper group."""
+        """A one-element list is the scalar case, so it must emit one alternative and nothing
+        more -- the same text, not a nested group."""
         for operator in ("equals", "contains", "starts_with", "ends_with", "is_one_of"):
             assert _rule("assetName", operator, ["Secret"]) == _rule(
                 "assetName", operator, "Secret"), operator

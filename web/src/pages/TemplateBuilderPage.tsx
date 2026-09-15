@@ -8,6 +8,7 @@ import { useParams } from "react-router-dom";
 import TemplateForm, {
     TemplateFormEditLoader,
 } from "../features/orchestration/pipelines/TemplateForm";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 /** Full-page create/edit Template wizard. */
 const TemplateBuilderPage: React.FC = () => {
@@ -17,10 +18,14 @@ const TemplateBuilderPage: React.FC = () => {
         templateId?: string;
     }>();
 
+    usePageTitle(databaseId, "Templates", templateId ? "Edit Template" : "Create Template");
+
     if (!databaseId || !pipelineId) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
-                <p className="text-vams-error text-xl">Missing database or pipeline ID</p>
+                <p role="alert" className="text-vams-error text-xl">
+                    Missing database or pipeline ID
+                </p>
             </div>
         );
     }

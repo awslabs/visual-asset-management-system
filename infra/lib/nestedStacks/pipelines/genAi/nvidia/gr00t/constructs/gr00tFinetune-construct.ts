@@ -9,6 +9,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as batch from "aws-cdk-lib/aws-batch";
@@ -28,12 +29,14 @@ import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as ServiceHelper from "../../../../../../helper/service-helper";
 import { Service } from "../../../../../../helper/service-helper";
+import { jobDefinitionNameFromRef } from "../../../../../../helper/batchJobLogGroup";
 import * as s3AssetBuckets from "../../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../../config/config";
 import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
-    kmsKeyPolicyStatementGenerator,
     grantExternalAssetBucketKmsKeys,
+    kmsKeyPolicyStatementGenerator,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
 import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
@@ -81,6 +84,17 @@ export class Gr00tFinetuneConstruct extends Construct {
          */
         const hfTokenSecret = new secretsmanager.Secret(this, "Gr00tHfTokenSecret", {
             description: "HuggingFace API token for downloading NVIDIA Gr00t models",
+            // Imported by ARN, not passed as the key object: the grants CDK derives from
+            // grantRead/grantWrite then land only on each grantee's own policy. Passing the object
+            // writes those grantees into the key's resource policy, which makes the storage stack
+            // that owns the key reference this pipeline stack and forms a circular dependency.
+            encryptionKey: props.storageResources.encryption.kmsKey
+                ? kms.Key.fromKeyArn(
+                      this,
+                      "HfTokenSecretKmsKeyRef",
+                      props.storageResources.encryption.kmsKey.keyArn
+                  )
+                : undefined,
         });
 
         populateHuggingFaceTokenSecret(
@@ -240,15 +254,8 @@ export class Gr00tFinetuneConstruct extends Construct {
          * Batch Compute Environment
          * GPU-accelerated compute for Gr00t fine-tuning
          */
-        const batchServiceRole = new iam.Role(this, "BatchServiceRole", {
-            assumedBy: new iam.ServicePrincipal("batch.amazonaws.com"),
-            managedPolicies: [
-                iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSBatchServiceRole"),
-            ],
-        });
-
         const instanceRole = new iam.Role(this, "BatchInstanceRole", {
-            assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
+            assumedBy: Service("EC2").Principal,
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonEC2ContainerServiceforEC2Role"
@@ -316,7 +323,15 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                         },
                     },
                 ],
-                userData: Buffer.from(userData).toString("base64"),
+                // Encoded by CloudFormation, not here: this string carries CDK tokens -- the EFS file
+                // system id among them -- and Buffer.from() freezes a token as its DEBUG TEXT, because a
+                // base64 blob is opaque to the resolver that runs afterwards. The deployed template read
+                // "mount -t efs -o tls ${Token[TOKEN.NNNN]}:/ /mnt/efs/cosmos-models", which bash parses as
+                // an array subscript ("invalid arithmetic operator") and which aborts the whole
+                // scripts-user module, skipping every later line too. So the model cache was never mounted
+                // and every run restored its weights from S3 on billed GPU time. Fn.base64 emits
+                // Fn::Base64, so the encoding happens after token resolution.
+                userData: cdk.Fn.base64(userData),
                 tagSpecifications: [
                     {
                         resourceType: "instance",
@@ -331,15 +346,32 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             },
         });
 
-        const batchEnvironment = new batch.CfnComputeEnvironment(this, "Gr00tOnDemandComputeEnv", {
+        const batchEnvironment = new batch.CfnComputeEnvironment(this, "Gr00tGpuComputeEnv", {
             // No explicit name - let CDK auto-generate to allow CloudFormation replacements
             // when instance types change (custom-named resources can't be replaced in-place)
             type: "MANAGED",
             state: "ENABLED",
-            serviceRole: batchServiceRole.roleArn,
+            // No serviceRole, so this environment uses the Batch service-linked role
+            // (AWSServiceRoleForBatch). Naming a role instead is what forbids an in-place update of the
+            // launch template, instance types, subnets or security groups -- Batch allows those fields to
+            // be updated "only for ... Compute Environment having a Batch Service Linked Role" -- which
+            // left this environment unable to take a change to its instance start-up script at all.
+            //
+            // Safe to ship to an existing deployment only because the construct id changed in the same
+            // release: that makes the upgrade a CREATE of this resource and a DELETE of the old one rather
+            // than an update, so replaceComputeEnvironment does not have to permit the one replacement the
+            // upgrade needs. An environment still naming a service role can be neither updated in place nor
+            // migrated to the service-linked role, so this property without the rename fails the upgrade.
+            replaceComputeEnvironment: false,
             computeResources: {
                 type: "EC2",
                 allocationStrategy: "BEST_FIT_PROGRESSIVE",
+                // Each infrastructure update takes the current ECS-optimised AMI rather than staying on
+                // the one that was current when this environment was created, which matters on a GPU image
+                // carrying drivers. It is also the fourth condition CloudFormation names for updating a
+                // compute environment in place, alongside no serviceRole, a progressive allocation strategy
+                // and replaceComputeEnvironment.
+                updateToLatestImageVersion: true,
                 minvCpus: minVCpus,
                 maxvCpus: maxVCpus * 2, // Allow headroom for concurrent jobs
                 desiredvCpus: minVCpus,
@@ -354,7 +386,13 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                 instanceRole: instanceProfile.attrArn,
                 launchTemplate: {
                     launchTemplateId: launchTemplate.ref,
-                    version: "$Latest",
+                    // Pinned to this template's own latest version, not "$Latest". Batch does not read
+                    // the launch template when an instance launches: it MERGES it with its own bootstrap
+                    // into a Batch-managed copy when the compute environment is created or updated.
+                    // "$Latest" is a constant, so a new template version is not a change to the
+                    // environment -- CloudFormation updates nothing and Batch goes on handing instances a
+                    // stale merge, which is how the encoding fix above reached no instance at all.
+                    version: launchTemplate.attrLatestVersionNumber,
                 },
             },
         });
@@ -542,10 +580,6 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
         /**
          * Step Functions State Machine
          */
-        const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
-            lambdaFunction: constructPipelineFunction,
-            outputPath: "$.Payload",
-        });
 
         const successState = new sfn.Succeed(this, "SuccessState", {
             comment: "Gr00t Finetune pipeline returned SUCCESS",
@@ -570,6 +604,23 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             resultPath: "$",
         }).next(pipeLineEndTask);
 
+        // error handler passthrough - Construct Pipeline Lambda.
+        //
+        // Without it a failure in the FIRST state ends the execution before PipelineEndTask runs, and
+        // PipelineEndTask is the only state that resolves the parent workflow's task token. The parent's
+        // waitForCallback task then stays RUNNING for its whole taskTimeout — eight hours on these
+        // pipelines — for a job that failed in under a second.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipeLineEndTask);
+
+        const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
+            lambdaFunction: constructPipelineFunction,
+            outputPath: "$.Payload",
+        }).addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
+
         const batchJob = new tasks.BatchSubmitJob(this, "Gr00tBatchJob", {
             jobName: sfn.JsonPath.stringAt("$.jobName"),
             jobDefinitionArn: batchJobDefinition.attrJobDefinitionArn,
@@ -592,6 +643,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
         const sfnDefinition = sfn.Chain.start(constructPipelineTask.next(batchJob));
 
         const stateMachineLogGroup = new logs.LogGroup(this, "Gr00tFinetune-LogGroup", {
+            encryptionKey: props.storageResources.encryption.kmsKey,
             logGroupName:
                 `/aws/vendedlogs/VAMSstateMachine-Gr00tFinetune` +
                 generateUniqueNameHash(
@@ -600,7 +652,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     "Gr00tFinetune-StateMachineLogGroup",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: RemovalPolicy.DESTROY,
         });
 
@@ -644,6 +696,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             props.config,
             props.vpc,
             props.pipelineSubnets,
+            { jobDefinitionName: jobDefinitionNameFromRef(batchJobDefinition.ref) },
             props.storageResources.encryption.kmsKey
         );
 
@@ -727,7 +780,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -743,7 +796,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*Gr00tFinetune.*StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*Gr00tFinetune.*StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -759,7 +812,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -775,7 +828,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*vamsExecuteGr00t.*Pipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecuteGr00t.*Pipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -788,7 +841,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies for ECS task execution and X-Ray tracing",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -803,22 +856,11 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies for ECS task execution and X-Ray tracing",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
                     reason: "ECS Containers require access to objects in asset buckets, model cache, and EFS for Gr00t model weights",
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            batchServiceRole,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for AWS Batch Service uses AWSBatchServiceRole managed policy which is required for batch operations",
                 },
             ],
             true

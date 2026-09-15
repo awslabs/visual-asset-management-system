@@ -28,6 +28,9 @@ moto = "5.1.0"
 pytest-watch = "4.2.0"
 mypy = "1.0"
 boto3 = "1.43.45"
+geojson = "3.2.0"
+joserfc = "1.7.2"
+pyjwt = { extras = ["crypto"], version = "2.13.0" }
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

@@ -107,6 +107,14 @@ def mock_env(monkeypatch):
     """Patch claims, Casbin, audit logging, and the DynamoDB tables."""
     claims = {"tokens": [USER], "roles": ["someRole"], "mfaEnabled": False}
     table = MagicMock()
+    # Both readers must return a real dict, not a bare Mock. The handler pages to exhaustion on
+    # `LastEvaluatedKey` (backend/CLAUDE.md Rule 14), and a MagicMock's `.get()` answers every key
+    # with a truthy Mock — so an unstubbed reader makes the paging loop run forever and the test
+    # hangs rather than failing. `query` is the one the user-scoped listing uses via the userId GSI;
+    # each test overrides `Items` and neither ever sets `LastEvaluatedKey`, which is what terminates
+    # the loop after one page.
+    table.query.return_value = {'Items': []}
+    table.scan.return_value = {'Items': []}
     roles_table = MagicMock()
     roles_table.query.return_value = {'Items': [{'userId': USER, 'roleName': 'someRole'}]}
     enforcer = MagicMock()
@@ -121,17 +129,90 @@ def mock_env(monkeypatch):
         yield {'table': table, 'roles_table': roles_table}
 
 
+def _key_condition(condition):
+    """(attribute name, operator, value) for a boto3 KeyConditionExpression."""
+    expression = condition.get_expression()
+    return expression['values'][0].name, expression['operator'], expression['values'][1]
+
+
 @pytest.mark.unit
 class TestUserScopeList:
-    def test_list_filters_to_own_keys(self, mock_env):
+    def test_list_reads_only_the_callers_own_keys_from_the_userid_index(self, mock_env):
+        """Ownership is a key condition, not a Python filter (S2-BACKEND-090).
+
+        The user-scoped listing queries the ``userIdIndex`` GSI on the caller's userId, so
+        another user's key is absent because it was never read — not because it was fetched
+        and then dropped. The other user's key is staged in the ``scan`` response on purpose:
+        if the listing still went through a table-wide scan, that row would come back.
+        """
+        mock_env['table'].query.return_value = {'Items': [_own_key_item()]}
         mock_env['table'].scan.return_value = {'Items': [_own_key_item(), _other_key_item()]}
+
         response = lambda_handler(_make_event('GET', '/auth/user/api-keys'), {})
+
         assert response['statusCode'] == 200
         body = json.loads(response['body'])
         items = body['message']['Items'] if 'message' in body else body['Items']
-        assert len(items) == 1
-        assert items[0]['apiKeyId'] == KEY_ID_OWN
+        # Positive control: the caller does get their own key back, hash stripped.
+        assert [item['apiKeyId'] for item in items] == [KEY_ID_OWN]
         assert 'apiKeyHash' not in items[0]
+
+        query_kwargs = mock_env['table'].query.call_args[1]
+        assert query_kwargs['IndexName'] == 'userIdIndex'
+        assert _key_condition(query_kwargs['KeyConditionExpression']) == ('userId', '=', USER)
+        # The other user's row was reachable only through the scan, which must not run.
+        mock_env['table'].scan.assert_not_called()
+
+    def test_a_foreign_row_from_the_index_is_still_excluded(self, mock_env):
+        """Defense in depth behind the key condition (S2-BACKEND-090).
+
+        The key condition is what makes another user's key absent, and this is the second line:
+        a wrong IndexName, a projection change, or a later edit to the read must not be able to
+        put someone else's key into a self-service response. Staged as the index returning a row
+        it should never return, which is the only way that failure can arrive here.
+        """
+        mock_env['table'].query.return_value = {
+            'Items': [_own_key_item(), _other_key_item()]}
+
+        response = lambda_handler(_make_event('GET', '/auth/user/api-keys'), {})
+
+        assert response['statusCode'] == 200
+        body = json.loads(response['body'])
+        items = body['message']['Items'] if 'message' in body else body['Items']
+        # Positive control: the row that IS the caller's survived the same filter.
+        assert [item['apiKeyId'] for item in items] == [KEY_ID_OWN]
+
+    def test_user_scope_list_denies_when_no_identity_is_established(self, mock_env):
+        """An empty token list leaves the owner unknown, so no key may be read.
+
+        Called on ``list_api_keys`` directly, not through ``lambda_handler``: the Tier-1 check
+        already rejects an empty token list, so a handler-level assertion would pass without
+        this guard existing at all.
+        """
+        mock_env['table'].query.return_value = {'Items': [_own_key_item()]}
+
+        with patch.object(apiKeyService, 'claims_and_roles',
+                          {'tokens': [], 'roles': [], 'mfaEnabled': False}):
+            response = apiKeyService.list_api_keys(
+                _make_event('GET', '/auth/user/api-keys'), user_scope=True)
+
+        assert response['statusCode'] == 403
+        mock_env['table'].query.assert_not_called()
+        mock_env['table'].scan.assert_not_called()
+
+    def test_user_scope_list_returns_keys_when_an_identity_is_established(self, mock_env):
+        """Control for the denial above: the same call with a caller present succeeds."""
+        mock_env['table'].query.return_value = {'Items': [_own_key_item()]}
+
+        with patch.object(apiKeyService, 'claims_and_roles',
+                          {'tokens': [USER], 'roles': ['someRole'], 'mfaEnabled': False}):
+            response = apiKeyService.list_api_keys(
+                _make_event('GET', '/auth/user/api-keys'), user_scope=True)
+
+        assert response['statusCode'] == 200
+        body = json.loads(response['body'])
+        items = body['message']['Items'] if 'message' in body else body['Items']
+        assert [item['apiKeyId'] for item in items] == [KEY_ID_OWN]
 
     def test_admin_list_unchanged_returns_all(self, mock_env):
         """Backwards compatibility: the admin route still returns every key."""

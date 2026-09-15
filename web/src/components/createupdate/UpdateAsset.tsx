@@ -3,11 +3,13 @@ import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
 import Synonyms from "../../synonyms";
+import { buildTagOptionGroups } from "../../common/utils/tagOptions";
 import Input from "@cloudscape-design/components/input";
 import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
-import { fetchTags, fetchtagTypes, updateAsset } from "../../services/APIService";
+import { fetchTagsForAsset, fetchTagTypesForAsset, updateAsset } from "../../services/APIService";
 import { fetchComplianceSchemas, bindSchemaToAsset, unbindSchemaFromAsset } from "../../services/ComplianceService";
 import { appCache } from "../../services/appCache";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
@@ -15,6 +17,7 @@ import { TagType } from "../../pages/Tag/TagType.interface";
 import {
     validateRequiredTagTypeSelected,
     validateNonZeroLengthTextAsYouType,
+    enforceableRequiredTagTypes,
 } from "../../pages/AssetUpload/validations";
 
 interface UpdateAssetProps {
@@ -71,6 +74,11 @@ const update = async (
 };
 
 export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
+    const { databaseId: routeDatabaseId } = useParams<{ databaseId: string }>();
+    // The scope the tag-type constraint is read for: the asset's own database, or the route's when
+    // the record in hand does not carry one. Never the unscoped list — that surfaces every other
+    // database's required tag types as constraints on this form.
+    const tagScopeDatabaseId = asset?.databaseId || routeDatabaseId;
     const [assetDetail, setAssetDetail] = useState(asset);
     const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
@@ -103,45 +111,17 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
 
     useEffect(() => {
         setAssetDetail(asset);
-        fetchTags().then((res) => {
+        // Scope to global + the asset's database so tags from other databases are hidden.
+        if (!tagScopeDatabaseId) return;
+        fetchTagsForAsset({ databaseId: tagScopeDatabaseId }).then((res) => {
             tags.length = 0; // Clear without losing reference
             if (res && Array.isArray(res)) {
-                const grouped: Record<
-                    string,
-                    { tagTypeName: string; required: string; tagItems: any[] }
-                > = {};
+                // Grouped, scope-labelled and ordered by the shared helper so this picker and the
+                // upload form present tags identically.
                 const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
-                for (const x of res) {
-                    const typeName = x.tagTypeName || "Uncategorized";
-                    if (!grouped[typeName]) {
-                        const typeInfo = storedTypes.find((t: any) => t.tagTypeName === typeName);
-                        grouped[typeName] = {
-                            tagTypeName: typeName,
-                            required: typeInfo?.required || "False",
-                            tagItems: [],
-                        };
-                    }
-                    grouped[typeName].tagItems.push(x);
-                }
-                Object.values(grouped)
-                    .filter((group) => group.tagItems.length > 0)
-                    .sort((a, b) => a.tagTypeName.localeCompare(b.tagTypeName))
-                    .forEach((group) => {
-                        tags.push({
-                            label:
-                                group.required === "True"
-                                    ? `${group.tagTypeName} [required]`
-                                    : group.tagTypeName,
-                            options: group.tagItems
-                                .sort((a: any, b: any) =>
-                                    (a.tagName || "").localeCompare(b.tagName || "")
-                                )
-                                .map((t: any) => ({ label: t.tagName, value: t.tagName })),
-                        });
-                    });
+                buildTagOptionGroups(res, storedTypes).forEach((group) => tags.push(group));
             }
         });
-
         const tagTypesString = localStorage.getItem("tagTypes");
         const tagTypes = tagTypesString ? JSON.parse(tagTypesString) : [];
         const initTags = asset.tags
@@ -163,11 +143,19 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
         // Get Tag Types to enforce when they are required
         tagTypes = [];
 
-        fetchtagTypes().then((res) => {
+        // Scope to global + the asset's database. The unscoped list let required tag types
+        // from OTHER databases block this form, because the tag picker only offers in-scope tags.
+        if (!tagScopeDatabaseId) return;
+        fetchTagTypesForAsset({ databaseId: tagScopeDatabaseId }).then((res) => {
+            if (!Array.isArray(res)) {
+                return;
+            }
             tagTypes = res;
 
             if (tagTypes.length) {
-                const requiredTagTypes = tagTypes.filter((tagType) => tagType.required === "True");
+                // A required tag type with no tags cannot be satisfied, so it is not announced as a
+                // constraint either — the same set the validator enforces.
+                const requiredTagTypes = enforceableRequiredTagTypes(tagTypes);
 
                 if (requiredTagTypes.length) {
                     // Set constraint text if there are required tag types
@@ -190,7 +178,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                 }
             }
         });
-    }, []);
+    }, [tagScopeDatabaseId]);
 
     useEffect(() => {
         if (!isFMMEnabled) return;

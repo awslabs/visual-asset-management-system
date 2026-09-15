@@ -10,7 +10,10 @@ import { validateMetadataValue } from "../utils/validationHelpers";
 
 interface RawValueEditorProps {
     value: string;
-    valueType: MetadataValueType;
+    // Nullable: a row stored before its type was recorded can still be opened in the raw editor,
+    // which is often exactly where an operator goes to inspect such a row. The equality checks
+    // below are all simply false for a null type, so it lands on the plain-string behaviour.
+    valueType: MetadataValueType | null;
     onChange: (value: string) => void;
     onClose: () => void;
     disabled?: boolean;
@@ -85,14 +88,18 @@ export const RawValueEditor: React.FC<RawValueEditorProps> = ({
     return (
         <SpaceBetween direction="vertical" size="m">
             <FormField
-                label={`Raw ${valueType.toUpperCase()} Value`}
-                description={`Edit the raw string value for this ${valueType} field. The value must be valid ${valueType} format.`}
+                label={valueType ? `Raw ${valueType.toUpperCase()} Value` : "Raw Value"}
+                description={
+                    valueType
+                        ? `Edit the raw string value for this ${valueType} field. The value must be valid ${valueType} format.`
+                        : "Edit the raw string value for this field. Its value type has not been recorded, so the value is not checked against one."
+                }
             >
                 <div style={{ position: "relative" }}>
                     <Textarea
                         value={rawValue}
                         onChange={({ detail }) => handleRawValueChange(detail.value)}
-                        placeholder={`Enter raw ${valueType} value`}
+                        placeholder={valueType ? `Enter raw ${valueType} value` : "Enter raw value"}
                         disabled={disabled}
                         invalid={!!validationError}
                         rows={isJSONType ? 10 : 4}

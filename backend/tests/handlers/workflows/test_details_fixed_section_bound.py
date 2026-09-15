@@ -45,12 +45,20 @@ LAMBDA_LIMIT = 6 * 1024 * 1024
 CONFIG_S3_KEY = "executions/E1/input/0/config.json"
 
 
-def _assemble(steps, config_kb, escape_heavy=False):
+def _assemble(steps, config_kb, escape_heavy=False, subs_per_step=0, stages_per_sub=0):
     """Assemble the details view for `steps` steps, each recording a rendered configuration body of
     `config_kb` KB. escape_heavy fills the body with characters JSON escapes, which is how a body's
-    serialized size exceeds its character count."""
+    serialized size exceeds its character count. subs_per_step registered Step Functions sub-executions
+    per step, each reporting stages_per_sub stages, exercise the sub-execution view (requested only when
+    subs_per_step > 0)."""
     prows = [{"pipelineExecutionId": f"pe{i}", "pipelineId": f"p{i}",
               "pipelineDatabaseId": "db", "S3AssetPipelineBucket": "bkt"} for i in range(steps)]
+    for prow in prows:
+        prow["registeredSubExecutions"] = [
+            {"resourceType": "stepFunctionsExecution",
+             "stateMachineArn": f"arn:aws:states:us-east-1:123456789012:stateMachine:sm{i}",
+             "executionArn": f"arn:aws:states:us-east-1:123456789012:execution:sm{i}:{prow['pipelineExecutionId']}"}
+            for i in range(subs_per_step)]
     body = ('"\\' if escape_heavy else "y") * (config_kb * 1024)
 
     def _all(table_name, key_condition):
@@ -59,15 +67,33 @@ def _assemble(steps, config_kb, escape_heavy=False):
                      "inputConfigurationFileS3Key": CONFIG_S3_KEY}]
         return []
 
+    def _summary(sub):
+        return ({"resourceType": "stepFunctionsExecution", "label": "", "stageName": "", "resourceName": "sm",
+                 "status": "SUCCEEDED", "startDate": "2026-09-11T10:00:00Z", "stopDate": "2026-09-11T10:05:00Z",
+                 "error": "", "cause": "", "stageSource": "none", "stagesTruncated": False,
+                 "historyTruncated": False, "stages": []}, [])
+
+    def _stages(summary, sub, page_budget, warnings):
+        summary["stages"] = [
+            {"stageName": f"Preview3dThumbnailBatchJob{i}", "stateType": "Task", "status": "FAILED",
+             "caught": True, "startDate": "2026-09-11T10:00:00Z", "stopDate": "2026-09-11T10:00:30Z",
+             "error": "States.TaskFailed", "cause": "c" * 100, "attempts": 1}
+            for i in range(stages_per_sub)]
+        summary["stageSource"] = "definition"
+
     with patch(f"{MOD}.get_workflow_definition", return_value={}), \
          patch(f"{MOD}.get_pipeline_definition", return_value={}), \
          patch(f"{MOD}.get_pipeline_definitions", return_value={}), \
          patch(f"{MOD}._query_all", side_effect=_all), \
          patch(f"{MOD}.get_pipeline_execution_rows", return_value=prows), \
          patch(f"{MOD}._query_capped", return_value=([], False)), \
-         patch(f"{MOD}.get_produced_file_versions", return_value={}):
+         patch(f"{MOD}.get_produced_file_versions", return_value={}), \
+         patch(f"{MOD}._available_logs_for_pipeline", return_value=[]), \
+         patch(f"{MOD}._sub_execution_summary", side_effect=_summary), \
+         patch(f"{MOD}._sub_execution_stages", side_effect=_stages):
         return le.assemble_execution_details(
-            "E1", {"workflowId": "wf", "workflowDatabaseId": "db"}, config_row={})
+            "E1", {"workflowId": "wf", "workflowDatabaseId": "db"}, config_row={},
+            include_sub_executions=subs_per_step > 0)
 
 
 def _response_bytes(details):
@@ -139,3 +165,59 @@ class TestFixedSectionBound:
         for pipeline in details["pipelines"]:
             assert pipeline["renderedConfigTruncated"] is False
             assert len(pipeline["renderedConfig"]) == 4 * 1024
+
+
+def _fixed_section_bytes(details):
+    return (sum(le._wire_bytes(p) for p in details["pipelines"])
+            + sum(le._wire_bytes(c) for c in details["inputConfigurations"]))
+
+
+@pytest.mark.unit
+class TestSubExecutionStagesYieldFirst:
+    """Stage lists are the first part of the fixed section to yield: each sub-execution keeps its summary
+    and loses its stages, the collection is named, and the configuration bodies are touched only if the
+    section is still over."""
+
+    def test_ten_steps_of_twenty_subs_of_fifty_stages_stay_under_the_section_bound(self):
+        details = _assemble(10, 4, subs_per_step=20, stages_per_sub=50)
+        assert _fixed_section_bytes(details) <= le.MAX_DETAIL_FIXED_SECTION_BYTES
+        assert _response_bytes(details) < LAMBDA_LIMIT
+        assert "pipelines.subExecutions" in details["truncatedCollections"]
+        for pipeline in details["pipelines"]:
+            assert len(pipeline["subExecutions"]) == 20
+            for sub in pipeline["subExecutions"]:
+                assert sub["stages"] == [] and sub["stagesTruncated"] is True
+                assert sub["status"] == "SUCCEEDED" and sub["stopDate"] == "2026-09-11T10:05:00Z"
+
+    def test_the_heavy_case_really_needed_the_drop(self):
+        # Positive control: the same view WITHOUT the drop would exceed the bound.
+        stage = {"stageName": "Preview3dThumbnailBatchJob0", "stateType": "Task", "status": "FAILED",
+                 "caught": True, "startDate": "2026-09-11T10:00:00Z", "stopDate": "2026-09-11T10:00:30Z",
+                 "error": "States.TaskFailed", "cause": "c" * 100, "attempts": 1}
+        assert le._wire_bytes(stage) * 50 * 20 * 10 > le.MAX_DETAIL_FIXED_SECTION_BYTES
+
+    def test_stages_yield_before_the_configuration_bodies(self):
+        details = _assemble(10, 4, subs_per_step=20, stages_per_sub=50)
+        assert "pipelines" not in details["truncatedCollections"]
+        assert "inputConfigurations" not in details["truncatedCollections"]
+        for pipeline in details["pipelines"]:
+            assert pipeline["renderedConfigTruncated"] is False
+            assert len(pipeline["renderedConfig"]) == 4 * 1024
+
+    def test_a_small_stage_view_is_kept_whole_and_flags_nothing(self):
+        details = _assemble(2, 4, subs_per_step=2, stages_per_sub=5)
+        assert details["truncatedCollections"] == []
+        for pipeline in details["pipelines"]:
+            for sub in pipeline["subExecutions"]:
+                assert len(sub["stages"]) == 5 and sub["stagesTruncated"] is False
+
+    def test_large_bodies_still_yield_when_no_stages_exist(self):
+        # The pre-existing path: no sub-execution view, so only the bodies can yield.
+        details = _assemble(10, 380, subs_per_step=0)
+        assert "pipelines" in details["truncatedCollections"]
+        assert "pipelines.subExecutions" not in details["truncatedCollections"]
+
+    def test_without_the_flag_no_sub_execution_keys_are_present(self):
+        details = _assemble(2, 4)
+        for pipeline in details["pipelines"]:
+            assert "subExecutions" not in pipeline and pipeline["availableLogs"] == []

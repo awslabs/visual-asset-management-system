@@ -3,9 +3,9 @@
 
 """Tests for the Stage-3 manifest refactor of the simulation/isaacLabTraining pipeline. This
 pipeline has no constructPipeline lambda — vamsExecute IS the entry point that reads the input
-configuration from S3 (to extract trainingConfig/computeConfig), threads metadata + config S3
-LOCATIONS into the internal SFN (never inline content), and best-effort registers the sub-SFN
-execution. openPipeline threads the locations into the job-config return."""
+configuration from S3 (to extract trainingConfig), threads metadata + config S3 LOCATIONS into the
+internal SFN (never inline content), and best-effort registers the sub-SFN execution. openPipeline
+threads the locations into the job-config return."""
 
 import os
 import sys
@@ -103,9 +103,10 @@ class TestVamsExecute:
             resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
         assert resp["statusCode"] == 200
         sfn_input = json.loads(start.call_args.kwargs["input"])
-        # Config read from S3 -> trainingConfig/computeConfig extracted at the boundary.
+        # Config read from S3 -> trainingConfig extracted at the boundary. The pipeline is
+        # single-node only, so the computeConfig the config file carries is not threaded.
         assert sfn_input["trainingConfig"] == {"epochs": 10}
-        assert sfn_input["computeConfig"] == {"numNodes": 2}
+        assert "computeConfig" not in sfn_input
         # Manifest-resolved input + identity.
         assert sfn_input["inputS3AssetFilePath"] == "s3://abkt/xidM/scene.usd"
         assert sfn_input["assetId"] == "xidM"
@@ -130,6 +131,43 @@ class TestVamsExecute:
                 patch.object(mod.events_client, "put_events", MagicMock(side_effect=Exception("denied"))):
             resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
         assert resp["statusCode"] == 200
+
+    def test_registration_labels_the_state_machine_log_source(self):
+        # The module-level env in this file leaves the log group unset; set it for this reload.
+        with patch.dict(os.environ, {
+                "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/VAMSstateMachine-IsaacLab",
+                "STATE_MACHINE_LOG_GROUP_ARN":
+                    "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/VAMSstateMachine-IsaacLab:*"}):
+            mod = self._load()
+        s3 = self._s3_for(self._manifest(), {"trainingConfig": {}})
+        start = MagicMock(return_value={"executionArn": "arn:ex"})
+        put_events = MagicMock()
+        with patch.object(mod, "s3_client", s3), \
+                patch.object(mod.sfn_client, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "Isaac Lab training processing"
+        assert detail["logs"] == [{
+            "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/VAMSstateMachine-IsaacLab:*",
+            "logGroupName": "/aws/vendedlogs/VAMSstateMachine-IsaacLab",
+            "logStreamName": "",
+            "sourceType": "stateMachine",
+            "label": "Isaac Lab training state machine",
+        }]
+
+    def test_registration_labels_follow_the_evaluation_mode(self):
+        mod = self._load()
+        s3 = self._s3_for(self._manifest(), {"trainingConfig": {"mode": "evaluation"}})
+        start = MagicMock(return_value={"executionArn": "arn:ex"})
+        put_events = MagicMock()
+        with patch.object(mod, "s3_client", s3), \
+                patch.object(mod.sfn_client, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "Isaac Lab evaluation processing"
+        assert all("evaluation" in log["label"] for log in detail.get("logs", []))
 
     def test_missing_task_token_errors(self):
         mod = self._load()

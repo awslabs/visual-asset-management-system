@@ -72,6 +72,107 @@ def test_paginate_respects_max_pages():
     assert result["truncated"] is True
 
 
+# --- Resumption: the outstanding token must come back ------------------------
+#
+# S6-TOOLS-002. `paginate()` built its result from Items/count/pages/truncated/note and never
+# included the token it stopped holding, and no read tool accepted a starting token. With the
+# defaults (max_pages=20, page_size=100) that made 2,000 items a WALL rather than a page size: on a
+# real asset with 12,000 files, files 2,001-12,000 were unreachable through this server, and the
+# agent could not answer "does file X exist in this asset?" at all. `max_items` above the ceiling was
+# accepted and ignored, and the note ("limit 20000, max_pages 20") read as "try a bigger max_items".
+
+
+def test_paginate_returns_the_outstanding_next_token_at_the_max_items_bound():
+    client = _client()
+
+    def fetch(_params):
+        return {"Items": [1, 2, 3, 4, 5], "NextToken": "more"}
+
+    result = client.paginate(fetch, max_items=3)
+    assert result["NextToken"] == "more"
+    assert result["truncated"] is True
+    # The note has to say how to continue, not only that the result is short.
+    assert "starting_token" in result["note"]
+
+
+def test_paginate_returns_the_outstanding_next_token_at_the_max_pages_bound():
+    """The ceiling the finding measured: max_pages fires regardless of max_items, so the token is the
+    only way past it."""
+    client = _client(max_pages=2, page_size=10)
+
+    def fetch(_params):
+        return {"Items": [1] * 10, "NextToken": "more"}
+
+    result = client.paginate(fetch, max_items=1000)
+    assert result["count"] == 20
+    assert result["pages"] == 2
+    assert result["truncated"] is True
+    assert result["NextToken"] == "more"
+    # The note must name WHICH bound fired, or the agent cannot tell "raise max_items" from
+    # "resume with the token".
+    assert "max_pages" in result["note"]
+
+
+def test_paginate_sends_a_supplied_starting_token_on_the_first_page():
+    client = _client()
+    seen = []
+
+    def fetch(params):
+        seen.append(params.get("startingToken"))
+        return {"Items": [1], "NextToken": None}
+
+    client.paginate(fetch, starting_token="resume-here")
+    assert seen == ["resume-here"]
+
+
+def test_paginate_omits_next_token_on_a_complete_walk():
+    """Negative control: a token present on a finished walk would make every result read as partial."""
+    client = _client()
+
+    def fetch(_params):
+        return {"Items": [1, 2], "NextToken": None}
+
+    result = client.paginate(fetch)
+    assert "NextToken" not in result
+    assert "truncated" not in result
+    assert "note" not in result
+
+
+# --- Overflow on a final page with no token ---------------------------------
+#
+# S6-TOOLS-021. `items[:limit]` dropped the surplus but `truncated` was set only `if next_token`, so
+# a single page holding more rows than max_items and carrying no NextToken reported a clean count.
+# `list_databases(max_items=5)` against 60 databases answered "the deployment has 5 databases".
+
+
+def test_paginate_flags_truncation_when_max_items_cuts_a_final_page():
+    client = _client()
+
+    def fetch(_params):
+        return {"Items": [1, 2, 3, 4, 5], "NextToken": None}
+
+    result = client.paginate(fetch, max_items=3)
+    assert result["Items"] == [1, 2, 3]
+    assert result["truncated"] is True
+    assert "note" in result
+    # No token exists, so the note must point at max_items rather than at a resumption that is
+    # impossible here — the two causes need distinguishable wording.
+    assert "starting_token" not in result["note"]
+    assert "max_items" in result["note"]
+
+
+def test_paginate_does_not_flag_a_page_that_exactly_fills_max_items():
+    """Boundary control: equal is complete, not truncated."""
+    client = _client()
+
+    def fetch(_params):
+        return {"Items": [1, 2, 3], "NextToken": None}
+
+    result = client.paginate(fetch, max_items=3)
+    assert result["Items"] == [1, 2, 3]
+    assert "truncated" not in result
+
+
 def test_paginate_custom_items_key():
     client = _client()
 

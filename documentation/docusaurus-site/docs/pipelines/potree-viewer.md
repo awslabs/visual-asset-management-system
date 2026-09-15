@@ -92,12 +92,14 @@ Enable this pipeline in `infra/config/config.json`:
 
 This pipeline runs on AWS Batch with AWS Fargate compute. Enabling it automatically sets `app.useGlobalVpc.enabled` to `true`. The VPC builder creates the required VPC endpoints for AWS Batch, Amazon ECR, and Amazon ECR Docker so that the Fargate container can pull its image.
 
-### Container Image
+### Container Images
 
-The pipeline container image is built from the Dockerfile located at `backendPipelines/preview/pcPotreeViewer/container/Dockerfile` during CDK deployment and stored in Amazon ECR. The container includes:
+The pipeline uses two container images, each built during CDK deployment from its own Dockerfile in `backendPipelines/preview/pcPotreeViewer/container/` and stored in Amazon ECR:
 
--   **PDAL** -- Point Data Abstraction Library for format translation
--   **PotreeConverter** -- Generates the octree structure for web-based viewing
+-   `Dockerfile_PDAL` -- **PDAL**, the Point Data Abstraction Library, for format translation
+-   `Dockerfile_Potree` -- **PotreeConverter**, which generates the octree structure for web-based viewing
+
+Each image runs under its own AWS Batch job definition, AWS Fargate compute environment, and job queue.
 
 :::warning[License Notice]
 This pipeline uses a third-party open-source library with a GPL license. Refer to your legal team before enabling this pipeline in production. See the NOTICE file in the pipeline directory for details.

@@ -1,7 +1,7 @@
 {
     "pipelineName": "CAD/Mesh Metadata Extraction",
     "category": "Conversion",
-    "description": "Basic Metadata Attribute Extraction (File-level metadata) - using Trimesh and CADQuery library. Supported files are STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ, STP, DXF.",
+    "description": "Basic Metadata Attribute Extraction (File-level metadata) - using Trimesh and CADQuery library. Supported files are STL, OBJ, PLY, GLTF, GLB, XYZ, STEP, STP, DXF.",
     "executionConfig": {
         "executionType": "Lambda",
         "waitForCallback": "Disabled",
@@ -28,10 +28,6 @@
                 "*.ply",
                 "*.gltf",
                 "*.glb",
-                "*.3mf",
-                "*.xaml",
-                "*.3dxml",
-                "*.dae",
                 "*.xyz",
                 "*.stp",
                 "*.step",

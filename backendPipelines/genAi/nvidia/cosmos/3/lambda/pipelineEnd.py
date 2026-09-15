@@ -5,12 +5,20 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="EndCosmos3Pipeline")
 
 sfn = boto3.client(
     'stepfunctions',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 
 
@@ -21,7 +29,7 @@ def lambda_handler(event, context):
     Sends task success or failure to external workflow if task token is present.
     """
 
-    logger.info(f"Event Input: {event}")
+    logger.info("Event Input", event=event)
     logger.info(f"Context Input: {context}")
 
     externalSfnTaskToken = event.get('externalSfnTaskToken', "")
@@ -41,8 +49,6 @@ def lambda_handler(event, context):
 
     # Report back to external workflow if task token present
     if externalSfnTaskToken and externalSfnTaskToken != "":
-        logger.info(f"External Sfn Task Token: {externalSfnTaskToken}")
-
         if not has_error:
             sfn.send_task_success(
                 taskToken=externalSfnTaskToken,

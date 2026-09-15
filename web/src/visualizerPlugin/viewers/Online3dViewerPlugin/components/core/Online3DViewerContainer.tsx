@@ -21,6 +21,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
     databaseId,
     assetKey,
     multiFileKeys,
+    multiFiles,
     versionId,
     assetVersionId,
 }) => {
@@ -54,11 +55,17 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                     // Load multiple files
                     console.log("Loading multiple assets:", multiFileKeys);
 
-                    for (const key of multiFileKeys) {
+                    for (let i = 0; i < multiFileKeys.length; i++) {
+                        const key = multiFileKeys[i];
+                        // Per-file asset context (Decision #3): when a multi-file selection
+                        // spans assets, each file downloads from its OWN assetId/databaseId.
+                        // Falls back to the shared top-level pair for single-asset callers.
+                        const fileAssetId = multiFiles?.[i]?.assetId || assetId;
+                        const fileDatabaseId = multiFiles?.[i]?.databaseId || databaseId;
                         try {
                             const response = await downloadAsset({
-                                assetId: assetId,
-                                databaseId: databaseId,
+                                assetId: fileAssetId,
+                                databaseId: fileDatabaseId,
                                 key: key,
                                 versionId: versionId,
                                 assetVersionId: assetVersionId as any,
@@ -71,10 +78,18 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                                     if (!fileName) fileName = key; // Use first file as main name
                                     console.log(`Successfully loaded file: ${key}`);
                                 } else {
+                                    // Console logging only: a % specifier in the interpolated value
+                                    // can at most garble this one log line; nothing is executed,
+                                    // stored or returned from it.
+                                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                     console.error(`Failed to load file: ${key}`, response[1]);
                                 }
                             }
                         } catch (fileError) {
+                            // Console logging only: a % specifier in the interpolated value can at
+                            // most garble this one log line; nothing is executed, stored or
+                            // returned from it.
+                            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                             console.error(`Error loading file ${key}:`, fileError);
                         }
                     }
@@ -105,7 +120,8 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                 }
 
                 if (urls.length > 0) {
-                    console.log(`Successfully loaded ${urls.length} model URLs:`, urls);
+                    // Presigned URLs — log the count, not the signed URLs.
+                    console.log(`Successfully loaded ${urls.length} model URLs`);
                     setModelUrls(urls);
                     setMainFileName(fileName);
 
@@ -124,11 +140,23 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
         };
 
         loadAssets();
-    }, [assetId, assetKey, databaseId, versionId, assetVersionId, multiFileKeys, updateState]);
+    }, [
+        assetId,
+        assetKey,
+        databaseId,
+        versionId,
+        assetVersionId,
+        multiFileKeys,
+        multiFiles,
+        updateState,
+    ]);
 
     // Load model URLs into viewer when both viewer and URLs are ready
     useEffect(() => {
         if (state.viewerInitialized && state.viewer && modelUrls.length > 0) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.log(`Loading ${modelUrls.length} files into Online3DViewer:`, modelUrls);
 
             try {

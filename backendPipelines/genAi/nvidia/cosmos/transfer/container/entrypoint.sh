@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# The upstream framework commit the image was built from, so a run's log names the inference
+# code it actually ran -- and, for the checkpoint_db patch below, the revision its
+# pattern was written against.
+if [ -f /opt/cosmos-transfer2.5/VAMS_UPSTREAM_COMMIT ]; then
+    echo "cosmos-transfer2.5 commit: $(cat /opt/cosmos-transfer2.5/VAMS_UPSTREAM_COMMIT)"
+fi
+
 # The CUDA forward-compatibility libraries in /usr/local/cuda*/compat are deliberately NOT placed on
 # LD_LIBRARY_PATH. cosmos-transfer2.5 needs CUDA 12.8, which the AL2023 NVIDIA AMI's driver satisfies
 # natively. Forward compatibility only applies when the host driver is OLDER than the container's CUDA
@@ -50,10 +57,17 @@ fi
 
 # Cosmos's checkpoint_db._hf_download() does two back-to-back subprocess calls:
 # `uvx hf download ...` then `uvx hf download ... --quiet` wrapped in
-# subprocess.check_output (capture_output=True). On a multi-GB download,
-# progress output can fill the ~64KB OS pipe buffer and deadlock the child
-# writing to stdout while the parent blocks in wait(). Patch once at startup
-# to redirect the second call's stderr to DEVNULL so the pipe never fills.
+# subprocess.check_output. The patch silences the second call's progress
+# output, which is many thousands of lines on a multi-GB download and buries
+# the surrounding log.
+#
+# It is NOT a deadlock fix, whatever an earlier version of this comment said:
+# check_output pipes stdout only and drains it through communicate(), and
+# stderr is inherited, so there is no stderr pipe to fill. Measured: a child
+# writing ~14 MB to stderr returns in 0.4 s with stderr=DEVNULL and 2.2 s
+# inherited, every line drained, while a Popen(stdout=PIPE) with no reader DID
+# hang -- so the harness can see a real deadlock and this is not one.
+# See backendPipelines/CLAUDE.md, which forbids restating that claim.
 CHECKPOINT_DB=/opt/cosmos-transfer2.5/cosmos_transfer2/_src/imaginaire/utils/checkpoint_db.py
 if [ -f "$CHECKPOINT_DB" ] && ! grep -q "VAMS_PATCHED_CHECKOUTPUT" "$CHECKPOINT_DB"; then
     python -c "

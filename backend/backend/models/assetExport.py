@@ -17,6 +17,14 @@ MAX_ASSETS_PER_EXPORT_PAGE = 1000
 MAX_FILE_EXTENSION_FILTERS = 100
 # Maximum length of a pagination token. The token carries the serialized asset tree.
 MAX_EXPORT_TOKEN_LENGTH = 400000
+# Files one page may export across all of its assets, and the ceiling a caller may raise it to.
+# Every exported file costs one S3 HeadObject for its primary type and, when asked for, a
+# presigned URL, so this bounds a page's work independently of how many files an asset holds.
+# An asset larger than the budget is exported across successive pages: its entry reports
+# files_truncated and the NextToken resumes its file listing where the page stopped, so the
+# budget bounds one request rather than capping what an export can retrieve.
+DEFAULT_MAX_FILES_PER_EXPORT_PAGE = 2000
+MAX_FILES_PER_EXPORT_PAGE = 10000
 
 
 class AssetExportRequestModel(BaseModel, extra='ignore'):
@@ -34,6 +42,9 @@ class AssetExportRequestModel(BaseModel, extra='ignore'):
     fileExtensions: Optional[List[str]] = Field(default=None, description="Filter files to only provided extensions",
                                                 max_items=MAX_FILE_EXTENSION_FILTERS)
     maxAssets: int = Field(default=100, description="Maximum assets per page", ge=1, le=MAX_ASSETS_PER_EXPORT_PAGE)
+    maxFiles: int = Field(default=DEFAULT_MAX_FILES_PER_EXPORT_PAGE,
+                          description="Maximum files per page across all of the page's assets",
+                          ge=1, le=MAX_FILES_PER_EXPORT_PAGE)
     startingToken: Optional[str] = Field(default=None, description="Pagination token for subsequent requests",
                                          max_length=MAX_EXPORT_TOKEN_LENGTH)
 
@@ -96,6 +107,9 @@ class AssetExportAssetModel(BaseModel, extra='ignore'):
     archived: bool
     metadata: Optional[Dict[str, AssetExportMetadataItemModel]] = None
     files: List[AssetExportFileModel]
+    files_truncated: bool = Field(default=False,
+                                  description="The file list is partial; the response NextToken "
+                                              "resumes this asset's remaining files")
 
 
 class AssetExportUnauthorizedAssetModel(BaseModel, extra='ignore'):

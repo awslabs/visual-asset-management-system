@@ -238,10 +238,11 @@ def create_single_asset(
             component["actual_asset_id"] = existing_asset_id
             return (item_revision, True, False, None)
 
-        # Prepare description
-        description = component.get("product_name", original_asset_name)
+        # Prepare description. The API removes surrounding whitespace before applying its own
+        # four-character minimum, so the trimmed length is what has to clear it.
+        description = (component.get("product_name", original_asset_name) or "").strip()
         if len(description) < 4:
-            description = f"Asset {description}"
+            description = f"Asset {description}".strip()
 
         # Create the asset - let it output naturally
         create_result = ctx.invoke(

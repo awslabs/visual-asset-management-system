@@ -1,6 +1,6 @@
 ## VAMS Web Frontend
 
-Built with React 17 + Vite. See `web/CLAUDE.md` for full development guide.
+Built with React 18 + Vite. See `web/CLAUDE.md` for full development guide.
 
 ## Available Scripts
 

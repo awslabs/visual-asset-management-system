@@ -169,7 +169,13 @@ def format_asset_links_list_output(links_data: Dict[str, Any], json_output: bool
                 output_lines.append(f"  • {asset.get('assetName', asset.get('assetId', 'N/A'))} ({asset.get('databaseId', 'N/A')}) - Link ID: {link_id_short}{alias_info}")
     else:
         output_lines.append("  None")
-    
+
+    # Tree ceiling
+    if links_data.get('treeTruncated'):
+        output_lines.append("")
+        output_lines.append("  Note: the children tree reached its depth or node ceiling and is incomplete.")
+        output_lines.append("  List the links of an asset further down the tree to see the rest of it.")
+
     # Unauthorized counts
     unauthorized = links_data.get('unauthorizedCounts', {})
     if any(unauthorized.get(key, 0) > 0 for key in ['related', 'parents', 'children']):
@@ -181,7 +187,19 @@ def format_asset_links_list_output(links_data: Dict[str, Any], json_output: bool
             output_lines.append(f"  Parents: {unauthorized['parents']}")
         if unauthorized.get('children', 0) > 0:
             output_lines.append(f"  Children: {unauthorized['children']}")
-    
+
+    # Unresolved counts (linked assets the read could not retrieve, not a permissions matter)
+    unresolved = links_data.get('unresolvedCounts', {})
+    if any(unresolved.get(key, 0) > 0 for key in ['related', 'parents', 'children']):
+        output_lines.append("")
+        output_lines.append("Unresolved Assets (could not be retrieved, retry to resolve):")
+        if unresolved.get('related', 0) > 0:
+            output_lines.append(f"  Related: {unresolved['related']}")
+        if unresolved.get('parents', 0) > 0:
+            output_lines.append(f"  Parents: {unresolved['parents']}")
+        if unresolved.get('children', 0) > 0:
+            output_lines.append(f"  Children: {unresolved['children']}")
+
     return '\n'.join(output_lines)
 
 
@@ -611,5 +629,13 @@ def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: b
             json_output,
             error_type="Permission Error",
             helpful_message="You need permissions on the asset to view its links."
+        )
+        raise click.ClickException(str(e))
+    except AssetLinkValidationError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Validation Error",
+            helpful_message="The links could not be read. Retry the request, and for a very large hierarchy list the links of an asset further down the tree instead."
         )
         raise click.ClickException(str(e))

@@ -31,7 +31,12 @@ or ``X-Forwarded-For`` to impersonate an allow-listed IP. Even behind CloudFront
 right-most *untrusted* forwarded address (the hop adjacent to the gateway, after stripping
 the proxy peer) is used, so a client-supplied left-most entry can never grant access.
 """
+import ipaddress
 from typing import Optional, List
+
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service_name="ClientIp")
 
 
 def _strip_port(addr: str) -> str:
@@ -116,20 +121,57 @@ def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
     return source_ip
 
 
-def ip_to_num(ip: str) -> int:
-    return int("".join(f"{int(part):03d}" for part in ip.split(".")))
-
-
 def is_ip_authorized(source_ip: Optional[str], allowed_ranges: List) -> bool:
+    """Whether a client address falls inside one of the configured ``[min, max]`` ranges.
+
+    Ranges are inclusive and are compared numerically via ``ipaddress``, so both IPv4 and IPv6
+    are expressible: ``[["203.0.113.0", "203.0.113.255"]]`` and
+    ``[["2001:db8::", "2001:db8::ffff"]]`` are both valid, and a deployment may configure ranges
+    of both families side by side.
+
+    An empty range list means unrestricted. A range whose two endpoints are different families,
+    or either of whose endpoints does not parse, is skipped rather than allowed — a malformed
+    entry must not widen access — and a caller whose family has no configured range at all is
+    logged, because that is the case where an operator has restricted by IPv4 and an IPv6 viewer
+    is denied with no configuration able to admit it.
+    """
     if not allowed_ranges:
         return True
     if not source_ip:
         return False
+
     try:
-        source_num = ip_to_num(source_ip)
-        return any(
-            ip_to_num(min_ip) <= source_num <= ip_to_num(max_ip)
-            for min_ip, max_ip in allowed_ranges
-        )
-    except (ValueError, IndexError):
+        source = ipaddress.ip_address(str(source_ip).strip())
+    except (ValueError, TypeError):
+        # Fail closed: an address this function cannot parse must not be admitted, and must not
+        # raise into the authorizer either, where it would answer 500 instead of denying.
+        logger.warning("Client address is not a valid IP address; denying")
         return False
+
+    family_has_a_range = False
+    for entry in allowed_ranges:
+        try:
+            min_ip, max_ip = entry
+            low = ipaddress.ip_address(str(min_ip).strip())
+            high = ipaddress.ip_address(str(max_ip).strip())
+        except (ValueError, TypeError):
+            logger.warning("Skipping malformed allowed IP range entry")
+            continue
+
+        if low.version != high.version:
+            logger.warning("Skipping allowed IP range whose endpoints are different IP versions")
+            continue
+        if low.version != source.version:
+            continue
+
+        family_has_a_range = True
+        if low <= source <= high:
+            return True
+
+    if not family_has_a_range:
+        logger.warning(
+            f"No allowed IP range is configured for IPv{source.version}, so every caller of that "
+            f"family is denied. Add an IPv{source.version} range to "
+            "authorizerOptions.allowedIpRanges."
+        )
+    return False

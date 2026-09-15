@@ -58,6 +58,11 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
             localTestInputFilePath, localTestOutputFilePath)
         logger.info(f"Pipeline Response: {pipeline_response}")
 
+        if pipeline_response["returncode"] != 0:
+            return ext.error_response(stage,
+                f"Blender render failed with exit code {pipeline_response['returncode']}. Check the logs for the Blender output."
+            )
+
         return ext.success_response(stage)
     else:
         logger.info("Running Non-Local...")
@@ -89,17 +94,27 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
             
         logger.info(filePathsToDownload)
 
+        #S3 keys are opaque, so a relative path may carry leading separators or '..' segments
+        input_dir_root = os.path.realpath(local_input_dir)
+
         for filePath in filePathsToDownload:
+            relativePath = filePath['relativePath'].lstrip('/')
+
             # Skip directory markers (empty relativePath or keys ending with '/')
-            if not filePath['relativePath'] or filePath['key'].endswith('/'):
+            if not relativePath or filePath['key'].endswith('/'):
                 logger.info(f"Skipping directory marker: {filePath['key']}")
                 continue
-            
-            localPath = os.path.join(local_input_dir, filePath['relativePath'])
-            
+
+            localPath = os.path.realpath(os.path.join(input_dir_root, relativePath))
+
+            # Confine the write to the input directory
+            if not localPath.startswith(input_dir_root + os.sep):
+                logger.error(f"Skipping file resolving outside the input directory: {filePath['key']}")
+                continue
+
             # Ensure parent directory exists for nested file structures
             os.makedirs(os.path.dirname(localPath), exist_ok=True)
-            
+
             s3.download(
                 input.bucketName,
                 filePath['key'],
@@ -122,6 +137,12 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
         pipeline_response = allconvert_blenderrenderer_pipeline(
             local_primaryfile_filepath, local_output_dir)
         logger.info(f"Pipeline Response: {pipeline_response}")
+
+        #Error if the render subprocess failed (a failed model import must not report success)
+        if pipeline_response["returncode"] != 0:
+            return ext.error_response(stage,
+                f"Blender render failed with exit code {pipeline_response['returncode']}. Check the logs for the Blender output."
+            )
 
         #Error if nothing generated
         if len(pipeline_response["output_files"]) == 0:
@@ -161,12 +182,14 @@ def allconvert_blenderrenderer_pipeline(input_file_path: str, output_dir: str) -
                            input_file_path,
                            output_dir]
 
-    subprocess.run(BLENDER_JOIN_CMD) # nosemgrep: dangerous-subprocess-use-audit
+    completed = subprocess.run(BLENDER_JOIN_CMD) # nosemgrep: dangerous-subprocess-use-audit
+    logger.info(f"Blender exit code: {completed.returncode}")
 
     # Get an array of all file names in output directory
     output_files = os.listdir(output_dir)
 
     return {
         "output_dir": output_dir,
-        "output_files": output_files
+        "output_files": output_files,
+        "returncode": completed.returncode
     }

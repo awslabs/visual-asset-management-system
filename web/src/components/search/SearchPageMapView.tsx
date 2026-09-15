@@ -14,6 +14,7 @@ import Map, {
     Layer,
 } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
+import "../../common/utils/maplibreWorker";
 import { SearchPageViewProps } from "./SearchPageTypes";
 import {
     Box,
@@ -29,6 +30,7 @@ import type { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
 import { SearchExplanation, getTotalResultCount } from "./types";
 import { extractLocationData } from "./utils/locationUtils";
+import { isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 
@@ -248,8 +250,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     // `_rectype` filter on search state, not by a per-document field. Read
     // it once per render so every result picked up by this map view is
     // classified consistently with the rest of the search UI (table view,
-    // list-mode buttons, etc.). Falling back to per-source `_rectype` is
-    // unreliable because that field isn't always populated on hit sources.
+    // list-mode buttons, etc.).
     const isFileSearchMode = state.filters?._rectype?.value === "file";
 
     // Extract location data from search results
@@ -266,9 +267,9 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             if (location && location.type) {
                 const { metadata, attributes } = extractMetadata(source);
                 // Authoritative source: the search-state `_rectype` filter.
-                // Fall back to per-source `_rectype` only if the filter
-                // is unset (e.g., a future "all" mode).
-                const isFile = isFileSearchMode || source._rectype === "file";
+                // Fall back to the document's own record type only if the
+                // filter is unset (e.g., a future "all" mode).
+                const isFile = isFileHitSource(source, isFileSearchMode);
                 validData.push({
                     ...location,
                     id: hit._id,

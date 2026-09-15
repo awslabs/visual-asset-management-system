@@ -11,6 +11,7 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.dynamodb import query_all_items
 from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -80,22 +81,24 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
         # For 'related' relationships, check both directions (aliases not applicable)
         if relationship_type == RelationshipType.RELATED:
             # Check from -> to
-            response1 = asset_links_table.query(
+            forward_links = query_all_items(
+                asset_links_table,
                 IndexName='fromAssetGSI',
-                KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) & 
+                KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) &
                                      Key('toAssetDatabaseId:toAssetId').eq(to_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.RELATED)
             )
-            
+
             # Check to -> from
-            response2 = asset_links_table.query(
+            reverse_links = query_all_items(
+                asset_links_table,
                 IndexName='fromAssetGSI',
-                KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(to_key) & 
+                KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(to_key) &
                                      Key('toAssetDatabaseId:toAssetId').eq(from_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.RELATED)
             )
-            
-            return len(response1.get('Items', [])) > 0 or len(response2.get('Items', [])) > 0
+
+            return len(forward_links) > 0 or len(reverse_links) > 0
         
         # For 'parentChild' relationships, use simplified approach
         else:
@@ -103,15 +106,14 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
             normalized_alias = alias_id if alias_id else ''
             
             # Step 1: Get ALL parent->child relationships for this parent-child pair using fromAssetGSI
-            response = asset_links_table.query(
+            existing_links = query_all_items(
+                asset_links_table,
                 IndexName='fromAssetGSI',
-                KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) & 
+                KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) &
                                      Key('toAssetDatabaseId:toAssetId').eq(to_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
             )
-            
-            existing_links = response.get('Items', [])
-            
+
             # Step 2: Check if any of these links have the same aliasId (or both have no alias)
             for link in existing_links:
                 existing_alias = link.get('assetLinkAliasId')
@@ -123,15 +125,16 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
                     return True
             
             # Step 3: Check for reverse relationship (child->parent) - not allowed regardless of alias
-            reverse_response = asset_links_table.query(
+            reverse_links = query_all_items(
+                asset_links_table,
                 IndexName='fromAssetGSI',
-                KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(to_key) & 
+                KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(to_key) &
                                      Key('toAssetDatabaseId:toAssetId').eq(from_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
             )
-            
+
             # If any reverse relationships exist, it's bidirectional (not allowed)
-            if len(reverse_response.get('Items', [])) > 0:
+            if len(reverse_links) > 0:
                 return True
             
             return False
@@ -165,14 +168,15 @@ def detect_cycle_in_parent_child(from_asset_id: str, from_database_id: str, to_a
             # Get all children of current asset (where current asset is the 'from' in parentChild relationships)
             # This will return multiple items if there are multiple aliases for the same parent-child pair
             try:
-                response = asset_links_table.query(
+                child_links = query_all_items(
+                    asset_links_table,
                     IndexName='fromAssetGSI',
                     KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(current_key),
                     FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
                 )
-                
+
                 # Process all items (may include multiple with different aliases)
-                for item in response.get('Items', []):
+                for item in child_links:
                     child_key = item['toAssetDatabaseId:toAssetId']
                     child_database_id, child_asset_id = child_key.split(':', 1)
                     

@@ -68,23 +68,33 @@ export function buildConfigService(
     storageResources.dynamo.appFeatureEnabledStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
-    // Grant SSM read permissions for Location Service API Key parameter
+    // The two parameters this handler reads, named exactly. Both paths are known at synthesis and are
+    // the only ones it looks up (see the environment variables above), so a wildcard over every
+    // parameter whose path merely contains the deployment name grants read access to unrelated
+    // configuration in the same account.
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["ssm:GetParameter", "ssm:GetParameters"],
-            resources: [Service.IAMArn("*" + config.name + "*").ssm],
+            resources: [
+                Service.IAMArn(config.locationServiceApiKeyArnSSMParam.replace(/^\/+/, "")).ssm,
+                Service.IAMArn(config.webUrlDeploymentSSMParam.replace(/^\/+/, "")).ssm,
+            ],
         })
     );
 
-    // Grant Location Services permissions to describe API keys
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["geo:DescribeKey"],
-            resources: [Service.IAMArn("*").geoapi],
-        })
-    );
+    // Only reachable when Amazon Location Service is deployed — there is no API key to describe
+    // otherwise, and the resource wildcard cannot be narrowed further because the key is created in a
+    // separate stack whose name this builder does not have.
+    if (config.app.useLocationService.enabled) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["geo:DescribeKey"],
+                resources: [Service.IAMArn("*").geoapi],
+            })
+        );
+    }
 
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);

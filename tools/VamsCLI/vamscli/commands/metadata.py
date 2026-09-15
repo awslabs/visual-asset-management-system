@@ -178,7 +178,7 @@ def asset():
 @click.option('-d', '--database-id', required=True, help='Database ID')
 @click.option('-a', '--asset-id', required=True, help='Asset ID')
 @click.option('--asset-version-id', help='Filter metadata by a specific asset version')
-@click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
+@click.option('--page-size', default=100, type=int, help='Page size for pagination (default: 100, maximum 1000)')
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
@@ -379,7 +379,7 @@ def file():
 @click.option('--type', 'metadata_type', type=click.Choice(['metadata', 'attribute']), required=True,
               help='Type: metadata or attribute')
 @click.option('--asset-version-id', help='Filter metadata by a specific asset version')
-@click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
+@click.option('--page-size', default=100, type=int, help='Page size for pagination (default: 100, maximum 1000)')
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
@@ -575,7 +575,7 @@ def asset_link():
 
 @asset_link.command()
 @click.option('--asset-link-id', required=True, help='Asset link ID')
-@click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
+@click.option('--page-size', default=100, type=int, help='Page size for pagination (default: 100, maximum 1000)')
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
@@ -757,7 +757,7 @@ def database():
 
 @database.command()
 @click.option('-d', '--database-id', required=True, help='Database ID')
-@click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
+@click.option('--page-size', default=100, type=int, help='Page size for pagination (default: 100, maximum 1000)')
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context

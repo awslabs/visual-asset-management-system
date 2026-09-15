@@ -46,7 +46,7 @@ from botocore.config import Config as BotoConfig
 
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
-from models.common import commonHeaders
+from models.common import commonHeaders, validation_error_message
 
 from . import physnaCommon
 from .physnaCommon import (
@@ -103,24 +103,10 @@ _dynamodb = boto3.resource("dynamodb", config=_retry_config)
 try:
     _ASSET_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
 except Exception as e:
-    logger.warning(
-        f"Failed resolving asset storage table name (OK for tests): {e}"
-    )
-    _ASSET_STORAGE_TABLE_NAME = None
+    logger.exception("Failed loading resource names")
+    raise e
 
-try:
-    _DATABASE_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
-except Exception as e:
-    logger.warning(
-        f"Failed resolving database storage table name (OK for tests): {e}"
-    )
-    _DATABASE_STORAGE_TABLE_NAME = None
-
-asset_storage_table = (
-    _dynamodb.Table(_ASSET_STORAGE_TABLE_NAME)
-    if _ASSET_STORAGE_TABLE_NAME
-    else None
-)
+asset_storage_table = _dynamodb.Table(_ASSET_STORAGE_TABLE_NAME)
 
 # Global claims_and_roles, mirroring the pattern in other handlers.
 claims_and_roles: Dict[str, Any] = {}
@@ -228,10 +214,6 @@ def _authorize_and_lookup(
             None,
         )
 
-    if asset_storage_table is None:
-        raise _VAMSGeneralErrorResponse()(
-            "Asset storage table is not configured for the Physna Viewer lambda."
-        )
     asset_response = asset_storage_table.get_item(
         Key={"databaseId": database_id, "assetId": asset_id}
     )
@@ -329,7 +311,7 @@ def _handle_get(event: Dict[str, Any]) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return _status_response(
-            "invalid_request", str(v), http_status=400
+            "invalid_request", validation_error_message(v), http_status=400
         )
 
     # Web-UI ``relativePath`` starts with the assetId (derived from S3 key).
@@ -454,7 +436,7 @@ def lambda_handler(
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return _status_response(
-            "invalid_request", str(v), http_status=400
+            "invalid_request", validation_error_message(v), http_status=400
         )
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")

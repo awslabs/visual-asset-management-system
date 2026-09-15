@@ -146,7 +146,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 7. ColumnarViewerPlugin
 
--   **Extensions**: `.rds`, `.fcs`, `.csv`
+-   **Extensions**: `.fcs`, `.csv`
 -   **Features**: Tabular data display using DataGrid
 -   **Multi-file**: No
 -   **Dependencies**: react-data-grid, FCS parser
@@ -1320,7 +1320,7 @@ If your viewer plugin can't connect to external APIs:
 4. **Deploy and test** in your development environment
 5. **Document the requirements** for other developers
 
-For more detailed information about CSP configuration, see the [Developer Guide CSP Configuration section](../../../DeveloperGuide.md#csp-configuration).
+For more detailed information about CSP configuration, see [Content Security Policy](https://awslabs.github.io/visual-asset-management-system/architecture/security#content-security-policy-csp) in the security documentation, and [Viewer plugins](https://awslabs.github.io/visual-asset-management-system/developer/viewer-plugins) for the plugin-specific requirements.
 
 ## 📞 Support
 

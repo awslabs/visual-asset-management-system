@@ -73,6 +73,8 @@ export const RESOURCE_PARAM_KEYS = {
         assetLinksStorage: "dynamoTables/legacy/assetLinksStorage",
         metadataStorage: "dynamoTables/legacy/metadataStorage",
         metadataSchemaStorage: "dynamoTables/legacy/metadataSchemaStorage",
+        tagStorage: "dynamoTables/legacy/tagStorage",
+        tagTypeStorage: "dynamoTables/legacy/tagTypeStorage",
     },
     // Lambda function names consumed by data-migration tooling
     lambdaFunctions: {

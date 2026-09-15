@@ -14,6 +14,7 @@ import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
+import { contentImageTag } from "../../../../../helper/containerImageTag";
 
 export interface SplatToolboxCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -24,7 +25,8 @@ export interface SplatToolboxCodeBuildConstructProps extends cdk.StackProps {
 
 export interface PipelineEcrRepo {
     repository: ecr.Repository;
-    imageUri: string;
+    /** Content-addressed tag the build pushes and the Batch job definition consumes. */
+    imageTag: string;
     codeBuildProjectName: string;
 }
 
@@ -74,17 +76,30 @@ export class SplatToolboxCodeBuildConstruct extends Construct {
             exclude: [".git", "*.pyc", "__pycache__", ".venv", "node_modules", ".env"],
         });
 
+        // Content-addressed image tag, supplied to the build and consumed by the Batch job definition
+        // from this one literal so the two sides cannot name different images.
+        const imageTag = contentImageTag(sourceAsset.assetHash);
+
         // CodeBuild Project — runs in the same private VPC/subnets as pipeline Batch compute.
         // Private subnets have NAT Gateway egress for pulling Docker base images and cloning repos.
         const project = new codebuild.Project(this, "CodeBuild-splat-toolbox", {
             description: "Build Splat Toolbox container image and push to ECR",
             environment: {
                 buildImage: Config.CODEBUILD_BUILD_IMAGE,
-                computeType: codebuild.ComputeType.LARGE,
+                // X_LARGE for its DISK, not its CPU: LARGE provides 128 GB and the upstream
+                // Dockerfile's `apt-get upgrade -y` over an NVIDIA CUDA base image unpacks the whole
+                // CUDA stack a second time, which exhausts it —
+                // `unable to make backup link of '.../libcusolver_static.a' before installing new
+                // version: No space left on device`, at layer 6 of 77. X_LARGE provides 824 GB and is
+                // the cheaper of the two tiers that do.
+                computeType: codebuild.ComputeType.X_LARGE,
                 privileged: true,
                 environmentVariables: {
                     ECR_REPO_URI: {
                         value: repository.repositoryUri,
+                    },
+                    IMAGE_TAG: {
+                        value: imageTag,
                     },
                     AWS_ACCOUNT_ID: {
                         value: account,
@@ -168,9 +183,6 @@ def handler(event, context):
             },
         });
 
-        // Image URI: latest tag
-        const imageUri = `${repository.repositoryUri}:latest`;
-
         /**
          * CDK Nag Suppressions
          */
@@ -191,13 +203,15 @@ def handler(event, context):
             true
         );
 
-        // IAM5: ecr:GetAuthorizationToken requires wildcard resource
+        // IAM5 on the build project and its role. Applied with applyToChildren, so the reason has to
+        // cover every wildcard shape in the subtree rather than only the ECR one: an ECR-only
+        // justification silently blankets the S3 and CloudWatch Logs wildcards as well.
         NagSuppressions.addResourceSuppressions(
             project,
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "ecr:GetAuthorizationToken requires resource '*' as it is an account-level operation, not scoped to a specific repository.",
+                    reason: "Three wildcard shapes, each required: ecr:GetAuthorizationToken is account-level and takes no repository ARN; the source-asset grant covers object keys under one bucket prefix; and CodeBuild writes to log streams and report groups whose names it generates per build.",
                 },
             ],
             true
@@ -241,7 +255,7 @@ def handler(event, context):
 
         this.splatToolboxRepo = {
             repository,
-            imageUri,
+            imageTag,
             codeBuildProjectName: project.projectName,
         };
 

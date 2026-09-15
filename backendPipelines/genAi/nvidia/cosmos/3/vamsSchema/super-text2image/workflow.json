@@ -1,6 +1,6 @@
 {
     "workflowName": "NVIDIA Cosmos 3 Super Text2Image (64B)",
-    "category": "GenAI",
+    "category": "WFM",
     "description": "NVIDIA Cosmos 3 Super Text2Image (64B)",
     "systemConfig": {
         "inputFileArity": "none",

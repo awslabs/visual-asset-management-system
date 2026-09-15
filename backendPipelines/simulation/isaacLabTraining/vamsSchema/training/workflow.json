@@ -1,6 +1,6 @@
 {
     "workflowName": "Isaac Lab RL Training",
-    "category": "Simulation",
+    "category": "VLA Training",
     "description": "Automated workflow for RL policy training using Isaac Lab simulation on GPU instances.",
     "systemConfig": {
         "inputFileArity": "one",

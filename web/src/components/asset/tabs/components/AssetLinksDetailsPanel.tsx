@@ -238,6 +238,22 @@ export function AssetLinksDetailsPanel({
         }
     };
 
+    const getUnresolvedCount = () => {
+        if (!selectedNode?.relationshipType || !state.assetLinksData?.unresolvedCounts) return 0;
+
+        const counts = state.assetLinksData.unresolvedCounts;
+        switch (selectedNode.relationshipType) {
+            case "related":
+                return counts.related || 0;
+            case "parent":
+                return counts.parents || 0;
+            case "child":
+                return counts.children || 0;
+            default:
+                return 0;
+        }
+    };
+
     if (!selectedNode) {
         return (
             <Box textAlign="center" padding="xl">
@@ -434,6 +450,24 @@ export function AssetLinksDetailsPanel({
                         <div className="asset-links-info-item">
                             <div className="asset-links-info-label">{`Unauthorized Sub-${Synonyms.Assets}:`}</div>
                             <div className="asset-links-info-value">{getUnauthorizedCount()}</div>
+                        </div>
+                    )}
+                    {/* Links whose asset could not be read - shown only when there are any */}
+                    {selectedNode.relationshipType && getUnresolvedCount() > 0 && (
+                        <div className="asset-links-info-item">
+                            <div className="asset-links-info-label">{`Unresolved Sub-${Synonyms.Assets}:`}</div>
+                            <div className="asset-links-info-value">
+                                {getUnresolvedCount()}
+                                <span
+                                    style={{
+                                        marginLeft: "8px",
+                                        color: "var(--vams-color-warning, #ff9900)",
+                                    }}
+                                    title={`These ${Synonyms.assets} could not be read. Refresh to retry.`}
+                                >
+                                    <Icon name="status-warning" size="small" /> Not retrieved
+                                </span>
+                            </div>
                         </div>
                     )}
                     {/* Linked Asset Tags Section - Only show for asset nodes */}

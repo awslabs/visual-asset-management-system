@@ -112,14 +112,15 @@ export const getVamsVersion = async (): Promise<string | null> => {
 };
 
 export const webRoutes = async (body: any) => {
-    console.log("webRoutes");
     try {
         const response = await apiClient.post("auth/routes", {
             body: {
                 routes: body.routes,
             },
         });
-        console.log("response", response);
+        // The response body carries the caller's `email` alongside their permitted routes, so it is
+        // not logged. Route gating runs on every authenticated session, which put the signed-in
+        // user's address and their full permission profile in the console of every session.
         return response;
     } catch (error: any) {
         console.log(error);
@@ -167,7 +168,10 @@ export const fetchConstraintPermissionObjects = async () => {
 /**
  * Fetch the API routes (and methods) the current user is authorized to call.
  * Cached by the auth flow (see FedAuth/Auth.tsx) and periodically renewed.
- * @returns {Promise<[boolean, any]>}
+ * On failure a third element carries the HTTP status when the request reached the
+ * backend, so a caller can tell an absent endpoint (404) from a call that failed and
+ * gate accordingly instead of treating both as "unknown".
+ * @returns {Promise<[boolean, any, number|undefined]>}
  */
 export const fetchAllowedApiRoutes = async () => {
     try {
@@ -178,7 +182,7 @@ export const fetchAllowedApiRoutes = async () => {
         return [true, response];
     } catch (error: any) {
         console.log(error);
-        return [false, error?.message];
+        return [false, error?.message, error?.status];
     }
 };
 
@@ -191,7 +195,8 @@ export const fetchAllowedApiRoutes = async () => {
  * @param {string} [params.versionId] - Optional version ID
  * @param {string} [params.assetVersionId] - Optional asset version ID
  * @param {string} [params.downloadType="assetFile"] - Download type: "assetFile" (default) or "assetPreview"
- * @returns {Promise<boolean|{message}|any>}
+ * @returns {Promise<boolean|{message}|any>} `[true, url]` on success; `[false, message, status?]` on
+ *   failure, where `status` is the HTTP status when the request itself was rejected (e.g. 403, 410).
  */
 export const downloadAsset = async ({
     databaseId,
@@ -238,11 +243,14 @@ export const downloadAsset = async ({
         }
     } catch (error: any) {
         console.log(error);
+        // Failure tuple is [false, message, status?]. The status is the HTTP status of the download
+        // request when known (ApiError), so a caller fetching several entries can tell a per-entry
+        // authorization denial (401/403) or archived version (410) apart from a generic failure.
         // Check for 410 Gone status (archived file)
         if (error.status === 410) {
-            return [false, "This file version has been archived and cannot be downloaded"];
+            return [false, "This file version has been archived and cannot be downloaded", 410];
         }
-        return [false, error?.message];
+        return [false, error?.message, error?.status];
     }
 };
 
@@ -495,12 +503,18 @@ export const fetchDatabase = async ({ databaseId }: any) => {
  * Returns array of all constraints from the auth/constraints api
  * @returns {Promise<boolean|{tags}|any>}
  */
-export const fetchTags = async () => {
+export const fetchTags = async (params?: { databaseId?: string; scope?: "global" | "all" }) => {
     try {
-        let response = await apiClient.get("tags", {});
+        const scopeParams: Record<string, any> = {};
+        if (params?.databaseId) scopeParams.databaseId = params.databaseId;
+        if (params?.scope) scopeParams.scope = params.scope;
+
+        let response = await apiClient.get("tags", {
+            queryStringParameters: { ...scopeParams },
+        });
         let items: any[] = [];
         const init: { queryStringParameters: Record<string, any> } = {
-            queryStringParameters: { startingToken: null },
+            queryStringParameters: { startingToken: null, ...scopeParams },
         };
         if (response.message) {
             if (response.message.Items) {
@@ -523,15 +537,52 @@ export const fetchTags = async () => {
     }
 };
 /**
+ * Returns the tags selectable for an asset in a given database: the GLOBAL tags
+ * plus that database's own tags, and nothing from other databases. The backend
+ * serves each scope from a separate partition (a databaseId query does not
+ * include GLOBAL), so this merges a global-scoped fetch with a database-scoped
+ * fetch. With no databaseId it falls back to the full tag list.
+ * @param {Object} params
+ * @param {string} params.databaseId - The asset's database.
+ * @returns {Promise<any[]|any>} Merged tag array, or a non-array error value.
+ */
+export const fetchTagsForAsset = async (params?: { databaseId?: string }) => {
+    if (!params?.databaseId) {
+        return fetchTags();
+    }
+    const [globalTags, databaseTags] = await Promise.all([
+        fetchTags({ scope: "global" }),
+        fetchTags({ databaseId: params.databaseId }),
+    ]);
+    // Surface a load failure (fetchTags returns a non-array on error) instead of
+    // silently dropping either scope.
+    if (!Array.isArray(globalTags)) return globalTags;
+    if (!Array.isArray(databaseTags)) return databaseTags;
+    // A tag name cannot exist as both GLOBAL and database-specific, but de-dupe by
+    // name defensively so the picker never shows a duplicate label.
+    const seen = new Set<string>();
+    return [...globalTags, ...databaseTags].filter((tag: any) => {
+        if (seen.has(tag.tagName)) return false;
+        seen.add(tag.tagName);
+        return true;
+    });
+};
+/**
  * Returns array of all constraints from the auth/constraints api
  * @returns {Promise<boolean|{tagtypes}|any>}
  */
-export const fetchtagTypes = async () => {
+export const fetchtagTypes = async (params?: { databaseId?: string; scope?: "global" | "all" }) => {
     try {
-        let response = await apiClient.get("tag-types", {});
+        const scopeParams: Record<string, any> = {};
+        if (params?.databaseId) scopeParams.databaseId = params.databaseId;
+        if (params?.scope) scopeParams.scope = params.scope;
+
+        let response = await apiClient.get("tag-types", {
+            queryStringParameters: { ...scopeParams },
+        });
         let items: any[] = [];
         const init: { queryStringParameters: Record<string, any> } = {
-            queryStringParameters: { startingToken: null },
+            queryStringParameters: { startingToken: null, ...scopeParams },
         };
         if (response.message) {
             if (response.message.Items) {
@@ -552,6 +603,39 @@ export const fetchtagTypes = async () => {
         console.log(error);
         return error?.message;
     }
+};
+
+/**
+ * Returns the tag types that apply to an asset in a given database: the GLOBAL tag types
+ * plus that database's own, and nothing from other databases.
+ *
+ * The asset forms use this to decide which tag types are REQUIRED. Using the unscoped list
+ * demanded a selection for a tag type belonging to another database, which the scoped tag
+ * picker can never satisfy — the form could not be completed. The backend applies the same
+ * scope when it validates required tags on create/update.
+ * @param {Object} params
+ * @param {string} params.databaseId - The asset's database.
+ * @returns {Promise<any[]|any>} Merged tag-type array, or a non-array error value.
+ */
+export const fetchTagTypesForAsset = async (params?: { databaseId?: string }) => {
+    if (!params?.databaseId) {
+        return fetchtagTypes();
+    }
+    const [globalTagTypes, databaseTagTypes] = await Promise.all([
+        fetchtagTypes({ scope: "global" }),
+        fetchtagTypes({ databaseId: params.databaseId }),
+    ]);
+    // Surface a load failure instead of silently dropping either scope.
+    if (!Array.isArray(globalTagTypes)) return globalTagTypes;
+    if (!Array.isArray(databaseTagTypes)) return databaseTagTypes;
+    // A tag-type name cannot exist as both GLOBAL and database-specific, but de-dupe by name
+    // defensively so a required type is never listed twice.
+    const seen = new Set<string>();
+    return [...globalTagTypes, ...databaseTagTypes].filter((tagType: any) => {
+        if (seen.has(tagType.tagTypeName)) return false;
+        seen.add(tagType.tagTypeName);
+        return true;
+    });
 };
 
 export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = false }: any) => {
@@ -922,12 +1006,14 @@ export const deleteCognitoUser = async ({ userId }: any) => {
  * Resets a Cognito user's password
  * @param {Object} params - Parameters object
  * @param {string} params.userId - User ID
+ * @param {boolean} params.confirmReset - Confirmation of the reset; the endpoint rejects the
+ *     request unless this is true
  * @returns {Promise<[boolean, string]>}
  */
-export const resetCognitoUserPassword = async ({ userId }: any) => {
+export const resetCognitoUserPassword = async ({ userId, confirmReset }: any) => {
     try {
         const response = await apiClient.post(`user/cognito/${userId}/resetPassword`, {
-            body: { userId },
+            body: { userId, confirmReset: confirmReset === true },
         });
 
         if (response.message) {
@@ -1814,19 +1900,19 @@ export const createAssetLinkMetadata = async ({
             return [false, "Missing required parameters"];
         }
 
+        // The collection route takes a bulk body; this wraps the single item in it.
         const response = await apiClient.post(`asset-links/${assetLinkId}/metadata`, {
             body: {
-                metadataKey,
-                metadataValue,
-                metadataValueType,
+                metadata: [{ metadataKey, metadataValue, metadataValueType }],
             },
         });
 
         if (response.message) {
             if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
+                response.success === false ||
+                (response.message.indexOf &&
+                    (response.message.indexOf("error") !== -1 ||
+                        response.message.indexOf("Error") !== -1))
             ) {
                 console.log("Create asset link metadata error:", response.message);
                 return [false, response.message];
@@ -1862,18 +1948,20 @@ export const updateAssetLinkMetadata = async ({
             return [false, "Missing required parameters"];
         }
 
-        const response = await apiClient.put(`asset-links/${assetLinkId}/metadata/${metadataKey}`, {
+        // The metadata key travels in the bulk body, not the path: the collection route
+        // carries all four verbs and there is no per-key sub-path.
+        const response = await apiClient.put(`asset-links/${assetLinkId}/metadata`, {
             body: {
-                metadataValue,
-                metadataValueType,
+                metadata: [{ metadataKey, metadataValue, metadataValueType }],
             },
         });
 
         if (response.message) {
             if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
+                response.success === false ||
+                (response.message.indexOf &&
+                    (response.message.indexOf("error") !== -1 ||
+                        response.message.indexOf("Error") !== -1))
             ) {
                 console.log("Update asset link metadata error:", response.message);
                 return [false, response.message];
@@ -1902,16 +1990,19 @@ export const deleteAssetLinkMetadata = async ({ assetLinkId, metadataKey }: any)
             return [false, "Missing required parameters"];
         }
 
-        const response = await apiClient.del(
-            `asset-links/${assetLinkId}/metadata/${metadataKey}`,
-            {}
-        );
+        // Keys to delete travel in the body, not the path, on the same collection route.
+        const response = await apiClient.del(`asset-links/${assetLinkId}/metadata`, {
+            body: {
+                metadataKeys: [metadataKey],
+            },
+        });
 
         if (response.message) {
             if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
+                response.success === false ||
+                (response.message.indexOf &&
+                    (response.message.indexOf("error") !== -1 ||
+                        response.message.indexOf("Error") !== -1))
             ) {
                 console.log("Delete asset link metadata error:", response.message);
                 return [false, response.message];
@@ -2100,6 +2191,7 @@ export const fetchAssetS3FilesPage = async ({
     startingToken = null,
     pageSize = null,
     assetVersionId = null,
+    prefix = null,
 }: any) => {
     try {
         if (!databaseId || !assetId) {
@@ -2129,11 +2221,19 @@ export const fetchAssetS3FilesPage = async ({
             queryParams.assetVersionId = assetVersionId;
         }
 
+        // Server-side folder scope: only keys under this asset-relative prefix are listed.
+        if (prefix) {
+            queryParams.prefix = prefix;
+        }
+
         const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/listFiles`, {
             queryStringParameters: queryParams,
         });
 
         console.log(
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             `fetchAssetS3FilesPage (basic=${basic}, page=${startingToken ? "next" : "first"}):`,
             response?.items?.length || 0,
             "items"
@@ -2683,9 +2783,24 @@ export const deleteDatabaseMetadata = async ({ databaseId, metadataKeys }: any) 
     }
 };
 
-export const fetchApiKeys = async () => {
+/**
+ * Fetches API keys across all users (paged)
+ * @param {Object} params - Parameters object
+ * @param {number} params.pageSize - Keys per page
+ * @param {string} params.startingToken - Continuation token from a prior page
+ * @returns {Promise<any>}
+ */
+export const fetchApiKeys = async ({ pageSize, startingToken }: any = {}) => {
     try {
-        const response = await apiClient.get("auth/api-keys");
+        const queryStringParameters: any = {};
+        if (pageSize) {
+            queryStringParameters.pageSize = `${pageSize}`;
+        }
+        if (startingToken) {
+            queryStringParameters.startingToken = startingToken;
+        }
+
+        const response = await apiClient.get("auth/api-keys", { queryStringParameters });
         if (response !== false && response !== undefined) {
             if (
                 response.message &&
@@ -2773,9 +2888,24 @@ export const deleteApiKey = async ({ apiKeyId }: any) => {
 // These call the /auth/user/api-keys routes: scoped server-side to the
 // requesting user's own keys, with mandatory expiration.
 
-export const fetchUserApiKeys = async () => {
+/**
+ * Fetches the calling user's own API keys (paged)
+ * @param {Object} params - Parameters object
+ * @param {number} params.pageSize - Keys per page
+ * @param {string} params.startingToken - Continuation token from a prior page
+ * @returns {Promise<any>}
+ */
+export const fetchUserApiKeys = async ({ pageSize, startingToken }: any = {}) => {
     try {
-        const response = await apiClient.get("auth/user/api-keys");
+        const queryStringParameters: any = {};
+        if (pageSize) {
+            queryStringParameters.pageSize = `${pageSize}`;
+        }
+        if (startingToken) {
+            queryStringParameters.startingToken = startingToken;
+        }
+
+        const response = await apiClient.get("auth/user/api-keys", { queryStringParameters });
         if (response !== false && response !== undefined) {
             if (
                 response.message &&
@@ -2937,9 +3067,18 @@ export const updateUserRole = async (body: any) => {
 
 // ===== Tags =====
 
-export const deleteTag = async ({ tagName }: any) => {
+/**
+ * Deletes a tag from a specific scope.
+ *
+ * A tag is identified by scope AND name — the scope is the storage partition key — so `databaseId`
+ * must be sent for a database-scoped tag. Omitting it targets the GLOBAL partition, which reports
+ * "Tag not found" for a scoped tag rather than deleting it.
+ */
+export const deleteTag = async ({ tagName, databaseId }: any) => {
     try {
-        const response = await apiClient.del(`tags/${tagName}`, {});
+        const response = await apiClient.del(`tags/${tagName}`, {
+            queryStringParameters: databaseId ? { databaseId } : {},
+        });
         if (
             response.message?.indexOf("error") !== -1 ||
             response.message?.indexOf("Error") !== -1
@@ -2953,9 +3092,12 @@ export const deleteTag = async ({ tagName }: any) => {
     }
 };
 
-export const deleteTagType = async ({ tagTypeName }: any) => {
+/** Deletes a tag type from a specific scope; see deleteTag on why databaseId is required. */
+export const deleteTagType = async ({ tagTypeName, databaseId }: any) => {
     try {
-        const response = await apiClient.del(`tag-types/${tagTypeName}`, {});
+        const response = await apiClient.del(`tag-types/${tagTypeName}`, {
+            queryStringParameters: databaseId ? { databaseId } : {},
+        });
         if (
             response.message?.indexOf("error") !== -1 ||
             response.message?.indexOf("Error") !== -1

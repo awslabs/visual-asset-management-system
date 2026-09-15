@@ -16,6 +16,7 @@ import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Map, { MapMouseEvent, MapRef, Marker, NavigationControl } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
+import "../../../common/utils/maplibreWorker";
 import { GeoSearchFilter } from "../types";
 
 interface GeoFilterMapSelectorProps {

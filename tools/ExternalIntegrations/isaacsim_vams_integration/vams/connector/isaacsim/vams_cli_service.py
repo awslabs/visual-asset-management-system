@@ -9,6 +9,7 @@ Prerequisites:
     - Profile configured via: vamscli setup <api-gateway-url>
 """
 
+import fnmatch
 import json
 import logging
 import os
@@ -19,6 +20,102 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# An allow list made up only of these places no restriction, so it is treated exactly like an
+# absent one rather than as a pattern to match against.
+_MATCH_EVERYTHING_PATTERNS = ("*", "**", "*.*", "/*", "/**")
+
+# How many failed file keys a transfer-failure message names before it summarizes the rest.
+_MAX_NAMED_TRANSFER_FAILURES = 5
+
+
+def _is_extension_pattern(pattern: str) -> bool:
+    """True for the two equivalent extension forms, '*.ext' and '.ext', where ext is alphanumeric
+    with no path separator. A general glob ('*skip*', '/models/*') or an exact path is not one."""
+    if "/" in pattern:
+        return False
+    if pattern.startswith("*."):
+        ext = pattern[1:]
+    elif pattern.startswith("."):
+        ext = pattern
+    else:
+        return False
+    body = ext[1:]
+    return bool(body) and body.isalnum()
+
+
+def _matches_any(relative_key: str, patterns: Optional[List[str]]) -> bool:
+    """True when a relative file key matches any pattern. Case-insensitive and OS-independent.
+
+    A pattern matches by extension ('*.glb' or '.glb'), by glob against either the full relative key
+    or the file name, or as an exact key. ``fnmatchcase`` on already-lowered strings rather than
+    ``fnmatch``, which applies OS-specific case folding and would differ between Windows and Linux.
+    """
+    fk = (relative_key or "").lower()
+    name = fk.rstrip("/").split("/")[-1]
+    for pattern in patterns or []:
+        if not pattern:
+            continue
+        pat = pattern.lower()
+        if _is_extension_pattern(pattern):
+            ext = pat[1:] if pat.startswith("*.") else pat
+            if name.endswith(ext):
+                return True
+        elif fnmatch.fnmatchcase(fk, pat) or fnmatch.fnmatchcase(name, pat):
+            return True
+        elif pat == fk:
+            return True
+    return False
+
+
+def _is_open_allow_list(allow: Optional[List[str]]) -> bool:
+    """True when an allow list places no restriction: absent, empty, or only match-everything."""
+    patterns = [p.strip() for p in (allow or []) if p and p.strip()]
+    return not patterns or all(p in _MATCH_EVERYTHING_PATTERNS for p in patterns)
+
+
+def _failed_transfer_keys(payload: Dict[str, Any]) -> List[str]:
+    """The relative keys a transfer report says failed.
+
+    ``assets download`` reports them as ``failed_downloads`` entries carrying ``relative_key``;
+    ``file upload`` reports them as a per-sequence ``failed_files`` list of relative keys under
+    ``sequence_results`` (its top-level ``failed_files`` is a count, not a list).
+    """
+    keys: List[str] = []
+    for entry in payload.get("failed_downloads") or []:
+        if isinstance(entry, dict):
+            keys.append(entry.get("relative_key") or entry.get("local_path") or "?")
+        else:
+            keys.append(str(entry))
+    for sequence in payload.get("sequence_results") or []:
+        if not isinstance(sequence, dict):
+            continue
+        for entry in sequence.get("failed_files") or []:
+            keys.append(entry if isinstance(entry, str) else str(entry))
+    return keys
+
+
+def _describe_transfer_failure(payload: Dict[str, Any]) -> str:
+    """A one-line summary of a transfer report, distinguishing a partial from a total failure."""
+    total = payload.get("total_files") or 0
+    successful = payload.get("successful_files") or 0
+    keys = _failed_transfer_keys(payload)
+    failed_count = payload.get("failed_files")
+    if not isinstance(failed_count, int):
+        failed_count = len(keys)
+
+    if successful and total and successful < total:
+        summary = (f"Transfer partially failed: {successful} of {total} file(s) succeeded, "
+                   f"{failed_count} failed")
+    else:
+        summary = f"Transfer failed: {failed_count} of {total} file(s) failed"
+
+    if keys:
+        named = ", ".join(keys[:_MAX_NAMED_TRANSFER_FAILURES])
+        if len(keys) > _MAX_NAMED_TRANSFER_FAILURES:
+            named += f", ... (+{len(keys) - _MAX_NAMED_TRANSFER_FAILURES} more)"
+        summary = f"{summary} ({named})"
+    return summary
 
 
 class VamsCliError(Exception):
@@ -43,6 +140,21 @@ class VamsNotInstalledError(VamsCliError):
 class VamsProfileNotSetupError(VamsCliError):
     """Raised when the VAMS CLI profile is not configured."""
     pass
+
+
+class VamsTransferError(VamsCliError):
+    """Raised when a file-transfer command reports failed files.
+
+    A transfer command writes its full report to stdout and THEN exits non-zero when
+    ``overall_success`` is false, so a partial transfer stays distinguishable from a total one.
+    ``payload`` carries that report — ``total_files``, ``successful_files``, ``failed_files``, and
+    the per-file ``failed_downloads`` / ``sequence_results[].failed_files`` lists.
+    """
+
+    def __init__(self, message: str, payload: Optional[Dict[str, Any]] = None,
+                 exit_code: int = 1):
+        self.payload: Dict[str, Any] = payload or {}
+        super().__init__(message, error_type="Transfer Failure", exit_code=exit_code)
 
 
 @dataclass
@@ -83,10 +195,17 @@ class Asset:
 class AssetFile:
     """Parsed file entry from vamscli file list.
 
-    ``content_type`` is not part of the file listing response — it is only returned by
-    ``vamscli file info`` for a single file. It stays on this dataclass so callers that
-    enrich a listing entry from ``get_file_info`` have somewhere to put it, and is left
-    empty by ``list_asset_files``.
+    Several fields cannot be populated by the commands this connector runs, and stay at their
+    defaults. They remain on the dataclass so a caller that enriches a listing entry from
+    ``get_file_info`` has somewhere to put them:
+
+    - ``content_type`` is file-info-only: a listing does not return it.
+    - ``primary_type`` and ``preview_file`` are file-info-only *for this connector*, because
+      ``list_files`` lists with ``--basic``. Basic mode skips the per-object ``head_object`` calls
+      that supply them, so the listing returns ``primaryType: null`` and ``previewFile: ""``.
+    - ``version_id`` is returned by NEITHER command: it is a full-mode listing field, and the
+      file-info response carries version ids only inside its ``versions[]`` history, not at the top
+      level. It is always empty here.
     """
     file_name: str = ""
     relative_path: str = ""
@@ -149,10 +268,12 @@ class Workflow:
     def allows_whole_asset(self) -> bool:
         """Whether a whole-asset ('/') selection passes this workflow's assetScope gate.
 
-        The gate is only enforced on a scope that declares the key, and the pipeline registration
-        schemas spell it ``wholeAsset`` while the canonical record vocabulary uses
-        ``wholeAssetAllowed``; both are accepted and evaluate identically. An arity of 'none' takes
-        no input file at all, so no selection is offered for it.
+        Deny by default. The workflow-level gate reads ``wholeAssetAllowed`` with a default of False,
+        so a scope declaring neither spelling rejects a '/' selection; the declared-keys-only reading
+        applies to a PIPELINE's scope, which may be a partial declaration layered under the workflow
+        gate. The pipeline registration schemas spell the key ``wholeAsset`` while the canonical
+        record vocabulary uses ``wholeAssetAllowed``; both are accepted and evaluate identically. An
+        arity of 'none' takes no input file at all, so no selection is offered for it.
         """
         if self.input_file_arity == "none":
             return False
@@ -160,6 +281,38 @@ class Workflow:
         for key in ("wholeAssetAllowed", "wholeAsset"):
             if key in scope:
                 return bool(scope[key])
+        return False
+
+    @property
+    def input_file_filters(self) -> Dict[str, List[str]]:
+        """The declared inputFileFilters ``{allow, exclude}``; an empty map when absent."""
+        return self.system_config.get("inputFileFilters") or {}
+
+    def allows_file(self, relative_key: str) -> bool:
+        """Whether one concrete input file passes this workflow's inputFileFilters.
+
+        Mirrors the service's allow-then-exclude evaluation for a single file: an open allow list
+        (absent, empty, or only match-everything patterns) admits everything, and exclude is applied
+        after allow. A file the filters reject is a hard execute error, so no run control is offered
+        for it.
+
+        The key is normalized to the leading-slash form the execute request carries, so a filter
+        written as a path glob ('/models/*') is evaluated against the same string the service sees.
+        Only a concrete file key is meaningful here — a container selection ('/' or a folder) is
+        gated by :attr:`allows_whole_asset` instead. The aggregate
+        ``aggregateWorkflowPipelineInputFileFilters`` field must not be used for this: it describes
+        the union across pipelines, not what a concrete selection may be.
+        """
+        filters = self.input_file_filters
+        key = relative_key or ""
+        if not key.startswith("/"):
+            key = f"/{key}"
+        allow = [] if _is_open_allow_list(filters.get("allow")) else (filters.get("allow") or [])
+        exclude = filters.get("exclude") or []
+        if allow and not _matches_any(key, allow):
+            return False
+        if exclude and _matches_any(key, exclude):
+            return False
         return True
 
 
@@ -190,7 +343,9 @@ class VamsCliService:
         Initialize the VAMS CLI service.
 
         Args:
-            profile: VAMS CLI profile name (default: "default").
+            profile: VAMS CLI profile name (default: "default"). Named explicitly on every
+                     command, so a `vamscli profile switch` elsewhere cannot redirect the
+                     connector at another deployment.
             vamscli_path: Optional explicit path to the vamscli executable.
                           If not provided, expects 'vamscli' to be on PATH.
         """
@@ -212,24 +367,29 @@ class VamsCliService:
                 "Install it with: pip install vamscli (or pip install -e path/to/VamsCLI)"
             )
 
-    def _execute_command(self, args: List[str]) -> str:
+    def _execute_command(self, args: List[str], stdin_payload: Optional[str] = None) -> str:
         """
         Execute a vamscli command and return its stdout.
 
         Args:
             args: List of command arguments (e.g., ["auth", "status", "--json-output"]).
                   No shell escaping needed — arguments are passed directly to the process.
+            stdin_payload: Text written to the command's stdin, UTF-8 encoded. Credentials travel
+                           this way rather than as arguments, which are readable from the OS
+                           process table by any other local account.
 
         Returns:
             The stdout output of the command.
 
         Raises:
             VamsCliError: If the command exits with a non-zero code.
+            VamsTransferError: If a transfer command exited non-zero but still reported which
+                               files failed.
         """
-        cmd = [self._vamscli]
-        if self._profile != "default":
-            cmd += ["--profile", self._profile]
-        cmd += args
+        # --profile is a group-level option, so it has to precede the subcommand; it names the
+        # configured profile on every invocation, because an omitted flag resolves to whatever
+        # profile `vamscli profile switch` last recorded.
+        cmd = [self._vamscli, "--profile", self._profile] + args
 
         logger.debug("Executing: %s", cmd)
 
@@ -262,8 +422,11 @@ class VamsCliService:
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=600,
                 env=env,
+                input=stdin_payload,
             )
         except subprocess.TimeoutExpired:
             raise VamsCliError("Command timed out after 600 seconds")
@@ -281,6 +444,17 @@ class VamsCliService:
             error_msg, error_type = self._try_parse_error(result.stdout)
             if error_msg:
                 raise VamsCliError(error_msg, error_type=error_type, exit_code=result.returncode)
+            # A transfer command emits its report on stdout and THEN exits non-zero when
+            # overall_success is false. Falling straight through to stderr would discard that
+            # report and turn a 900-of-1000-file download into an undiagnosable total failure;
+            # under --json-output stderr is empty, so the message would carry nothing at all.
+            payload = self._try_parse_transfer_report(result.stdout)
+            if payload is not None:
+                raise VamsTransferError(
+                    _describe_transfer_failure(payload),
+                    payload=payload,
+                    exit_code=result.returncode,
+                )
             raise VamsCliError(
                 f"Command failed (exit {result.returncode}): {result.stderr.strip()}",
                 exit_code=result.returncode,
@@ -311,6 +485,24 @@ class VamsCliService:
             pass
 
         return None, None
+
+    @staticmethod
+    def _try_parse_transfer_report(output: str) -> Optional[Dict[str, Any]]:
+        """The transfer report on the stdout of a command that exited non-zero, else None.
+
+        Keyed on ``overall_success`` being present and exactly False. Testing for presence keeps
+        every other response shape — an error document, a listing, a single-entity get — out of this
+        path, and testing for False rather than falsiness keeps a successful transfer out of it.
+        """
+        if not output or not output.strip():
+            return None
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(data, dict) and data.get("overall_success") is False:
+            return data
+        return None
 
     def _parse_json(self, output: str) -> Any:
         """Parse JSON output from a CLI command."""
@@ -367,8 +559,11 @@ class VamsCliService:
         Returns:
             The authenticated user ID.
         """
+        # --password-stdin keeps the password out of the argument vector, which the OS process
+        # table exposes to every other local account for the lifetime of the login.
         output = self._execute_command(
-            ["auth", "login", "--json-output", "-u", username, "-p", credential]
+            ["auth", "login", "--json-output", "-u", username, "--password-stdin"],
+            stdin_payload=credential,
         )
 
         data = self._parse_json(output)
@@ -394,7 +589,7 @@ class VamsCliService:
 
     def login_with_token(self, user_id: str, token: str, expires_at: Optional[str] = None) -> str:
         """
-        Authenticate with a token override via ``auth login --token-override``.
+        Authenticate with a token override via ``auth login --token-override-stdin``.
 
         Use this for external IDP JWT tokens or VAMS API keys (prefixed ``vams_``).
         The token is validated against the VAMS API during login.
@@ -407,12 +602,14 @@ class VamsCliService:
         Returns:
             The authenticated user ID.
         """
+        # The token goes to stdin for the same reason the password does: an argument is readable
+        # from the OS process table.
         cmd = ["auth", "login", "--user-id", user_id,
-               "--token-override", token, "--json-output"]
+               "--token-override-stdin", "--json-output"]
         if expires_at:
             cmd += ["--expires-at", expires_at]
 
-        output = self._execute_command(cmd)
+        output = self._execute_command(cmd, stdin_payload=token)
         data = self._parse_json(output)
 
         self._cached_username = user_id
@@ -711,6 +908,11 @@ class VamsCliService:
 
         Returns:
             True if the download succeeded.
+
+        Raises:
+            VamsTransferError: If the file failed to download. A single-file transfer has no partial
+                               outcome to report, so the failure is raised with the reported reason
+                               rather than returned as False.
         """
         self.ensure_authenticated()
 
@@ -736,18 +938,25 @@ class VamsCliService:
             asset_id: The asset ID.
 
         Returns:
-            DownloadResult with details about the download.
+            DownloadResult with details about the download. A partial download is reported here
+            rather than raised: ``assets download`` exits non-zero once any file fails, but its
+            report survives on stdout, and ``overall_success`` plus ``failed_downloads`` is a more
+            useful answer to "which files did I get" than an exception.
         """
         self.ensure_authenticated()
         os.makedirs(local_path, exist_ok=True)
 
         # local_path is the first positional argument to assets download
-        output = self._execute_command(
-            ["assets", "download", local_path,
-             "-d", database_id, "-a", asset_id,
-             "--file-key", "/", "--recursive", "--json-output"]
-        )
-        data = self._parse_json(output)
+        try:
+            output = self._execute_command(
+                ["assets", "download", local_path,
+                 "-d", database_id, "-a", asset_id,
+                 "--file-key", "/", "--recursive", "--json-output"]
+            )
+            data = self._parse_json(output)
+        except VamsTransferError as e:
+            logger.warning("Recursive download of %s reported failures: %s", asset_id, e)
+            data = e.payload
 
         return DownloadResult(
             overall_success=data.get("overall_success", False),
@@ -774,7 +983,11 @@ class VamsCliService:
             Raw JSON dict with upload result.
 
         Raises:
-            VamsCliError: If the file doesn't exist or upload fails.
+            VamsCliError: If the file doesn't exist.
+            VamsTransferError: If the upload reported failed files. Raised rather than returned so a
+                               caller that ignores the payload — ``create_and_upload`` and
+                               ``export_and_upload_scene`` both do — cannot report an incomplete
+                               upload as a success.
         """
         if not os.path.isfile(file_path):
             raise VamsCliError(f"File not found: {file_path}")
@@ -801,6 +1014,11 @@ class VamsCliService:
 
         Returns:
             Raw JSON dict with upload result.
+
+        Raises:
+            VamsCliError: If the directory doesn't exist.
+            VamsTransferError: If any file in the directory failed to upload. The message names the
+                               failed keys from the report the CLI wrote before exiting non-zero.
         """
         if not os.path.isdir(directory_path):
             raise VamsCliError(f"Directory not found: {directory_path}")

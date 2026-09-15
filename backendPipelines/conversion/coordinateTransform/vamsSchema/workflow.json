@@ -6,7 +6,7 @@
         {
             "triggerType": "fileUpload",
             "inputFileFilters": {
-                "allow": ["*.e57", "*.las", "*.laz", "*.ply"],
+                "allow": ["*.e57", "*.las", "*.laz"],
                 "exclude": []
             },
             "defaultTemplateIds": {

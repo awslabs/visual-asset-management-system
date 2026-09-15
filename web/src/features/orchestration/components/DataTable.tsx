@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useId, useState } from "react";
 import {
     useReactTable,
     getCoreRowModel,
@@ -20,12 +20,20 @@ import SearchInput from "./SearchInput";
 interface DataTableProps<T> {
     columns: ColumnDef<T, any>[];
     rows: T[];
+    // What the table lists, as its accessible name. Required: a page carrying several tables (the
+    // execution detail view carries five) announces every one of them as an unnamed "table" without
+    // it, and none can be addressed by role and name.
+    ariaLabel: string;
     onRowContextMenu?: (row: T) => void;
     onRowClick?: (row: T) => void;
     getRowActions?: (row: T) => React.ReactNode;
     pageSize?: number;
     sorting?: boolean;
     filtering?: boolean;
+    // Rendered under the table while a column sort is active. Supply it when the rows are only part
+    // of the set (a server-paged caller), so a sort that covers the loaded window is not read as
+    // covering everything.
+    sortScopeNote?: React.ReactNode;
     // Stable per-row identity. Supply it whenever the row set can be re-ordered or refreshed while
     // mounted (a polling list): without it react-table keys rows by position, so React reuses a row's
     // subtree — and any state it owns, such as an open row menu — for whichever row lands there next.
@@ -42,12 +50,14 @@ interface DataTableProps<T> {
 function DataTable<T>({
     columns,
     rows,
+    ariaLabel,
     onRowContextMenu,
     onRowClick,
     getRowActions,
     pageSize = 10,
     sorting = true,
     filtering = true,
+    sortScopeNote,
     paginate = true,
     flush = false,
     getRowId,
@@ -55,6 +65,9 @@ function DataTable<T>({
     const [sortingState, setSortingState] = useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
     const [globalFilter, setGlobalFilter] = useState("");
+    // What a clickable row does. A `<tr>` is announced as a row whatever handlers it carries, so the
+    // activation is described once per table and referenced from every row.
+    const rowActivationHintId = useId();
 
     const table = useReactTable({
         data: rows,
@@ -100,7 +113,7 @@ function DataTable<T>({
                         : "orch-outline overflow-x-auto border border-border-default rounded-lg bg-surface-container"
                 }
             >
-                <table className="min-w-full border-collapse">
+                <table aria-label={ariaLabel} className="min-w-full border-collapse">
                     <thead>
                         {table.getHeaderGroups().map((headerGroup) => (
                             <tr
@@ -112,9 +125,14 @@ function DataTable<T>({
                                         | "asc"
                                         | "desc"
                                         | false;
-                                    const toggleSort = sorting
-                                        ? header.column.getToggleSortingHandler()
-                                        : undefined;
+                                    // A display column (no accessor) cannot sort, and react-table
+                                    // still hands back a toggle handler for it — rendering the button
+                                    // unconditionally gave Duration and Actions a sort control that
+                                    // did nothing when clicked.
+                                    const toggleSort =
+                                        sorting && header.column.getCanSort()
+                                            ? header.column.getToggleSortingHandler()
+                                            : undefined;
                                     return (
                                         <th
                                             key={header.id}
@@ -169,6 +187,7 @@ function DataTable<T>({
                                     onRowClick ? " cursor-pointer" : ""
                                 }`}
                                 tabIndex={onRowClick ? 0 : undefined}
+                                aria-describedby={onRowClick ? rowActivationHintId : undefined}
                                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                                 onKeyDown={
                                     onRowClick
@@ -203,6 +222,20 @@ function DataTable<T>({
                     </tbody>
                 </table>
             </div>
+
+            {onRowClick && (
+                <span id={rowActivationHintId} className="sr-only">
+                    Press Enter on a row to open its details.
+                </span>
+            )}
+
+            {/* Where a sort actually reaches. Only while one is applied — with no sort there is
+                nothing to qualify. */}
+            {sortScopeNote && sortingState.length > 0 && (
+                <p role="status" className="mt-2 text-sm text-text-secondary">
+                    {sortScopeNote}
+                </p>
+            )}
 
             {/* Pagination controls (only when the table owns paging) */}
             {paginate && table.getPageCount() > 1 && (

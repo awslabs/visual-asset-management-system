@@ -433,13 +433,66 @@ class TestSetupCommand:
             
             assert result.exit_code == 0
             assert 'Setting up VamsCLI with base URL: https://vams.mycompany.com' in result.output
-            assert '✓ Extracted API Gateway URL: https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com' in result.output
             assert 'Setup completed successfully!' in result.output
-            
-            # Verify the saved configuration includes both base_url and api_gateway_url
+
+            # Verify the saved configuration includes both base_url and api_gateway_url.
+            #
+            # The deployment reports a STAGE-LESS execute-api URL (the `api` field above), and the
+            # stored value is the stage-inclusive form. Amazon API Gateway reads the first path
+            # segment as the stage name, so a request built from the bare host asks for a stage named
+            # after the route -- `<host>/database` -- and is answered 403 {"message": "Forbidden"}
+            # before any authorizer or handler runs. That is indistinguishable from a permission
+            # denial, and `auth login` still succeeds because it talks to Amazon Cognito directly and
+            # never reaches this URL, so the misconfiguration surfaces only as an unexplained 403 on
+            # every command.
             saved_config = mocks['profile_manager'].save_config.call_args[0][0]
             assert saved_config['base_url'] == 'https://vams.mycompany.com'
-            assert saved_config['api_gateway_url'] == 'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com'
+            assert saved_config['api_gateway_url'] == (
+                'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com/api'
+            )
+            # The change is reported rather than applied silently, so an operator can see which URL
+            # the CLI will actually use.
+            assert '/api' in result.output
+
+    def test_setup_from_a_web_front_stores_the_reported_stage_inclusive_url_unchanged(
+        self, cli_runner, cli_command_mocks
+    ):
+        """The paired arm: an operator who supplies the website URL, not the API Gateway URL.
+
+        This is the normal path and it must not be disturbed by the stage normalization above. A
+        front (Amazon CloudFront, or an ALB on a deployment that has no CloudFront) serves
+        `/api/amplify-config`, and the deployment reports its execute-api URL WITH the stage already
+        present -- measured against a live deployment:
+
+            GET https://<front>/api/amplify-config
+              -> {"api": "https://<id>.execute-api.<region>.amazonaws.com/api/", ...}
+
+        So the stored value needs no substitution, and applying one would corrupt a working profile.
+        """
+        with cli_command_mocks as mocks:
+            mocks['api_client'].check_version.return_value = {
+                'match': True, 'cli_version': '1.0.0', 'api_version': '1.0.0'
+            }
+            mocks['api_client'].get_amplify_config.return_value = {
+                'region': 'us-west-2',
+                'api': 'https://1ecvpmvrj8.execute-api.us-west-2.amazonaws.com/api/',
+                'cognitoUserPoolId': 'us-west-2_test',
+                'cognitoAppClientId': 'test-client-id'
+            }
+            mocks['profile_manager'].has_config.return_value = False
+
+            with patch('click.DateTime'):
+                result = cli_runner.invoke(cli, ['setup', 'https://vams.mycompany.com'])
+
+            assert result.exit_code == 0
+            saved_config = mocks['profile_manager'].save_config.call_args[0][0]
+            # Only the trailing slash is removed; the stage is already correct and is left alone.
+            assert saved_config['api_gateway_url'] == (
+                'https://1ecvpmvrj8.execute-api.us-west-2.amazonaws.com/api'
+            )
+            # And no substitution is reported, because none was needed. Without this the test would
+            # pass even if the normalizer had appended a second '/api'.
+            assert 'stage-less' not in result.output
 
 
 class TestAuthCommands:

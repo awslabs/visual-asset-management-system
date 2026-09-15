@@ -117,6 +117,110 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def confirm_migration_target(
+    profile: Optional[str],
+    region: Optional[str],
+    base_param_prefix: Optional[str],
+    dry_run: bool,
+    destructive: bool,
+    confirm_account: Optional[str],
+    assume_yes: bool,
+) -> bool:
+    """Echo the resolved target and, for a destructive run, require the operator to confirm it.
+
+    Returns True to proceed, False to abort.
+
+    The target comes entirely from the config file and CLI flags, and the shipped template leaves
+    aws_profile and aws_region null, so boto3 falls back to whatever is in the environment. The SSM
+    prefix carries no account or Region either - it is /{configName}-{baseStackName}/resourceNames - so
+    two deployments sharing a config name and stack name resolve the SAME parameter paths and the
+    migration would read valid table names out of the wrong account without anything looking unusual.
+
+    Printing sts:GetCallerIdentity is the cheap half and always runs. The prompt is required only when
+    the run will DELETE something: auxPreviewRelocation copies each preview object to its new key and
+    then deletes the original, and there is no automated rollback for that. --confirm-account lets an
+    automated run assert the expected account instead of answering a prompt; --yes skips the prompt for
+    an operator who has already checked.
+    """
+    session_kwargs = {}
+    if profile:
+        session_kwargs['profile_name'] = profile
+    if region:
+        session_kwargs['region_name'] = region
+
+    try:
+        session = boto3.Session(**session_kwargs)
+        identity = session.client('sts').get_caller_identity()
+        account = identity.get('Account')
+        caller_arn = identity.get('Arn')
+    except Exception as e:
+        # Not fatal on its own: a principal may be denied sts:GetCallerIdentity yet hold every
+        # permission the migration needs. Reported so the operator knows the echo below is incomplete
+        # rather than reassuring.
+        logger.warning(f"Could not resolve the caller identity (sts:GetCallerIdentity failed: {e}).")
+        account, caller_arn = None, None
+
+    resolved_region = session_kwargs.get('region_name') or getattr(
+        boto3.Session(**session_kwargs), 'region_name', None
+    )
+
+    logger.info("")
+    logger.info("##### MIGRATION TARGET #####")
+    logger.info(f"  Account:      {account or 'UNRESOLVED'}")
+    logger.info(f"  Region:       {resolved_region or 'UNRESOLVED (boto3 default)'}")
+    logger.info(f"  Caller:       {caller_arn or 'UNRESOLVED'}")
+    logger.info(f"  Profile:      {profile or 'none (ambient credentials)'}")
+    logger.info(f"  SSM prefix:   {base_param_prefix or 'not configured'}")
+    logger.info(f"  Dry run:      {dry_run}")
+    logger.info(f"  Deletes data: {destructive and not dry_run}")
+    logger.info("############################")
+    logger.info("")
+
+    if confirm_account:
+        if account is None:
+            logger.error(
+                "--confirm-account was given but the caller identity could not be resolved, so the "
+                "account cannot be checked. Grant sts:GetCallerIdentity or drop the flag."
+            )
+            return False
+        if account != confirm_account:
+            logger.error(
+                f"Refusing to run: --confirm-account {confirm_account} does not match the resolved "
+                f"account {account}."
+            )
+            return False
+        logger.info(f"Account {account} matches --confirm-account.")
+        return True
+
+    if dry_run or not destructive:
+        # Nothing is deleted, so an interactive gate would only train the operator to dismiss it.
+        return True
+
+    if assume_yes:
+        logger.info("Proceeding without a prompt (--yes).")
+        return True
+
+    if not sys.stdin.isatty():
+        logger.error(
+            "This run deletes objects from the auxiliary bucket (auxPreviewRelocation) and stdin is "
+            "not a terminal, so it cannot be confirmed interactively. Re-run with "
+            "--confirm-account <id> (preferred, it verifies the target) or --yes."
+        )
+        return False
+
+    answer = input(
+        f"This will DELETE auxiliary-bucket objects in account {account or 'UNKNOWN'} "
+        f"({resolved_region or 'UNKNOWN region'}) after copying them. Type the account id to continue: "
+    ).strip()
+    if account and answer != account:
+        logger.error("Aborted: the value entered does not match the resolved account id.")
+        return False
+    if not account and answer.lower() not in ('yes', 'y'):
+        logger.error("Aborted.")
+        return False
+    return True
+
+
 def load_config_from_file(config_file: str) -> dict:
     """Load configuration from a JSON file, stripping comment fields."""
     try:
@@ -257,7 +361,7 @@ def invoke_reindexer_lambda(
         error_message = e.response['Error']['Message']
         logger.error(f"AWS Error ({error_code}): {error_message}")
         if error_code == 'ResourceNotFoundException':
-            logger.error(f"Lambda function '{function_name}' not found. Verify the function name from the CDK output 'ReindexerFunctionNameOutput'.")
+            logger.error(f"Lambda function '{function_name}' not found. Verify the function name from the CDK output 'OpenSearchReindexerFunctionNameOutput'.")
         elif error_code == 'AccessDeniedException':
             logger.error("Access denied. Ensure your IAM principal has lambda:InvokeFunction permission for the reindexer function.")
         return {'error': error_message, 'error_code': error_code}
@@ -379,7 +483,8 @@ def backfill_asset_history(
     history_table = dynamodb.Table(history_table_name)
 
     stats = {'assets_scanned': 0, 'create_records': 0, 'archive_records': 0,
-             'unarchive_records': 0, 'records_written': 0, 'errors': 0}
+             'unarchive_records': 0, 'records_written': 0, 'errors': 0,
+             'v0_lookup_failures': 0}
 
     scan_kwargs = {}
     while True:
@@ -406,7 +511,15 @@ def backfill_asset_history(
                     'assetVersionId': '0',
                 }).get('Item')
             except ClientError as e:
+                # Counted, not just logged. Uncounted, a lookup that failed on every asset left
+                # stats['errors'] at 0, so the step reported success having created no 'create'
+                # record at all.
+                # Counted, not just logged. Uncounted, a lookup that failed on every asset left
+                # stats['errors'] at 0, so the step reported success having created no 'create'
+                # record at all.
                 logger.warning(f"v0 lookup failed for {asset_id}: {e}")
+                stats['errors'] = stats.get('errors', 0) + 1
+                stats['v0_lookup_failures'] = stats.get('v0_lookup_failures', 0) + 1
                 v0 = None
             if v0 and v0.get('dateCreated'):
                 records.append(_history_record(
@@ -549,13 +662,20 @@ def scan_all_items(dynamodb_client, table_name: str, limit: int = None,
 
 
 def iter_all_items(dynamodb_client, table_name: str, limit: int = None,
-                   projection: str = None) -> Iterator[Dict]:
+                   projection: str = None,
+                   projection_names: Dict[str, str] = None) -> Iterator[Dict]:
     """Yield a table's items page by page, so a large table is never held in memory at once.
-    Same paging + ``limit`` + ``projection`` semantics as ``scan_all_items``."""
+    Same paging + ``limit`` + ``projection`` semantics as ``scan_all_items``.
+
+    ``projection_names`` supplies ExpressionAttributeNames for the projection, which is required when
+    an attribute name is not a legal identifier -- ``workflowDatabaseId:workflowId`` contains a colon,
+    so naming it directly in a ProjectionExpression is a validation error."""
     logger.info(f"Scanning {table_name} for all records...")
     scan_kwargs = {'TableName': table_name}
     if projection:
         scan_kwargs['ProjectionExpression'] = projection
+    if projection_names:
+        scan_kwargs['ExpressionAttributeNames'] = projection_names
     yielded = 0
     try:
         while True:
@@ -692,9 +812,16 @@ def _batch_write_backoff_seconds(attempt: int) -> float:
 
 
 def flush_batch_write(dynamodb_client, table_name: str, batch: List[Dict], dry_run: bool = False) -> Tuple[int, int]:
+    """Write ``batch`` to ``table_name``, returning (rows_written, errors).
+
+    Under ``dry_run`` the first element is the number of rows that WOULD be written, not a count of
+    writes that happened. Callers fold it into the same counter either way, which is what makes a dry
+    run's summary comparable to a real one - so the log line here names the mode, or a dry-run summary
+    reading "12 rows written" is indistinguishable from a real one."""
     if not batch:
         return 0, 0
     if dry_run:
+        logger.info(f"  [DRY RUN] Would write {len(batch)} row(s) to {table_name}.")
         return len(batch), 0
     written, errors = 0, 0
     # Slice into <=25-item requests; a single legacy row can append several
@@ -1899,11 +2026,16 @@ def _v2_trigger_item(row: Dict, now: str) -> Optional[Dict]:
     }
 
 
-def _offload_template_body(s3_client, bucket: str, key: str, body: str,
+def _offload_template_body(s3_client, default_bucket: Optional[Dict], key: str, body: str,
                            database_id: str, pipeline_id: str, dry_run: bool) -> bool:
     """Write an over-threshold migrated template body to the default asset bucket. False when it could
     not be stored, so the caller drops the template row rather than writing one whose configBody
-    neither lives inline nor resolves in S3."""
+    neither lives inline nor resolves in S3.
+
+    `key` is the row's stored key, relative to the area VAMS owns inside the bucket, so it is joined to
+    the bucket's baseAssetsPrefix here — the same join the pipeline template service and the run path
+    apply when they read the object back."""
+    bucket = (default_bucket or {}).get('bucketName') or ''
     if not bucket or s3_client is None:
         logger.error(
             f"Pipeline '{database_id}:{pipeline_id}' has inputParameters larger than the "
@@ -1911,23 +2043,34 @@ def _offload_template_body(s3_client, bucket: str, key: str, body: str,
             "be resolved, so its migrated template is skipped. Re-run the step with the bucket "
             "resolvable to migrate the template.")
         return False
+    full_key = default_bucket_key(default_bucket, key)
     if dry_run:
         logger.info(f"  [DRY RUN] Would offload the '{database_id}:{pipeline_id}' template body to "
-                    f"s3://{bucket}/{key}")
+                    f"s3://{bucket}/{full_key}")
         return True
     try:
-        tbs.write_body_to_s3(s3_client, bucket, key, body)
+        tbs.write_body_to_s3(s3_client, bucket, full_key, body)
         return True
     except (ClientError, BotoCoreError) as e:
         logger.error(f"Failed offloading the '{database_id}:{pipeline_id}' template body to "
-                     f"s3://{bucket}/{key}: {e}. Its migrated template is skipped.")
+                     f"s3://{bucket}/{full_key}: {e}. Its migrated template is skipped.")
         return False
 
 
-def resolve_default_bucket_name(dynamodb_client, buckets_table_name: str) -> str:
-    """The bucket name of the VAMS default asset bucket (the row flagged isDefault), or '' when none
-    is flagged. Mirrors common.workflows.defaultBucket: a bucket registered under several prefixes has
-    a row per prefix, and the bucket-root row is preferred so the canonical base wins."""
+def default_bucket_key(default_bucket: Optional[Dict], key: str) -> str:
+    """The full bucket key for a VAMS-managed pipeline key inside the default bucket. Mirrors
+    common.workflows.defaultBucket.default_bucket_key: the stored keys are relative to the area VAMS
+    owns, which for a bucket registered under a prefix is that prefix rather than the bucket root."""
+    prefix = ((default_bucket or {}).get('baseAssetsPrefix') or '').strip('/')
+    body = (key or '').lstrip('/')
+    return f"{prefix}/{body}" if prefix else body
+
+
+def resolve_default_bucket(dynamodb_client, buckets_table_name: str) -> Dict[str, str]:
+    """The VAMS default asset bucket row (the one flagged isDefault) as
+    {bucketName, baseAssetsPrefix}, or {} when none is flagged. Mirrors
+    common.workflows.defaultBucket: a bucket registered under several prefixes has a row per prefix,
+    and the bucket-root row is preferred so the canonical base wins."""
     rows = []
     for item in iter_all_items(dynamodb_client, buckets_table_name,
                                projection='bucketName,baseAssetsPrefix,isDefault'):
@@ -1936,13 +2079,13 @@ def resolve_default_bucket_name(dynamodb_client, buckets_table_name: str) -> str
         rows.append((item.get('baseAssetsPrefix', {}).get('S', '') or '',
                      item.get('bucketName', {}).get('S', '') or ''))
     if not rows:
-        return ''
+        return {}
     rows.sort(key=lambda entry: (0 if entry[0].strip('/') == '' else 1, entry[0], entry[1]))
     distinct = {name for _prefix, name in rows}
     if len(distinct) > 1:
         logger.error(f"More than one bucket is flagged as the VAMS default ({sorted(distinct)}); using "
                      f"{rows[0][1]}. Clear the stale isDefault row(s) in the S3 asset buckets table.")
-    return rows[0][1]
+    return {'bucketName': rows[0][1], 'baseAssetsPrefix': rows[0][0]}
 
 
 def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, limit: int,
@@ -1955,9 +2098,10 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
     v1_workflow_table = cfg['workflow_storage_table_name']
     v2_workflow_table = cfg['workflow_storage_table_name_v2']
     triggers_table = cfg.get('workflow_triggers_storage_table_name')
-    # Default asset bucket for an offloaded template body. Optional: a body over the inline threshold
-    # is skipped rather than written onto the row, where it would exceed the 400 KB item limit.
-    template_body_bucket = cfg.get('pipeline_template_body_bucket_name')
+    # Default asset bucket row for an offloaded template body. Optional: a body over the inline
+    # threshold is skipped rather than written onto the row, where it would exceed the 400 KB item
+    # limit.
+    template_body_bucket = cfg.get('pipeline_template_body_bucket')
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     counts = {'pipelines': 0, 'templates': 0, 'workflows': 0, 'triggers': 0, 'skipped_global': 0,
@@ -2091,7 +2235,30 @@ def backfill_global_list_partition(dynamodb_client, cfg, dry_run: bool, limit: i
         table_name = cfg.get(cfg_key)
         if not table_name:
             continue
-        rows = scan_all_items(dynamodb_client, table_name, limit)
+        # Streamed with a projection rather than materialized. This step usually runs LAST, straight
+        # after the workflow-executions step has just filled that table, so it is the step most
+        # exposed to a large row count -- and it needs only the key attributes plus the one attribute
+        # it tests for. scan_all_items with no projection held every attribute of every row of all
+        # three tables in memory simultaneously.
+        #
+        # ExpressionAttributeNames is required for the projection: two of the attribute names are
+        # reserved-word-free but "workflowDatabaseId:workflowId" contains a colon, which is not a
+        # legal identifier in a ProjectionExpression.
+        projection_names = {
+            "#p0": "workflowExecutionId",
+            "#p1": "databaseId",
+            "#p2": "workflowDatabaseId:workflowId",
+            "#p3": "pipelineId",
+            "#p4": "workflowId",
+            "#p5": _ALL_LIST_PARTITION_ATTR,
+        }
+        rows = iter_all_items(
+            dynamodb_client,
+            table_name,
+            limit,
+            projection=", ".join(projection_names.keys()),
+            projection_names=projection_names,
+        )
         # Each table's primary key attributes, derived from the row itself (no schema lookup):
         # pipeline (databaseId, pipelineId); workflow (databaseId, workflowId);
         # execution (workflowExecutionId, workflowDatabaseId:workflowId).
@@ -2129,6 +2296,62 @@ def backfill_global_list_partition(dynamodb_client, cfg, dry_run: bool, limit: i
                     counts["already"] += 1
                 else:
                     logger.error(f"Error backfilling {table_name} key={key}: {e}")
+                    counts["errors"] += 1
+    return counts
+
+
+# Global-scope sentinel partition value for the composite-key tag / tag-type tables. Mirrors
+# common.tagScope.GLOBAL_SCOPE: a tag/tag-type with an absent or "GLOBAL" databaseId is global,
+# so assets keep referencing tags by bare name.
+_TAGS_GLOBAL_SCOPE = "GLOBAL"
+
+# (legacy single-key table cfg key, V2 composite-key table cfg key, name/sort-key attribute)
+_TAGS_NAMESPACING_TABLES = [
+    ("tag_legacy_table_name", "tag_table_name_v2", "tagName"),
+    ("tag_type_legacy_table_name", "tag_type_table_name_v2", "tagTypeName"),
+]
+
+
+def copy_tags_to_global_partition(dynamodb_client, cfg, dry_run: bool, limit: int):
+    """Copy every legacy tag / tag-type row into its V2 composite table, placing each under the
+    databaseId it already carries (if any) or the GLOBAL sentinel partition otherwise. Idempotent:
+    the put ConditionExpression skips rows already present in the V2 table, so re-runs copy nothing.
+    Legacy rows are never modified or deleted."""
+    counts = {"copied": 0, "skipped": 0, "errors": 0}
+    for legacy_key, v2_key, name_attr in _TAGS_NAMESPACING_TABLES:
+        legacy_table = cfg.get(legacy_key)
+        v2_table = cfg.get(v2_key)
+        if not legacy_table or not v2_table:
+            continue
+        rows = scan_all_items(dynamodb_client, legacy_table, limit)
+        for row in rows:
+            name_value = row.get(name_attr, {}).get("S")
+            if not name_value:
+                logger.error(f"Legacy {legacy_table} row missing {name_attr}; skipping: {row}")
+                counts["errors"] += 1
+                continue
+            # Honor an existing databaseId on the legacy row, else fall back to the GLOBAL sentinel.
+            scope = row.get("databaseId", {}).get("S") or _TAGS_GLOBAL_SCOPE
+            new_item = {**row, "databaseId": s(scope)}
+            if dry_run:
+                logger.info(
+                    f"[dry-run] Would copy {name_attr}={name_value} into {v2_table} "
+                    f"under databaseId={scope}")
+                counts["copied"] += 1
+                continue
+            try:
+                dynamodb_client.put_item(
+                    TableName=v2_table,
+                    Item=new_item,
+                    ConditionExpression="attribute_not_exists(databaseId) AND attribute_not_exists(#n)",
+                    ExpressionAttributeNames={"#n": name_attr},
+                )
+                counts["copied"] += 1
+            except ClientError as e:
+                if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                    counts["skipped"] += 1
+                else:
+                    logger.error(f"Error copying {name_attr}={name_value} into {v2_table}: {e}")
                     counts["errors"] += 1
     return counts
 
@@ -2238,11 +2461,11 @@ def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix
 
     # The default asset bucket houses an offloaded template body. Optional: only a pipeline whose V1
     # inputParameters exceed the inline threshold needs it, and that case reports itself.
-    cfg['pipeline_template_body_bucket_name'] = None
+    cfg['pipeline_template_body_bucket'] = None
     try:
         buckets_table = resolve('s3_asset_buckets_storage_table_name',
                                 ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
-        cfg['pipeline_template_body_bucket_name'] = resolve_default_bucket_name(
+        cfg['pipeline_template_body_bucket'] = resolve_default_bucket(
             dynamodb_client, buckets_table)
     except Exception as e:
         logger.warning(f"Could not resolve the VAMS default asset bucket: {e}")
@@ -2280,6 +2503,70 @@ def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix
     return 0 if counts['errors'] == 0 else 1
 
 
+def run_tags_namespacing_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
+    """Copy legacy tag / tag-type rows into the V2 composite tables under GLOBAL. Returns 0 on success."""
+    session_kwargs = {}
+    if profile:
+        session_kwargs['profile_name'] = profile
+    if region:
+        session_kwargs['region_name'] = region
+    dynamodb_client = boto3.Session(**session_kwargs).client('dynamodb')
+
+    # Resolve the legacy + V2 table names for both tags and tag types: explicit config overrides
+    # win, else resolve from the SSM prefix.
+    try:
+        lookup = SsmResourceLookup(base_param_prefix, profile=profile, region=region) if base_param_prefix else None
+
+        def resolve(cfg_key, param_key):
+            override = config.get(cfg_key)
+            if override and not str(override).startswith('<') and not str(override).startswith('YOUR-'):
+                return override
+            if not lookup:
+                raise ValueError(
+                    f"Config '{cfg_key}' is unset and no resource_names_ssm_param_prefix is configured "
+                    "to resolve it from SSM.")
+            return lookup.resolve(param_key)
+
+        cfg = {
+            'tag_legacy_table_name': resolve(
+                'tag_legacy_table_name', ResourceParamKeys.LEGACY_TAG_STORAGE_TABLE),
+            'tag_table_name_v2': resolve(
+                'tag_table_name_v2', ResourceParamKeys.TAG_STORAGE_TABLE),
+            'tag_type_legacy_table_name': resolve(
+                'tag_type_legacy_table_name', ResourceParamKeys.LEGACY_TAG_TYPE_STORAGE_TABLE),
+            'tag_type_table_name_v2': resolve(
+                'tag_type_table_name_v2', ResourceParamKeys.TAG_TYPE_STORAGE_TABLE),
+        }
+    except Exception as e:
+        logger.error(f"Failed resolving table names for the tagsNamespacing step: {e}")
+        return 1
+
+    limit = args.limit if args.limit is not None else config.get('limit')
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.5 -> v2.6 TAGS NAMESPACING (legacy tags/tag-types -> V2 GLOBAL partition)")
+    logger.info(f"Dry Run: {dry_run}")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        counts = copy_tags_to_global_partition(dynamodb_client, cfg, dry_run, limit)
+    except Exception as e:
+        logger.error(f"tagsNamespacing step failed: {e}")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    logger.info("=" * 80)
+    logger.info("TAGS NAMESPACING SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    logger.info(f"  Rows copied:                     {counts['copied']}")
+    logger.info(f"  Rows skipped (already present):  {counts['skipped']}")
+    logger.info(f"  Errors:                          {counts['errors']}")
+    logger.info("=" * 80)
+
+    return 0 if counts['errors'] == 0 else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3).',
@@ -2299,7 +2586,7 @@ Examples:
   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --async
 
 Notes:
-  - The reindexer Lambda function name is exposed by the CDK stack output 'ReindexerFunctionNameOutput'.
+  - The reindexer Lambda function name is exposed by the CDK stack output 'OpenSearchReindexerFunctionNameOutput'.
   - Synchronous invocation (default) waits for completion and prints a summary.
   - For deployments with hundreds of thousands or millions of objects, use --async and monitor CloudWatch Logs.
   - --clear-indexes defaults to FALSE because the v3 indexes are empty after the v2.6 deploy. Use it only when re-running.
@@ -2310,7 +2597,7 @@ Notes:
                         help='Path to the migration JSON configuration file')
     parser.add_argument('--steps',
                         choices=['reindex', 'assetHistory', 'workflowExecutions', 'auxPreviewRelocation',
-                                 'pipelineWorkflowDefinitions', 'globalListBackfill', 'all'],
+                                 'pipelineWorkflowDefinitions', 'globalListBackfill', 'tagsNamespacing', 'all'],
                         default='all',
                         help="Which release migration step(s) to run (default: all)")
     parser.add_argument('--operation', choices=['assets', 'files', 'both'],
@@ -2330,6 +2617,14 @@ Notes:
                         help='Use asynchronous invocation (recommended for large datasets)')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO',
                         help='Logging level (default: INFO)')
+    parser.add_argument('--confirm-account', dest='confirm_account',
+                        help='Expected AWS account id. The migration refuses to run if the resolved '
+                             'account differs, and no interactive confirmation is then required. '
+                             'Preferred over --yes for automated runs, because it verifies the target '
+                             'rather than only skipping the prompt.')
+    parser.add_argument('--yes', action='store_true',
+                        help='Skip the interactive confirmation before a step that deletes data '
+                             '(auxPreviewRelocation). Does not verify the target account.')
 
     args = parser.parse_args()
 
@@ -2343,6 +2638,7 @@ Notes:
     run_aux_preview_relocation = args.steps in ('auxPreviewRelocation', 'all')
     run_pipeline_workflow_definitions = args.steps in ('pipelineWorkflowDefinitions', 'all')
     run_global_list_backfill = args.steps in ('globalListBackfill', 'all')
+    run_tags_namespacing = args.steps in ('tagsNamespacing', 'all')
 
     operation = args.operation or config.get('operation', 'both')
     dry_run = args.dry_run or bool(config.get('dry_run', False))
@@ -2355,6 +2651,22 @@ Notes:
     base_param_prefix = config.get('resource_names_ssm_param_prefix')
     if base_param_prefix and base_param_prefix.startswith('<'):
         base_param_prefix = None
+
+    # Echo the resolved target before touching anything. The shipped config template leaves
+    # aws_profile and aws_region null, so boto3 falls back to the ambient environment, and the SSM
+    # prefix is /{configName}-{baseStackName}/resourceNames with no account or Region in it. Two
+    # deployments that share a config name and stack name therefore resolve identical parameter
+    # paths, and nothing else in this script would reveal which account it had reached.
+    if not confirm_migration_target(
+        profile=profile,
+        region=region,
+        base_param_prefix=base_param_prefix,
+        dry_run=dry_run,
+        destructive=run_aux_preview_relocation,
+        confirm_account=args.confirm_account,
+        assume_yes=args.yes,
+    ):
+        return 1
 
     reindex_ok = True
     if run_reindex:
@@ -2452,10 +2764,30 @@ Notes:
             dry_run=dry_run,
             limit=limit,
         )
-        if backfill_stats.get('errors'):
-            logger.warning(f"Asset history backfill finished with {backfill_stats['errors']} errors.")
-
     exit_code = 0 if reindex_ok else 1
+
+    if run_asset_history:
+        # Folded into the exit code like every other step. A warning alone meant a backfill that
+        # failed on every asset still exited 0, and run_migration.sh then printed
+        # "Reindex migration completed successfully."
+        if backfill_stats.get('errors'):
+            logger.error(
+                f"Asset history backfill finished with {backfill_stats['errors']} error(s). "
+                f"The step is idempotent - the sort key is deterministic - so re-running it after "
+                f"fixing the cause repairs the gap."
+            )
+            exit_code = 1
+        # The signature of a systematic failure rather than a per-asset one: rows were read and none
+        # were written. Reported loudly because both counts individually look healthy.
+        scanned = backfill_stats.get('assets_scanned', 0)
+        created = backfill_stats.get('create_records', 0)
+        if scanned > 0 and created == 0:
+            logger.error(
+                f"Asset history backfill scanned {scanned} asset(s) and created 0 history record(s). "
+                f"That is the signature of a systematic lookup or permission failure rather than a "
+                f"per-asset one. Check for AccessDenied on the asset versions table."
+            )
+            exit_code = 1
 
     if run_workflow_executions:
         logger.info("")
@@ -2482,6 +2814,13 @@ Notes:
         logger.info("")
         logger.info("##### STEP: Global-list partition backfill (allListPartition) #####")
         rc = run_global_list_backfill_step(config, args, base_param_prefix, profile, region, dry_run)
+        if rc != 0:
+            exit_code = rc
+
+    if run_tags_namespacing:
+        logger.info("")
+        logger.info("##### STEP: Tags namespacing (legacy tags/tag-types -> V2 GLOBAL partition) #####")
+        rc = run_tags_namespacing_step(config, args, base_param_prefix, profile, region, dry_run)
         if rc != 0:
             exit_code = rc
 

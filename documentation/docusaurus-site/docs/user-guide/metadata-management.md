@@ -47,9 +47,9 @@ File attributes only support the `string` value type. Attempting to create a fil
 ### Single metadata entry
 
 1. Navigate to the entity's metadata view (for example, the **Metadata** tab on an asset detail page).
-2. Click **Add** or the add button in the metadata table header.
+2. Choose **Add** or the add button in the metadata table header.
 3. Enter a **key** (field name), select the **value type**, and provide the **value**.
-4. Click **Save** to persist the metadata.
+4. Choose **Save** to persist the metadata.
 
 If a metadata schema is active for this entity type, the form may pre-populate required fields and provide type-specific input controls.
 
@@ -60,7 +60,7 @@ To create multiple metadata entries at once:
 1. Navigate to the entity's metadata view.
 2. Switch to **Bulk Edit** mode using the toggle in the toolbar.
 3. Add multiple key-value-type rows.
-4. Click **Save All** to persist all entries in a single operation.
+4. Choose **Save All** to persist all entries in a single operation.
 
 The bulk operation response indicates how many items succeeded and failed, with detailed error messages for any failures.
 
@@ -77,9 +77,9 @@ VAMS supports two update modes for metadata:
 
 To edit a metadata entry:
 
-1. Click the **Edit** button (pencil icon) on the metadata row.
+1. Choose the **Edit** button (pencil icon) on the metadata row.
 2. Modify the value using the type-appropriate input control.
-3. Click **Save** to persist the change.
+3. Choose **Save** to persist the change.
 
 :::warning
 The `REPLACE_ALL` mode permanently removes any metadata keys not included in the update request. Use this mode with caution.
@@ -89,12 +89,12 @@ The `REPLACE_ALL` mode permanently removes any metadata keys not included in the
 
 ### Single deletion
 
-Click the **Delete** button (trash icon) on the metadata row you want to remove, then confirm the deletion.
+Choose the **Delete** button (trash icon) on the metadata row you want to remove, then confirm the deletion.
 
 ### Bulk deletion
 
 1. Select multiple metadata rows using the checkboxes.
-2. Click **Delete Selected** in the toolbar.
+2. Choose **Delete Selected** in the toolbar.
 3. Confirm the deletion. The operation removes all selected metadata keys.
 
 ## Metadata schemas
@@ -124,18 +124,28 @@ Each schema targets one entity type:
 
 ### Creating a schema
 
-1. Navigate to **Metadata Schemas** from the left navigation menu.
+1. Navigate to **Metadata Schema** from the left navigation menu.
 2. Select a database (or GLOBAL) from the database selector.
-3. Click **Create Schema**.
+3. Choose **Create Schema**.
 4. Fill in the schema details:
     - **Schema Name** -- A descriptive name for the schema.
     - **Entity Type** -- The target entity type (cannot be changed after creation).
     - **Enabled** -- Whether the schema is currently active.
     - **File Type Restriction** (optional, for `fileMetadata` and `fileAttribute` only) -- Comma-delimited file extensions that this schema applies to (for example, `.jpg,.png,.pdf`). If left empty, the schema applies to all file types.
 5. Add one or more schema fields.
-6. Click **Create Schema**.
+6. Choose **Create Schema**.
 
 ![Metadata schema editor showing field definitions and value types](/img/edit_schema_management_20260323_v2.5.png)
+
+### File type restriction matching
+
+A **File Type Restriction** is compared against the extension of the file's name:
+
+-   Extensions are written with a leading dot (`.glb`). An entry without one matches no file.
+-   The extension is read from the file's name, not from the whole path. A dot in a folder name is not an extension, so `folder.v2/part.glb` matches a schema restricted to `.glb`.
+-   Matching is case-insensitive, and the last dot in the name decides the extension. `archive.tar.gz` matches `.gz`.
+-   A file whose name carries no extension -- `LICENSE`, `Dockerfile`, `README` -- is matched by every enabled schema for its entity type, restricted schemas included. This is the same for a file at the root of an asset and for one under a folder whose name contains a dot.
+-   `.all` in the list applies the schema to all file types, as does leaving the restriction empty.
 
 ### Schema field definitions
 

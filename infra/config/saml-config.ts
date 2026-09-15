@@ -8,6 +8,7 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 
 interface SamlSettings {
     name: string;
+    displayName: string;
     cognitoDomainPrefix: string;
     metadata: cognito.UserPoolIdentityProviderSamlMetadata;
     attributeMapping: cognito.AttributeMapping;
@@ -29,6 +30,8 @@ export const samlSettings: SamlSettings = {
     // This string is used to identify the saml identify provider in the Cognito User Pool as well as
     // in the user interface layer to authenticate users against that identity provider.
     name: "myidentiyprovidername",
+    // Display name shown on the login button (e.g., "Login with <displayName>")
+    displayName: "SSO",
     // This is used as a url prefix to authenticate users with the SAML identity provider.
     // If you domain prefix is mydomainprefix, then your complete domain will be
     // https://mydomainprefix.auth.us-east-1.amazoncognito.com/saml2/idpresponse. This string

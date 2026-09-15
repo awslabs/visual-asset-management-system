@@ -29,8 +29,19 @@
      * properties, so a form control on a Tailwind page paints the exact colour a Cloudscape control
      * paints beside it and follows Cloudscape's light/dark switch automatically. `applyMode()`
      * (src/hooks/useThemeSettings.ts) publishes these variables, so they are defined at runtime; the
-     * literal after each comma is the matching Cloudscape value as a build-time fallback. Aliasing
-     * rather than copying is what keeps the two from drifting apart on a Cloudscape upgrade. */
+     * literal after each comma is the matching Cloudscape value as a build-time fallback.
+     *
+     * The `-ifz5bb`-style suffix is derived from the token NAME, not from the package version: the
+     * same suffixes appear identically in @cloudscape-design/design-tokens and
+     * @cloudscape-design/components even though those two are versioned separately. So a version bump
+     * does not by itself regenerate them, and aliasing the hashed name is stable rather than fragile.
+     *
+     * What WOULD break silently is Cloudscape renaming or removing a token, or changing the value the
+     * literal mirrors: a reference that no longer resolves falls back to the literal with no build
+     * error and no runtime error, leaving the previous release's colour beside the new one.
+     * `src/__tests__/shellAndThemeInvariants.test.ts` reads every hashed name — and the light-mode
+     * fallback beside it — back out of the installed @cloudscape-design/design-tokens output, so
+     * either change fails the suite instead of degrading quietly. */
     --vams-bg-input: var(--color-background-input-default-ifz5bb, #ffffff);
     --vams-orch-page-bg: var(--color-background-layout-main-5ilwcb, #ffffff);
     --vams-orch-container-bg: var(--color-background-container-content-6u8rvp, #ffffff);

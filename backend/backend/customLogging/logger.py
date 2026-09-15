@@ -11,8 +11,11 @@ date_format = "%m/%d/%Y %I:%M:%S %p"
 
 REDACTED = "<redacted>"
 
-# Credential-shaped keys - the value is never safe to log.
-SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey", "SessionToken")
+# Credential-shaped keys - the value is never safe to log. Key matching is on the WHOLE lowercased
+# key name, so the api-key identifier fields (apiKeyId, apiKeyName, apiKeyHash) stay in the clear and
+# the audit trail keeps naming which key an action used.
+SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
+                  "SessionToken", "apiKey", "apiKeySecret", "rawKey")
 
 # Caller-authored payload keys - a pipeline template body or a tag value carries free-form content
 # (prompts, model configuration, file paths). The key is kept so the record still shows that the field

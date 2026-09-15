@@ -79,7 +79,10 @@ function validateDatabaseName(name: string) {
 function validateDatabaseDescriptionLength(description: string) {
     const min = 4,
         max = 256;
-    return description.length >= min && description.length <= max
+    // The API removes surrounding whitespace before applying its own length constraint, so
+    // the trimmed length is what decides whether a value is accepted.
+    const trimmed = description.trim();
+    return trimmed.length >= min && trimmed.length <= max
         ? null
         : `Between ${min} and ${max} characters`;
 }
@@ -300,6 +303,10 @@ export default function CreateDatabase({
                                         }
                                     })
                                     .catch((err) => {
+                                        // Console logging only: a % specifier in the interpolated
+                                        // value can at most garble this one log line; nothing is
+                                        // executed, stored or returned from it.
+                                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                         console.log(`${createOrUpdate} database error`, err);
                                         const msg =
                                             err.message ||

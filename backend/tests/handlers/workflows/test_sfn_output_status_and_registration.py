@@ -81,6 +81,17 @@ def _event(**overrides):
     return {"body": body}
 
 
+def _collecting_table(puts):
+    """A table stub that collects written items from EITHER write mode -- one-at-a-time put_item or a
+    batch_writer context -- so an assertion about WHICH rows were written does not also pin HOW the
+    recording batched them."""
+    table = MagicMock()
+    table.put_item.side_effect = lambda Item: puts.append(Item)
+    table.batch_writer.return_value.__enter__.return_value.put_item.side_effect = (
+        lambda Item: puts.append(Item))
+    return table
+
+
 def _asset_patches():
     return (
         patch.object(po, "lookup_existing_asset",
@@ -172,8 +183,7 @@ class TestOutputFileBucketPairing:
 
     def test_recorded_row_prefers_the_descriptor_bucket_over_the_asset_bucket(self):
         puts = []
-        table = MagicMock()
-        table.put_item.side_effect = lambda Item: puts.append(Item)
+        table = _collecting_table(puts)
         dynamo = MagicMock(Table=MagicMock(return_value=table))
         po.record_execution_outputs(
             dynamo=dynamo, workflow_execution_id="E1", end_state_pipeline_execution_id="P1",
@@ -188,8 +198,7 @@ class TestOutputFileBucketPairing:
 
     def test_falls_back_to_bucket_name_when_descriptor_has_none(self):
         puts = []
-        table = MagicMock()
-        table.put_item.side_effect = lambda Item: puts.append(Item)
+        table = _collecting_table(puts)
         dynamo = MagicMock(Table=MagicMock(return_value=table))
         po.record_execution_outputs(
             dynamo=dynamo, workflow_execution_id="E1", end_state_pipeline_execution_id="P1",
@@ -436,6 +445,7 @@ class TestRegistrationIdempotency:
     _SM_ARN = "arn:aws:states:us-east-1:123456789012:stateMachine:sm"
     _EX_ARN = "arn:aws:states:us-east-1:123456789012:execution:sm:ex"
     _LG_ARN = "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lg:*"
+    _SOURCE = "vams.prod.execution.E1.pipeline.P1"
 
     def _detail(self):
         return {"pipelineExecutionId": "P1",
@@ -455,8 +465,8 @@ class TestRegistrationIdempotency:
         table = MagicMock(query=MagicMock(return_value={"Items": [row]}),
                           update_item=MagicMock(side_effect=_update_item))
         with patch.object(reg.dynamodb, "Table", return_value=table):
-            reg.register(self._detail())
-            reg.register(self._detail())
+            reg.register(self._detail(), source=self._SOURCE)
+            reg.register(self._detail(), source=self._SOURCE)
         assert table.update_item.call_count == 1
         assert len(stored_subs) == 1 and len(stored_logs) == 1
 
@@ -471,7 +481,40 @@ class TestRegistrationIdempotency:
         with patch.object(reg.dynamodb, "Table", return_value=table):
             reg.register({"pipelineExecutionId": "P1",
                           "subExecution": {"stateMachineArn": self._SM_ARN,
-                                           "executionArn": new_ex}})
+                                           "executionArn": new_ex}}, source=self._SOURCE)
         subs = table.update_item.call_args.kwargs["ExpressionAttributeValues"][":s"]
         assert subs == [{"resourceType": "stepFunctionsExecution",
                          "stateMachineArn": self._SM_ARN, "executionArn": new_ex}]
+
+    def test_a_legacy_four_key_row_entry_absorbs_a_seven_key_redelivery(self):
+        # A pipeline redeployed with the descriptive fields re-registers the SAME location; the row
+        # must gain the fields, not a second copy.
+        legacy = {"logGroupArn": self._LG_ARN, "logGroupName": "lg", "logStreamName": "s1",
+                  "logStreamPrefix": ""}
+        row = {"pipelineExecutionId": "P1", "workflowExecutionId": "E1",
+               "registeredSubExecutions": [{"resourceType": "stepFunctionsExecution",
+                                            "stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN}],
+               "registeredLogs": [legacy]}
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        detail = self._detail()
+        detail["logs"][0].update({"stageName": "Convert", "label": "Converter", "sourceType": "stateMachine"})
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.register(detail, source=self._SOURCE)
+        assert table.update_item.call_count == 1
+        kw = table.update_item.call_args.kwargs
+        assert kw["UpdateExpression"].startswith("SET registeredLogs[0].")
+        assert "list_append" not in kw["UpdateExpression"]
+        assert kw["ExpressionAttributeValues"][":m_stageName"] == "Convert"
+
+    def test_a_four_key_redelivery_onto_a_seven_key_row_entry_writes_nothing(self):
+        stored = {"logGroupArn": self._LG_ARN, "logGroupName": "lg", "logStreamName": "s1",
+                  "logStreamPrefix": "", "stageName": "Convert", "label": "Converter",
+                  "sourceType": "stateMachine"}
+        row = {"pipelineExecutionId": "P1", "workflowExecutionId": "E1",
+               "registeredSubExecutions": [{"resourceType": "stepFunctionsExecution",
+                                            "stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN}],
+               "registeredLogs": [stored]}
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.register(self._detail(), source=self._SOURCE)
+        table.update_item.assert_not_called()

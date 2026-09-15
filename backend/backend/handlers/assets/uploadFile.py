@@ -34,6 +34,7 @@ from common.s3PathPatterns import (
     PREVIEW_PREFIX,
 )
 from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL
+from common.dynamodb import to_update_expr
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -286,10 +287,31 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def save_asset_details(asset_data):
-    """Save asset details to DynamoDB"""
+def update_asset_attributes(databaseId, assetId, updates):
+    """Update the named attributes of an existing asset record in DynamoDB.
+
+    Only the supplied attributes are written, so a field another writer changed while
+    the upload was in flight is not reverted. Conditional on the record still existing
+    so an asset removed during the upload is not recreated.
+    """
+    keys_map, values_map, expr = to_update_expr(updates)
     try:
-        asset_table.put_item(Item=asset_data)
+        asset_table.update_item(
+            Key={
+                'databaseId': databaseId,
+                'assetId': assetId
+            },
+            UpdateExpression=expr,
+            ExpressionAttributeNames=keys_map,
+            ExpressionAttributeValues=values_map,
+            ConditionExpression='attribute_exists(databaseId) AND attribute_exists(assetId)'
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset {assetId} in database {databaseId} no longer exists, asset record not updated")
+            raise VAMSGeneralErrorResponse(f"Error saving asset.")
+        logger.exception(f"Error saving asset details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error saving asset.")
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
@@ -1016,27 +1038,28 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
                 )
                 if not is_valid:
                     raise VAMSGeneralErrorResponse(error_message)
-        
+
+    # Every remaining per-file rule is checked here, before any upload is initiated. Each reads only
+    # relativeKey, file_size and uploadType, so none of it depends on the per-file work below. Run
+    # inside that loop instead, a rejection on the second or later file leaves the earlier files with
+    # multipart uploads already created in S3 and no upload record to find them by, so they linger
+    # until the bucket lifecycle rule expires them.
+    for file in request_model.files:
+        if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
+            raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
+
+        # Validate the extension of an asset preview and of a .previewFile. file
+        if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
+            if not validate_preview_file_extension(file.relativeKey):
+                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+
+        # Validate file size for preview files
+        if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
+            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
+
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
         logger.info(f"Asset {assetId} already has a preview. The existing preview will be replaced.")
-        
-        # Validate file extensions before proceeding
-        for file in request_model.files:
-            if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
-                raise VAMSGeneralErrorResponse(f"File provided has an unsupported file extension")
-            
-            # Additional validation for preview files
-            if uploadType == "assetPreview":
-                # Validate preview file extension
-                if not validate_preview_file_extension(file.relativeKey):
-                    raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
-            
-            # Check if this is a preview file in an assetFile upload
-            if uploadType == "assetFile" and is_preview_file(file.relativeKey):
-                # Validate preview file extension
-                if not validate_preview_file_extension(file.relativeKey):
-                    raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
     
     # Generate upload ID
     uploadId = f"y{str(uuid.uuid4())}"
@@ -1054,15 +1077,9 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
+    # Every file has already passed validation above, so no rejection can occur once the first
+    # multipart upload has been created.
     for file in request_model.files:
-        # Validate file extension
-        if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
-            raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
-        
-        # Validate file size for preview files
-        if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
-            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
-        
         # Determine final S3 key based on upload type
         if uploadType == "assetFile":
             # Get the asset's base key from assetLocation
@@ -1235,6 +1252,18 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     # Process each file in the request
     for file in request_model.files:
         try:
+            # Validate the extension of an asset preview and of a .previewFile. file
+            if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
+                if not validate_preview_file_extension(file.relativeKey):
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",
+                        success=False,
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                    ))
+                    has_failures = True
+                    continue
+
             # Validate file extension if restrictions are configured
             # Only apply to regular asset files, not asset previews or file preview files
             if allowed_extensions and allowed_extensions.strip() != "" and uploadType == "assetFile":
@@ -1400,7 +1429,12 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     try:
                         s3.head_object(Bucket=bucket_name, Key=base_file_key)
                     except ClientError as e:
-                        if e.response['Error']['Code'] == 'NoSuchKey':
+                        # head_object reports a missing key as '404'; 'NoSuchKey' is what get_object
+                        # raises (measured against S3). Matching 'NoSuchKey' alone made this branch
+                        # unreachable, so a genuinely missing base file took the generic
+                        # "Error verifying base file" path and the accurate message naming the missing
+                        # file was never emitted.
+                        if e.response['Error']['Code'] in ('404', 'NoSuchKey', 'NotFound'):
                             # Base file doesn't exist in S3 or in the current request
                             file_results.append(FileCompletionResult(
                                 relativeKey=file.relativeKey,
@@ -1581,7 +1615,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         # If asset already has a type and assetType is None, keep the existing type
         
         # Save updated asset
-        save_asset_details(asset)
+        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']})
         
         # Send notification to subscribers
         send_subscription_email(databaseId, assetId)
@@ -1596,7 +1630,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             }
             
             # Save updated asset
-            save_asset_details(asset)
+            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
     
     # Update upload status in DynamoDB
     try:
@@ -2117,7 +2151,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     try:
                         s3.head_object(Bucket=bucket_name, Key=base_file_key)
                     except ClientError as e:
-                        if e.response['Error']['Code'] == 'NoSuchKey':
+                        # head_object reports a missing key as '404'; 'NoSuchKey' is what get_object
+                        # raises (measured against S3). Matching 'NoSuchKey' alone made this branch
+                        # unreachable, so a genuinely missing base file took the generic
+                        # "Error verifying base file" path and the accurate message naming the missing
+                        # file was never emitted.
+                        if e.response['Error']['Code'] in ('404', 'NoSuchKey', 'NotFound'):
                             # Base file doesn't exist in S3 or in the current request
                             # Delete the uploaded file
                             delete_s3_object(bucket_name, temp_s3_key)
@@ -2295,7 +2334,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
         # If asset already has a type and assetType is None, keep the existing type
         
         # Save updated asset
-        save_asset_details(asset)
+        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']})
         
         # Send notification to subscribers
         send_subscription_email(databaseId, assetId)
@@ -2310,7 +2349,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             }
             
             # Save updated asset
-            save_asset_details(asset)
+            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
     
     # Update upload status in DynamoDB
     try:

@@ -3,63 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { resolvePipelineParams, findUnmatchedTags, missingRequiredTags } from "./resolveTemplate";
+import { resolvePipelineParams, missingRequiredTags } from "./resolveTemplate";
 import { Pipeline, Template, TagSchemaField } from "../types";
 
 describe("resolveTemplate", () => {
-    describe("findUnmatchedTags", () => {
-        it("flags an unmatched {{tag}} in the body", () => {
-            expect(
-                findUnmatchedTags(
-                    '{"a":"{{ missing }}"}',
-                    new Set(["provided"]),
-                    new Set(["executionId"])
-                )
-            ).toEqual(["missing"]);
-        });
-
-        it("does not flag tags that are provided", () => {
-            expect(
-                findUnmatchedTags(
-                    '{"a":"{{ provided }}"}',
-                    new Set(["provided"]),
-                    new Set(["executionId"])
-                )
-            ).toEqual([]);
-        });
-
-        it("does not flag system tags", () => {
-            expect(
-                findUnmatchedTags(
-                    '{"a":"{{ executionId }}"}',
-                    new Set(["provided"]),
-                    new Set(["executionId"])
-                )
-            ).toEqual([]);
-        });
-
-        it("does not flag metadata_ prefixed dynamic tags", () => {
-            expect(
-                findUnmatchedTags(
-                    '{"a":"{{ metadata_customField }}"}',
-                    new Set([]),
-                    new Set(["executionId"])
-                )
-            ).toEqual([]);
-        });
-
-        it("handles multiple tags", () => {
-            const body = '{"a":"{{ tag1 }}", "b":"{{ tag2 }}", "c":"{{ tag3 }}"}';
-            expect(findUnmatchedTags(body, new Set(["tag1", "tag3"]), new Set())).toEqual(["tag2"]);
-        });
-
-        it("handles whitespace in tags", () => {
-            expect(findUnmatchedTags('{"a":"{{  spaced  }}"}', new Set([]), new Set())).toEqual([
-                "spaced",
-            ]);
-        });
-    });
-
     describe("missingRequiredTags", () => {
         it("returns empty array when all required tags are provided", () => {
             const schema: TagSchemaField[] = [
@@ -260,7 +207,9 @@ describe("resolveTemplate", () => {
             expect(r.errors.some((e) => /reserved/i.test(e))).toBe(true);
         });
 
-        it("case 1: detects unmatched tags in template body", () => {
+        it("case 1: a body tag with no schema entry does not block launch", () => {
+            // The backend leaves such a tag unsubstituted and the pipeline receives the literal
+            // {{missing}} text, so blocking here would refuse a run the API accepts.
             const template: Template = {
                 databaseId: "db",
                 pipelineId: "p",
@@ -276,7 +225,8 @@ describe("resolveTemplate", () => {
                 templateId: "t",
                 tags: [],
             });
-            expect(r.errors.some((e) => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
+            expect(r.errors).toEqual([]);
+            expect(r.mode).toBe(1);
         });
 
         it("case 1: detects missing required tags", () => {
@@ -320,7 +270,7 @@ describe("resolveTemplate", () => {
             expect(r.params.customTemplateOverride).toBe('{"override":true}');
         });
 
-        it("case 2: validates tags against template schema and unmatched tags against override body", () => {
+        it("case 2: validates tags against the template schema, not the override body's tags", () => {
             const template: Template = {
                 databaseId: "db",
                 pipelineId: "p",
@@ -337,7 +287,9 @@ describe("resolveTemplate", () => {
                 tags: [{ key: "required1", value: "val" }],
                 customTemplateOverride: '{"a":"{{ missing }}"}',
             });
-            expect(r.errors.some((e) => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
+            // The undeclared {{missing}} is not an error; the required tag WAS supplied, so nothing is.
+            expect(r.errors).toEqual([]);
+            expect(r.mode).toBe(2);
         });
 
         it("case 3: template-less override is valid when allowOverride and !requireTemplate", () => {
@@ -363,7 +315,8 @@ describe("resolveTemplate", () => {
             expect(r.errors.some((e) => /reserved/i.test(e))).toBe(true);
         });
 
-        it("case 3: detects unmatched tags in override body", () => {
+        it("case 3: a template-less override body's tags are never declared, and never block", () => {
+            // A template-less override carries no schema at all, so every name in it is undeclared.
             const r = resolvePipelineParams({
                 pipeline: {
                     systemConfig: { allowCustomTemplateOverride: true, requireTemplate: false },
@@ -371,7 +324,8 @@ describe("resolveTemplate", () => {
                 tags: [],
                 customTemplateOverride: '{"a":"{{ missing }}"}',
             });
-            expect(r.errors.some((e) => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
+            expect(r.errors).toEqual([]);
+            expect(r.mode).toBe(3);
         });
 
         it("case 4: no-template no-override is valid when !requireTemplate", () => {
@@ -418,7 +372,8 @@ describe("resolveTemplate", () => {
 
         it("case 1: a blank OPTIONAL string/enum/string-list tag referenced in the body is accepted", () => {
             // The backend materializes the type's empty value for these three, so the {{tag}} renders
-            // empty rather than erroring as unmatched. Every shipped GenAI template relies on it —
+            // empty rather than surviving as its own literal text. Every shipped GenAI template relies
+            // on it —
             // their prompt tags are optional and documented as "leave blank to fall back to asset
             // metadata".
             const template: Template = {
@@ -445,10 +400,13 @@ describe("resolveTemplate", () => {
         });
 
         it.each(["integer", "number", "boolean"] as const)(
-            "case 1: a blank OPTIONAL %s tag referenced in the body is still unmatched",
+            "case 1: a blank OPTIONAL %s tag referenced in the body does not block launch",
             (type) => {
                 // These three have no representable empty value, so the backend leaves them out of the
-                // filled map and the renderer fails on the placeholder.
+                // filled map and the {{tag}} stays literal — it does not fail the run. The shape is
+                // refused where it is DECLARED (validate_tag_schema requires such a tag to be required
+                // or to carry a default), not when a run is launched, so erroring here would block a
+                // launch the API accepts.
                 const template: Template = {
                     databaseId: "db",
                     pipelineId: "p",
@@ -464,13 +422,14 @@ describe("resolveTemplate", () => {
                     templateId: "t",
                     tags: [],
                 });
-                expect(r.errors.some((e) => /unmatched/i.test(e) && /COUNT/.test(e))).toBe(true);
+                expect(r.errors).toEqual([]);
+                expect(r.mode).toBe(1);
             }
         );
 
-        it("case 1: a blank REQUIRED tag referenced in the body is still unmatched", () => {
-            // The backend errors on a blank required tag instead of filling it, so the web must not
-            // seed its key either — both the required and the unmatched message are expected.
+        it("case 1: a blank REQUIRED tag referenced in the body still blocks launch", () => {
+            // The backend errors on a blank required tag in validate_tags, before substitution runs.
+            // That check is what makes the required case blocking; an undeclared name is not.
             const template: Template = {
                 databaseId: "db",
                 pipelineId: "p",
@@ -487,7 +446,6 @@ describe("resolveTemplate", () => {
                 tags: [],
             });
             expect(r.errors.some((e) => /required/i.test(e) && /PROMPT/.test(e))).toBe(true);
-            expect(r.errors.some((e) => /unmatched/i.test(e) && /PROMPT/.test(e))).toBe(true);
         });
 
         it("case 1: a required tag whose default round-tripped as null blocks launch", () => {
@@ -530,7 +488,7 @@ describe("resolveTemplate", () => {
             expect(r.mode).toBe(2);
         });
 
-        it("case 5: validates unmatched tags against edited body", () => {
+        it("case 5: an edited body's undeclared tags do not block launch", () => {
             const template: Template = {
                 databaseId: "db",
                 pipelineId: "p",
@@ -548,7 +506,8 @@ describe("resolveTemplate", () => {
                 tags: [],
                 customEditedBody: '{"a":"{{ missing }}"}',
             });
-            expect(r.errors.some((e) => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
+            expect(r.errors).toEqual([]);
+            expect(r.mode).toBe(5);
         });
     });
 });

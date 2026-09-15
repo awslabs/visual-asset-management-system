@@ -12,8 +12,10 @@ Playwright drives the **deployed** application, so it is the only layer that pro
 reached users. Jest proves a component behaves; Playwright proves the built, published bundle behaves.
 
 :::danger[A source-only fix proves nothing here]
-These specs run against `E2E_BASE_URL` (default `https://vams5.scheurik.people.aws.dev`). A fix that
-exists only in `web/src/` will still fail — the front end must be rebuilt and published:
+These specs run against `E2E_BASE_URL`, which is **required** — `playwright.config.ts` throws when it
+is unset rather than falling back to a hard-coded host, so a run cannot silently target the wrong
+deployment. A fix that exists only in `web/src/` will still fail — the front end must be rebuilt and
+published:
 
 ```bash
 cd web && npm run build     # then deploy: cd infra && npx cdk deploy --all
@@ -118,17 +120,18 @@ An ad-hoc spec may create and clean up its own throwaway data. A core spec may n
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
 locators — the app's markup is not always guessable, and these were established empirically.
 
-| Helper                                          | Use for                                                |
-| ----------------------------------------------- | ------------------------------------------------------ |
-| `gotoOrchestration(page, route, heading)`       | Navigate + wait for first load (no data dependency)    |
-| `searchBox(page)`                               | The orchestration filter-bar search input              |
-| `facet(page, label)`                            | A native `<select>` filter                             |
-| `firstCardId(page)`                             | Id of the first card, or `null` when the list is empty |
-| `openCardMenu(page, id)`                        | Filter to a card and open its actions menu             |
-| `tableRows(page)` / `expectTableRendered(page)` | Table rows / "rendered in any environment" assertion   |
-| `menuSurface(items)`                            | The open menu's own floating surface, from an item     |
-| `rowValue(page, label)`                         | The value cell of a label/value row in a detail panel  |
-| `collectPageErrors(page)`                       | Uncaught page errors, for crash-regression assertions  |
+| Helper                                          | Use for                                                         |
+| ----------------------------------------------- | --------------------------------------------------------------- |
+| `gotoOrchestration(page, route, heading)`       | Navigate + wait for first load (no data dependency)             |
+| `searchBox(page)`                               | The orchestration filter-bar search input                       |
+| `facet(page, label)`                            | A native `<select>` filter                                      |
+| `firstCardId(page)`                             | Id of the first card, or `null` when the list is empty          |
+| `openCardMenu(page, id)`                        | Filter to a card and open its actions menu                      |
+| `tableRows(page)` / `expectTableRendered(page)` | Table rows / "rendered in any environment" assertion            |
+| `menuSurface(items)`                            | The open menu's own floating surface, from an item              |
+| `wizardRail(page)`                              | The execute dialog's step rail (`navigation` "Execution steps") |
+| `rowValue(page, label)`                         | The value cell of a label/value row in a detail panel           |
+| `collectPageErrors(page)`                       | Uncaught page errors, for crash-regression assertions           |
 
 **Selector facts worth not rediscovering:**
 
@@ -144,8 +147,13 @@ locators — the app's markup is not always guessable, and these were establishe
     Basic. Fields on a later step do not exist in the DOM until you advance with the form's own `Next`
     button. Do **not** locate a step by name: `getByRole("button", { name: /Settings/ })` matches the
     global navigation's Settings button, not the step. The metadata-input toggles are on Settings.
--   The **execute wizard's `Launch` button exists only on the final step**. An assertion about the input
-    stage must target `Next`; looking for `Launch` there finds nothing.
+-   The **execute flow is one dialog**: from the Executions board's `Execute workflow` button and the
+    file manager's Automation menu its first step is the workflow picker — rows are `role=option` in a
+    `role=listbox`, the search input is labelled `Workflow` — and `Continue` swaps in the wizard steps
+    inside the same `role=dialog`. From a workflow card's Execute action the picker step is skipped.
+    Every step shows the rail (`wizardRail(page)`); visited rows are buttons. The **`Launch` button
+    exists only on the final step**: an assertion about the Inputs step must target `Next`; looking for
+    `Launch` there finds nothing.
 -   The executions board names the workflow's database `Workflow Database` (there is also an Output
     Type / Output Database / Output Asset ID group) and has **no** `Group` column.
 -   **`[role="menu"]` is ambiguous on every page.** Each closed Cloudscape Select / ButtonDropdown keeps
@@ -190,12 +198,18 @@ expect(hit).toBe(true);
 
 ```bash
 cd web
-export E2E_USERNAME=<user> E2E_PASSWORD=<pass>   # never hardcode credentials
-npm run e2e                                       # all specs
-npm run e2e:headed                                # watch a run
+export E2E_BASE_URL=https://<your-deployment-host>   # required; the config throws without it
+export E2E_USERNAME=<user> E2E_PASSWORD=<pass>       # never hardcode credentials
+npm run e2e                                           # all specs
+npm run e2e:headed                                    # watch a run
 npx playwright test e2e/orchestration.pipelines.spec.ts --retries=0 --workers=2
-E2E_BASE_URL=http://localhost:3001 npm run e2e    # against a local dev server
+E2E_BASE_URL=http://localhost:3001 npm run e2e        # against a local dev server
 ```
+
+`retries: 1` is configured, so a spec that fails then passes is reported as **flaky**, not failed —
+and Playwright's own exit code counts flaky as success. Read the summary line, not the exit status:
+wrapping the run in a shell pipeline makes the exit code the _pipeline's_, which is how a run with
+25 failures can appear to have exited 0.
 
 `auth.setup.ts` logs in once through the Amplify Authenticator and saves `storageState` to
 `e2e/.auth/admin.json`; every other spec reuses it. The state is reused for 45 minutes — repeated

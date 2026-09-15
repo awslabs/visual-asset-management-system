@@ -7,6 +7,7 @@ import * as batch from "aws-cdk-lib/aws-batch";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecr from "aws-cdk-lib/aws-ecr";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../../config/config";
 import { Construct } from "constructs";
@@ -30,11 +31,45 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      */
     ephemeralStorageGiB?: number;
     /**
-     * Optional ECR repository to use instead of local Docker build.
-     * When provided, imageAssetPath is ignored and the image is
-     * pulled from this ECR repository (tagged "latest").
+     * vCPU reserved for the container. Default 16, the sizing the point-cloud and rendering pipelines
+     * were built against; a caller that names a smaller figure must pair it with a Fargate-valid
+     * `memoryMiB`.
      */
-    ecrRepository?: ecr.IRepository;
+    cpu?: number;
+    /** Memory reserved for the container, in MiB. Default 65536. */
+    memoryMiB?: number;
+    /**
+     * Log group the container's stdout and stderr are written to through the `awslogs` driver, as
+     * `<jobDefinitionName>/default/<ecs-task-id>`. Every Fargate pipeline passes its own VAMS-owned
+     * `/aws/vendedlogs/Pipelines/<Name><hash>` group and registers that same group as the Batch
+     * state's log source. When absent, AWS Batch writes to its default `/aws/batch/job` group, which
+     * carries neither a KMS key nor a retention policy.
+     */
+    logGroup?: logs.ILogGroup;
+    /**
+     * Hard limit on a single job attempt, after which AWS Batch terminates the job itself.
+     *
+     * Required rather than optional so a new pipeline has to state its own bound: with no attempt
+     * duration a wedged 16 vCPU / 64 GiB container runs until someone notices. The orchestration's
+     * timeout is not a substitute — a pipeline that submits its job from a Lambda under
+     * `WAIT_FOR_TASK_TOKEN` (coordinate transform) owns the job itself, so Step Functions giving up
+     * bounds only the token wait, not the container.
+     *
+     * Set it to the enclosing orchestration bound (the task timeout, or the state machine timeout for
+     * a `.sync` submission). Equal is correct here: the orchestration clock starts first, so it still
+     * gives up before Batch does on a live execution, and this limit only takes effect once the
+     * orchestration is no longer watching.
+     */
+    attemptDuration: cdk.Duration;
+    /**
+     * Optional CodeBuild-produced ECR image to use instead of a local Docker build. When provided,
+     * imageAssetPath is ignored and the image is pulled from this repository at this tag.
+     *
+     * The tag travels with the repository in one prop rather than as a separate optional value: the
+     * tag the job definition names and the tag CodeBuild pushes have to be the same string, and a
+     * caller that supplies the repository alone would silently fall back to a mutable alias.
+     */
+    ecrImage?: { repository: ecr.IRepository; tag: string };
 }
 
 const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
@@ -66,9 +101,13 @@ export class BatchFargatePipelineConstruct extends Construct {
         );
 
         // Container image: use ECR repository if provided, otherwise build locally
-        const containerImage = props.ecrRepository
-            ? ecs.ContainerImage.fromEcrRepository(props.ecrRepository, "latest")
-            : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
+        const containerImage = props.ecrImage
+            ? ecs.ContainerImage.fromEcrRepository(props.ecrImage.repository, props.ecrImage.tag)
+            : // Synth-time asset path built from __dirname and a construct prop that the calling
+              // construct hard-codes; CDK resolves it on the operator's machine, never from request
+              // input.
+              // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+              ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
                   file: props.dockerfileName,
                   platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
               });
@@ -85,9 +124,10 @@ export class BatchFargatePipelineConstruct extends Construct {
         this.batchJobDefinition = new batch.EcsJobDefinition(this, "PipelineBatchJobDefinition", {
             jobDefinitionName: batchJobName,
             retryAttempts: 1,
+            timeout: props.attemptDuration,
             container: new batch.EcsFargateContainerDefinition(this, "PipelineBatchContainer", {
-                cpu: 16,
-                memory: cdk.Size.mebibytes(65536),
+                cpu: props.cpu ?? 16,
+                memory: cdk.Size.mebibytes(props.memoryMiB ?? 65536),
                 ephemeralStorageSize: cdk.Size.gibibytes(props.ephemeralStorageGiB ?? 60),
                 image: containerImage,
                 environment: {
@@ -96,7 +136,22 @@ export class BatchFargatePipelineConstruct extends Construct {
                 },
                 jobRole: props.jobRole,
                 executionRole: props.executionRole,
-                user: "root",
+                // The stream is `<awslogs-stream-prefix>/default/<ecs-task-id>` (Batch names the
+                // container `default`). Prefixing with the PHYSICAL job definition name -- base name
+                // plus hash, the string `jobDefinition.jobDefinitionName` resolves to -- keeps the
+                // stream under the `<jobDefinitionName>/default/` prefix the pipeline's registering
+                // lambda derives from that same property, and matches the shape Batch's default
+                // group gives the GPU pipelines. With the bare base name the resolved stream falls
+                // outside the registered prefix and the execution log view filters every line out.
+                logging: props.logGroup
+                    ? ecs.LogDrivers.awsLogs({
+                          logGroup: props.logGroup,
+                          streamPrefix: batchJobName,
+                      })
+                    : undefined,
+                // No `user` override: the job runs as whatever the image's own USER declares. An
+                // override here replaces it, so a container that drops privileges in its Dockerfile
+                // would still run as uid 0.
             }),
         });
 

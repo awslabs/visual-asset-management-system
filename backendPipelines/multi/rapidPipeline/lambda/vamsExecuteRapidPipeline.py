@@ -10,19 +10,33 @@ import boto3
 import json
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 logger = safeLogger(service="VamsExecuteRapidPipeline")
-lambda_client = boto3.client('lambda')
-s3_client = boto3.client('s3')
-sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+lambda_client = boto3.client('lambda', config=retry_config)
+s3_client = boto3.client('s3', config=retry_config)
+sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
-                                        , executing_userName, executing_requestContext, output_file_type, orchestration_event_prefix=""):
+                                        , executing_userName, executing_requestContext, output_file_type, orchestration_event_prefix=""
+                                        , input_manifest_s3_location="", asset_id=""):
 
     # Create the object message to be sent
+    #
+    # inputManifestS3Location and assetId locate the input file WITHIN its asset. The
+    # constructPipeline state reads them to keep the converted file under the same subdirectory
+    # within the output-files prefix as its source file sits within the asset, so both are part of
+    # this payload: openPipeline forwards only the keys named here into the state machine input,
+    # and a key absent here cannot be recovered by any later state.
     messagePayload = {
         "inputS3AssetFilePath": input_s3_asset_file_path,
         "outputS3AssetFilesPath": output_s3_asset_files_path,
@@ -31,6 +45,8 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        "inputManifestS3Location": input_manifest_s3_location,
+        "assetId": asset_id,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
@@ -50,6 +66,14 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
     if 'StatusCode' not in lambda_response or lambda_response['StatusCode'] != 200:
         message = lambda_response.get("body", {}).get("message", "")
         raise Exception("Invoke Open Pipeline Lambda Failed. " + message)
+
+    # A handled invocation still returns StatusCode 200 when the invoked function raised: the
+    # failure is reported via FunctionError. Without this check an unhandled error in
+    # openPipeline reads as success here, so no task-token failure is ever sent and the
+    # workflow's callback task blocks until taskTimeout.
+    if lambda_response.get('FunctionError'):
+        raise Exception(
+            "Invoke Open Pipeline Lambda Failed: " + str(lambda_response.get('FunctionError')))
 
 
 def abort_external_workflow(error, task_token):
@@ -125,11 +149,15 @@ def lambda_handler(event, context):
         manifestHelper.enforce_single_input_file(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
-        # Starts excution of pipeline
+        # Starts excution of pipeline. The manifest pointer travels from the payload body (it locates
+        # the manifest this handler just read) and the assetId from the resolved manifest, which is
+        # the only carrier of asset identity.
         execute_pipeline(resolved['inputS3AssetFilePath'], resolved['outputS3AssetFilesPath'], resolved['outputS3AssetPreviewPath']
                                             , resolved['outputS3AssetMetadataPath'], resolved['inputOutputS3AssetAuxiliaryFilesPath']
                                             , resolved['inputMetadataS3Location'], resolved['inputConfigurationS3Location'], external_task_token, executing_userName,
-                                            executing_requestContext, output_file_type, resolved['orchestrationEventPrefix'])
+                                            executing_requestContext, output_file_type, resolved['orchestrationEventPrefix'],
+                                            input_manifest_s3_location=manifestHelper.manifest_location(data),
+                                            asset_id=resolved['assetId'])
 
         return {
             'statusCode': 200,

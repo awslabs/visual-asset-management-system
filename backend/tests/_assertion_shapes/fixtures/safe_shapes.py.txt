@@ -1,0 +1,78 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# A FIXTURE, not a test module. Read as TEXT by test_assertion_shapes.py; never imported, executed,
+# or collected -- hence the .py.txt extension and the undefined helper names.
+#
+# The NEGATIVE control. Every function here is a CORRECT form of an assertion the detector's
+# categories describe, so the detector must report NOTHING in this file. Without it, a detector that
+# flagged everything would satisfy the positive control while being useless -- and a zero from the
+# real sweep would mean nothing, because the sweep's files are the ones that were made to conform.
+
+
+def containment_over_meaningful_tuples():
+    batch = MagicMock()
+    delete_everything(batch)
+    deleted = {frozenset(call.kwargs["Key"].items()) for call in batch.delete_item.call_args_list}
+    assert frozenset({"userId": "u1", "roleName": ROLE}.items()) in deleted
+
+
+def an_upper_bound_on_a_cost_with_a_positive_lower_bound():
+    pager = Pager(FIRST_PAGE, LAST_PAGE)
+    read_everything(pager)
+    assert 2 <= len(pager.calls) <= READ_CALL_CEILING
+
+
+def an_iteration_guarded_by_the_exhaustion_assertion():
+    pager = Pager(FIRST_PAGE, LAST_PAGE)
+    read_everything(pager)
+    pager.assert_paged_to_exhaustion()
+    for call in pager.calls:
+        assert "roleName" in str(call.get("FilterExpression"))
+
+
+def an_iteration_guarded_by_a_non_emptiness_assertion():
+    table = RecordingTable()
+    read_everything(table)
+    assert table.calls, "no read was issued"
+    for call in table.calls:
+        assert call.get("ProjectionExpression")
+
+
+def any_over_recorded_reads_guards_itself():
+    requests = record_posts()
+    assert any("/pipelines" in path for path in requests)
+
+
+def a_write_that_happened_on_an_allow_path():
+    table = MagicMock()
+    save_the_pipeline(table)
+    assert table.put_item.called
+
+
+def a_projection_asserted_by_set_containment():
+    pager = Pager(ONLY_PAGE)
+    read_everything(pager)
+    projected = {name.strip() for name in pager.calls[0]["ProjectionExpression"].split(",")}
+    assert {"databaseId", "workflowId"} <= projected
+    assert not (projected & {"systemConfig", "description"})
+
+
+def a_refusal_asserted_by_absence():
+    table = MagicMock()
+    attempt_a_forbidden_save(table)
+    table.put_item.assert_not_called()
+
+
+def a_membership_over_a_derived_set():
+    mock_lambda = MagicMock()
+    provision(mock_lambda)
+    created = {call.kwargs.get("FunctionName") for call in mock_lambda.create_function.call_args_list}
+    assert "vams-pipeline-fn" in created
+
+
+def a_classification_by_identity_rather_than_wording():
+    warnings = save_the_pipeline()
+    served = ["wf0", "wf1", "wf2"]
+    named = {workflow for workflow in served if any(workflow in w for w in warnings)}
+    assert named == set(served)

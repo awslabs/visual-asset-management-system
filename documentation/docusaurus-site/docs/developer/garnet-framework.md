@@ -320,11 +320,22 @@ Each Garnet indexer Lambda function processes events from specific DynamoDB tabl
 
 ---
 
+## Failure Handling
+
+Each Garnet indexer Amazon SQS queue has its own dead-letter queue, and each event source reports
+partial batch failures. A record whose indexing fails is returned to the queue for redrive rather than
+deleted, so the entity is retried instead of being dropped. After three delivery attempts the record
+moves to that indexer's dead-letter queue, which retains it for 14 days for inspection.
+
+A dead-letter queue per indexer keeps one indexer's poison records distinguishable from another's. This
+matches the failure handling of the core VAMS indexers.
+
+---
+
 ## Limitations
 
 -   **One-way synchronization only.** Data flows from VAMS to the Garnet Framework. Changes made directly in the Garnet Framework knowledge graph are not reflected back into VAMS.
 -   **External Garnet deployment required.** VAMS does not deploy the Garnet Framework itself. You must have an existing Garnet Framework deployment and provide the API endpoint, API token, and ingestion queue URL.
--   **No dead-letter queue.** The Garnet indexer Amazon SQS queues do not use dead-letter queues. Failed messages are retried based on the queue visibility timeout (960 seconds). If persistent failures occur, messages expire based on the default Amazon SQS retention period.
 -   **Metadata key prefixing.** Custom metadata fields are prefixed with `metadata_` in the NGSI-LD entities. Custom file attributes are prefixed with `attribute_`. This prevents conflicts with core NGSI-LD properties but means queries in Garnet must use the prefixed names.
 
 ---

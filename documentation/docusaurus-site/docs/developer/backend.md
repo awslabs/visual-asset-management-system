@@ -4,18 +4,20 @@ This guide covers development patterns for the VAMS Python Lambda backend, inclu
 
 ## Technology Stack
 
-| Component     | Details                                               |
-| ------------- | ----------------------------------------------------- |
-| Runtime       | Python 3.12 (AWS Lambda)                              |
-| Validation    | Pydantic 1.10.7 (v1 only) via `aws-lambda-powertools` |
-| Authorization | Casbin ABAC/RBAC with Amazon DynamoDB policy storage  |
-| AWS SDK       | boto3 1.34.84                                         |
-| Search        | OpenSearch (opensearch-py 2.5.0)                      |
-| Logging       | AWS Lambda Powertools Logger with custom redaction    |
-| Testing       | pytest 8.3.4, moto 5.1.0                              |
+| Component     | Details                                              |
+| ------------- | ---------------------------------------------------- |
+| Runtime       | Python 3.12 (AWS Lambda)                             |
+| Validation    | Pydantic v1 only, via `aws-lambda-powertools`        |
+| Authorization | Casbin ABAC/RBAC with Amazon DynamoDB policy storage |
+| AWS SDK       | boto3                                                |
+| Search        | OpenSearch (`opensearch-py`)                         |
+| Logging       | AWS Lambda Powertools Logger with custom redaction   |
+| Testing       | pytest, moto                                         |
+
+Exact versions are pinned in `backend/requirements.txt` and `backend/requirements-dev.txt`, which are generated from `poetry.lock`. Install with `pip install -r requirements.txt` rather than pinning packages by hand.
 
 :::warning[Pydantic v1 Only]
-VAMS uses Pydantic **1.10.7**. Never use Pydantic v2 syntax (`model_validator`, `model_dump`, `ConfigDict`). Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from `pydantic` directly. Violations cause import failures in Lambda.
+VAMS uses Pydantic **v1** (1.10.x). Never use Pydantic v2 syntax (`model_validator`, `model_dump`, `ConfigDict`). Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from `pydantic` directly. Violations cause import failures in Lambda.
 :::
 
 ## Project Structure
@@ -55,7 +57,7 @@ backend/
 
 ## Gold Standard Handler Pattern
 
-Every new Lambda handler must follow the structure demonstrated in `backend/handlers/assets/assetService.py`. The pattern consists of five layers.
+Every new Lambda handler must follow the structure demonstrated in `backend/backend/handlers/assets/assetService.py`. The pattern consists of five layers.
 
 ### 1. Module-Level Setup
 
@@ -240,7 +242,7 @@ You must add `object__type` to the item dictionary before calling `enforce()`. V
 
 ## Pydantic v1 Model Patterns
 
-Reference file: `backend/models/assetsV3.py`
+Reference file: `backend/backend/models/assetsV3.py`
 
 ### Correct Model Definition
 
@@ -413,24 +415,30 @@ if not valid:
 
 ### Available Validators
 
-| Validator                   | Pattern                       | Use For                                         |
-| --------------------------- | ----------------------------- | ----------------------------------------------- |
-| `ID`                        | `^[-_a-zA-Z0-9]{3,63}$`       | databaseId, pipelineId                          |
-| `ASSET_ID`                  | filename pattern, max 256     | assetId                                         |
-| `UUID`                      | Standard UUID format          | Unique identifiers                              |
-| `OBJECT_NAME`               | `^[a-zA-Z0-9\-._\s]{1,256}$`  | assetName, dbName                               |
-| `EMAIL`                     | Email regex                   | Email addresses                                 |
-| `USERID`                    | `^[\w\-\.\+\@]{3,256}$`       | User identifiers                                |
-| `FILE_NAME`                 | No special characters         | File names                                      |
-| `STRING_256`                | Max 256 chars                 | Medium strings                                  |
-| `ID_ARRAY`                  | Array of IDs                  | Multiple IDs                                    |
-| `STRING_256_ARRAY`          | Array of max-256 strings      | Tags, lists                                     |
-| `ARN`                       | Partition-aware AWS ARN       | Any AWS resource ARN (sub-process registration) |
-| `CLOUDWATCH_LOG_GROUP_ARN`  | Partition-aware log-group ARN | Registered CloudWatch log-group locations       |
-| `CLOUDWATCH_LOG_GROUP_NAME` | 1-512 chars (`-_./#` + alnum) | Registered CloudWatch log-group names           |
-| `LOG_STREAM_NAME`           | 1-512 chars, no `:` or `*`    | Registered log-stream names / prefixes          |
+| Validator                   | Pattern                       | Use For                                                                                       |
+| --------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------- |
+| `ID`                        | `^[-_a-zA-Z0-9]{3,63}$`       | databaseId, pipelineId                                                                        |
+| `ASSET_ID`                  | filename pattern, max 256     | assetId                                                                                       |
+| `UUID`                      | Standard UUID format          | Unique identifiers                                                                            |
+| `OBJECT_NAME`               | `^[a-zA-Z0-9\-._\s]{1,256}$`  | assetName, dbName                                                                             |
+| `EMAIL`                     | Email regex                   | Email addresses                                                                               |
+| `USERID`                    | `^[\w\-\.\+\@]{3,256}$`       | User identifiers                                                                              |
+| `FILE_NAME`                 | No special characters         | File names                                                                                    |
+| `STRING_256`                | Max 256 chars                 | Medium strings                                                                                |
+| `STRING_16384`              | Max 16384 chars               | Free-form caller text (comment bodies)                                                        |
+| `ID_ARRAY`                  | Array of IDs                  | Multiple IDs                                                                                  |
+| `STRING_256_ARRAY`          | Array of max-256 strings      | Tags, lists                                                                                   |
+| `ARN`                       | Partition-aware AWS ARN       | Any AWS resource ARN (sub-process registration)                                               |
+| `CLOUDWATCH_LOG_GROUP_ARN`  | Partition-aware log-group ARN | Registered CloudWatch log-group locations                                                     |
+| `CLOUDWATCH_LOG_GROUP_NAME` | 1-512 chars (`-_./#` + alnum) | Registered CloudWatch log-group names                                                         |
+| `LOG_STREAM_NAME`           | 1-512 chars, no `:` or `*`    | Registered log-stream names / prefixes                                                        |
+| `SFN_STATE_NAME`            | 1-80 chars, no control chars  | Registered sub-state-machine stage names                                                      |
+| `DISPLAY_LABEL`             | 1-128 chars, no control chars | Registered sub-process / log display labels                                                   |
+| `LOG_SOURCE_TYPE`           | Closed enum                   | Registered log `sourceType` (`stateMachine`, `lambda`, `batch`, `ecs`, `container`, `custom`) |
 
 All AWS-resource validators are partition-aware (commercial, GovCloud, China, ISO).
+
+The dispatcher recognizes only the names it implements, and the `_VALIDATOR_DISPATCH` mapping in `common/validators.py` is that list — a new validation type is one entry in it, with no second list to update. A name with no entry has no rule to apply, so it is rejected rather than reported valid unchecked. The name is resolved after the empty/optional short-circuits, so an optional field left empty is skipped before its validator is consulted.
 
 ### Regex Patterns for Pydantic Fields
 
@@ -465,12 +473,12 @@ from common.s3PathPatterns import (
     ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif')
     TEMPORARY_UPLOAD_PREFIX,          # 'temp-uploads/'
     PREVIEW_PREFIX,                   # 'previews/' (asset bucket)
-    PIPELINES_PREFIX,                 # 'pipelines/' (workflow pipeline outputs)
+    PIPELINES_PREFIX,                 # 'pipelines/' (workflow run I/O in the default bucket)
     AUXILIARY_PREVIEW_PREFIX,         # 'preview/' (auxiliary bucket, singular)
 )
 ```
 
-Pipeline staging paths follow the structure `pipelines/{pipelineName}/{jobName}/output/{executionId}/{outputType}/`. The path segments within this structure are also defined as constants:
+Pipeline staging paths follow the structure `pipelines/{pipelineName}/{jobName}/output/{executionId}/{outputType}/`, relative to the area VAMS owns in the default asset bucket. `executionRecords.run_bucket_key()` joins that bucket's `baseAssetsPrefix` onto a relative key to produce the key an Amazon S3 call uses, and returns the key unchanged for a bucket registered at the root. The workflow state machine carries the relative form and the bucket's prefix as separate values, so a definition never embeds the prefix. The path segments within this structure are also defined as constants:
 
 ```python
 from common.s3PathPatterns import (
@@ -653,7 +661,7 @@ VAMS provides two customization points for organizations to extend authenticatio
 
 The file `customAuthLoginProfile.py` controls how user profile information is updated when a user authenticates. Override the `customAuthProfileLoginWriteOverride()` function to customize profile data.
 
-**Default behavior:** Extracts the `email` claim from the JWT token and writes it to the user's VAMS profile. The login profile is updated via an authenticated POST call to `/api/auth/loginProfile/\{userId\}` from the web UI on each login.
+**Default behavior:** Extracts the `email` claim from the JWT token and writes it to the user's VAMS profile. The login profile is updated via an authenticated POST call to `/api/auth/loginProfile/{userId}` from the web UI on each login.
 
 **Common customizations:**
 
@@ -705,6 +713,27 @@ def customAuthClaimsCheckOverride(claims_and_roles, lambdaRequest):
 
 :::warning[Performance Consideration]
 `customMFATokenScopeCheckOverride` runs inside the API Gateway authorizer on every non-cached authorization. Cache external lookups (the default implementation caches by `auth_time`) and minimize external API calls to avoid adding latency to every request.
+:::
+
+## Notification Subscriptions
+
+`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry is keyed on the event name and the entity (`Asset#{assetId}`) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic (`AssetTopic{databaseId}-{assetId}`). Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
+
+How a subscriber value becomes an email address:
+
+1. `subscribers` is validated with the `USERID_ARRAY` validator, so each entry matches `^[\w\-\.\+\@]{3,256}$`. The list has no maximum length.
+2. `get_userProfile_Email()` reads the entry as a `userId` in the user table. When a record exists with a non-empty `email`, that address is used.
+3. When no record exists, or the record's email is blank, the submitted value itself is checked with the `EMAIL` validator and used verbatim when it is email-shaped. A value that is neither a user with an email nor email-shaped is rejected with `400`.
+
+:::warning[A subscriber does not have to be a VAMS user]
+Step 3 is deliberate — it allows a shared mailbox or resource account that has no VAMS identity to receive asset notifications — and it means the recipient list is not bounded by the user directory. Authorization covers the **asset**, not the recipients: the caller must pass the API-route tier for `/subscriptions` and the object tier for a `POST` on the target asset, and nothing further constrains whose address is added.
+
+Two properties follow, and both are worth knowing before extending this handler:
+
+-   Amazon SNS sends a confirmation request to each new address and delivers nothing until it is confirmed, so an unrecognized address receives one confirmation email and no asset data.
+-   Subscriber values are stored as submitted (user identifiers or addresses), while the topic holds the resolved addresses — and the removal paths do not agree on which form they match. `PUT /subscriptions` unsubscribes by resolved address, and `DELETE /subscriptions` deletes the asset's topic outright, but `DELETE /unsubscribe` matches the submitted value against the topic's endpoints. A user whose profile email differs from their user identifier is therefore dropped from the subscription record while their topic subscription remains.
+
+Subscription management is an administrative form. The Subscription Management page (`/auth/subscriptions`) is the only place an arbitrary recipient list is authored, and it is reachable only by a role granted that `web` route — the seeded `admin` role, whose default constraint allows all web paths. No shipped role template in `documentation/permissionsTemplates/` grants it. The asset details pane offers an ordinary user a self-subscribe toggle, which submits only that user's own identifier; the `/subscriptions` API routes themselves carry no such restriction, so a role granted `POST /subscriptions` (the `database-user` template grants it) can submit any recipient through the API or the CLI.
 :::
 
 ## Anti-Patterns

@@ -17,7 +17,9 @@
         "cdk.deploy.app": "cdk deploy --all --require-approval never",
         "deploy.dev": "npm run cdk.deploy.app -- --context ",
         "deploy.vams": "cdk deploy --all --require-approval never -c stack-name=vams -c region=us-east-1 --context",
-        "gen": "ts-node ./gen/genEndpoints.ts"
+        "gen": "ts-node ./gen/genEndpoints.ts",
+        "check.account": "ts-node ./scripts/assertManifestAccount.ts",
+        "check.quotas": "ts-node ./scripts/assertDeployQuotas.ts"
     },
     "devDependencies": {
         "@types/jest": "^30.0.0",

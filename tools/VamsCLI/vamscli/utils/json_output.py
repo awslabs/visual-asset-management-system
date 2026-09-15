@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional, Callable
 import click
 
 # Import logging for file-only logging (not console)
-from .logging import log_debug, log_info, log_warning, log_error
+from .logging import log_debug, log_info, log_warning, log_error, redact_to_text
 
 
 def output_result(result: Any, json_output: bool, success_message: Optional[str] = None,
@@ -43,9 +43,13 @@ def output_result(result: Any, json_output: bool, success_message: Optional[str]
             cli_formatter=lambda r: f"Asset ID: {r.get('assetId')}"
         )
     """
-    # Log to file (not console - console output handled below)
+    # Log to file (not console - console output handled below).
+    # The result is redacted first: this helper receives every command's response, including the
+    # one-time plaintext API key from `api-key create` and the token set from `auth login`. The log
+    # file is a rotating on-disk artifact, so an unredacted result would persist a live credential
+    # long after the command that printed it once.
     try:
-        result_str = str(result)
+        result_str = redact_to_text(result)
         if len(result_str) > 1000:
             log_info(f"output_result: json_output={json_output}, result (truncated): {result_str[:1000]}...", False)
         else:

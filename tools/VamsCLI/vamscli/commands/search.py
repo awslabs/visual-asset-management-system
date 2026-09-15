@@ -116,7 +116,9 @@ def _parse_geo_options(
                 geo_search["geoJson"] = json.load(f)
         except FileNotFoundError:
             raise InvalidSearchParametersError(f"GeoJSON file not found: {geo_geojson}")
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, RecursionError) as e:
+            # A deeply nested file exhausts the parser's stack, which surfaces as RecursionError
+            # rather than as a decode error and would otherwise leave a traceback.
             raise InvalidSearchParametersError(f"Invalid GeoJSON: {e}")
 
     return geo_search
@@ -471,7 +473,16 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
             --filters '[{"term": {"str_assettype": "3d-model"}}, {"range": {"num_version": {"gte": 1}}}]'
     
     Metadata Search Examples:
-        --metadata-query "MD_str_product:Training"              # Exact field:value match
+        Metadata is stored in one flat object per record, named MD_, with the keys carried
+        verbatim: {"product": "Training"} is indexed as "MD_": {"product": "Training"}. File
+        attributes use AB_ the same way, on the file index only. A key may be written bare,
+        with the MD_/AB_ entity prefix, or with a type prefix -- all three address the same
+        field. Do not write MD_.product; the dot belongs to the internal query path and a
+        query using it matches nothing.
+
+        --metadata-query "product:Training"                     # Exact field:value match
+        --metadata-query "MD_product:Training"                  # Same field, entity prefix
+        --metadata-query "MD_str_product:Training"              # Same field, type prefix
         --metadata-query "MD_str_product:Train*"                # Wildcard search
         --metadata-query "MD_str_product:A AND MD_num_version:1" # Multiple conditions
         --metadata-query "product" --metadata-mode key          # Search field names only

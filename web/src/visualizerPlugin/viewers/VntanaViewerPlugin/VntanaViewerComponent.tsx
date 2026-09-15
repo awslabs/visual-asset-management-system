@@ -51,7 +51,8 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
 
                 if (response && Array.isArray(response) && response[0] !== false) {
                     const assetUrl = response[1]; // URL from downloadAsset
-                    console.log("VNTANA Viewer: Asset URL retrieved:", assetUrl);
+                    // Presigned URL — log the key, not the signed URL.
+                    console.log("VNTANA Viewer: Asset URL retrieved for", assetKey);
 
                     // Create VNTANA viewer element
                     setLoadingMessage("Creating viewer...");

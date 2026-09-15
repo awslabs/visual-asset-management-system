@@ -3,6 +3,7 @@
 import json
 from customConfigCommon.customAuthClaimsCheck import customAuthClaimsCheckOverride
 from common.auth.apiEvent import normalize_event
+from common.validators import normalize_userid, normalize_userid_array
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="RequestToClaims")
@@ -19,7 +20,7 @@ def request_to_claims(request):
         cross_call = request["lambdaCrossCall"]
         mfa_value = cross_call.get("mfaEnabled", True)
         return {
-            "tokens": [cross_call.get("userName", "SYSTEM_USER")],
+            "tokens": [normalize_userid(cross_call.get("userName", "SYSTEM_USER"))],
             "roles": [],
             "externalAttributes": [],
             "mfaEnabled": bool(mfa_value)
@@ -77,6 +78,11 @@ def request_to_claims(request):
     if 'vams:mfaEnabled' in claims:
         mfaValue = claims['vams:mfaEnabled']
         mfaEnabled = mfaValue == 'true' if isinstance(mfaValue, str) else bool(mfaValue)
+
+    #The token list is the caller's identity: it keys per-user lookups, is written as createdBy /
+    #modifiedBy, and is what Casbin compares a constraint's userId against. Normalized here, the one
+    #point every handler receives it from, so it carries the same spelling as a stored user id.
+    tokens = normalize_userid_array(tokens)
 
     claims_and_roles = {
             "tokens": tokens,

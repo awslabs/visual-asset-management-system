@@ -13,7 +13,7 @@ cd tools/VamsCLI
 pip install .
 ```
 
-> **Note:** On Windows, set `PYTHONIOENCODING=utf-8` or use Windows Terminal for proper Unicode support.
+> **Note:** VamsCLI writes UTF-8 output regardless of the system code page, so no encoding configuration is required. On Windows, Windows Terminal renders its status indicators as intended.
 
 ## Quick Start
 
@@ -86,6 +86,8 @@ vamscli assets --help
 | `sync`             | Directory push/pull synchronization          |
 | `metadata`         | Metadata for assets, files, databases, links |
 | `metadata-schema`  | Schema management                            |
+| `comment`          | Asset version comments                       |
+| `subscription`     | Asset event subscriptions                    |
 | `search`           | OpenSearch-powered search                    |
 | `workflow`         | Workflow execution and monitoring            |
 | `tag` / `tag-type` | Tag and tag type management                  |

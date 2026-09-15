@@ -7,6 +7,7 @@ import React from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import PipelineForm from "../features/orchestration/pipelines/PipelineForm";
 import { usePipeline } from "../features/orchestration/api/queries";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 /**
  * Full-page create/edit Pipeline wizard (mirrors the workflow builder page). Create mode renders an
@@ -19,10 +20,16 @@ const PipelineBuilderPage: React.FC = () => {
 
     const { data: pipeline, isLoading, isError } = usePipeline(databaseId || "", pipelineId || "");
 
+    // Declared above the terminal states below: a hook that runs on only some renders breaks React's
+    // hook ordering.
+    usePageTitle(databaseId, "Pipelines", isEdit ? "Edit Pipeline" : "Create Pipeline");
+
     if (!databaseId) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
-                <p className="text-vams-error text-xl">Missing Database ID</p>
+                <p role="alert" className="text-vams-error text-xl">
+                    Missing Database ID
+                </p>
             </div>
         );
     }
@@ -32,7 +39,9 @@ const PipelineBuilderPage: React.FC = () => {
     if (isEdit && isLoading) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
-                <div className="text-center">
+                {/* A status region, so the swap from the route spinner to this one — and from here to
+                    the form or the error below — is announced rather than only visible. */}
+                <div role="status" className="text-center">
                     <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 dark:border-blue-400 mb-3" />
                     <p className="text-text-secondary">Loading pipeline…</p>
                 </div>
@@ -43,7 +52,9 @@ const PipelineBuilderPage: React.FC = () => {
     if (isEdit && (isError || !pipeline)) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
-                <p className="text-vams-error text-xl">Pipeline not found</p>
+                <p role="alert" className="text-vams-error text-xl">
+                    Pipeline not found
+                </p>
             </div>
         );
     }

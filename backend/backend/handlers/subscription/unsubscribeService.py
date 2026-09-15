@@ -6,58 +6,84 @@ import boto3
 import json
 
 from botocore.exceptions import ClientError
+from botocore.config import Config
+from boto3.dynamodb.conditions import Key
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
-from common.validators import validate
+from common.validators import validate, normalize_userid_array
 from handlers.authz import CasbinEnforcer
-from common.dynamodb import get_asset_object_from_id
+from common.dynamodb import get_asset_object_from_id, query_all_items
 from customLogging.logger import safeLogger
 
 claims_and_roles = {}
 logger = safeLogger(service="UnsubscriptionService")
-main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
-sns_client = boto3.client('sns')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
+sns_client = boto3.client('sns', config=retry_config)
 
+# A required table name that cannot be resolved fails the module load, so the deployment reports it
+# at cold start. Degrading to None instead let the module import and turned the failure into a boto3
+# error on a None table name for every request afterwards -- a generic 500 naming nothing.
 try:
     subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving subscriptions table name")
-    subscription_table_name = None
-
-try:
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed resolving asset table name")
-    asset_table_name = None
-
-if not (subscription_table_name and asset_table_name):
-    main_rest_response['body'] = json.dumps({"message": "Failed resolving required table names"})
+    logger.exception("Failed loading resource names")
+    raise e
 
 
 def get_asset(asset_id):
-    resp = dynamodb_client.scan(
-        TableName=asset_table_name,
-        ProjectionExpression='snsTopic, databaseId',
-        FilterExpression='assetId = :asset_id',
-        ExpressionAttributeValues={':asset_id': {'S': asset_id}},
+    """Resolve the databaseId and SNS topic of the asset carrying an assetId.
+
+    assetIdGSI is partitioned on assetId, so this is a keyed read of that index paged to
+    exhaustion. A single scan with a FilterExpression applies its filter only to the page
+    it already read, so it answers None for an asset that exists once the table outgrows
+    one page.
+
+    Returns None when the assetId resolves to no live asset, and when it resolves to more
+    than one: assetIds are unique within a database only, so an ambiguous match cannot be
+    attributed to a single database's record.
+    """
+    asset_table = dynamodb.Table(asset_table_name)
+    items = query_all_items(
+        asset_table,
+        IndexName='assetIdGSI',
+        KeyConditionExpression=Key('assetId').eq(asset_id)
     )
 
-    items = resp.get('Items')
-    if items:
-        asset_obj = {"databaseId": items[0].get('databaseId').get("S")}
-        if items[0].get('snsTopic'):
-            asset_obj["snsTopic"] = items[0].get('snsTopic').get("S")
-        return asset_obj
-    return None
+    # Archiving rewrites a record under a "{databaseId}#deleted" partition, so an archived
+    # row is not the live asset and must not stand in for it
+    live_items = [
+        item for item in items
+        if not str(item.get('databaseId', '')).endswith('#deleted')
+        and item.get('status') != 'archived'
+    ]
+
+    if len(live_items) != 1:
+        logger.error(
+            f"assetId {asset_id} matches {len(live_items)} live assets; "
+            f"archived or duplicate matches: {len(items)}")
+        return None
+
+    item = live_items[0]
+    asset_obj = {"databaseId": item.get('databaseId')}
+    if item.get('snsTopic'):
+        asset_obj["snsTopic"] = item.get('snsTopic')
+    return asset_obj
 
 
 def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
     asset_table = dynamodb.Table(asset_table_name)
     asset_obj = get_asset(asset_id)
+
+    # An asset that no longer resolves to one live record has no topic to act on, so the
+    # cleanup is skipped and the caller's row rewrite proceeds without it
+    if asset_obj is None:
+        logger.error(f"No live asset found for asset {asset_id}")
+        return
 
     if not asset_obj.get("snsTopic"):
         logger.error(f"No topic found for asset {asset_id}")
@@ -103,27 +129,33 @@ def delete_subscription(body):
     subscription_table = dynamodb.Table(subscription_table_name)
     items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
 
-    if not items or body["subscribers"][0] not in [item["S"] for item in items["subscribers"]['L']]:
+    if not items:
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": "Subscription does not exists for eventName."})
         return response
 
+    subscriber = body["subscribers"][0]
     existing_subscribers = [item["S"] for item in items["subscribers"]['L']]
-    existing_subscribers.remove(body["subscribers"][0])
 
-    subscription_table.update_item(
-        Key={
-            'eventName': body["eventName"],
-            'entityName_entityId': f'{body["entityName"]}#{body["entityId"]}'
-        },
-        UpdateExpression='SET subscribers = :subscribers',
-        ExpressionAttributeValues={
-            ':subscribers': existing_subscribers
-        }
-    )
-
+    # The SNS side is released before the row is rewritten: a failed unsubscribe leaves the row
+    # still listing the subscriber, so the same request can be retried. The cleanup also runs
+    # for a subscriber the row no longer lists -- a retry after a failure between the two writes
+    # still owes the SNS half, and it is a no-op for an endpoint the topic never carried.
     if body["entityName"] == "Asset":
         delete_sns_subscriptions(body["entityId"], list(body["subscribers"]), delete_sns=False)
+
+    if subscriber in existing_subscribers:
+        existing_subscribers.remove(subscriber)
+        subscription_table.update_item(
+            Key={
+                'eventName': body["eventName"],
+                'entityName_entityId': f'{body["entityName"]}#{body["entityId"]}'
+            },
+            UpdateExpression='SET subscribers = :subscribers',
+            ExpressionAttributeValues={
+                ':subscribers': existing_subscribers
+            }
+        )
 
     response['statusCode'] = 200
     response['body'] = json.dumps({"message": "success"})
@@ -153,6 +185,9 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": message})
             return response
 
+        # The stored subscriber ids are normalized, so the ids to remove are normalized too
+        event['body']['subscribers'] = normalize_userid_array(event['body']['subscribers'])
+
         (valid, message) = validate({
             'eventName': {
                 'value': event['body']['eventName'],
@@ -179,17 +214,34 @@ def lambda_handler(event, context):
 
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
-        method_allowed_on_api = False
 
-        asset_object = get_asset_object_from_id(None, event['body']["entityId"])
-        asset_object.update({"object__type": "asset"})
+        # Route authorization runs ahead of the asset lookup, so a caller without access
+        # to the route learns nothing about whether the requested asset exists
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if (casbin_enforcer.enforceAPI(event) and
-                    casbin_enforcer.enforce(asset_object, "POST")):
+            if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
-        if method_allowed_on_api and httpMethod == 'DELETE':
+        if not method_allowed_on_api:
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
+            return response
+
+        asset_object = get_asset_object_from_id(None, event['body']["entityId"])
+        if asset_object is None:
+            response['statusCode'] = 404
+            response['body'] = json.dumps({"message": "Asset not found"})
+            return response
+
+        asset_object.update({"object__type": "asset"})
+
+        allowed = False
+        if len(claims_and_roles["tokens"]) > 0:
+            if casbin_enforcer.enforce(asset_object, "POST"):
+                allowed = True
+
+        if allowed and httpMethod == 'DELETE':
             return delete_subscription(event['body'])
         else:
             response['statusCode'] = 403

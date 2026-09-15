@@ -33,7 +33,7 @@ tools/VamsCLI/
     commands/
       setup.py               # Initial CLI configuration
       auth.py                # Login, change-password, forgot-password, logout, status, refresh, set-override, routes (API route listing)
-      apiKey.py              # API key management (admin) + 'user' sub-group (self-service own keys)
+      apiKey.py              # API key management (admin: list/get/create/update/delete) + 'user' sub-group (self-service own keys)
       assets.py              # Asset CRUD operations + lifecycle history lookup (history)
       asset_version.py       # Asset version management (list, get, create, update, archive, unarchive, revert)
       asset_links.py         # Asset relationship/link management
@@ -43,7 +43,9 @@ tools/VamsCLI/
       tag.py                 # Tag management
       tag_type.py            # Tag type management
       metadata.py            # Metadata operations (unified API)
-      metadata_schema.py     # Metadata schema management
+      metadata_schema.py     # Metadata schema management (list, get, create, update, delete)
+      comment.py             # Asset version comments (list, get, add, update, delete)
+      subscription.py        # Asset event subscriptions (list, create, update, delete, unsubscribe, check)
       features.py            # Feature switch inspection
       search.py              # Search (OpenSearch integration)
       sync.py                # Directory sync (sync file push/pull)
@@ -63,7 +65,7 @@ tools/VamsCLI/
     utils/
       api_client.py          # APIClient class (HTTP, retries, error mapping)
       profile.py             # ProfileManager (multi-profile, config dirs)
-      exceptions.py          # Two-tier exception hierarchy (~60 classes)
+      exceptions.py          # Two-tier exception hierarchy (~140 classes)
       global_exceptions.py   # @handle_global_exceptions() decorator
       decorators.py          # @requires_setup_and_auth, @requires_feature
       json_output.py         # output_result(), output_error(), output_status()
@@ -78,17 +80,17 @@ tools/VamsCLI/
       glb_combiner.py        # GLB binary file combination
   tests/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
-    test_*.py                # ~25 test files (includes test_asset_version_new_commands.py)
+    test_*.py                # 59 test files, one per command group or behavior area
 ```
 
-### Command Groups (22 top-level)
+### Command Groups (24 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
-tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
-pipeline, execution, industry, user, role, api-key
+tag, tag-type, metadata, metadata-schema, comment, subscription, features,
+search, sync, workflow, pipeline, execution, industry, user, role, api-key
 ```
 
 Sync has a nested sub-command group:
@@ -100,6 +102,11 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
 -   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
+
+Comment and subscription cover the comments and subscriptions APIs:
+
+-   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
+-   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
 
 Industry has nested sub-command groups:
 
@@ -139,6 +146,9 @@ VamsCLIError (base)
     TagError (+ 7 subclasses)
     AssetVersionError (+ 5 subclasses, includes AssetVersionArchiveError)
     AssetLinkError (+ 7 subclasses)
+    CommentError (+ 2 subclasses)
+    SubscriptionError (+ 3 subclasses)
+    MetadataSchemaError (+ 3 subclasses)
     SearchError (+ 5 subclasses)
     WorkflowError (+ 4 subclasses)
     CognitoUserError (+ 4 subclasses)
@@ -327,6 +337,25 @@ API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetvers
 2. Upload/download limits are constants, not magic numbers
 3. Feature switch names are constants (e.g., `FEATURE_GOVCLOUD = "GOVCLOUD"`)
 4. Retry config defaults are constants, overridable via env vars
+5. **Every `API_*` path constant must name a route the API actually registers.** `constants.py` is
+   the authority a new consumer trusts, so a path the backend never declared is a trap that fails
+   only at runtime against a live deployment — API Gateway rejects an unmatched path before any
+   handler runs, and neither import nor build catches it. `tests/test_constants_contract.py`
+   cross-checks every constant against the `ApiRoute` declarations in
+   `backend/backend/common/apiRoutes.py`. Two such constants shipped in this release: one formatted
+   by a live `APIClient` method, and one imported but never formatted, which read like working code.
+   A constant used as a path **prefix** (concatenated at the call site rather than formatted) needs
+   an entry in `_PREFIX_ONLY_CONSTANTS` naming why; prefer a format-string constant matching a
+   registered route, since the exemption list is the one place this check can be widened.
+
+6. **One route cannot be reached with `str.format`.** `API_COMMENTS_ASSET_VERSION_COMMENT` ends in
+   `{assetVersionId:commentId}` — the API's composite sort key, which is two values joined by a
+   colon inside a single path segment. `str.format` reads everything after the colon as a format
+   spec, so formatting that constant raises `ValueError`. `build_comment_path()` (module level in
+   `utils/api_client.py`) substitutes the parts instead, and is the only place that should: it also
+   rejects a colon in either part, because the handlers split the segment and read element `[1]` as
+   the commentId — an extra colon shifts which value is validated, and a missing one makes that
+   index raise, which surfaces as a `500` rather than a rejected request.
 
 ### 8. Authentication Flow
 
@@ -350,6 +379,8 @@ Password changes (Cognito only):
 -   `CognitoAuthenticator.change_password(access_token, previous_password, proposed_password)` wraps the Cognito `ChangePassword` API. `vamscli auth change-password` signs in with the current password (`interactive=False`) and then changes it, also satisfying a forced change in one step.
 -   `CognitoAuthenticator.forgot_password(username)` and `confirm_forgot_password(username, code, new_password)` wrap the Cognito `ForgotPassword` / `ConfirmForgotPassword` APIs (self-service reset, no current password needed). `vamscli auth forgot-password` is a single two-phase command: with no `--code` it requests an emailed code; with `--code` + `--new-password` it confirms. Interactive mode prompts through both phases; `--json-output` requests-only or confirms when both are supplied.
 -   These flows call the `cognito-idp` client directly (boto3), not a VAMS API route, so they have no `constants.py` endpoint entry.
+-   **The `cognito-idp` client is built with `signature_version=UNSIGNED` and must stay that way.** Every operation these flows reach — `initiate_auth`, `respond_to_auth_challenge`, `forgot_password`, `confirm_forgot_password`, `change_password` — is an unauthenticated Cognito user-pool API that takes no SigV4 signature, and botocore skips credential resolution entirely for an unsigned client. A signed client walks the AWS credential chain inside `create_client`, so a configured-but-failing provider (an expired SSO session, a `credential_process` helper that now returns non-zero) aborts `vamscli auth login` with a raw `CredentialRetrievalError` before any Cognito call — the CLI's front door, blocked by an AWS configuration it does not use. A machine with no AWS configuration at all resolves to `None` and proceeds, which is why CI never sees it. Pinned by `tests/test_auth_cognito_unsigned.py`.
+-   A test building a `CognitoAuthenticator` must patch `vamscli.auth.cognito.boto3.client` **around** the constructor, not assign over `.client` afterwards: the client is built in `__init__`, so a later assignment leaves a real one already constructed and makes the test depend on ambient AWS configuration. `tests/test_auth_password.py::_make_authenticator` is the reference shape, and `tests/conftest.py::isolate_aws_credentials` sets dummy credentials suite-wide as a second line of defence.
 
 Override tokens (external auth):
 
@@ -357,21 +388,164 @@ Override tokens (external auth):
 -   Pre-flight expiry check before each API request
 -   No auto-refresh -- fails immediately on 401
 
-### 9. Unicode and Terminal Encoding
+### 9. The CLI Sets Its Own Output Encoding — Never Rely on the Ambient Locale
 
-VamsCLI uses Unicode characters (e.g., `✓`, `✗`) in CLI output for status indicators. On Windows, the default console encoding (`charmap`/`cp1252`) cannot render these characters and will raise encoding errors.
+VamsCLI uses Unicode characters (e.g., `✓`, `✗`, `●`) in CLI output for status indicators — several
+hundred occurrences across 33 modules. Python selects stdout's encoding from the locale whenever stdout
+is **not** a console, which on a default Windows install is the ANSI code page (`cp1252`). None of those
+characters exist in `cp1252`, so every redirect and every pipe raised `UnicodeEncodeError`:
+`vamscli profile list > profiles.txt` wrote one line naming a charmap error and no profile data.
 
-**Requirements**:
-
--   Use a UTF-8 capable terminal (Windows Terminal, VS Code terminal, etc.)
--   Or set `PYTHONIOENCODING=utf-8` environment variable before running the CLI
--   Linux/macOS terminals are typically UTF-8 by default and do not require additional configuration
+`main._use_utf8_output()` therefore reconfigures `sys.stdout` and `sys.stderr` to UTF-8 with
+`errors="replace"` at the entry point, before Click parses anything.
 
 **Rules**:
 
-1. Unicode characters in CLI output are intentional and should not be replaced with ASCII
-2. When testing CLI commands in bash/shell scripts, set `export PYTHONIOENCODING=utf-8`
-3. Document the UTF-8 requirement in user-facing README and installation guides
+1. Unicode characters in CLI output are intentional and must not be replaced with ASCII. The encoding
+   is set once at the entry point; do not work around a rendering problem by editing glyphs out of a
+   command, because the next added glyph reintroduces the failure across all 33 modules.
+2. **Never make output correctness depend on `PYTHONIOENCODING`.** It is no longer required, and the
+   user-facing docs no longer ask for it — `docs/cli/installation.md`, `getting-started.md`,
+   `troubleshooting/general.md`, `troubleshooting/database-tags.md` and `tools/VamsCLI/README.md` all
+   describe the CLI as setting its own encoding.
+3. `errors="replace"` is deliberate: a stream that genuinely cannot represent a character substitutes it
+   rather than turning a working command into a failed one. A legacy console drawing a box instead of a
+   check mark is a font limitation, not an error.
+4. A stream lacking `reconfigure` (a `StringIO` under `CliRunner`, for instance) must be left alone —
+   reconfiguring unconditionally would raise `AttributeError` at entry and fail every command.
+5. **Do not put `PYTHONIOENCODING=utf-8` in a test fixture.** That is what hid this defect for a whole
+   release: `tests/test_json_output_purity.py` set it so the glyphs would encode under its own
+   subprocesses, which fixed the symptom for the suite and left it in production. A test covering output
+   encoding must force a legacy code page instead — see `tests/test_output_encoding.py`, which sets
+   `PYTHONIOENCODING=cp1252`, clears `PYTHONUTF8`, and carries a positive control asserting a
+   non-`cp1252` character actually reaches stdout so the case cannot pass vacuously.
+6. `CliRunner` cannot see this class of defect at all: it replaces `sys.stdout` with an in-memory buffer
+   that has no code page. Encoding behaviour must be tested by spawning `python -m vamscli.main`
+   (Testing rule 9 covers the config-home requirement that comes with a subprocess).
+
+### 10. Never Log a Whole Request or Response Payload Unredacted
+
+The CLI writes to a rotating log file (`get_config_dir()/logs/vamscli.log`, up to 6 files) at DEBUG level,
+regardless of whether `--verbose` is set. Anything written there **outlives the command** and, on a shared
+host or build agent, is readable by other local users. Several API payloads carry live credentials:
+
+| Payload                                       | Credential                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------ |
+| `auth login` response                         | Amazon Cognito access, refresh, and id tokens                      |
+| `auth login` / `auth change-password` request | The plaintext password                                             |
+| `api-key create` response                     | The one-time plaintext `vams_…` API key                            |
+| Any download response                         | Presigned Amazon S3 URLs (a bearer credential in the query string) |
+
+**Every log call that receives a whole request or response payload MUST route it through the redactor in
+`utils/logging.py`:**
+
+```python
+from .logging import redact_to_text   # returns a redacted string
+# or
+from .logging import redact_sensitive # returns a redacted copy of the object
+
+logger.debug(f"Response body: {redact_to_text(response_data)}")
+```
+
+The five existing sinks are already wired: `output_result` (`utils/json_output.py`), `log_api_request`
+and `log_api_response` (`utils/logging.py`), and the command-result lines in `@requires_setup_and_auth`
+(`utils/decorators.py`) and `@handle_global_exceptions()` (`utils/global_exceptions.py`). **Adding a sixth
+sink means adding the redactor call** — there is no automatic interception, because the payload reaches the
+logger as an already-formatted string. `tests/test_log_redaction_sink_inventory.py` scans the package for a
+log call that interpolates an unredacted payload, so a sixth sink added without the redactor fails there
+rather than at an audit. Redaction runs before truncation, so the length cut cannot reveal anything.
+
+**How the redactor decides:**
+
+-   **By key name** — a key whose normalized form (separators stripped, lowercased) contains `password`,
+    `passwd`, `secret`, `token`, `credential`, `apikey`, `authorization`, `signature`, `privatekey`, or
+    `cookie` is replaced. Applied recursively through dicts and sequences.
+-   **By descriptive suffix (an exception)** — a key that also _ends_ in `id`, `name`, `arn`, `type`,
+    `count`, `expiry`, `expiration`, `enabled`, or `status` is treated as naming a credential rather than
+    carrying one, so `apiKeyId`, `tokenType`, and `credentialsSecretArn` survive. `apiKeyHash` and
+    `passwordHash` deliberately do **not** survive.
+-   **By value shape** — `vams_…` keys, JWTs, `Bearer …`, and presigned-URL `X-Amz-Signature` /
+    `X-Amz-Security-Token` parameters are scrubbed even when the key name gives no hint, which covers a
+    payload that was already rendered to a string.
+
+**Two properties that must not be broken** (both pinned by `tests/test_log_redaction.py`):
+
+1. **Redaction applies to the log file only — never to console or `--json-output`.** A newly created API
+   key is displayed exactly once and cannot be retrieved again, so leaking redaction into the output path
+   would make `api-key create` useless. `redact_sensitive` returns a **copy** and never mutates its input.
+2. **Non-secret keys must survive.** This CLI logs S3 object keys constantly (`s3Key`, `objectKey`,
+   `keyName`, `bucketExistingKey`). Over-redaction destroys the diagnostic value the log exists for, which
+   is why the key-fragment list spells out credential names instead of matching a bare `key`.
+
+**One predicate, every per-key filter.** `redact_mapping_for_log()` wraps `_is_sensitive_key` and is
+what `log_command_start`, `log_api_request`'s header filter, `log_config_info`,
+`log_config_diagnostic`, and `log_auth_diagnostic` all use. A new per-key log filter must call it
+rather than keep its own list: each of those sites previously matched with
+`key.lower() in ['password', 'token', 'secret', 'key']`, which missed every parameter name the CLI
+actually declares — `new_password`, `old_password`, `token_override`, `access_token` — while the
+redaction visibly fired for `password` on the same line. Pinned by
+`tests/test_log_redaction.py::TestPerKeyLogFiltersShareOnePredicate`, which asserts both directions
+(the secrets are masked, and `starting_token` / `tokenType` / `apiKeyId` survive).
+
+### 11. Every Credential Option Needs a Non-Argv Alternative
+
+The OS process table publishes every argument of a running process — `/proc/<pid>/cmdline` and `ps -ef`
+on Linux, Task Manager's command-line column on Windows — to any other local account, including one with
+no VAMS entitlement. A command that accepts a password, token, or API key as an **option value only**
+therefore has no safe non-interactive form, and the CLI's two external connectors are non-interactive by
+construction.
+
+`auth login` pairs each credential option with a stdin flag: `-p/--password` with `--password-stdin`, and
+`--token-override` with `--token-override-stdin`. Follow that shape for any new credential input:
+
+-   Read the secret with `read_secret_from_stdin()` (`commands/auth.py`). It reads `sys.stdin.buffer` and
+    decodes UTF-8, because the writer is usually another process and a text-mode read would use the
+    console code page, which differs on the two ends. Only CR and LF are stripped, so a credential
+    ending in a space survives.
+-   Reject the stdin flag combined with its option form, and reject an empty payload — an empty pipe
+    otherwise authenticates with an empty secret or saves an override token that 401s on every call.
+-   **Keep the option form working.** Existing scripts and integrations depend on it. Say in its `help`
+    text that it is discouraged and why, and document the stdin form as the recommended one in
+    `documentation/docusaurus-site/docs/cli/commands/setup-and-auth.md`.
+
+Pinned by `tests/test_auth_secret_not_in_argv.py` (CLI side) and
+`tools/ExternalIntegrations/isaacsim_vams_integration/tests/test_vams_cli_service_secrets.py` (connector
+side). The two suites together are what catches a flag rename: the connector does not import this
+package.
+
+### 12. Never Call a Builtin a Command Shadows — Use `builtin_list`
+
+Click commands are bound to module-scope names, so a command named `list` produces a module attribute
+`list` that is a `click.Command`, **shadowing the builtin for the whole module**. A `Command` is
+callable — `Command.__call__` runs `main()` — so `list(x)` does not build a list; it executes that CLI
+command as a nested program, parsing `x` as its argv:
+
+```python
+# In commands/assets.py, which defines `def list(...)` as `assets list`:
+list([])                 # runs `assets list` with no args -> prints the asset listing, SystemExit(0)
+list({'dup.txt'})        # runs `assets list dup.txt`      -> "unexpected extra argument", SystemExit(2)
+```
+
+Both failures are hard to attribute. The empty-iterable case is the worse one: the command prints an
+unrelated asset listing in place of its own output **and exits 0**, so it reads as a successful run of
+something else entirely. Neither raises `TypeError`, so nothing points at the call site.
+
+**Any module defining a command named after a builtin must import that builtin under an alias and use
+it:**
+
+```python
+from builtins import list as builtin_list  # Avoid namespace collision with the 'list' command
+
+unique = builtin_list(set(conflicts))
+```
+
+`commands/metadata.py` established the idiom; `commands/assets.py` follows it. The names at risk are
+the command names this CLI actually uses — `list`, `get`, `set`, `delete`, `update`, `create` — of which
+`list`, `get` and `set` are builtins. Prefer a comprehension or `[*a, *b]` where one will do, since
+neither names the builtin at all.
+
+There is no linter for this: the module-scope rebinding is legitimate Python and the call type-checks.
+Treat a command whose output includes another command's output as this bug until proven otherwise.
 
 ---
 
@@ -380,7 +554,7 @@ VamsCLI uses Unicode characters (e.g., `✓`, `✗`) in CLI output for status in
 ### Framework and Configuration
 
 -   **Framework**: pytest with Click's `CliRunner`
--   **Test files**: `tests/test_*.py` (~24 files)
+-   **Test files**: `tests/test_*.py` (59 files)
 -   **Shared fixtures**: `tests/conftest.py`
 
 ### Key Fixtures (conftest.py)
@@ -388,6 +562,8 @@ VamsCLI uses Unicode characters (e.g., `✓`, `✗`) in CLI output for status in
 | Fixture                    | Scope    | Purpose                                        |
 | -------------------------- | -------- | ---------------------------------------------- |
 | `isolate_logging_globals`  | autouse  | Restores `_verbose_mode` / `_logger` per test  |
+| `isolate_aws_credentials`  | autouse  | Dummy AWS credentials; clears `AWS_PROFILE`    |
+| `redirect_log_dir`         | autouse  | Points `get_log_dir` at a temp directory       |
 | `CoroutineClosingMock`     | class    | `asyncio.run` mock that closes the coroutine   |
 | `mock_logging`             | autouse  | Prevents file system operations during tests   |
 | `cli_runner`               | function | Pre-configured `CliRunner` instance            |
@@ -434,7 +610,7 @@ The `generic_command_mocks(command_module)` context manager patches:
 5. To disable the autouse `mock_logging`, mark the test: `@pytest.mark.no_mock_logging`
 6. Never leave `vamscli.utils.logging._verbose_mode` or `._logger` mutated. `main.py` binds `initialize_logging` at import, so `mock_logging`'s patch does not intercept the CLI group's call — every `cli_runner.invoke` writes those globals for real. In verbose mode each `log_*` call also writes to stderr, `CliRunner` merges stderr into `result.output`, and any later `json.loads(result.output)` fails on text wrapped around its JSON. The autouse `isolate_logging_globals` fixture restores both; `tests/test_logging_isolation.py` guards it in ordered pairs.
 7. Patch a command's `asyncio.run` with `new_callable=CoroutineClosingMock` (from `tests/conftest.py`). Commands call `asyncio.run(some_coro())`; Python evaluates the argument first, so the coroutine object is always built and a plain `MagicMock` then discards it un-awaited. The "coroutine ... was never awaited" `RuntimeWarning` surfaces whenever that object is later garbage collected, attributed to an unrelated test. `CoroutineClosingMock` closes the coroutine and otherwise behaves as a normal `MagicMock`, so `return_value`, `side_effect`, and call assertions are unaffected. Do not use `AsyncMock` here — it returns a coroutine instead of the canned value and leaks two coroutines instead of one.
-8. `tests/conftest.py` removes `--verbose` from `sys.argv` at import, before collection. `_is_verbose_mode()` treats that literal anywhere in `sys.argv` as a request for verbose output — including pytest's own argv — which would turn on stderr logging session-wide and break ~113 tests that parse `result.output` as JSON. No fixture can prevent it, because the helper is consulted per call rather than per test. Keep the strip: `pytest --verbose` is green only because of it. Its one visible cost is that pytest reads the same flag for its own progress display, so `pytest --verbose` renders as dots; use `-v` (a different string, never affected) for per-test output.
+8. `_is_verbose_mode()` reads only the `_verbose_mode` module global, which `initialize_logging()` sets from Click's parsed `--verbose` (registered in `main.py`). Keep it that way. While it also matched the literal `--verbose` anywhere in `sys.argv`, the suite's result depended on how pytest was invoked: pytest's own flag turned on stderr logging session-wide and broke ~113 tests that parse `result.output` as JSON, and no fixture could prevent it because the helper is consulted per call rather than per test — `tests/conftest.py` had to strip the argument out of `sys.argv` at import, which is a process global no test owns. The same sniff fired on an option **value**, so `vamscli search assets -q "--verbose"` turned on full request/response logging. Both are pinned by `tests/test_logging_isolation.py::test_verbosity_does_not_depend_on_process_argv` and `tests/test_logging.py::TestVerboseMode`.
 
 9. **A test that runs the CLI as a SUBPROCESS must supply its own config home.** `CliRunner` bypasses `main()`, so behavior that lives there (the `standalone_mode=False` call and its `UsageError`/`ClickException` → JSON handling) can only be tested by spawning `python -m vamscli.main`. That subprocess has no pytest loaded, so `check_setup_required`'s `if 'pytest' in sys.modules` escape hatch does **not** apply and the setup gate is live: on a developer machine with a real profile the gate passes and the test reaches the behavior it meant to exercise, while on a clean checkout or in CI it fires first and every case sees a `SetupRequired` payload (no `error_type` key, no `Usage:` text). Point `HOME`, `USERPROFILE` and `APPDATA` at a `tmp_path` holding one `profiles/default/config.json` — see the `cli_env` fixture in `tests/test_json_output_purity.py`, which also keeps the suite independent of whatever profiles the developer happens to have. Include a control asserting `"Setup Required" not in output`, so a fixture that stops satisfying the gate fails loudly instead of silently testing the wrong error.
 
@@ -493,7 +669,23 @@ python -m pytest tests/test_database_commands.py::TestDatabaseList::test_list_da
 
 # Run with coverage
 python -m pytest tests/ --cov=vamscli --cov-report=term-missing
+
+# List every test that pins one past change rather than a durable rule (root CLAUDE.md Rule 13)
+python -m pytest -m temporary --collect-only
 ```
+
+### Mark a Temporary Test with `@pytest.mark.temporary`
+
+A test written to prove one specific change landed — a deleted branch, a removed helper, a reworded
+message — carries `@pytest.mark.temporary` (registered in `pyproject.toml`) plus a line saying what it
+pins. This suite runs `--strict-markers`, so the marker must stay registered or every test using it
+fails.
+
+The marker exists because a temporary test and a durable guardrail cannot be told apart by reading them
+later: both scan source, both assert an absence, both explain themselves. Do **not** mark a test whose
+forbidden construct is still writable — `test_api_error_body.py::test_every_error_path_in_the_client_uses_the_helper`
+and the `test_log_redaction.py` guards must keep holding — nor a control whose subject is deliberately
+a string that does not exist. Full criterion: root `CLAUDE.md` Rule 13.
 
 ---
 
@@ -590,10 +782,12 @@ Follow this checklist:
     - `isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py` -- Python subprocess wrapper. Check the argument lists passed to `subprocess.run` and each `@dataclass` field's `item.get("jsonKey", ...)` mapping.
     - `arcgispro-connector-for-vams/Services/VamsCliService.cs` -- C# subprocess wrapper. Check the interpolated argument strings plus the `[JsonPropertyName("jsonKey")]` attributes in `Models/VamsModels.cs`.
 
-    Two failure modes to watch for:
+    Failure modes to watch for:
 
     - **Map each key to the command that actually returns it.** `file list` items and the `file info` response are different shapes: a listing item carries `dateCreatedCurrentVersion` and no `contentType`/`lastModified`, while `file info` carries `contentType`/`lastModified` and no `dateCreatedCurrentVersion`. A key mapped onto the wrong command is permanently empty with no error.
     - **ArcGIS computed properties need `[JsonIgnore]`** when their name matches a mapped JSON field (for example `Key` alongside `[JsonPropertyName("key")]`). Deserialization uses `PropertyNameCaseInsensitive`, so the collision throws `InvalidOperationException` while building type metadata and fails the whole response.
+    - **Every invocation names the configured profile, and `--profile` is PREPENDED.** An omitted `--profile` resolves to whatever `profile switch` last recorded (Rule 6), so a connector that skips the flag follows another deployment. It is a group-level option, so a flag appended after the subcommand is rejected with Click's "no such option" — an argv-membership assertion passes and the command still fails at runtime. Both connectors prepend it centrally, in `_execute_command` and `ExecuteCommandAsync`; add it there, not per call site. `profile info <name>` also takes the profile as a **positional**, which must track the configured name too.
+    - **Credentials go to the CLI's stdin, never onto argv** (Rule 11). The connectors pipe the password and the override token to `--password-stdin` / `--token-override-stdin`.
 
     To validate the command surface, walk `cli.commands[group].commands[cmd].params` for every group/subcommand/flag the connectors pass, then spot-check a live `--json-output` response for the keys each connector parses.
 
@@ -794,6 +988,7 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 9. Ship a command that produces output without `--json-output` support — every output-producing command accepts `json_output: bool` (Rule 4).
 10. Forget the `output_error(...); raise click.ClickException(str(e))` pair — `output_error` exits in JSON mode; the raise handles CLI mode (Rule 4).
 11. Spawn the CLI as a subprocess in a test without giving it its own config home — the setup gate is live there (no pytest in `sys.modules`), so the test passes only on a machine that happens to have a configured profile and fails in CI (Testing rule 9).
+12. Call `list()`, `get()` or `set()` in a module that defines a command of that name — the name is a `click.Command`, and calling it runs that command as a nested CLI program instead of the builtin. Use `builtin_list` (Rule 12).
 
 ---
 
@@ -824,14 +1019,25 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 
 ### Feature Switches
 
-| Constant                                | Value                             | Meaning              |
-| --------------------------------------- | --------------------------------- | -------------------- |
-| `FEATURE_GOVCLOUD`                      | `"GOVCLOUD"`                      | GovCloud deployment  |
-| `FEATURE_ALBDEPLOY`                     | `"ALBDEPLOY"`                     | ALB deployment mode  |
-| `FEATURE_NOOPENSEARCH`                  | `"NOOPENSEARCH"`                  | OpenSearch disabled  |
-| `FEATURE_AUTHPROVIDER_COGNITO`          | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled |
-| `FEATURE_AUTHPROVIDER_COGNITO_SAML`     | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth    |
-| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP` | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP   |
+One constant per member of `VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`), which is the set a
+deployment publishes through `/secure-config`. The two lists must stay equal in both directions — a
+missing constant is a gate no command can name, and an extra one names a gate no deployment publishes.
+`tests/test_constants_contract.py` parses the enum and fails on either drift.
+
+| Constant                                | Value                             | Meaning                  |
+| --------------------------------------- | --------------------------------- | ------------------------ |
+| `FEATURE_GOVCLOUD`                      | `"GOVCLOUD"`                      | Restricted partition     |
+| `FEATURE_ALLOWUNSAFEEVAL`               | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
+| `FEATURE_LOCATIONSERVICES`              | `"LOCATIONSERVICES"`              | Location Service enabled |
+| `FEATURE_ALBDEPLOY`                     | `"ALBDEPLOY"`                     | ALB deployment mode      |
+| `FEATURE_CLOUDFRONTDEPLOY`              | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
+| `FEATURE_NOOPENSEARCH`                  | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
+| `FEATURE_AUTHPROVIDER_COGNITO`          | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
+| `FEATURE_AUTHPROVIDER_COGNITO_SAML`     | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
+| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`     | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
+| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP` | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
+| `FEATURE_PHYSNA_ADDON`                  | `"PHYSNA_ADDON"`                  | Physna add-on features   |
+| `FEATURE_DEADLINECLOUD_PIPELINES`       | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
 
 ---
 
@@ -846,7 +1052,7 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 | `vamscli/auth/cognito.py`            | Cognito SRP + USER_PASSWORD_AUTH implementation        |
 | `vamscli/utils/api_client.py`        | APIClient: HTTP, retries, error mapping                |
 | `vamscli/utils/profile.py`           | ProfileManager: multi-profile config management        |
-| `vamscli/utils/exceptions.py`        | Two-tier exception hierarchy (~60 classes)             |
+| `vamscli/utils/exceptions.py`        | Two-tier exception hierarchy (~140 classes)            |
 | `vamscli/utils/global_exceptions.py` | `@handle_global_exceptions()` decorator                |
 | `vamscli/utils/decorators.py`        | `@requires_setup_and_auth`, `@requires_feature`        |
 | `vamscli/utils/json_output.py`       | `output_result()`, `output_error()`, `output_status()` |

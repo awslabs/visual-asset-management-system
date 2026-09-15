@@ -859,16 +859,19 @@ def create_constraint(ctx: click.Context, constraint_id: str, name: Optional[str
             {"field": "assetType", "operator": "equals", "value": "model"}
         ],
         "groupPermissions": [
-            {"groupId": "admin", "permission": "read", "permissionType": "allow"}
+            {"groupId": "admin", "permission": "GET", "permissionType": "allow"}
         ],
         "userPermissions": [
-            {"userId": "user@example.com", "permission": "write", "permissionType": "allow"}
+            {"userId": "user@example.com", "permission": "PUT", "permissionType": "allow"}
         ]
     }
-    
+
+    "permission" is an HTTP method: GET, PUT, POST or DELETE. Any other value, including
+    "read" or "write", is rejected with a 400. "permissionType" is "allow" or "deny".
+
     Examples:
         vamscli role constraint create -c my-constraint --json-input constraint.json
-        vamscli role constraint create -c my-constraint --json-input '{"name":"Test","description":"Test constraint","objectType":"asset","criteriaAnd":[{"field":"databaseId","operator":"equals","value":"db1"}],"groupPermissions":[{"groupId":"admin","permission":"read","permissionType":"allow"}]}'
+        vamscli role constraint create -c my-constraint --json-input '{"name":"Test","description":"Test constraint","objectType":"asset","criteriaAnd":[{"field":"databaseId","operator":"equals","value":"db1"}],"groupPermissions":[{"groupId":"admin","permission":"GET","permissionType":"allow"}]}'
     """
     # Get profile manager and API client (setup/auth already validated by decorator)
     profile_manager = get_profile_manager_from_context(ctx)
@@ -959,10 +962,13 @@ def update_constraint(ctx: click.Context, constraint_id: str, name: Optional[str
     This command updates an existing constraint in VAMS. Due to the complexity of
     constraint data (criteria, permissions), it's recommended to use --json-input
     for updating constraints. The update replaces the entire constraint.
-    
+
+    "permission" is an HTTP method: GET, PUT, POST or DELETE. Any other value, including
+    "read" or "write", is rejected with a 400. "permissionType" is "allow" or "deny".
+
     Examples:
         vamscli role constraint update -c my-constraint --json-input constraint.json
-        vamscli role constraint update -c my-constraint --json-input '{"name":"Updated","description":"Updated constraint","objectType":"asset","criteriaAnd":[{"field":"databaseId","operator":"equals","value":"db1"}],"groupPermissions":[{"groupId":"admin","permission":"read","permissionType":"allow"}]}'
+        vamscli role constraint update -c my-constraint --json-input '{"name":"Updated","description":"Updated constraint","objectType":"asset","criteriaAnd":[{"field":"databaseId","operator":"equals","value":"db1"}],"groupPermissions":[{"groupId":"admin","permission":"GET","permissionType":"allow"}]}'
         vamscli role constraint update -c my-constraint --name "Updated Name" --description "Updated Description"
     """
     # Setup/auth already validated by decorator

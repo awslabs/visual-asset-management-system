@@ -28,7 +28,7 @@ from urllib.parse import urlparse
 
 import manifest_io
 from inference import run_inference
-from model_manager import ensure_models_cached
+from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -42,7 +42,16 @@ logging.basicConfig(
 # Directories
 INPUT_DIR = Path("/tmp/input")
 OUTPUT_DIR = Path("/tmp/output")
-HF_CACHE_BASE = "/mnt/efs/cosmos-models/hf_cache"
+# One EFS filesystem is mounted at one path by ALL FOUR Cosmos pipelines, so a cache directory
+# that does not name the pipeline is shared by all of them -- and the cache check asks only
+# whether the directory holds any weights at all. The first pipeline to run would populate it
+# and every other one would read a hit, skip its own S3 restore, and download its weights during
+# inference instead, while the backup uploaded the combined directory to each pipeline's own
+# prefix. This lay dormant only because the mount never worked -- an unmounted path is an empty
+# local directory, so the check was correctly a miss -- so fixing the mount is what activates it.
+# The segment comes from the S3 prefix that already identifies this pipeline, so the filesystem
+# layout and the backup layout cannot drift apart.
+HF_CACHE_BASE = f"/mnt/efs/cosmos-models/hf_cache/{S3_HF_CACHE_PREFIX.split('/')[0]}"
 
 
 def load_pipeline_definition() -> Dict:
@@ -180,23 +189,45 @@ def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
 
 def find_output_video(output_dir: Path) -> Optional[Path]:
     """
-    Find output video file in output directory.
+    Find the generated video in the output directory.
 
-    Cosmos Transfer 2.5 writes output to a subdirectory structure under the
-    output dir. Search recursively for .mp4 files.
+    Cosmos Transfer 2.5 writes output to a subdirectory structure under the output dir, so the search
+    is recursive.
+
+    Selection is by sorted order, never by `rglob`'s own. `rglob` yields directory order, which is
+    filesystem-dependent rather than sorted, so taking its first hit makes the choice arbitrary
+    whenever a second .mp4 is present -- and an unrelated file uploaded as the generated video is a run
+    that reports success with the wrong result. Exactly one object is uploaded from this result, so the
+    choice is the result.
+
+    Unlike Cosmos Predict 2.5, this pipeline has no expected output NAME to key on: nothing in the
+    transfer inference path names the artifact it writes. So the name-matching half of that fix does
+    not apply here, and reproducible ordering plus a named warning is the whole of it -- a run with
+    more than one candidate says so in the log rather than choosing in silence.
 
     Args:
         output_dir: Directory to search
 
     Returns:
-        Path to first .mp4 file found, or None
+        Path to the selected video, or None when the directory holds no .mp4 at all
     """
-    for video_path in output_dir.rglob("*.mp4"):
-        logger.info(f"Found output video: {video_path}")
-        return video_path
+    candidates = sorted((path for path in output_dir.rglob("*.mp4") if path.is_file()),
+                        key=lambda path: str(path))
 
-    logger.warning(f"No .mp4 files found in {output_dir}")
-    return None
+    if not candidates:
+        logger.warning(f"No .mp4 files found in {output_dir}")
+        return None
+
+    if len(candidates) > 1:
+        logger.warning(
+            f"{len(candidates)} .mp4 files found in {output_dir} where one is expected; "
+            f"selecting the first in sorted order: "
+            f"{', '.join(str(path.relative_to(output_dir)) for path in candidates)}"
+        )
+
+    chosen = candidates[0]
+    logger.info(f"Found output video: {chosen}")
+    return chosen
 
 
 def main():

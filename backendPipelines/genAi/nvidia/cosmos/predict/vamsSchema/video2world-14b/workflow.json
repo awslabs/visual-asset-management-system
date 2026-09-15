@@ -1,6 +1,6 @@
 {
     "workflowName": "NVIDIA Cosmos Video-to-World 14B v2",
-    "category": "GenAI",
+    "category": "WFM",
     "description": "NVIDIA Cosmos Video-to-World 14B v2 - Generate high-quality videos from video + text input (Predict2.5)",
     "triggers": [
         {

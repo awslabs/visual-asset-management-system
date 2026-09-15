@@ -3,8 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useState, useEffect, useRef, Component } from "react";
-import { Container, Grid, Header, Spinner, Box, Alert } from "@cloudscape-design/components";
+import React, { Suspense, useState, useEffect, useMemo, useRef, Component } from "react";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
+import Container from "@cloudscape-design/components/container";
+import Grid from "@cloudscape-design/components/grid";
+import Header from "@cloudscape-design/components/header";
+import Spinner from "@cloudscape-design/components/spinner";
 
 /**
  * Error boundary that catches render errors from viewer plugins.
@@ -47,8 +52,10 @@ class ViewerErrorBoundary extends Component<
 import {
     PluginRegistry,
     getFileExtensions,
+    deriveCompareContext,
     ViewerPlugin,
     ViewerPluginMetadata,
+    ViewerMode,
 } from "../core/PluginRegistry";
 import { FileInfo } from "../core/types";
 import { StylesheetManager } from "../core/StylesheetManager";
@@ -67,6 +74,9 @@ export interface DynamicViewerProps {
     hideFullscreenControls?: boolean;
     /** "viewport" uses calc(100vh - 300px) for modals, "container" uses 100% to fill parent */
     sizingMode?: "viewport" | "container";
+    /** Which surface this render serves. "compare" filters to compare-capable viewers and passes
+     *  the ordered `files` to the viewer as compareFiles. Defaults to "visualize" (unchanged path). */
+    mode?: ViewerMode;
 }
 
 export const DynamicViewer: React.FC<DynamicViewerProps> = ({
@@ -81,6 +91,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     onDeletePreview,
     hideFullscreenControls = false,
     sizingMode = "viewport",
+    mode = "visualize",
 }) => {
     const [selectedViewerId, setSelectedViewerId] = useState<string | null>(null);
     const [compatibleViewers, setCompatibleViewers] = useState<ViewerPluginMetadata[]>([]);
@@ -90,6 +101,28 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     const [registryInitialized, setRegistryInitialized] = useState(false);
     const [viewerLoading, setViewerLoading] = useState(false);
     const mountedRef = useRef(true);
+    // Mirrors selectedViewerId so the compatibility effect can read the current
+    // selection without taking it as a dependency (re-running that effect on a
+    // selection change would clobber the user's pick).
+    const selectedViewerIdRef = useRef<string | null>(null);
+    selectedViewerIdRef.current = selectedViewerId;
+
+    // Compare entries with their owning database/asset resolved. An entry that names its own pair keeps
+    // it; one that does not (legacy callers) takes the caller's TOP-LEVEL pair — never files[0]'s, which
+    // is what the visualize-path effectiveAssetId below falls back to. In compare mode that fallback
+    // would silently re-home a second entry under the first entry's asset. The shape/cross-asset
+    // classification and the viewer both consume this resolved list. Memoized on the inputs so the
+    // compatibility effect and the viewer's own effects see a stable reference between renders.
+    const compareFiles = useMemo<FileInfo[] | undefined>(() => {
+        if (mode !== "compare") {
+            return undefined;
+        }
+        return files.map((file) => ({
+            ...file,
+            assetId: file.assetId ?? assetId,
+            databaseId: file.databaseId ?? databaseId,
+        }));
+    }, [mode, files, assetId, databaseId]);
 
     // Initialize plugin registry
     useEffect(() => {
@@ -119,34 +152,64 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         const fileExtensions = getFileExtensions(files);
         const isMultiFile = files.length > 1;
 
-        console.log("Finding viewers for:", { fileExtensions, isMultiFile, isPreviewMode });
+        console.log("Finding viewers for:", { fileExtensions, isMultiFile, isPreviewMode, mode });
 
-        const viewerMetadata = registry.getCompatibleViewers(
-            fileExtensions,
-            isMultiFile,
-            isPreviewMode
-        );
+        const viewerMetadata =
+            mode === "compare"
+                ? registry.getCompatibleViewers(
+                      fileExtensions,
+                      isMultiFile,
+                      false,
+                      "compare",
+                      // Classified on the RESOLVED entries so a missing per-entry asset id does not
+                      // read as "a different asset" (or hide a real cross-asset selection).
+                      deriveCompareContext(compareFiles ?? files)
+                  )
+                : registry.getCompatibleViewers(fileExtensions, isMultiFile, isPreviewMode);
         setCompatibleViewers(viewerMetadata);
+
+        if (viewerMetadata.length === 0) {
+            // Customize error message based on whether multiple files are selected
+            const errorMessage =
+                mode === "compare"
+                    ? `No compatible compare viewers found for file types: ${fileExtensions.join(
+                          ", "
+                      )}`
+                    : isMultiFile
+                    ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(
+                          ", "
+                      )}`
+                    : `No compatible viewers found for file types: ${fileExtensions.join(", ")}`;
+            setSelectedViewerId(null);
+            setLoadedViewer(null);
+            setError(errorMessage);
+            setLoading(false); // Stop loading when no viewers are found
+            return;
+        }
+
+        // The previous selection's error (including "no compatible viewers" for
+        // a file the user has already left) does not describe this selection.
+        setError(null);
 
         // Auto-select only if there's exactly one viewer available
         // If multiple viewers exist, force user to choose to avoid loading performance-heavy viewers
-        if (viewerMetadata.length === 1 && !selectedViewerId) {
-            setSelectedViewerId(viewerMetadata[0].config.id);
-        } else if (viewerMetadata.length > 1 && !selectedViewerId) {
-            // Multiple viewers available - don't auto-select, force user choice
-            setSelectedViewerId(null);
-            setLoading(false); // Stop loading state to show the selector
-        } else if (viewerMetadata.length === 0) {
-            // Customize error message based on whether multiple files are selected
-            const errorMessage = isMultiFile
-                ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(
-                      ", "
-                  )}`
-                : `No compatible viewers found for file types: ${fileExtensions.join(", ")}`;
-            setError(errorMessage);
-            setLoading(false); // Stop loading when no viewers are found
+        const currentId = selectedViewerIdRef.current;
+        const selectionStillCompatible =
+            !!currentId && viewerMetadata.some((metadata) => metadata.config.id === currentId);
+        if (selectionStillCompatible) {
+            return;
         }
-    }, [files, isPreviewMode, registryInitialized]); // Removed selectedViewerId from dependencies
+        if (viewerMetadata.length === 1) {
+            setSelectedViewerId(viewerMetadata[0].config.id);
+        } else {
+            // Multiple viewers available - don't auto-select, force user choice.
+            // The previously selected viewer cannot render these files, so its
+            // component must come down with the selection.
+            setSelectedViewerId(null);
+            setLoadedViewer(null);
+            setLoading(false); // Stop loading state to show the selector
+        }
+    }, [files, compareFiles, isPreviewMode, registryInitialized, mode]); // Removed selectedViewerId from dependencies
 
     // Load selected viewer lazily
     useEffect(() => {
@@ -173,6 +236,9 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                 if (!mountedRef.current) return; // Check again after async operation
 
                 setLoadedViewer(viewer);
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.log(`Loaded viewer: ${viewer.config.name}`, viewer);
                 console.log(`Viewer component:`, viewer.component);
             } catch (error) {
@@ -229,6 +295,20 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     // Determine the content to show inside the viewer container
     const isShowingViewer =
         registryInitialized && !loading && !viewerLoading && !error && compatibleViewers.length > 0;
+
+    // Per-file asset context (Decision #3) for the VISUALIZE path. For a single file, prefer its own
+    // context. For multi-file, use the first file's context as the shared pair (same-asset case);
+    // top-level props remain the fallback for legacy callers that don't set per-file context.
+    // Compare mode does not use this: each compare entry is resolved individually (see compareFiles),
+    // so the viewer receives the caller's top-level pair untouched and must never read files[0]'s.
+    const effectiveAssetId =
+        mode === "compare"
+            ? assetId
+            : (files.length === 1 ? files[0].assetId : files[0]?.assetId) ?? assetId;
+    const effectiveDatabaseId =
+        mode === "compare"
+            ? databaseId
+            : (files.length === 1 ? files[0].databaseId : files[0]?.databaseId) ?? databaseId;
 
     const renderStatusContent = () => {
         if (!registryInitialized || loading || viewerLoading) {
@@ -316,7 +396,9 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                 header={
                     <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
                         <Box>
-                            <Header variant="h2">Visualizer</Header>
+                            <Header variant="h2">
+                                {mode === "compare" ? "Compare" : "Visualizer"}
+                            </Header>
                         </Box>
                         <Box textAlign="right">
                             {showViewerSelector && compatibleViewers.length > 0 && (
@@ -329,6 +411,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                     selectedViewerId={selectedViewerId}
                                     onViewerChange={handleViewerChange}
                                     className="visualizer-segment-control"
+                                    mode={mode}
                                 />
                             )}
                         </Box>
@@ -386,8 +469,8 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                     >
                                         {loadedViewer ? (
                                             <loadedViewer.component
-                                                assetId={assetId}
-                                                databaseId={databaseId}
+                                                assetId={effectiveAssetId}
+                                                databaseId={effectiveDatabaseId}
                                                 assetKey={
                                                     files.length === 1 ? files[0].key : undefined
                                                 }
@@ -396,6 +479,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                         ? files.map((f) => f.key)
                                                         : undefined
                                                 }
+                                                multiFiles={files.length > 1 ? files : undefined}
                                                 versionId={
                                                     files.length === 1
                                                         ? files[0].versionId
@@ -406,6 +490,8 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                 onViewerModeChange={onViewerModeChange}
                                                 onDeletePreview={onDeletePreview}
                                                 isPreviewFile={isPreviewMode}
+                                                compareMode={mode === "compare"}
+                                                compareFiles={compareFiles}
                                                 customParameters={
                                                     loadedViewer.config.customParameters
                                                 }

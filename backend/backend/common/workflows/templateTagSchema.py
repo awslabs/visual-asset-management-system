@@ -54,7 +54,7 @@ TAG_TYPES = frozenset(
 )
 
 # The empty value each type materializes to for a blank OPTIONAL tag with no declared default, so a
-# {{tag}} referencing it renders empty rather than failing resolution as unmatched. integer, number
+# {{tag}} referencing it renders empty rather than surviving as its own literal text. integer, number
 # and boolean have no representable empty value and are therefore absent from this map.
 _TYPE_EMPTY_VALUES = {
     TAG_TYPE_STRING: "",
@@ -64,8 +64,8 @@ _TYPE_EMPTY_VALUES = {
 
 # The complement of _TYPE_EMPTY_VALUES: the types a blank tag cannot materialize as. Such a tag is
 # supplyable only by a value — the caller's or a declared default — so a schema declaring one
-# optional-and-defaultless is rejected at declaration (validate_tag_schema) rather than rendering an
-# unmatched {{tag}} on every execution, which is a failure with no name attached to it.
+# optional-and-defaultless is rejected at declaration (validate_tag_schema) rather than delivering the
+# literal {{tag}} to the pipeline on every execution, which no declared tag should ever do.
 TYPES_WITHOUT_EMPTY_VALUE = frozenset(TAG_TYPES - set(_TYPE_EMPTY_VALUES))
 
 
@@ -258,11 +258,12 @@ def validate_tags(tag_schema, provided_tags):
       - Each provided value must match its declared type (coerced where unambiguous).
       - An OPTIONAL tag left blank (absent or empty) with no declared default still materializes as
         its type's empty value — "" for string/enum, [] for string-list — so a {{tag}} referencing it
-        renders empty instead of failing resolution as an unmatched tag. integer / number / boolean
-        have no representable empty value and stay absent; validate_tag_schema is what keeps such a
-        tag from being declared optional-and-defaultless, so a body may always reference one.
-      - EXTRA provided tags (no matching schema entry) are IGNORED, not an error. The only
-        render-time tag error is an unmatched {{tag}} in the body, enforced by the renderer.
+        renders empty instead of surviving as its own literal text. integer / number / boolean have no
+        representable empty value and stay absent; validate_tag_schema is what keeps such a tag from
+        being declared optional-and-defaultless, so a body may always reference one.
+      - EXTRA provided tags (no matching schema entry) are IGNORED, not an error, and so is a {{tag}}
+        in the body with no schema entry at all: it has no value to substitute, so its literal text is
+        what the pipeline receives.
     """
     errors = []
     filled = {}
@@ -302,7 +303,7 @@ def validate_tags(tag_schema, provided_tags):
             errors.append(f"tag '{key}' is required")
         elif tag_type in _TYPE_EMPTY_VALUES:
             # Blank optional tag, no default: materialize the type's empty value so a body
-            # referencing it renders empty instead of erroring as an unmatched tag.
+            # referencing it renders empty instead of keeping its own literal text.
             empty = _TYPE_EMPTY_VALUES[tag_type]
             filled[key] = list(empty) if isinstance(empty, list) else empty
 
@@ -314,15 +315,14 @@ def required_tags_without_default(tag_schema):
     """Return the tagKeys in a schema that no headless run could supply a value for.
 
     A headless run (an auto-triggered workflow) has no person to supply tag values, so a template
-    with such a tag can never render for a trigger — every triggered execution would fail, at
-    validate_tags for a required tag and at the renderer's unmatched-tag check for a tag with no
-    blank form. Callers use this to reject saving a trigger (or a trigger-referenced template) that
-    would be dead-on-arrival. A default of None (or an absent default) counts as 'no default'; any
-    other value (including False/0/"") is a usable default.
+    with such a tag can never render for a trigger — every triggered execution would fail in
+    validate_tags, which reports the required tag as missing. Callers use this to reject saving a
+    trigger (or a trigger-referenced template) that would be dead-on-arrival. A default of None (or an
+    absent default) counts as 'no default'; any other value (including False/0/"") is a usable default.
 
     Two shapes qualify: a required tag with no default, and a tag of a type with no blank form
-    (TYPES_WITHOUT_EMPTY_VALUE) with no default, which is equally unsupplyable whether or not it is
-    marked required."""
+    (TYPES_WITHOUT_EMPTY_VALUE) with no default — which validate_tag_schema refuses to declare as
+    optional, and which is equally unsupplyable when marked required."""
     missing = []
     for field in tag_schema or []:
         if not isinstance(field, dict):

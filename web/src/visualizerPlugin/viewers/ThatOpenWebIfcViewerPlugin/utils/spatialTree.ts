@@ -175,6 +175,9 @@ export async function buildSpatialTree(
             // Build one exact-match RegExp per category and fetch their items in
             // a single call: returns { [category]: number[] }.
             const regexes = categories.map(
+                // The category name is escaped with the standard metacharacter escape before it is
+                // interpolated.
+                // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
                 (c) => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)
             );
             const byCategory: Record<string, number[]> = await model.getItemsOfCategories(regexes);

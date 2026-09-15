@@ -22,6 +22,11 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from common.batchItemFailures import (
+    all_batch_item_failures,
+    batch_item_identifier,
+    with_batch_item_failures,
+)
 from common.syncTracking import (
     SYNC_OBJECT_TYPE_DATABASE,
     SYNC_ACTION_CREATE,
@@ -32,6 +37,7 @@ from common.syncTracking import (
     write_outbound_sync_record,
 )
 from common.validators import validate
+from common.dynamodb import query_all_items
 from models.common import VAMSGeneralErrorResponse
 
 # Helper function to convert Decimal to int/float for JSON serialization
@@ -78,32 +84,17 @@ def _record_sync(object_type, action, success, database_id, asset_id=None,
 
 try:
     database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving database storage table name")
-    database_storage_table_name = None
-
-try:
     database_metadata_storage_table_name = get_table_name(ResourceKeys.DATABASE_METADATA_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving database metadata table name")
-    database_metadata_storage_table_name = None
-
-try:
     s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving S3 asset buckets table name")
-    s3_asset_buckets_storage_table_name = None
-
-try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading Garnet environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
-database_storage_table = dynamodb.Table(database_storage_table_name) if database_storage_table_name else None
-database_metadata_table = dynamodb.Table(database_metadata_storage_table_name) if database_metadata_storage_table_name else None
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
+database_storage_table = dynamodb.Table(database_storage_table_name)
+database_metadata_table = dynamodb.Table(database_metadata_storage_table_name)
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
 
 #######################
 # Data Retrieval Functions
@@ -116,13 +107,14 @@ def get_database_metadata(database_id: str) -> Dict[str, Any]:
     """
     try:
         # Query using DatabaseIdIndex GSI
-        response = database_metadata_table.query(
+        items = query_all_items(
+            database_metadata_table,
             IndexName='DatabaseIdIndex',
             KeyConditionExpression=Key('databaseId').eq(database_id)
         )
-        
+
         all_metadata = {}
-        for item in response.get('Items', []):
+        for item in items:
             metadata_key = item.get('metadataKey')
             metadata_value = item.get('metadataValue')
             metadata_value_type = item.get('metadataValueType', 'string')
@@ -638,6 +630,9 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
         
         successful_records = 0
         failed_records = 0
+        # Identifiers of records the event-source mapping must redrive. Counting alone left a
+        # failed record deleted from the queue and its document never indexed.
+        batch_failures = []
         
         # Handle different event sources (same pattern as OpenSearch indexers)
         if 'Records' in event:
@@ -669,6 +664,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                     successful_records += 1
                                 else:
                                     failed_records += 1
+                                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                             elif database_metadata_storage_table_name in source_arn:
                                 # Database metadata table stream
                                 success = handle_database_metadata_stream(sns_message)
@@ -676,37 +672,42 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                     successful_records += 1
                                 else:
                                     failed_records += 1
+                                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                             else:
                                 logger.warning(f"Unknown table in source ARN: {source_arn}")
                                 failed_records += 1
+                                batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         else:
                             logger.warning("SQS message is not an SNS notification")
                             failed_records += 1
+                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                     except json.JSONDecodeError as e:
                         logger.exception(f"Error parsing SQS/SNS message: {e}")
                         failed_records += 1
+                        batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         
                 else:
                     logger.warning(f"Unknown event source: {event_source}")
                     failed_records += 1
+                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
         
         logger.info(f"Garnet database indexing completed: {successful_records} successful, {failed_records} failed")
         
-        return {
+        return with_batch_item_failures({
             'statusCode': 200,
             'body': {
                 'message': 'Garnet database indexing completed',
                 'successful_records': successful_records,
                 'failed_records': failed_records
             }
-        }
+        }, event, batch_failures)
         
     except Exception as e:
         logger.exception(f"Error in Garnet database indexer lambda handler: {e}")
-        return {
+        return with_batch_item_failures({
             'statusCode': 500,
             'body': {
                 'message': 'Error processing Garnet database indexing',
                 'error': str(e)
             }
-        }
+        }, event, all_batch_item_failures(event))

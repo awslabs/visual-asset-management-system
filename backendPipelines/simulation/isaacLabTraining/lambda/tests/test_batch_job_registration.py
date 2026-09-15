@@ -43,6 +43,8 @@ for _k, _v in {
     "BATCH_JOB_QUEUE": "isaaclab-queue",
     "BATCH_JOB_DEFINITION": "isaaclab-jobdef",
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
+    "BATCH_JOB_LOG_GROUP_NAME": "/aws/batch/job",
+    "BATCH_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
 }.items():
     os.environ.setdefault(_k, _v)
 
@@ -65,6 +67,16 @@ _INFRA_PIPELINE = os.path.join(
     _repo_root(), "infra", "lib", "nestedStacks", "pipelines", "simulation", "isaacLabTraining")
 _CONSTRUCT = os.path.join(_INFRA_PIPELINE, "constructs", "isaacLabTraining-construct.ts")
 _BUILDER = os.path.join(_INFRA_PIPELINE, "lambdaBuilder", "isaacLabTrainingFunctions.ts")
+
+
+def _backend_validators():
+    """The backend's real validators module, so registered values are checked against the regexes
+    registerPipelineExecution applies rather than a copy of them. Appended to the END of sys.path so
+    nothing under backend/backend shadows this pipeline's own modules."""
+    backend_pkg = os.path.join(_repo_root(), "backend", "backend")
+    if backend_pkg not in sys.path:
+        sys.path.append(backend_pkg)
+    return importlib.import_module("common.validators")
 
 
 def _load_execute_batch_job():
@@ -102,7 +114,18 @@ class TestBatchJobRegistration:
         detail = json.loads(entry["Detail"])
         # The abort path routes on pipelineExecutionId and terminates on jobId; both are required.
         assert detail["pipelineExecutionId"] == "pexec-123"
-        assert detail["subExecution"] == {"resourceType": "batchJob", "jobId": "job-xyz"}
+        assert detail["subExecution"] == {
+            "resourceType": "batchJob", "jobId": "job-xyz",
+            "stageName": "ExecuteBatchJobState", "label": "Isaac Lab training job",
+        }
+
+    def test_evaluation_mode_names_the_job_after_the_mode(self):
+        # One function submits both pipelines' jobs; the evaluation run must not read as training.
+        mod = _load_execute_batch_job()
+        mod.lambda_handler(_event(definition=json.dumps({"trainingConfig": {"mode": "evaluation"}}),
+                                  orchestrationEventPrefix=PREFIX), MagicMock())
+        detail = json.loads(mod.events_client.put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "Isaac Lab evaluation job"
 
     def test_registration_happens_after_the_job_exists(self):
         # Registering an id that was never submitted would leave abort terminating nothing.
@@ -137,13 +160,46 @@ class TestBatchJobRegistration:
         mod.lambda_handler(_event(orchestrationEventPrefix="garbage"), MagicMock())
         mod.events_client.put_events.assert_not_called()
 
-    def test_a_multi_node_job_still_registers(self):
-        # numNodes > 1 rewrites submit_params into nodeOverrides; registration must be unaffected.
+    def test_a_stale_node_count_in_the_payload_still_registers(self):
+        # A numNodes the payload still carries is inert (see test_single_node_only.py); the
+        # submission and its registration must be unaffected by it either way.
         mod = _load_execute_batch_job()
         mod.lambda_handler(_event(orchestrationEventPrefix=PREFIX, numNodes=3), MagicMock())
         submitted = mod.batch.submit_job.call_args.kwargs
-        assert "nodeOverrides" in submitted and "containerOverrides" not in submitted
+        assert "containerOverrides" in submitted and "nodeOverrides" not in submitted
         mod.events_client.put_events.assert_called_once()
+
+    def test_registers_the_container_log_source_under_the_job_definition_prefix(self):
+        # The job runs under WAIT_FOR_TASK_TOKEN, so no `.sync` history event ever carries its log
+        # stream; the registered prefix + DescribeJobs is the only way a reader finds the stream.
+        mod = _load_execute_batch_job()
+        mod.lambda_handler(_event(orchestrationEventPrefix=PREFIX), MagicMock())
+        detail = json.loads(mod.events_client.put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["logs"] == [{
+            "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+            "logGroupName": "/aws/batch/job",
+            "logStreamName": "",
+            "logStreamPrefix": "isaaclab-jobdef/default/",
+            "stageName": "ExecuteBatchJobState",
+            "sourceType": "batch",
+            "label": "ExecuteBatchJobState container",
+        }]
+        validators = _backend_validators()
+        entry = detail["logs"][0]
+        assert validators.validate_cloudwatch_log_group_arn("logGroupArn", entry["logGroupArn"])[0]
+        assert validators.validate_log_stream_name("logStreamPrefix", entry["logStreamPrefix"])[0]
+        assert not validators.validate_cloudwatch_log_group_arn(
+            "logGroupArn", "arn:aws:logs:us-east-1:123456789012:log-group//aws/batch/job")[0]
+
+    def test_the_container_log_source_is_skipped_when_the_group_is_not_configured(self):
+        with patch.dict(os.environ):
+            os.environ.pop("BATCH_JOB_LOG_GROUP_NAME", None)
+            os.environ.pop("BATCH_JOB_LOG_GROUP_ARN", None)
+            mod = _load_execute_batch_job()
+        mod.lambda_handler(_event(orchestrationEventPrefix=PREFIX), MagicMock())
+        detail = json.loads(mod.events_client.put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert "logs" not in detail
+        assert detail["subExecution"]["stageName"] == "ExecuteBatchJobState"
 
 
 @pytest.mark.unit
@@ -198,3 +254,10 @@ class TestPrefixSurvivesTheStateMachine:
         batch_builder = batch_builder.split("this.closePipelineFunction = new lambda.Function")[0]
         assert "ORCHESTRATION_BUS_NAME" in batch_builder
         assert "grantPutEventsTo" in batch_builder
+
+    def test_the_lambda_builder_wires_the_batch_log_group(self):
+        # Without these two env vars the container log source is skipped with no error.
+        source = open(_BUILDER, encoding="utf-8").read()
+        batch_builder = source.split("this.executeBatchJobFunction = new lambda.Function")[1]
+        batch_builder = batch_builder.split("this.closePipelineFunction = new lambda.Function")[0]
+        assert "...batchJobLogGroupEnvironment()" in batch_builder

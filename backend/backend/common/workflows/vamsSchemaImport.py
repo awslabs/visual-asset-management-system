@@ -4,23 +4,27 @@
 """Pure vamsSchema -> V2 cross-call request builder.
 
 A pipeline's ``vamsSchema/`` bundle registers a built-in (or externally self-registered) pipeline +
-workflow into the V2 tables at CDK deploy time. This module has NO AWS/env dependency so it unit-tests
-in isolation: it turns a parsed schema bundle plus the deploy-time resolved resource values into the
-ordered list of ``SYSTEM_USER`` cross-call requests the import custom-resource lambda invokes against
-the V2 service handlers (pipelineServiceV2 / pipelineTemplateService / workflowServiceV2 /
-workflowTriggerService).
+workflow into the V2 tables at CDK deploy time. This module has NO AWS/env dependency beyond the
+module-level logger so it unit-tests in isolation: it turns a parsed schema bundle plus the deploy-time
+resolved resource values into the ordered list of ``SYSTEM_USER`` cross-call requests the import
+custom-resource lambda invokes against the V2 service handlers (pipelineServiceV2 /
+pipelineTemplateService / workflowServiceV2 / workflowTriggerService).
 
 Bundle shape (all but ``pipeline`` optional — minimal-required ingestion, plan decision S14):
 
     {
-      "pipeline":  { pipelineId?, pipelineName, category?, description?, systemConfig?,
-                     executionConfig? },
-      "workflow":  { workflowId?, workflowName, category?, description?, systemConfig?,
+      "pipeline":  { pipelineId?, databaseId?, pipelineName, category?, description?, systemConfig?,
+                     executionConfig?, enabled? },
+      "workflow":  { workflowId?, databaseId?, workflowName, category?, description?, systemConfig?,
                      subDashboardUrl?, specifiedPipelines?, triggers?: [ {triggerType,
                      inputFileFilters?, defaultTemplateIds?, enabled?} ] },
-      "templates": [ { templateId?, templateName, configFormat?, configBody?, webFormJson?,
-                       allowCustomEdit?, inputInstructions?, overrides?, tagSchema? } ]
+      "templates": [ { templateId, templateName, description?, configFormat?, configBody?,
+                       webFormJson?, allowCustomEdit?, inputInstructions?, overrides?, tagSchema?,
+                       isDefault? } ]
     }
+
+``schemaVersion?`` is accepted alongside any of those objects: it says which shape the bundle was
+written against, and records read their own version with a default rather than matching it.
 
 Deploy-time resource injection: the schema files are static, but a built-in pipeline's execution
 target (Lambda function name / SQS queue url / EventBridge bus arn) is only known at deploy. Those
@@ -35,12 +39,34 @@ decided by the lambda after probing existence; this module only produces the cre
 the update-shaped bodies so the lambda can pick.
 """
 
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service_name="VamsSchemaImport")
+
 GLOBAL_DATABASE = "GLOBAL"
 
 # assetScope shorthand -> canonical key (mirrors executionValidation._ASSET_SCOPE_SHORTHAND). A bundle
 # may spell whole-asset support either way, so a shorthand declaration must suppress the canonical
 # default rather than being silently overridden by it.
 _ASSET_SCOPE_SHORTHAND = {"wholeAsset": "wholeAssetAllowed"}
+
+# The keys each level of a bundle may declare — the shape documented above. A key outside these sets
+# reaches no create/update body, so it is reported rather than passing unremarked: a trigger whose
+# `inputFileFilters` is misspelled registers a filter-less — match-all — auto-trigger. Unknown keys stay
+# ignored rather than rejected, so a bundle written against a newer VAMS keeps registering; the
+# `schemaVersion` marker is a declaration of exactly that, so it is accepted wherever a bundle writes
+# it rather than reported. The shipped bundles are held to zero unknown keys by
+# tests/common/workflows/test_vamsSchemaImport_unknown_keys.py.
+_BUNDLE_KEYS = frozenset({"pipeline", "workflow", "templates", "schemaVersion"})
+_PIPELINE_KEYS = frozenset({"pipelineId", "databaseId", "pipelineName", "category", "description",
+                            "systemConfig", "executionConfig", "enabled", "schemaVersion"})
+_WORKFLOW_KEYS = frozenset({"workflowId", "databaseId", "workflowName", "category", "description",
+                            "systemConfig", "subDashboardUrl", "specifiedPipelines", "triggers",
+                            "schemaVersion"})
+_TEMPLATE_KEYS = frozenset({"templateId", "templateName", "description", "configFormat",
+                            "configBody", "webFormJson", "allowCustomEdit", "inputInstructions",
+                            "overrides", "tagSchema", "isDefault", "schemaVersion"})
+_TRIGGER_KEYS = frozenset({"triggerType", "inputFileFilters", "defaultTemplateIds", "enabled"})
 
 # Cross-call targets (mapped to concrete function names by the lambda).
 TARGET_PIPELINE_SERVICE = "pipelineService"
@@ -251,6 +277,36 @@ def _trigger_body(trigger, trigger_enabled_override=None):
     }
 
 
+def unknown_bundle_keys(bundle):
+    """Every key a bundle declares that no create/update body reads, as sorted dotted paths
+    (``workflow.triggers[0].fileFilters``). The interiors of ``systemConfig`` / ``executionConfig`` /
+    a template's ``overrides`` are not walked: those blocks are copied through to the request models,
+    which police their own keys. Any shape is tolerated — a malformed bundle yields the keys that are
+    visible rather than raising, so the structural errors build_import_requests raises stay the ones a
+    caller sees."""
+    if not isinstance(bundle, dict):
+        return []
+    unknown = [key for key in bundle if key not in _BUNDLE_KEYS]
+    for section, allowed in (("pipeline", _PIPELINE_KEYS), ("workflow", _WORKFLOW_KEYS)):
+        block = bundle.get(section)
+        if isinstance(block, dict):
+            unknown.extend(f"{section}.{key}" for key in block if key not in allowed)
+    templates = bundle.get("templates")
+    if isinstance(templates, list):
+        for index, template in enumerate(templates):
+            if isinstance(template, dict):
+                unknown.extend(f"templates[{index}].{key}" for key in template
+                               if key not in _TEMPLATE_KEYS)
+    workflow = bundle.get("workflow")
+    triggers = workflow.get("triggers") if isinstance(workflow, dict) else None
+    if isinstance(triggers, list):
+        for index, trigger in enumerate(triggers):
+            if isinstance(trigger, dict):
+                unknown.extend(f"workflow.triggers[{index}].{key}" for key in trigger
+                               if key not in _TRIGGER_KEYS)
+    return sorted(unknown)
+
+
 def resolve_ids(bundle, id_overrides=None):
     """Resolve the effective pipeline/workflow/database ids for a bundle, applying deploy-time id
     overrides (built-ins keep known ids for external references). Returns
@@ -290,9 +346,15 @@ def build_import_requests(bundle, resource_overrides=None, id_overrides=None,
     pipeline's autoRegisterAutoTriggerOnFileUpload config). None leaves the schema value intact.
 
     Only ``pipeline`` is required. ``workflow``/``templates`` are optional (minimal-required
-    ingestion). Raises VamsSchemaError on a structurally invalid bundle."""
+    ingestion). Raises VamsSchemaError on a structurally invalid bundle. A key no body reads is
+    ignored, so a bundle written against a newer VAMS still registers, but it is logged: the key names
+    an author's typo, whose registered record otherwise looks deliberate."""
     if not isinstance(bundle, dict):
         raise VamsSchemaError("vamsSchema bundle must be a JSON object")
+    unknown = unknown_bundle_keys(bundle)
+    if unknown:
+        logger.warning("vamsSchema bundle declares keys that no pipeline/template/workflow/trigger "
+                       f"field reads, so they are ignored: {unknown}")
     pipeline = bundle.get("pipeline")
     if not pipeline:
         raise VamsSchemaError("vamsSchema bundle: 'pipeline' is required")

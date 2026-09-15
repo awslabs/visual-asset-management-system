@@ -18,6 +18,7 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import * as Config from "../../../../../../config/config";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     globalLambdaEnvironmentsAndPermissions,
     grantReadPermissionsToAllAssetBuckets,
@@ -38,6 +39,8 @@ export function buildConstructPipelineFunction(
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
+    const region = cdk.Stack.of(scope).region;
+    const account = cdk.Stack.of(scope).account;
     const name = "constructPipeline";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
@@ -69,6 +72,16 @@ export function buildConstructPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     suppressCdkNagLambda(fun);
+
+    // constructPipeline reports the external VAMS workflow token when it fails before the Batch job
+    // starts. Without this the SendTaskFailure raises AccessDeniedException, the handler logs it, and the
+    // workflow task waits out its full taskTimeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
+        })
+    );
 
     return fun;
 }
@@ -255,6 +268,7 @@ export function buildExecuteBatchJobFunction(
     lambdaCommonBaseLayer: LayerVersion,
     batchJobQueue: batch.JobQueue,
     batchJobDefinition: batch.IJobDefinition,
+    containerLogGroup: logs.ILogGroup,
     orchestrationBus: events.IEventBus,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -290,6 +304,9 @@ export function buildExecuteBatchJobFunction(
             BATCH_JOB_DEFINITION: batchJobDefinition.jobDefinitionName,
             // Orchestration bus for registering the submitted Batch job as an abortable sub-process
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            // This pipeline's vended container log group, registered with the job as the
+            // CoordTransformBatchJob log source (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...vendedBatchJobLogGroupEnvironment(containerLogGroup),
         },
     });
 

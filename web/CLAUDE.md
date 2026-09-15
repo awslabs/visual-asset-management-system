@@ -44,23 +44,32 @@ web/
     features/orchestration/ # Pipeline/workflow/execution management (React 18, Tailwind, Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
-                            #   client.ts queries.ts
+                            #   client.ts queries.ts triggerCache.ts
       permissions/          # useAllowedRoutes.ts (Tier-1 gating)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, ...)
+                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
+                            #   Callout, VirtualList (fixed-row-height windowed list), ...)
                             #   ToastProvider.tsx — notifications for the whole module (see 6.5)
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
                             #   TemplateEditor.tsx TemplateForm.tsx TagSchemaBuilder.tsx
                             #   TemplateOverridesEditor.tsx pipelineValidation.ts
+                            #   templateBodyValidation.ts (tag placeholder quoting + the json
+                            #   body shape check mirrored from the backend)
       workflows/            # WorkflowsPage.tsx WorkflowBuilder.tsx PipelineOrderList.tsx
-                            #   TriggersEditor.tsx WorkflowSystemConfigFields.tsx DagPreview.tsx
+                            #   TriggersEditor.tsx (live) TriggerDraftsEditor.tsx (create) over
+                            #   TriggerList.tsx TriggerForm.tsx triggerDraft.ts triggerStyles.ts
+                            #   WorkflowSystemConfigFields.tsx DagPreview.tsx
                             #   WorkflowValidationPanel.tsx workflowValidation.ts
       executions/           # ExecutionsBoard.tsx ExecutionDetailPage.tsx ExecutionLogViewer.tsx
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
-      wizard/               # ExecuteWizard.tsx + WizardPipelineStage/WizardInputStage/
-                            #   WizardReviewStage, InputFileSelector, MetadataSourceSelector,
+                            #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+      wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
+                            #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
+                            #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
+                            #   SelectedInputFilesList + BulkFilePicker + selectedInputFiles.ts (the
+                            #   multi-file selection: windowed list, bulk/paste picker, dedupe, 1000 cap),
                             #   RestrictionSummary, resolveRestrictions.ts resolveTemplate.ts
       types.ts reservedTagKeys.ts
 
@@ -88,11 +97,15 @@ web/
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
       filemanager/            # Asset file manager (Cloudscape)
+                                #   EnhancedFileManager.tsx lazy-loads the orchestration execution
+                                #   quick view for a file's "View execution" provenance link.
         components/             #   FileDetailsPanel toolbar: Export | Automation | operations.
                                 #   AutomationActions.tsx lazy-loads the orchestration execute modal,
                                 #   so this Cloudscape tree never bundles that module.
         utils/                  #   automationSelection.ts — maps a selection (whole asset / folder /
                                 #   one file / many) to workflow input files
+                                #   executionLinks.ts — workflow-execution provenance → execution
+                                #   detail route + the Tier-1 route the link is gated on
       list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
       search/                 # ModernSearchContainer.tsx - main search UI
       searchSmall/ selectors/
@@ -136,6 +149,7 @@ web/
       sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
       fileHandleCompat.ts
+      maplibreWorker.ts     # setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts
 
     styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
@@ -172,7 +186,7 @@ The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**` plus the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**`). A new orchestration shell must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page. So a Cloudscape page that happens to use a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (verified present in the built CSS; the emitted set depends on what the orchestration module uses, so treat this as examples rather than a closed list). Outside the orchestration module, either use a VAMS-defined class or no class at all.
 
     This is not hypothetical: `<div className="container">` wrapped the asset-view comment editor, and because VAMS defines no `.container` rule, the only match was Tailwind's `.container` utility with its responsive max-widths (640/768/1024/1280/1536px). It capped the comment box on any wide viewport. Nothing in the source pointed at it — the editor was filling its parent correctly, the parent was the clamped element — so the cause was only visible by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
@@ -324,6 +338,85 @@ import MyNewPage from "./pages/MyNewPage";
 -   Only `src/__mocks__/*.js` files remain as `.js` (Jest CommonJS requirement)
 -   Use `any` sparingly but pragmatically (the codebase uses it extensively)
 
+### Rule 9: Regenerate the CSP Hashes After Touching an Inline Script in `index.html`
+
+`index.html` contains inline `<script>` blocks (the `__publicField` polyfill, the `SharedArrayBuffer`
+probe, and the pre-render theme application). The CDK Content-Security-Policy allows them by
+**SHA-256 hash**, not by `'unsafe-inline'`, so an injected inline script is still blocked.
+
+A CSP hash covers the **exact text content** of the element -- every byte between the opening and
+closing tag, indentation included. That makes the values sensitive to formatting: adding a line,
+changing a variable name, or letting Prettier reindent the block invalidates its hash. The browser
+then silently refuses to run that script and the app breaks at runtime with nothing failing at build
+time.
+
+**Any edit to an inline `<script>` block in `web/index.html` -- including a reformat -- requires
+regenerating the hashes and updating the CDK constant in the same change:**
+
+```bash
+# 1. Build, so the hashes are taken from the HTML that is actually served
+cd web && npm run build
+
+# 2. Emit the TypeScript constant
+node scripts/cspInlineScriptHashes.js --ts
+
+# 3. Paste the output over INDEX_HTML_INLINE_SCRIPT_HASHES in
+#    infra/lib/helper/cspInlineScriptHashes.ts
+
+# 4. Confirm the drift guard passes
+cd ../infra && npx jest test/web/cspInlineScriptHashes.test.ts
+```
+
+Run the generator with no `--ts` for a human-readable listing of each block and its hash.
+
+| File                                           | Role                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `web/index.html`                               | The inline scripts being hashed                                          |
+| `web/scripts/cspInlineScriptHashes.js`         | Generator -- hashes every inline block (skips any with `src`)            |
+| `infra/lib/helper/cspInlineScriptHashes.ts`    | The generated constant. **Generated -- do not hand-edit**                |
+| `infra/lib/helper/security.ts`                 | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
+| `infra/test/web/cspInlineScriptHashes.test.ts` | Recomputes from `index.html` and fails on drift                          |
+
+:::danger[A hash and `'unsafe-inline'` are mutually exclusive]
+A CSP may allow inline script by hash **or** by the `'unsafe-inline'` keyword, never both -- when a
+hash source is present browsers ignore `'unsafe-inline'` entirely. So the two are not additive, and
+`'unsafe-inline'` cannot be left in as a safety net.
+
+Because of this, `generateContentSecurityPolicy()` adds `'unsafe-inline'` **only** when the Physna
+add-on is enabled: that viewer renders Physna-hosted HTML in a `blob:` iframe, a `blob:` document
+inherits the parent page's CSP, and its inline scripts are not ours to hash. Enabling that add-on
+therefore trades hash protection for viewer compatibility, scoped to deployments that opt in.
+
+If a **new** viewer plugin needs inline script, widen that condition (or add a dedicated
+`app.webUi` flag) rather than moving `'unsafe-inline'` back into the base `script-src` list -- the
+base list is what keeps a default deployment protected.
+:::
+
+Adding a `<script src="...">` (external) needs no hash; it is matched by host-source instead. It may
+still need a `connect-src`/`script-src` origin added if it loads from a new host.
+
+### Rule 10: A maplibre Map Needs the Worker Setup Module and react-map-gl >= 8.1.2
+
+`maplibre-gl` 6 is ESM-only and ships its web worker as a separate module (`dist/maplibre-gl-worker.mjs`,
+which imports `maplibre-gl-shared.mjs`). By default it resolves that worker as a sibling of the main
+module's `import.meta.url`, a file the Vite bundle never emits, so the worker request fails and no map
+renders. `src/common/utils/maplibreWorker.ts` registers a bundled copy through `setWorkerUrl()` using
+Vite's `?worker&url` import (plain `?url` copies the worker without its shared chunk and breaks on its
+first import). **Every module that imports `react-map-gl/maplibre` or a runtime value from `maplibre-gl`
+imports that setup module for its side effect** before the map mounts.
+
+maplibre-gl 6 also removed the public `map.transform` property; `react-map-gl` versions before 8.1.2 read
+`transform.center` on every camera update and crash each map into the page error boundary. Keep
+`react-map-gl` at 8.1.2 or later while `maplibre-gl` is on 6.x.
+
+Both rules are held in place by `src/common/utils/maplibreWorker.test.ts`, which scans the source tree
+for map consumers and checks the installed versions.
+
+Under Jest neither import resolves: `maplibre-gl` has no `require` export condition and `?worker&url` is
+Vite-only, so `jest.config.js` maps both to `src/__mocks__/emptyModule.js`, as it already does for the
+Monaco worker imports. A suite that reaches a map component through a page import therefore loads a
+no-op setup module rather than failing to resolve.
+
 ---
 
 ## 4. API Integration Patterns
@@ -474,9 +567,12 @@ const header = await getDualAuthorizationHeader();
 ```typescript
 // User is stored in localStorage as JSON
 const user = JSON.parse(localStorage.getItem("user"));
-// Email is stored separately
-const email = localStorage.getItem("email");
 ```
+
+There is no separate `email` key. Nothing writes one and nothing reads one — the signed-in user's
+identity comes from the `user` entry above. Storing it a second time under its own key put a user
+identifier in `localStorage` for no consumer, and wrote the literal string `"undefined"` when there
+was no signed-in user.
 
 ---
 
@@ -865,6 +961,27 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 }
 ```
 
+### 10.5 A Resizable Table Column's Width Is Seeded Once
+
+With `resizableColumns`, Cloudscape stores column widths in state and seeds each column **once** — on
+the render in which that column id first becomes visible. Its follow-up effect only seeds ids missing
+from both the stored widths and the previous visible list, so once an id has been rendered with one
+declared `width`, later changes to that declaration are **silently ignored**. The header keeps the
+first-seeded width, and the first resize drag makes it jump to the value you expected.
+
+Raising `width` in `columnDefinitions` therefore appears to do nothing. The symptom looks like CSS
+compressing the column toward its `minWidth`, so the tempting fix is to raise `minWidth` — but that is
+not the lever. Cloudscape applies `table-layout: fixed` with `width: 100%` and `overflow-x: auto` on
+the wrapper, and the browser honors an over-budget column sum by widening the table and scrolling: a
+declared 700px column measures 700px even when the declared widths total more than the viewport.
+
+The practical rule: **the value that selects the visible column set and the value that selects a
+column's declared width must come from one source, resolved in the same render.** A set chosen from
+component state while the width branch reads a value written from a `useEffect` leaves one render in
+which the column is visible under the wrong declaration, and that is the one that sticks. This is why
+`SearchPageListView` derives `isFileMode` from the container's `recordType` rather than from the
+`_rectype` filter.
+
 ---
 
 ## 11. Testing
@@ -939,6 +1056,25 @@ describe("MyComponent", () => {
 -   Cloudscape components need custom transformers (configured in `jest.config.js`)
 -   `transformIgnorePatterns` must stay a SINGLE pattern: a file matching ANY ignore pattern is excluded from transformation, so every ESM package that needs transforming (Cloudscape, d3-\*, internmap, react-leaflet, axios) must be exempted in one combined negative lookahead
 -   Jest 30 removed deprecated matcher aliases (`toBeCalled`, `toBeCalledWith`, ...) — use the `toHaveBeenCalled*` forms
+
+### 11.4.1 Label a Temporary Test with a `TEMPORARY-TEST` Comment
+
+Jest has no marker system, so a test written to prove one specific change landed — a removed prop, a
+deleted branch, a reworded string — carries a `TEMPORARY-TEST` token in a comment directly above its
+`it(...)`, naming what it pins:
+
+```ts
+// TEMPORARY-TEST: pins the removal of the duplicate upload summary branch; drop once released.
+it("no longer renders the second summary", () => {
+```
+
+Release cleanup finds them with `grep -rn "TEMPORARY-TEST" web/src web/e2e`. The token is needed because
+a temporary test and a durable guardrail read identically afterwards — both may assert an absence and
+both explain themselves.
+
+Do **not** label a test whose forbidden construct is still writable: a CSP that must not gain
+`'unsafe-inline'`, a component that must not import `apiClient` directly, a div that must not be named
+after a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13.
 
 ### 11.5 End-to-End Tests (Playwright)
 
@@ -1075,7 +1211,7 @@ See section 9.4 for the full Synonyms rules.
 | `react-router-dom`              | ^6.0.0               | Client-side routing                  |
 | `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)             |
 | `three`                         | (via customInstalls) | 3D rendering engine                  |
-| `maplibre-gl`                   | ^5.8.0               | Map rendering                        |
+| `maplibre-gl`                   | ^6.9.0               | Map rendering                        |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                          |
 | `papaparse`                     | ^5.4.1               | CSV parsing                          |
 | `dompurify`                     | ^3.4.11              | HTML sanitization                    |

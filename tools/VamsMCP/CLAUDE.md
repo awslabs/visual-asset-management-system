@@ -29,17 +29,32 @@ authentication.
 ```
 tools/VamsMCP/
   pyproject.toml             # package + deps (mcp, vamscli, requests)
-  .env.example               # documents every supported env var
+  .env.example               # reference list of every supported env var (NOT a dotenv template -
+                             # nothing loads a .env; set them in the MCP host's `env` block)
   vams_mcp/
     __init__.py              # __version__ (roll with pyproject.toml)
     config.py                # env-based config (profile, feature gates, pagination)
     client.py                # VamsClient: wraps vamscli APIClient + ProfileManager
     server.py                # FastMCP app, response-shape helpers, tool definitions, logging guard
   tests/
+    conftest.py              # clears VAMS_ENABLE_* / VAMS_PROFILE / pagination vars at import,
+                             # BEFORE vams_mcp.server reads them at module level
     test_config.py           # env parsing + the writes/destructive gate interaction
     test_client_helpers.py   # paginate(), unwrap_message(), trim_search_results()
     test_server_tools.py     # tool behavior + the source-layout assertions of Mandatory Rule 4
+    test_gated_tools.py      # the write/destructive tool bodies, via a module reload with both gates on
+    test_comment_subscription_tools.py
+                             # the comment / subscription / metadata-schema / API-key tools: the three
+                             # response shapes they span, and their docstring contracts
 ```
+
+**No dotenv.** `config.py` reads `os.environ` only, and there is no `python-dotenv` dependency. That
+is the right mechanism for this transport — a host spawns the `vams-mcp` console script from an
+arbitrary working directory, so a cwd-upward `.env` search would not reliably find this one — but it
+means `.env.example` is a reference list, not a template to copy. Never write documentation that
+tells a reader to copy it: a `.env` beside the server is silently ignored, the gates stay off with
+nothing reporting why, and the usual next step is to delete the `if CONFIG.enable_writes:` guard in
+source. Document a new variable in `.env.example` **and** in the README's `env` sample.
 
 ### Layers
 
@@ -68,8 +83,11 @@ asymmetry other callers rely on):
 -   `_paginate_with_page_metadata(fetch_page, passthrough_keys=..., ...)` —
     paginates while collecting each page's `warnings` (deduplicated, in order)
     and named echo fields onto the result, marking it `truncated` when any page
-    withheld rows. `list_executions` uses it to carry `warnings` plus the applied
-    `filterStartDate` / `filterEndDate` window.
+    withheld rows. `list_executions` and `list_workflow_executions` both use it to
+    carry `warnings` plus the applied `filterStartDate` / `filterEndDate` window.
+-   `_bounded_message_list(page, max_items, page_size, noun)` — lifts a **bare
+    array** nested under `message` onto `Items`, and flags the bound the route
+    applied. Used by the two asset-scoped comment listings (Mandatory Rule 7).
 
 ---
 
@@ -90,14 +108,36 @@ asymmetry other callers rely on):
    `if CONFIG.enable_destructive:` and must never be in `autoApprove`.
    `enable_destructive` is AND-ed with `enable_writes` in `Config.from_env()`, so
    `VAMS_ENABLE_DESTRUCTIVE=true` alone registers nothing.
-   `execute_workflow` and `rerun_execution` start real AWS compute, so keep them
-   out of `autoApprove` too even though they are write-tier, not destructive.
-   Because the tools are module-level `def`s, misplacement fails **silently**: a
-   duplicate name shadows the earlier definition, and a `def` after the
-   `if __name__` entrypoint or outside its gate block never executes, so the tool
-   is simply absent with no import error. `tests/test_server_tools.py` asserts the
-   source layout (uniqueness, position relative to each gate and the entrypoint,
-   and that every `CLIENT.api.*` call resolves on `APIClient`) — keep it passing.
+   `execute_workflow`, `rerun_execution` and `abort_execution` are write-tier, not
+   destructive — they remove no stored data — but all three act on real AWS
+   compute (the first two start it, `abort_execution` irreversibly stops it and
+   fans out across a group), so keep all three out of `autoApprove`. The tier is
+   about stored data; that list is about compute. Three places state this and must
+   agree: this rule, the README's caution paragraph, and the tool's own docstring.
+   The same three-place rule holds for the tools that RETURN a credential:
+   `create_api_key` and `create_user_api_key` (write tier) hand back the one-time
+   API key value, a bearer token with the acting user's permissions, so both stay out
+   of `autoApprove` and their docstrings say where the value ends up. `update_*_api_key`
+   with `is_active=False` is the reversible revoke and is what the delete tools point at
+   first. An API-key tool takes `is_active` as a bool and sends the model's `"true"` /
+   `"false"` string — the request model rejects a raw boolean.
+
+    **A required-true request field is not a confirmation to re-expose.**
+    `delete_asset` sends `confirmPermanentDelete=True` because
+    `DeleteAssetRequestModel` declares an `always=True` validator that rejects any
+    other value — it is part of the request contract, not an optional interlock, so
+    surfacing it as a tool parameter would give the agent a boolean whose only
+    non-erroring value is `True`. What actually controls these tools is the
+    destructive gate (which `Config.from_env()` additionally requires
+    `enable_writes` for), the tool name, the docstring, and keeping them out of
+    `autoApprove`.
+    Because the tools are module-level `def`s, misplacement fails **silently**: a
+    duplicate name shadows the earlier definition, and a `def` after the
+    `if __name__` entrypoint or outside its gate block never executes, so the tool
+    is simply absent with no import error. `tests/test_server_tools.py` asserts the
+    source layout (uniqueness, position relative to each gate and the entrypoint,
+    and that every `CLIENT.api.*` call resolves on `APIClient`) — keep it passing.
+
 5. **Return data, not exceptions.** Wrap tool bodies with `@tool_result` so
    failures return `{"error": ..., "error_type": ...}`.
 6. **API Gateway URL only.** The server rejects CloudFront URLs implicitly (the
@@ -109,6 +149,26 @@ asymmetry other callers rely on):
    unwraps the legacy `message` envelope used by tags, tag types, workflows, and
    workflow executions. Verify both against the handler's response model before
    adding a list tool; a mismatch silently returns zero items.
+
+    **A `message` envelope can hold a BARE ARRAY, and then neither helper finds the
+    rows.** `unwrap_message()` returns the page untouched when `message` is not a
+    dict, and `paginate()` reads `items_key` off whatever it gets — so for
+    `{"message": [row, ...]}` both hand back zero rows on a successful call, which
+    reads as an empty thread rather than a wiring defect. The asset-scoped comment
+    listings are that shape; use `_bounded_message_list()`. Three variants now
+    exist across the API, so check which one a route returns before choosing a
+    helper: a bare array under `message`, an `Items`/`NextToken` page under
+    `message` (subscriptions), and no envelope at all (metadata schemas, API keys).
+
+    **A route can accept the pagination parameters and discard the token.** The
+    comment listings apply `maxItems`/`pageSize` and return no `NextToken` — the
+    service returns `response["Items"]` and drops it — so rows past the bound are
+    unreachable through the API. Do not paper over it with a client-side walk, and
+    do not offer a `starting_token` that could never be filled. Report the bound
+    instead: it is knowable without a token, because the handler takes `maxItems`
+    as given, falls back to `pageSize`, and otherwise applies
+    `COMMENT_LIST_DEFAULT_BOUND`, so a result that reached the effective bound can
+    be flagged even when the caller narrowed nothing.
 
     **Unwrap the envelope on non-paginated pipeline/workflow/execution tools.**
     Every `APIClient` method in that domain returns the handler's raw
@@ -129,8 +189,10 @@ asymmetry other callers rely on):
 8. **Never let a bounded response read as a complete one.** A VAMS handler can
    answer successfully while withholding rows, and it reports that out of band: a
    top-level `warnings` array (a page that hit its distinct-asset permission-check
-   cap), a `truncatedCollections` list (a bounded execution-detail collection), or
-   an echoed filter window (`filterStartDate` on the executions list). Because
+   cap, or spent its per-request work budget before filling the page — the array
+   can carry more than one entry, so collect them all rather than the first), a
+   `truncatedCollections` list (a bounded execution-detail collection), or an
+   echoed filter window (`filterStartDate` on the executions list). Because
    `paginate()` rebuilds its result from the accumulated items alone, every one of
    those is dropped by default, and the agent reports an understated count or
    concludes an object does not exist.
@@ -142,6 +204,17 @@ asymmetry other callers rely on):
     means for the agent's conclusion, not just that the field exists — a tool
     description is the only place an agent learns not to trust a short list.
 
+    **`paginate()`'s own bound is one of those, and every paginated tool docstring
+    must state it.** The walk stops at `max_items` or at `max_pages`, whichever
+    comes first, and sets `truncated` plus a `note` naming which fired — including
+    the case where a single page returned more rows than `max_items` and carried no
+    token at all, which a token-only check misses. It returns the outstanding
+    `NextToken`, and every paginated read tool takes a `starting_token` that
+    forwards it as the first page's `startingToken`; without that pair the ceiling
+    is a wall and rows past it are unreachable through this server. `max_pages` is
+    a per-call work bound on the server process, so a larger `max_items`
+    deliberately does NOT raise it — the resumption token is the way past it.
+
 9. **Forward every narrowing parameter the endpoint supports.** A tool that omits
    one silently pins the agent to the server default: `get_execution_logs` without
    `limit`/`next_token` caps a container's output at 100 events with no way past
@@ -152,6 +225,15 @@ asymmetry other callers rely on):
    accepts, and forward a parameter only in the mode that acts on it (the log
    paging parameters are sent in `full` mode only, since truncated mode returns
    one joined blob and no continuation token).
+
+    **The converse is equally a defect: never expose a parameter the endpoint does
+    not act on.** A knob that silently does nothing is worse than its absence,
+    because the agent draws a conclusion from having set it. Two shapes to refuse:
+    a parameter the handler forwards and the service ignores (`showDeleted` on the
+    asset-scoped comment routes), and one whose only valid value can never be
+    obtained (`starting_token` on a route that returns no token). Say in the
+    docstring that the capability is absent, so the agent stops looking for it —
+    and pin the absence with a test, or the next reader adds it back as a fix.
 
 10. **Support both `mcp` major versions.** `mcp` 1.x exposes `FastMCP` from
     `mcp.server.fastmcp`; `mcp` 2.x renamed it to `MCPServer` in
@@ -245,6 +327,17 @@ pytest
 ```
 
 Tests mock `vams_mcp.server.CLIENT` so no live VAMS deployment is required.
+
+### Mark a Temporary Test with `@pytest.mark.temporary`
+
+A test written to prove one specific change landed — a removed tool, a renamed call site — carries
+`@pytest.mark.temporary` (registered in `pyproject.toml`) plus a line saying what it pins, so release
+cleanup can find it with `pytest -m temporary --collect-only`.
+
+Do **not** mark the source-layout guards in `tests/test_server_tools.py`. They are durable: a duplicate
+`def` silently shadows an earlier tool, a `def` placed outside its gate block never executes, and a read
+tool calling a mutating `APIClient` method is a permission defect — each stays writable, so each guard
+can still fire. Full criterion: root `CLAUDE.md` Rule 13.
 
 ---
 

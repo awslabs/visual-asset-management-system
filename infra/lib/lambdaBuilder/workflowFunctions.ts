@@ -13,6 +13,7 @@ import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { Service, IAMArn, Partition } from "../helper/service-helper";
+import { BATCH_JOB_LOG_GROUP_NAME } from "../helper/batchJobLogGroup";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
@@ -140,6 +141,103 @@ export function buildExecutionServiceFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
+            // Resolve a registered Batch job's status and container log stream for the execution
+            // details and logs APIs. DescribeJobs supports no resource-level scoping (its only
+            // resource type is `*`); the handler only ever passes job ids read from registration
+            // rows of the execution being read.
+            actions: ["batch:DescribeJobs"],
+            resources: ["*"],
+        })
+    );
+    // Gated the same way the createJob grant is: with the execution type disabled no pipeline can be
+    // registered as DeadlineCloud, so no execution can hold a job to cancel or report on, and the
+    // grants would be standing access to every farm in the account for code paths that cannot run.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                // Cancel a Deadline Cloud farm job on abort. The task is
+                // `createJob.waitForTaskToken`, so Step Functions holds the token and NOT the job —
+                // StopExecution on the state machine leaves the job running (and billing) on the
+                // farm, which is why an explicit cancel is required here.
+                //
+                // ListJobs + GetJob are what make a QUEUED job cancellable. The job is otherwise
+                // identified from a registration written by the job-status callback, and that
+                // callback only runs on a status CHANGE — a job sitting queued with no worker never
+                // produces one. Discovery walks the pipeline's queue and matches the reserved
+                // VamsPipelineExecutionId job parameter instead, so it needs no event to have
+                // occurred.
+                //
+                // GetJob also resolves a registered job's name and status for the execution details
+                // view. ListSessions lists the job's sessions for the logs API: each session is one
+                // CloudWatch log stream in the queue's shared '/aws/deadline/{farmId}/{queueId}'
+                // group, and the lines carry no VAMS id, so the streams are read by exact session
+                // id (log-group grant below).
+                actions: [
+                    "deadline:UpdateJob",
+                    "deadline:ListJobs",
+                    "deadline:GetJob",
+                    "deadline:ListSessions",
+                ],
+                // Farm and queue ids come from the pipeline record, not from configuration, so they
+                // are not known at deploy time; the handler only ever passes ids read from the
+                // execution being aborted or read. Scoped to the account/Region's Deadline resources.
+                resources: [
+                    `arn:${Partition()}:deadline:${config.env.region}:${config.env.account}:farm/*`,
+                ],
+            })
+        );
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
+                // Deadline Cloud writes session logs to the queue's own group
+                // '/aws/deadline/{farmId}/{queueId}', one stream per session, shared by every job of
+                // the queue. Farm and queue ids come from the pipeline record, so the group is not
+                // known at deploy time; the handler only ever reads the streams named by the session
+                // ids ListSessions returned for a job registered on the execution being read. Suffixed
+                // with ':*' for stream-level reads, as the log-group statement below.
+                resources: [
+                    IAMArn("/aws/deadline/*").loggroup,
+                    IAMArn("/aws/deadline/*").loggroup + ":*",
+                ],
+            })
+        );
+        NagSuppressions.addResourceSuppressions(
+            fun,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
+                        "known at deploy time, so deadline:UpdateJob/ListJobs/GetJob/ListSessions are scoped to " +
+                        "this account and Region's farm hierarchy. The handler only ever passes a farm/queue read " +
+                        "from the pipeline definition of the execution being aborted or read, and a job id it " +
+                        "either read from that execution's registration rows or matched by the execution's own id " +
+                        "in a reserved job parameter.",
+                    appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
+                },
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "Deadline Cloud session logs land in the queue's own '/aws/deadline/<farmId>/<queueId>' " +
+                        "log group, and farm and queue ids are recorded on VAMS pipeline records rather than " +
+                        "known at deploy time, so the logs read is scoped to this account and Region's Deadline " +
+                        "log-group namespace. The handler only ever reads the streams named by the session ids " +
+                        "Deadline Cloud returned for a job registered on the execution being read.",
+                    appliesTo: [
+                        {
+                            regex: "/^Resource::arn:.*:logs:.*:log-group:/aws/deadline/\\*(:\\*)?$/g",
+                        },
+                    ],
+                },
+            ],
+            true
+        );
+    }
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
             actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
             // Read scope covers the whole-execution and per-pipeline-step log sources the logs API
             // reads. IAM resource matching is CASE-SENSITIVE, so each real prefix is listed exactly:
@@ -148,7 +246,13 @@ export function buildExecutionServiceFunction(
             //   (2) config-name-based groups (the audit/log groups that embed the config name);
             //   (3) pipeline state-machine groups — BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
             //       '/aws/vendedlogs/VAMSstateMachine-*' are used across pipelines (case varies);
-            //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*'.
+            //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*' — the ECS pipelines and
+            //       the five Fargate Batch pipelines (coordinate transform, Blender renderer, 3D
+            //       thumbnail, PDAL, Potree), whose job definitions route container output there
+            //       through the awslogs driver and register that group per stage;
+            //   (5) AWS Batch's default container group '/aws/batch/job' — the GPU Batch pipelines
+            //       (Cosmos, GR00T, Isaac Lab, Splat) set no log configuration, so their container
+            //       streams land there and that is the group they register.
             // Scoped to these prefixes (not the whole /aws/vendedlogs/* namespace) so it cannot read
             // unrelated apps' vended log groups. Each is suffixed with ':*' for stream-level reads.
             resources: [
@@ -162,6 +266,8 @@ export function buildExecutionServiceFunction(
                 IAMArn("/aws/vendedlogs/VAMSstateMachine-*").loggroup + ":*",
                 IAMArn("/aws/vendedlogs/Pipelines/*").loggroup,
                 IAMArn("/aws/vendedlogs/Pipelines/*").loggroup + ":*",
+                IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup,
+                IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup + ":*",
             ],
         })
     );
@@ -379,6 +485,7 @@ export function buildInterimPipelineTrackingFunction(
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadData(fun);
     // Reads original input files + output-files folder, and writes the next pipeline's
     // resolved input manifest into the asset bucket execution input folder.
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -439,6 +546,82 @@ export function buildHandleExecutionErrorFunction(
             ],
         })
     );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Stop the Step Functions sub-execution an in-flight pipeline registered, before its row
+            // is stamped terminal — a terminal row is no longer a candidate for the abort API, so a
+            // sub-execution left running here has no in-product remedy. Scoped exactly as the abort
+            // path's grant is: the two act on the same registered sub-executions.
+            actions: ["states:StopExecution"],
+            resources: [
+                IAMArn("*" + config.name + "*").statemachine,
+                IAMArn("*" + config.name + "*").statemachineExecution,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachine,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachineExecution,
+                // Registered pipeline sub-executions (CDK-generated names — see the constant above).
+                IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachine,
+                IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachineExecution,
+            ],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Terminate a Batch job a pipeline submitted ITSELF and registered: a job submitted
+            // through the Step Functions `.sync` Batch integration is stopped by StopExecution on
+            // its state machine (granted above). AWS Batch generates job ids with no
+            // deployment-specific prefix to scope on, so the resource is a wildcard; the handler
+            // only ever passes an id read from a registration row on the failing execution.
+            actions: ["batch:TerminateJob"],
+            resources: ["*"],
+        })
+    );
+    // Gated the same way the abort path's grant is: with the execution type disabled no pipeline can
+    // be registered as DeadlineCloud, so no failing execution can hold a job to cancel.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+        // Resolves a DeadlineCloud pipeline's farmId/queueId, which live on the pipeline DEFINITION
+        // rather than on any execution row, so a job that was never registered can still be found.
+        storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                // Cancel a Deadline Cloud farm job held by a pipeline this failure is about to stamp
+                // terminal. The task is `createJob.waitForTaskToken`, so Step Functions holds the
+                // token and NOT the job, and a terminal row is no longer a candidate for the abort
+                // API — so a job left running here has no in-product remedy.
+                //
+                // ListJobs + GetJob are what make a QUEUED job cancellable. The job is otherwise
+                // identified from a registration written by the job-status callback, and that
+                // callback only runs on a status CHANGE — a job sitting queued with no worker never
+                // produces one. Discovery walks the pipeline's queue and matches the reserved
+                // VamsPipelineExecutionId job parameter instead, so it needs no event to have
+                // occurred. Same three actions as the abort path, which shares the implementation.
+                actions: ["deadline:UpdateJob", "deadline:ListJobs", "deadline:GetJob"],
+                // Farm and queue ids come from the pipeline record, not from configuration, so they
+                // are not known at deploy time. Scoped to the account/Region's Deadline resources.
+                resources: [
+                    `arn:${Partition()}:deadline:${config.env.region}:${config.env.account}:farm/*`,
+                ],
+            })
+        );
+        NagSuppressions.addResourceSuppressions(
+            fun,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
+                        "known at deploy time, so deadline:UpdateJob/ListJobs/GetJob are scoped to this account " +
+                        "and Region's farm hierarchy. The handler only ever passes a farm/queue read from the " +
+                        "failing execution's own pipeline definition, and a job id either read from a registration " +
+                        "row on that execution or matched to it by the reserved VamsPipelineExecutionId parameter.",
+                    appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
+                },
+            ],
+            true
+        );
+    }
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -490,7 +673,37 @@ export function buildRegisterPipelineExecutionFunction(
             detailType: ["pipeline.execution.register"],
         },
     });
-    registerRule.addTarget(new eventsTargets.LambdaFunction(fun));
+
+    // The registration event is what makes an execution abortable: `execution abort` can only stop the
+    // sub-state-machines and Batch jobs that were registered against the pipeline execution row. With
+    // no dead-letter queue, EventBridge discards a persistently failing delivery after its own retries
+    // and nothing records that it happened — leaving orphaned pipeline state machines and GPU Batch
+    // jobs that keep incurring cost after the user aborted the workflow. Same reasoning, and the same
+    // treatment, as the Deadline Cloud job-status rules.
+    const registerDlq = new sqs.Queue(scope, "PipelineExecutionRegisterDLQ", {
+        encryption: storageResources.encryption.kmsKey
+            ? sqs.QueueEncryption.KMS
+            : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: storageResources.encryption.kmsKey,
+        enforceSSL: true,
+    });
+    NagSuppressions.addResourceSuppressions(registerDlq, [
+        {
+            id: "AwsSolutions-SQS3",
+            reason:
+                "This queue is itself the dead-letter target for the pipeline-execution registration " +
+                "EventBridge rule, so it does not take a further dead-letter queue. Its messages are the " +
+                "undeliverable registration events an operator redrives; until they are, the affected " +
+                "executions cannot be aborted.",
+        },
+    ]);
+
+    registerRule.addTarget(
+        new eventsTargets.LambdaFunction(fun, {
+            deadLetterQueue: registerDlq,
+            retryAttempts: 3,
+        })
+    );
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -641,10 +854,22 @@ export function buildDeadlineCloudJobCallbackFunction(
     });
 
     // Deadline Cloud publishes job status events to the account DEFAULT bus only. Two rules
-    // route job endings to the callback: terminal combined task-run statuses, and lifecycle
+    // route job status to the callback: every combined task-run status change, and lifecycle
     // failure states (a job that fails at CREATE/UPLOAD never reaches a task-run status, so
     // its task token would otherwise only resolve by timing out). The lambda additionally
     // ignores jobs without the reserved VamsTaskToken job parameter.
+    //
+    // The status rule deliberately does NOT filter to terminal statuses. The callback does two
+    // jobs, and they need the events at different times: it resolves the task token only on a
+    // TERMINAL status, but it REGISTERS the Deadline job as the pipeline execution's sub-process on
+    // EVERY status it is handed. Registration is what makes the job abortable — `execution abort`
+    // cancels registered Deadline jobs via UpdateJob, and it can only cancel what has been
+    // registered. Filtering the rule to terminal statuses meant a job was registered exactly when
+    // there was nothing left to cancel: aborting an in-flight execution stopped the state machine
+    // and left the farm job running with a task token nobody would ever resolve. The lambda side of
+    // this was already correct (backend test
+    // `test_non_terminal_status_registers_the_job_and_leaves_the_token_open`, S2-BACKEND-045); the
+    // filter here is what kept it unreachable in practice.
     // The handler re-raises GetJob/SendTask* failures so EventBridge retries delivery. Without a
     // dead-letter queue a persistently failing terminal event is discarded after those retries and
     // the workflow's task token is left to time out with no operator-visible signal.
@@ -668,9 +893,6 @@ export function buildDeadlineCloudJobCallbackFunction(
         eventPattern: {
             source: ["aws.deadline"],
             detailType: ["Job Run Status Change"],
-            detail: {
-                taskRunStatus: ["SUCCEEDED", "FAILED", "CANCELED", "NOT_COMPATIBLE"],
-            },
         },
     });
     deadlineJobStatusRule.addTarget(
@@ -761,19 +983,6 @@ export function buildWorkflowRole(
         statements: [
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
-                actions: ["states:CreateStateMachine"],
-                resources: [
-                    IAMArn("*" + config.name + "*").statemachine,
-                    IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachine,
-                ],
-            }),
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
-                resources: [IAMArn("*" + config.name + "*").stateMachineEvents],
-            }),
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
                 actions: [
                     "logs:CreateLogDelivery",
                     "logs:GetLogDelivery",
@@ -844,11 +1053,6 @@ export function buildWorkflowRole(
                     IAMArn(BACKEND_GENERATED_NAME_PATTERN).lambda,
                 ],
             }),
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["iam:PassRole"],
-                resources: [IAMArn("*" + config.name + "*").role],
-            }),
             // SQS SendMessage permission for SQS pipeline types
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
@@ -860,6 +1064,19 @@ export function buildWorkflowRole(
                 effect: iam.Effect.ALLOW,
                 actions: ["events:PutEvents"],
                 resources: [IAMArn("*" + config.name + "*").eventBus, IAMArn("default").eventBus],
+            }),
+
+            // AWS X-Ray publishes no resource-level permissions for these actions, so the resource is
+            // "*" of necessity.
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: [
+                    "xray:PutTraceSegments",
+                    "xray:PutTelemetryRecords",
+                    "xray:GetSamplingRules",
+                    "xray:GetSamplingTargets",
+                ],
+                resources: ["*"],
             }),
         ],
     });
@@ -889,20 +1106,12 @@ export function buildWorkflowRole(
     }
 
     const role = new iam.Role(scope, "VAMSWorkflowIAMRole", {
-        assumedBy: new iam.CompositePrincipal(
-            Service("LAMBDA").Principal,
-            Service("STATES").Principal
-        ),
+        assumedBy: Service("STATES").Principal,
         description: "VAMS Workflow IAM Role.",
         inlinePolicies: {
             createWorkflowPolicy: createWorkflowPolicy,
             runWorkflowPolicy: runWorkflowPolicy,
         },
-        managedPolicies: [
-            iam.ManagedPolicy.fromAwsManagedPolicyName(
-                "service-role/AWSLambdaVPCAccessExecutionRole"
-            ),
-        ],
     });
 
     // Grant access to any external asset bucket customer managed KMS keys so the
@@ -1018,9 +1227,6 @@ export function buildWorkflowServiceV2Function(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            // Execution-overhaul lambda names embedded in the generated ASL (interim states between
-            // pipelines; error-handler catch state; end-state process-output), plus the SFN role +
-            // shared workflow log group + partition the deploy uses. Read lazily by workflowAsl.
             PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
                 processWorkflowExecutionOutputFunction.functionName,
             INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME:
@@ -1035,8 +1241,6 @@ export function buildWorkflowServiceV2Function(
     storageResources.dynamo.workflowStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
-    // Read the workflow-executions table (+ its by-workflow GSI) to compute each workflow's
-    // executionCount on the list response via a bounded COUNT query.
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -1099,12 +1303,10 @@ export function buildWorkflowTriggerServiceFunction(
     });
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowTriggersStorageTable.grantReadWriteData(fun);
-    // Setting a fileUpload trigger validates any default template it names: a headless (auto-)
-    // triggered run cannot supply tag values, so a chosen default template must not have a required
-    // tag without a default. That check reads the template's tag schema (TagSchemaByTemplateGSI),
-    // and rehydrates an S3-offloaded schema from the default asset bucket.
     storageResources.dynamo.pipelineTemplateTagSchemaStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.pipelineTemplatesStorageTable.grantReadData(fun);
     // A large tag schema is offloaded to the default asset bucket; the headless-template check
     // rehydrates it, so grant read on the asset buckets (best-effort — skipped if unreadable).
     grantReadPermissionsToAllAssetBuckets(fun);

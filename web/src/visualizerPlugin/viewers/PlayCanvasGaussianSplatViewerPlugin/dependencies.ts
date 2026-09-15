@@ -5,6 +5,8 @@
  * Follows VAMS plugin dependency management patterns with script tag loading.
  */
 
+import { loadExternalScript } from "../../core/loadExternalScript";
+
 export class PlayCanvasGaussianSplatDependencyManager {
     private static readonly PLUGIN_ID = "playcanvas-gaussian-splat-viewer";
     private static loaded = false;
@@ -69,10 +71,16 @@ export class PlayCanvasGaussianSplatDependencyManager {
             this.loaded = true;
 
             console.log(`[${this.PLUGIN_ID}] PlayCanvas engine loaded successfully`);
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.log(`[${this.PLUGIN_ID}] PlayCanvas version:`, pc.version || "Unknown");
 
             return pc;
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`[${this.PLUGIN_ID}] Failed to load PlayCanvas:`, error);
 
             // Reset state on failure
@@ -89,22 +97,10 @@ export class PlayCanvasGaussianSplatDependencyManager {
      * Load a script dynamically
      * @param src - Script source URL
      */
+    // Resolving on the mere presence of a tag returned before an in-flight download had executed,
+    // handing the caller a library whose global was still undefined.
     private static loadScript(src: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            // Check if script is already loaded
-            const existingScript = document.querySelector(`script[src="${src}"]`);
-            if (existingScript) {
-                resolve();
-                return;
-            }
-
-            const script = document.createElement("script");
-            script.src = src;
-            script.async = true;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-            document.head.appendChild(script);
-        });
+        return loadExternalScript(src);
     }
 
     /**
@@ -158,6 +154,9 @@ export class PlayCanvasGaussianSplatDependencyManager {
 
             console.log(`[${this.PLUGIN_ID}] PlayCanvas cleanup completed`);
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`[${this.PLUGIN_ID}] Error during cleanup:`, error);
         }
     }

@@ -43,7 +43,9 @@ const DatabaseMapThumbnail: React.FC<DatabaseMapThumbnailProps> = ({
                     // that extractLocationData expects
                     const md: Record<string, string> = {};
                     response.metadata.forEach((record) => {
-                        md[record.metadataKey] = record.metadataValue;
+                        // A record stored with no value contributes an empty string rather than
+                        // being dropped, so a key present in the data stays present here.
+                        md[record.metadataKey] = record.metadataValue ?? "";
                     });
                     setAssetData({ MD_: md });
                 } else {

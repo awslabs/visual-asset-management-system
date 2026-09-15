@@ -149,9 +149,12 @@ export class CoreVAMSStack extends cdk.Stack {
         );
 
         //Deploy Resource Names SSM Parameters (nested stack). Deploys directly after storage
-        //and before every Lambda-bearing stack so the parameters exist before any function
-        //that resolves them cold-starts, and so the parameter-creation burst does not race
-        //other stacks' SSM writes (shared PutParameter rate limit).
+        //and before the downstream Lambda-bearing stacks so the parameters exist before any of
+        //their functions resolve them, and so the parameter-creation burst does not race other
+        //stacks' SSM writes (shared PutParameter rate limit). Storage is the exception: it holds
+        //the bucket-sync Lambdas and cannot depend on this stack, since this stack depends on it,
+        //so a bucket-sync invocation arriving before the parameters exist fails at initialization
+        //and is retried from its SQS queue.
         const resourceNamesNestedStack = new ResourceNamesBuilderNestedStack(
             this,
             "ResourceNamesBuilder",
@@ -173,7 +176,10 @@ export class CoreVAMSStack extends cdk.Stack {
                         "VAMSCloudTrailLogs",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                // No encryptionKey: this log group lives in the root stack, so consuming the shared key
+                // from the storage nested stack forms a circular dependency between the root stack and
+                // every nested stack in it. Encrypted under the CloudWatch Logs AWS-managed key instead.
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             });
 
@@ -198,6 +204,11 @@ export class CoreVAMSStack extends cdk.Stack {
         //See if we have enabled SAML settings
         if (props.config.app.authProvider.useCognito.useSaml) {
             this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_COGNITO_SAML);
+        }
+
+        //See if we have enabled OIDC settings (mutually exclusive with SAML)
+        if (props.config.app.authProvider.useCognito.useOidc) {
+            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_COGNITO_OIDC);
         }
 
         //Setup Auth (Nested Stack)
@@ -233,8 +244,9 @@ export class CoreVAMSStack extends cdk.Stack {
             apiBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
 
             //Deploy Backend API framework - secondary stack (nested stack).
-            //Holds API domains) moved out of ApiBuilder to keep
-            //it under the CloudFormation per-stack resource limit. Add new API endpoints here.
+            //Holds API domains moved out of ApiBuilder to keep both stacks clear of the
+            //per-template CloudFormation ceilings (500 resources, 1 MB template body).
+            //Add new API endpoints here. See "API Stack Ceilings" in infra/CLAUDE.md.
             const apiBuilder2NestedStack = new ApiBuilder2NestedStack(this, "ApiBuilder2", {
                 config: props.config,
                 registry: apiRouteRegistry,
@@ -430,9 +442,22 @@ export class CoreVAMSStack extends cdk.Stack {
             }
 
             //Write final output configurations (pulling forward from nested stacks)
+            // The stage-INCLUSIVE invoke URL, because this output is read by a human and handed to a
+            // client (`vamscli setup <url>`), not used as an origin.
+            //
+            // `apiEndpoint` is a bare hostname with no scheme and no stage. Amazon API Gateway reads the
+            // first path segment as the deployment stage, so a client configured with the bare host asks
+            // for a stage that does not exist and every request is answered 403 {"message":"Forbidden"}
+            // before any authorizer runs — indistinguishable from a permission denial. Publishing the
+            // bare form here is how that misconfiguration is created.
+            //
+            // `apiEndpoint` is still correct for the OTHER consumer: StaticWeb passes it to
+            // `cloudfrontOrigins.HttpOrigin(...)` and to the ALB listener rules' `host:`, both of which
+            // take a domain name, and `security.ts` prefixes the scheme itself. This is a per-consumer
+            // distinction rather than one wrong member.
             const gatewayURLParamsOutput = new cdk.CfnOutput(this, "APIGatewayEndpointOutput", {
-                value: `${apiNestedStack.apiEndpoint}`,
-                description: "API Gateway endpoint",
+                value: `${apiNestedStack.invokeUrlWithStage}`,
+                description: "API Gateway endpoint (stage-inclusive invoke URL)",
             });
 
             const importGlobalPipelineWorkflowFunctionNameOutput = new cdk.CfnOutput(

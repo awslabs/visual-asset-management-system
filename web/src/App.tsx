@@ -59,10 +59,7 @@ function App() {
         }
     }, [navigationOpen]);
 
-    console.log("current user is", user);
-
     const menuText = user?.username;
-    localStorage.setItem("email", user?.username);
 
     const signOut = () => {
         localStorage.clear();
@@ -138,7 +135,7 @@ function App() {
                         setNavigationOpen={setNavigationOpen}
                     />
                 </HashRouter>
-                <PageFooter />
+                <PageFooter showVersion={true} />
             </ToastProvider>
         </QueryClientProvider>
     );

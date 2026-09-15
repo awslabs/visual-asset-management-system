@@ -4,7 +4,15 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { Box, Button, FormField, SpaceBetween, Textarea } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import FormField from "@cloudscape-design/components/form-field";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Textarea from "@cloudscape-design/components/textarea";
+import {
+    MAX_GEOJSON_NESTING_DEPTH,
+    geoJsonNestingDepth,
+} from "../../../common/constants/geoSearch";
 
 interface GeoJSONInputProps {
     value: string;
@@ -35,6 +43,9 @@ const validateGeoJSON = (raw: string): string[] => {
     }
     if (!parsed || typeof parsed !== "object") return ["GeoJSON must be a JSON object"];
     if (!parsed.type) return ["GeoJSON must have a type property"];
+    if (geoJsonNestingDepth(parsed) > MAX_GEOJSON_NESTING_DEPTH) {
+        return [`GeoJSON nests geometries more than ${MAX_GEOJSON_NESTING_DEPTH} levels deep`];
+    }
     if (parsed.type === "Feature") {
         if (!parsed.geometry || !parsed.geometry.type) {
             return ["GeoJSON Feature must contain a geometry with a type"];

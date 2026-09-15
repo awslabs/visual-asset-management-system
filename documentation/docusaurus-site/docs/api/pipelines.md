@@ -72,7 +72,14 @@ GET /pipelines
 
 `templates` is absent from a list item — it is returned only by [Get a pipeline](#get-a-pipeline). `templateCount` is best-effort and is `null` when the count could not be computed.
 
-`NextToken` is `null` on the last page. Pipelines the caller cannot read are dropped after the page is read, so a page may hold fewer items than requested while a token still remains — page until it is absent.
+`NextToken` is `null` on the last page.
+
+:::note[A page may hold fewer items than requested]
+Two things shorten a page, so page until `NextToken` is absent rather than until a page looks short:
+
+-   **The authorization filter.** Pipelines the caller cannot read are dropped after the page is read.
+-   **A 4 MB page budget**, measured over the serialized items. Each item carries its full `executionConfig`, which may hold a large inline job template, so a page of large configurations reaches the budget well inside the row cap. A page that reaches it stops accumulating and its `NextToken` resumes at the last item it kept, so the remaining rows are deferred rather than lost.
+    :::
 
 ### Error responses
 
@@ -321,7 +328,7 @@ Set `enabled` to `true` or `false` to enable or disable a pipeline without chang
 :::
 
 :::tip[Restore an archived pipeline]
-`PUT` with `\{"archived": false\}` returns an archived pipeline to the active listings under its original identifier, together with every workflow reference and execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the pipeline.
+`PUT` with `{"archived": false}` returns an archived pipeline to the active listings under its original identifier, together with every workflow reference and execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the pipeline.
 :::
 
 ### Request body example
@@ -600,6 +607,8 @@ When a template is referenced by a workflow trigger as a default (see [Set a tri
 
 `overrides` does **not** change the config body. It changes how an execution's inputs are accepted and validated (and what metadata is provided) when this template is chosen. See [System configuration](#system-configuration) for the meaning of each key.
 
+The whole block may be at most **65,536 bytes** (64 KB) serialized — the same budget as the pipeline's own `systemConfig`, whose keys these are a subset of. As there, the ceiling bounds the filter lists as a group: it admits the full 250 patterns in each of `allow` and `exclude` at ordinary glob lengths, but the maximum pattern count and the maximum 512-character pattern length cannot be combined, since that alone would serialize past 250 KB.
+
 :::tip[Recommended: let the template decide whether an input file is needed]
 When one pipeline supports several modes that differ in what they consume, set the pipeline's
 `inputFileArity` to the LOWEST value any of its templates needs — usually `none` — and let each
@@ -749,7 +758,7 @@ As with [Create a template](#create-a-template), when the template is referenced
 :::
 
 :::note[A tag's type is validated against the stored body]
-A tag schema and a configuration body are one contract: a tag's declared type determines whether its placeholder renders into a valid document. `\{"steps": \{\{PARAM\}\}\}` is valid JSON when `PARAM` is an integer and invalid when it is a string, because the substituted value lands in an unquoted position.
+A tag schema and a configuration body are one contract: a tag's declared type determines whether its placeholder renders into a valid document. `{"steps": {{PARAM}}}` is valid JSON when `PARAM` is an integer and invalid when it is a string, because the substituted value lands in an unquoted position.
 
 Supplying `tagSchema` therefore re-checks the schema against the body currently stored, even when the request changes no body of its own, and a retype that would invalidate it is rejected with `400`. [Set a template's tag schema](#set-a-templates-tag-schema) applies the same check, so both routes reach the same verdict for the same change. Send the new `configBody` alongside `tagSchema` when a retype requires the body to change with it.
 :::
@@ -786,6 +795,21 @@ DELETE /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}
 ```json
 {
     "message": "Template deleted"
+}
+```
+
+A template that a file-upload trigger still names as a default template for this pipeline is deleted
+as requested, and the response carries a non-blocking `warnings` array naming those workflows and
+triggers. The reference lives on the trigger, so the delete neither refuses nor edits it: triggered
+executions of the named workflows fail at template resolution until each trigger picks a different
+default template for this pipeline.
+
+```json
+{
+    "message": "Template deleted",
+    "warnings": [
+        "this template was chosen as a default template by the trigger(s) of auto-triggered workflow(s) 'my-database:convert-and-preview' (trigger 'fileUpload'). Triggered executions of those workflows will fail until each trigger picks a different default template for this pipeline."
+    ]
 }
 ```
 
@@ -941,16 +965,18 @@ Each entry in a template's tag schema defines one tag:
 
 A tag schema holds at most 250 entries. Exceeding any of these bounds rejects the request with a `400`. See [Service Quotas and Limits](../additional/quotas.md#pipeline-template-and-tag-schema-limits) for the full set.
 
+A definition may contain only the fields above. An unrecognized key is rejected with a `400` rather than ignored, because a stored definition is read a named key at a time: a misspelled `requried` would leave the tag optional and a differently cased `Type` would leave it a `string`, giving a schema weaker than the one authored with nothing reporting it. This rejection names the offending index and key in a plain `message` string — it is not one of the `tagSchemaErrors` entries, which report definitions that parsed but failed a schema-level rule.
+
 #### Placeholders in a json config body
 
 When `configFormat` is `json`, the declared `type` determines where a tag's `{{tagKey}}` placeholder may sit, because it determines what the tag renders.
 
-| Tag type                                      | Renders                          | Placement in the body                                    |
-| --------------------------------------------- | -------------------------------- | -------------------------------------------------------- |
-| `integer`, `number`, `boolean`, `string-list` | A JSON number, boolean, or array | The whole value, unquoted: `"steps": \{\{STEPS\}\}`      |
-| `string`, `enum`                              | Text                             | Inside the string it fills: `"prompt": "\{\{PROMPT\}\}"` |
+| Tag type                                      | Renders                          | Placement in the body                                |
+| --------------------------------------------- | -------------------------------- | ---------------------------------------------------- |
+| `integer`, `number`, `boolean`, `string-list` | A JSON number, boolean, or array | The whole value, unquoted: `"steps": {{STEPS}}`      |
+| `string`, `enum`                              | Text                             | Inside the string it fills: `"prompt": "{{PROMPT}}"` |
 
-A body is validated against its own `tagSchema` when it is saved, and the reverse of either placement is rejected. Quoting a typed placeholder is the case worth knowing: `"steps": "\{\{STEPS\}\}"` is valid JSON, so nothing downstream complains — the pipeline simply receives the string `"150"` where its schema promised the number `150`. A quoted `string-list` is worse, rendering a body that does not parse at all.
+A body is validated against its own `tagSchema` when it is saved, and the reverse of either placement is rejected. Quoting a typed placeholder is the case worth knowing: `"steps": "{{STEPS}}"` is valid JSON, so nothing downstream complains — the pipeline simply receives the string `"150"` where its schema promised the number `150`. A quoted `string-list` is worse, rendering a body that does not parse at all.
 
 The same check applies to a `customTemplateOverride` supplied at execute time, since that body reaches the pipeline without having passed through a template save.
 

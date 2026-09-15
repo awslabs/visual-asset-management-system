@@ -8,14 +8,22 @@ import datetime
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="OpenPipeline-CoordinateTransform")
 
 sfn = boto3.client(
     'stepfunctions',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
-events_client = boto3.client('events')
+events_client = boto3.client('events', config=retry_config)
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
@@ -28,7 +36,7 @@ REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
     if (task_token != None and task_token != ""):
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
@@ -52,6 +60,7 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "Coordinate transform processing",
         },
     }
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
@@ -59,6 +68,8 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
+            "sourceType": "stateMachine",
+            "label": "Coordinate transform state machine",
         }]
     try:
         events_client.put_events(Entries=[{
@@ -78,7 +89,7 @@ def lambda_handler(event, context):
     Starts StepFunctions State Machine for coordinate transformation processing.
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     # Get the input metadata + input-configuration S3 locations
     input_metadata_s3_location = event.get('inputMetadataS3Location', '')
@@ -103,10 +114,14 @@ def lambda_handler(event, context):
             'body': {"message": "Input S3 URI cannot be a folder"}
         }
 
-    # Validate file extension
+    # Validate file extension against exact members of the comma-separated allow list. A
+    # containment test against the joined string accepts any prefix of a listed extension
+    # ('.la' against '.las,.laz'), which admits a file the container cannot read.
     file_root, extension = os.path.splitext(input_s3_asset_files_uri)
+    allowed_extensions = [ext.strip().lower() for ext in ALLOWED_INPUT_FILEEXTENSIONS.split(',')
+                          if ext.strip()]
 
-    if not extension or extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS:
+    if not extension or extension.lower() not in allowed_extensions:
         abort_external_workflow("Pipeline cannot process file type provided", external_sfn_task_token)
         return {
             'statusCode': 400,

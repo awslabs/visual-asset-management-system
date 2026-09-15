@@ -52,6 +52,7 @@ describe("searchAssetFilesPaged", () => {
         await searchAssetFilesPaged("x", "db1", "a1");
         const body = api().searchAssets.mock.calls[0][0];
         expect(body.entityTypes).toEqual(["file"]);
+        expect(body.sort).toEqual([{ field: "str_key", order: "asc" }]);
         const filters = JSON.stringify(body.filters);
         expect(filters).toContain("db1");
         expect(filters).toContain("a1");

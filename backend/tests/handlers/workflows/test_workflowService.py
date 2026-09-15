@@ -32,6 +32,45 @@ def _enforcer(api=True, obj=True):
     return inst
 
 
+def _real_to_update_expr(record, op="SET"):
+    """The real `common.dynamodb.to_update_expr`.
+
+    The handler binds `to_update_expr` at import time and `tests/conftest.py` registers
+    `sys.modules['common.dynamodb']` as a `MagicMock`, so the bound name is a mock whose call yields
+    nothing to unpack into three values. Patching the real logic in is what makes the expression the
+    handler builds observable — the same approach as
+    `tests/handlers/roles/test_createRole_partial_update.py`.
+    """
+    keys = record.keys()
+    keys_attr_names = ["#f{n}".format(n=x) for x in range(len(keys))]
+    values_attr_names = [":v{n}".format(n=x) for x in range(len(keys))]
+    keys_map = {k: key for k, key in zip(keys_attr_names, keys)}
+    values_map = {v1: record[v] for v, v1 in zip(keys, values_attr_names)}
+    expr = "{op} ".format(op=op) + ", ".join(
+        "{f} = {v}".format(f=f, v=v)
+        for f, v in zip(keys_attr_names, values_attr_names))
+    return keys_map, values_map, expr
+
+
+@pytest.fixture(autouse=True)
+def bind_real_to_update_expr():
+    with patch(f"{MOD}.to_update_expr", _real_to_update_expr):
+        yield
+
+
+def _written(table):
+    """The attributes the last update_item call SET, as {attributeName: value}. Update and archive
+    write a targeted SET built by to_update_expr, so the names/values arrive as #f/:v placeholders."""
+    kwargs = table.update_item.call_args.kwargs
+    names = kwargs["ExpressionAttributeNames"]
+    values = kwargs["ExpressionAttributeValues"]
+    written = {}
+    for assignment in kwargs["UpdateExpression"].split("SET ", 1)[1].split(", "):
+        name_ref, value_ref = [part.strip() for part in assignment.split(" = ")]
+        written[names[name_ref]] = values[value_ref]
+    return written
+
+
 PIPELINE_REC = {"databaseId": "db1", "pipelineId": "pipe1", "pipelineName": "P",
                 "enabled": True, "archived": False, "systemConfig": {}}
 
@@ -272,7 +311,7 @@ class TestWorkflowServiceV2:
             _event("PUT", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"},
                    {"enabled": False}), MagicMock())
         assert resp["statusCode"] == 200
-        assert table.put_item.call_args.kwargs["Item"]["enabled"] is False
+        assert _written(table)["enabled"] is False
 
     @patch(f"{MOD}._resolve_snapshot_pipeline_records")
     @patch(f"{MOD}._workflow_table")
@@ -298,6 +337,7 @@ class TestWorkflowServiceV2:
             _event("PUT", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"},
                    {"category": "production"}), MagicMock())
         assert resp["statusCode"] == 403
+        table.update_item.assert_not_called()
         table.put_item.assert_not_called()
 
     @patch(f"{MOD}.ev")
@@ -322,7 +362,7 @@ class TestWorkflowServiceV2:
             _event("PUT", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"},
                    {"enabled": False}), MagicMock())
         assert resp["statusCode"] == 200
-        assert table.put_item.call_args.kwargs["Item"]["enabled"] is False
+        assert _written(table)["enabled"] is False
         assert "pipeline 'pipe1' is archived" in json.loads(resp["body"])["message"]["warnings"]
 
     @patch(f"{MOD}.workflowAsl")
@@ -348,6 +388,7 @@ class TestWorkflowServiceV2:
                    {"specifiedPipelines": [{"pipelineId": "pipe1"}]}), MagicMock())
         assert resp["statusCode"] == 400
         assert "saveErrors" in json.loads(resp["body"])["message"]
+        table.update_item.assert_not_called()
         table.put_item.assert_not_called()
 
     @patch(f"{MOD}._workflow_table")
@@ -363,7 +404,7 @@ class TestWorkflowServiceV2:
             _event("DELETE", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"}),
             MagicMock())
         assert resp["statusCode"] == 200
-        saved = table.put_item.call_args.kwargs["Item"]
+        saved = _written(table)
         assert saved["archived"] is True and saved["enabled"] is False
 
     @patch(f"{MOD}.request_to_claims")

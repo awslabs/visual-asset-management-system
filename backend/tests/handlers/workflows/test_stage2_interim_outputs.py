@@ -4,7 +4,11 @@
 """Stage 2 unit tests: shared output-attribution module (executionOutputs), the interim
 pipeline-tracking lambda (output version-diff + resolved input manifest), the error-handler
 lambda (table reconciliation to FAILED), and the createWorkflow ASL flow (interim states +
-error-catch routing + the Stage 2 input envelope)."""
+error-catch routing + the Stage 2 input envelope).
+
+Also guards S11-EXTERNALS3-005 / S2-BACKEND-100: every run-I/O key the interim lambda touches is
+joined to the VAMS-owned area of the run bucket (its declared ``baseAssetsPrefix``) rather than
+written at the bucket root, with the empty and ``/`` spellings still resolving to the root."""
 
 import os
 import sys
@@ -20,6 +24,7 @@ for k, v in {
     "PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME": "t-of",
     "PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME": "t-logs",
     "WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME": "t-wf-inputs",
+    "PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME": "t-pin-cfg",
     "WORKFLOW_EXECUTION_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:1:log-group:vams-wf:*",
 }.items():
     os.environ.setdefault(k, v)
@@ -620,3 +625,201 @@ class TestOutputListingVersionSource:
             s3, [], "bkt", "out/files/", current_output_files=listing)
         s3.get_paginator.assert_not_called()
         assert envelope["inputFiles"][0]["versionId"] == "v3"
+
+
+# ============ run I/O honours the default bucket's baseAssetsPrefix ============
+# S11-EXTERNALS3-005 / S2-BACKEND-100. Every key in the interim payload is relative to the VAMS-owned
+# area of the run bucket; the lambda joins the threaded base prefix before it touches S3. The doubles
+# below RECORD the Bucket/Key of each call and every assertion reads that recording -- the defect was
+# which key was written, so a stub that merely accepts the call would prove nothing.
+
+_PREFIXED_BODY = {
+    "workflowExecutionId": "EXEC1",
+    "workflowDatabaseId": "wdb", "workflowId": "wf", "executingUserName": "u@x",
+    "workflowExecutionS3InputOutputBucket": "run-bkt",
+    "workflowExecutionS3InputOutputBasePrefix": "vams-assets/",
+    "outputFilesPrefix": "pipelines/p1/job-1/output/EXEC1/files/",
+    "outputFilesPrefixRelative": "pipelines/p1/job-1/output/EXEC1/files/",
+    "outputPreviewsPrefixRelative": "pipelines/p1/job-1/output/EXEC1/previews/",
+    "outputMetadataPrefixRelative": "pipelines/p1/job-1/output/EXEC1/metadata/",
+    "outputResultsPrefixRelative": "pipelines/p1/job-1/output/EXEC1/results/",
+    "nextPipelineManifestS3Key": "pipelines/workflowExecutionInputs/EXEC1/pipeline2/manifest.json",
+    "nextPipelineConfigS3Key": "pipelines/workflowExecutionInputs/EXEC1/pipeline2/config.json",
+    "nextPipelineMetadataS3Key": "pipelines/workflowExecutionInputs/EXEC1/pipeline2/metadata.json",
+    "nextPipelineAuxTempPrefix": "pipelines/p2/EXEC1/",
+    "nextPipelineExecutionId": "P2",
+}
+
+
+def _run_interim(body):
+    """Drive prepare_next_pipeline against recording doubles.
+
+    Returns (written, listed, manifest): `written` is the list of (Bucket, Key) pairs put_object was
+    called with, `listed` the (bucket, prefix) pairs the output listing was asked for, and `manifest`
+    the envelope actually written.
+    """
+    written, listed, bodies = [], [], {}
+
+    def record_put(**kw):
+        written.append((kw["Bucket"], kw["Key"]))
+        bodies[kw["Key"]] = kw["Body"]
+        return {}
+
+    def record_list(_client, bucket, files_prefix):
+        listed.append((bucket, files_prefix))
+        return []
+
+    inputs_table = MagicMock(query=MagicMock(return_value={"Items": [
+        {"inputAssetFileKey": "/a1/scan.e57", "databaseId": "db", "assetId": "a1",
+         "s3Bucket": "asset-bkt", "assetRootS3Key": "a1/"}]}))
+    with patch.object(ipt.dynamodb, "Table", return_value=inputs_table), \
+         patch.object(ipt.s3c, "put_object", MagicMock(side_effect=record_put)), \
+         patch.object(ipt.s3c, "get_object", MagicMock(side_effect=_absent_object_error())), \
+         patch.object(ipt.eo, "list_current_output_files", MagicMock(side_effect=record_list)):
+        result = ipt.prepare_next_pipeline(body)
+    manifest_keys = [k for _b, k in written if k.endswith("manifest.json")]
+    manifest = (json.loads(bodies[manifest_keys[0]].decode("utf-8")) if manifest_keys else None)
+    return written, listed, manifest, result
+
+
+@pytest.mark.unit
+class TestInterimRunIoHonoursTheBasePrefix:
+
+    def test_the_next_manifest_is_written_inside_the_declared_area(self):
+        written, _listed, _manifest, _result = _run_interim(dict(_PREFIXED_BODY))
+        assert written == [("run-bkt",
+                           "vams-assets/pipelines/workflowExecutionInputs/EXEC1/"
+                           "pipeline2/manifest.json")]
+
+    def test_nothing_is_written_at_the_bucket_root(self):
+        """The negative half. An implementation that wrote to BOTH places, or that joined only the
+        returned location and not the put, passes an existence check and fails this."""
+        written, _listed, _manifest, _result = _run_interim(dict(_PREFIXED_BODY))
+        assert [key for _b, key in written if not key.startswith("vams-assets/")] == []
+
+    def test_the_output_folder_is_listed_from_inside_the_declared_area(self):
+        """The READ side. Moving the writes without the reads makes every run report success while
+        finding no outputs -- worse than the defect."""
+        _written, listed, _manifest, _result = _run_interim(dict(_PREFIXED_BODY))
+        assert listed == [("run-bkt", "vams-assets/pipelines/p1/job-1/output/EXEC1/files/")]
+
+    def test_the_next_manifest_points_the_pipeline_at_prefixed_output_prefixes(self):
+        """The pipeline writes to manifest.outputs directly, so those must be FULL bucket keys."""
+        _written, _listed, manifest, _result = _run_interim(dict(_PREFIXED_BODY))
+        assert manifest["outputs"] == {
+            "bucket": "run-bkt",
+            "files": "vams-assets/pipelines/p1/job-1/output/EXEC1/files/",
+            "previews": "vams-assets/pipelines/p1/job-1/output/EXEC1/previews/",
+            "metadata": "vams-assets/pipelines/p1/job-1/output/EXEC1/metadata/",
+            "results": "vams-assets/pipelines/p1/job-1/output/EXEC1/results/",
+        }
+
+    def test_the_threaded_metadata_key_is_resolved_inside_the_area(self):
+        _written, _listed, manifest, _result = _run_interim(dict(_PREFIXED_BODY))
+        assert manifest["inputMetadataS3Location"] == (
+            "s3://run-bkt/vams-assets/pipelines/workflowExecutionInputs/EXEC1/"
+            "pipeline2/metadata.json")
+
+    def test_the_aux_temp_prefix_is_left_at_the_auxiliary_bucket_root(self):
+        """The auxiliary bucket is VAMS-created and has no baseAssetsPrefix; joining the run bucket's
+        area onto its working folder would be a second, silent misplacement."""
+        _written, _listed, manifest, _result = _run_interim(dict(_PREFIXED_BODY))
+        assert manifest["auxTempPrefix"] == "pipelines/p2/EXEC1/"
+
+    def test_the_reported_locations_name_the_objects_that_were_written(self):
+        written, _listed, _manifest, result = _run_interim(dict(_PREFIXED_BODY))
+        assert result["inputManifestS3Location"] == "s3://run-bkt/%s" % written[0][1]
+        assert result["nextPipelineManifestS3Key"] == written[0][1]
+
+    def test_an_empty_base_prefix_still_writes_at_the_bucket_root(self):
+        """The owner's carve-out and the must-still-work arm: a VAMS-created default bucket declares
+        no prefix, and its keys must be byte-identical to before this change."""
+        body = dict(_PREFIXED_BODY, workflowExecutionS3InputOutputBasePrefix="")
+        written, listed, manifest, _result = _run_interim(body)
+        assert written == [("run-bkt",
+                           "pipelines/workflowExecutionInputs/EXEC1/pipeline2/manifest.json")]
+        assert listed == [("run-bkt", "pipelines/p1/job-1/output/EXEC1/files/")]
+        assert manifest["outputs"]["files"] == "pipelines/p1/job-1/output/EXEC1/files/"
+
+    def test_a_slash_base_prefix_also_means_the_bucket_root(self):
+        """'/' is the other value storageBuilder accepts for a bucket registered at the root. It must
+        NOT produce a leading slash, which would put every object under an empty first path segment."""
+        body = dict(_PREFIXED_BODY, workflowExecutionS3InputOutputBasePrefix="/")
+        written, _listed, _manifest, _result = _run_interim(body)
+        assert written == [("run-bkt",
+                           "pipelines/workflowExecutionInputs/EXEC1/pipeline2/manifest.json")]
+
+    def test_a_prefix_without_a_trailing_slash_still_gains_the_separator(self):
+        """The buckets table validates a trailing slash, but nothing forces the interim payload's
+        value through that validation, so the lambda normalizes rather than concatenating."""
+        body = dict(_PREFIXED_BODY, workflowExecutionS3InputOutputBasePrefix="vams-assets")
+        written, _listed, _manifest, _result = _run_interim(body)
+        assert written == [("run-bkt",
+                           "vams-assets/pipelines/workflowExecutionInputs/EXEC1/"
+                           "pipeline2/manifest.json")]
+
+    def test_a_payload_predating_the_field_writes_at_the_bucket_root(self):
+        """Backward compatibility: an in-flight state machine created before the prefix was threaded
+        sends no such key. Absent must mean the bucket root, not a crash."""
+        body = {k: v for k, v in _PREFIXED_BODY.items()
+                if k != "workflowExecutionS3InputOutputBasePrefix"}
+        written, listed, _manifest, _result = _run_interim(body)
+        assert written == [("run-bkt",
+                           "pipelines/workflowExecutionInputs/EXEC1/pipeline2/manifest.json")]
+        assert listed == [("run-bkt", "pipelines/p1/job-1/output/EXEC1/files/")]
+
+    def test_the_recording_double_would_notice_a_root_write(self):
+        """Vacuity control for the recording harness: fed the SAME body with the join removed from
+        the payload's keys, the recording reports a bucket-root key -- so the assertions above are
+        reading a real recording rather than a fixture that can only say one thing."""
+        body = dict(_PREFIXED_BODY, workflowExecutionS3InputOutputBasePrefix="")
+        written, _listed, _manifest, _result = _run_interim(body)
+        assert written and not written[0][1].startswith("vams-assets/")
+
+
+@pytest.mark.unit
+class TestRunBucketKeyResolution:
+    """er.run_bucket_key / er.normalize_base_prefix -- the single join every run-I/O site uses."""
+
+    RELATIVE = "pipelines/workflowExecutionInputs/E1/pipeline1/manifest.json"
+
+    @pytest.mark.parametrize("declared,expected_prefix", [
+        ("", ""),                      # VAMS-created default bucket
+        ("/", ""),                     # the other spelling of the bucket root
+        ("vams-assets", "vams-assets/"),
+        ("vams-assets/", "vams-assets/"),
+        ("/vams-assets/", "vams-assets/"),
+        ("a/b", "a/b/"),               # a nested area
+        (None, ""),                    # an absent attribute on the bucket row
+    ])
+    def test_normalize_base_prefix(self, declared, expected_prefix):
+        assert er.normalize_base_prefix(declared) == expected_prefix
+
+    @pytest.mark.parametrize("declared,expected", [
+        ("", RELATIVE),
+        ("/", RELATIVE),
+        ("vams-assets", "vams-assets/" + RELATIVE),
+        ("vams-assets/", "vams-assets/" + RELATIVE),
+    ])
+    def test_run_bucket_key(self, declared, expected):
+        assert er.run_bucket_key(declared, self.RELATIVE) == expected
+
+    def test_no_resolved_key_ever_starts_with_a_slash(self):
+        """A leading slash creates an object under an empty first path segment."""
+        for declared in ("", "/", "//", "vams-assets", "/vams-assets/", "a/b"):
+            assert not er.run_bucket_key(declared, self.RELATIVE).startswith("/"), declared
+
+    def test_an_empty_key_stays_empty(self):
+        """An unset location must not resolve to the prefix itself, which would turn 'no object here'
+        into a listing of the whole VAMS area."""
+        assert er.run_bucket_key("vams-assets/", "") == ""
+        assert er.run_bucket_key("vams-assets/", None) is None
+
+    def test_it_agrees_with_default_bucket_key_on_every_non_empty_key(self):
+        """The template-body path joins through defaultBucket.default_bucket_key. The two helpers must
+        not drift: a disagreement would put run I/O and template bodies in different areas of the same
+        bucket."""
+        from backend.backend.common.workflows.defaultBucket import default_bucket_key
+        for declared in ("", "/", "vams-assets", "vams-assets/", "/vams-assets/", "a/b"):
+            assert (er.run_bucket_key(declared, self.RELATIVE)
+                    == default_bucket_key(declared, self.RELATIVE)), declared

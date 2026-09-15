@@ -10,8 +10,8 @@ Two AI coding agents are supported: Claude Code and Kiro. Each reads from dedica
 
 VAMS also ships an MCP server and an agent skill for **operating** a deployed VAMS instance with agents, rather than writing VAMS code. See [Operating a Deployment with Agents](#operating-a-deployment-with-agents).
 
-:::note[Cline support deprecated]
-The Cline agent (`.clinerules/workflows/`) is no longer supported. Its steering files have been removed. Use Claude Code or Kiro instead.
+:::note[Cline is not supported]
+The Cline agent is not among the supported agents, and VAMS ships no `.clinerules/` steering files. Use Claude Code or Kiro instead.
 :::
 
 ## Supported Agents
@@ -81,15 +81,15 @@ Adding a new API endpoint in VAMS requires coordinated changes across as many as
 | Step | File                                                          | Action                                                           |
 | ---- | ------------------------------------------------------------- | ---------------------------------------------------------------- |
 | 1    | `backend/backend/common/apiRoutes.py`                         | Define the route constant and add it to its category group array |
-| 2    | `backend/backend/handlers/\{domain\}/\{handler\}.py`          | Implement Lambda handler with Casbin enforcement                 |
-| 3    | `backend/backend/models/\{domain\}.py`                        | Define request/response models (Pydantic v1)                     |
-| 4    | `infra/lib/lambdaBuilder/\{domain\}Functions.ts`              | Build Lambda with environment variables, permissions, VPC config |
+| 2    | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement                 |
+| 3    | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic v1)                     |
+| 4    | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with environment variables, permissions, VPC config |
 | 5    | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route                               |
 | 6    | `web/src/services/APIService.ts`                              | Add API call method                                              |
-| 7    | `tools/VamsCLI/vamscli/commands/\{group\}.py`                 | Add CLI command, and the endpoint path to `constants.py`         |
+| 7    | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command, and the endpoint path to `constants.py`         |
 | 8    | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it                  |
 | 9    | `documentation/VAMS_API.yaml`                                 | Add the path and its component schemas to the OpenAPI spec       |
-| 10   | `documentation/docusaurus-site/docs/api/\{domain\}.md`        | Add the human-readable endpoint reference                        |
+| 10   | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add the human-readable endpoint reference                        |
 
 Without steering documents, an AI agent might create a handler without the corresponding API Gateway route (resulting in dead code), add a route without a handler (resulting in 500 errors), or stop at the backend and leave the client tooling and documentation describing an API that no longer matches the deployment.
 
@@ -181,15 +181,22 @@ vamscli auth login -u you@example.com
 
 Tools are organized into three tiers, gated by environment variable:
 
-| Tier            | Environment variable                                 | Contents                                                                                                                                                                                                                                                             |
-| :-------------- | :--------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read and search | Always available                                     | Databases, assets, files, metadata, versions, history, asset links, tags, metadata schemas, full-text and geospatial search, allowed API routes; pipelines, pipeline templates and their tag schemas, workflows and their triggers, executions with details and logs |
-| Write           | `VAMS_ENABLE_WRITES=true`                            | Create databases, assets, folders, and version snapshots; update assets and metadata; create and update pipelines, pipeline templates, workflows, and workflow triggers; execute workflows, re-run and abort executions                                              |
-| Destructive     | `VAMS_ENABLE_DESTRUCTIVE=true` (plus writes enabled) | Archive, unarchive, and permanently delete assets; delete databases; archive and unarchive pipelines and workflows; delete pipeline templates and workflow triggers; permanently delete executions                                                                   |
+| Tier            | Environment variable                                 | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read and search | Always available                                     | Databases, assets, files, metadata, versions, history, asset links, tags, metadata schemas, full-text and geospatial search, allowed API routes; pipelines, pipeline templates and their tag schemas, workflows and their triggers, executions with details and logs; Adds comments on an asset version and the two comment listings, subscriptions and their subscription check, and API key reads and listings (administrative and self-service) |
+| Write           | `VAMS_ENABLE_WRITES=true`                            | Create databases, assets, folders, and version snapshots; update assets and metadata; create and update pipelines, pipeline templates, workflows, and workflow triggers; execute workflows, re-run and abort executions; Adds add and update a comment, create and update a subscription, and create and update a metadata schema; create API keys (administrative or self-service) and update their description, expiry and enabled state         |
+| Destructive     | `VAMS_ENABLE_DESTRUCTIVE=true` (plus writes enabled) | Archive, unarchive, and permanently delete assets; delete databases; archive and unarchive pipelines and workflows; delete pipeline templates and workflow triggers; permanently delete executions; Adds delete a comment, delete a subscription, unsubscribe a single subscriber, and delete a metadata schema; delete API keys                                                                                                                   |
 
 Both mutation tiers are **off by default**, and a gated tool is not registered with the host at all — an agent cannot invoke a tool it never receives. Keep destructive tools out of the host's auto-approve list.
 
 Executing a workflow or re-running an execution launches the pipelines it references, which run real AWS compute and can incur cost. Keep those tools out of the auto-approve list as well, even though they sit in the write tier rather than the destructive one.
+
+Four tool behaviours are worth knowing before an agent is allowed to call them, because each reads more narrowly than its name suggests:
+
+-   **`delete_subscription` removes the subscription record and, for an asset, the asset's notification topic**, so every subscriber is unsubscribed. It takes a `subscribers` argument because the API requires one, and that argument plays no part in selecting what is removed. `unsubscribe` is the separate tool that removes one subscriber and leaves the subscription in place.
+-   **The two comment listings are bounded rather than paged.** They apply `max_items` and `page_size` and then discard the continuation token the API returns, so a result cannot be continued from its own output. Each reports `truncated` when it reached the bound in force — the `max_items` supplied, else `page_size`, else the deployment default of 10000 — which makes the count a floor rather than a total. Raise `max_items` rather than reporting the count as complete.
+-   **`delete_metadata_schema` takes no confirmation argument.** The API's required-true `confirmDelete` field is supplied inside the `APIClient`, and the tool is gated behind `VAMS_ENABLE_DESTRUCTIVE` instead, so the destructive tier is the single interlock rather than one of two. Deleting a schema stops the fields being validated on later writes and leaves metadata already stored untouched.
+-   **The API key read tools return key inventory; the two create tools return the key itself.** `get_api_key`, `get_user_api_key`, `list_api_keys` and `list_user_api_keys` report that a key exists and who it acts as; no key value or hash is returned, and the self-service tools report another user's key as not found. `create_api_key` and `create_user_api_key` (write tier) are different: their response carries the one-time key value, a bearer credential with the acting user's permissions, which is recorded wherever the host records tool output. Keep every API key tool out of the auto-approve sample in `tools/VamsMCP/README.md`, and reach for `update_api_key` / `update_user_api_key` with `is_active=False` — the reversible revoke — before the permanent `delete_*_api_key` tools.
 
 The `list_allowed_api_routes` tool reports the routes the authenticated user is authorized to call. Calling it at the start of a session lets an agent scope its plan to what the user can actually do rather than discovering an authorization failure mid-task.
 
@@ -282,7 +289,7 @@ Follow the established pattern for new steering documents:
 
 ### File Placement
 
-Create the workflow document in `.kiro/steering/\{WORKFLOW_NAME\}.md`.
+Create the workflow document in `.kiro/steering/{WORKFLOW_NAME}.md`.
 
 For component-level steering, create a `CLAUDE.md` file in the component's root directory. Reference the root `CLAUDE.md` for the standard sections and conventions to include. If the component warrants a mirrored Kiro front-end-style steering file, copy the `CLAUDE.md` content into `.kiro/steering/` and keep the two in sync.
 

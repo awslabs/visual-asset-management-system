@@ -30,8 +30,8 @@ Associated data such as textures, materials, bills of materials, quality analysi
 
 As an **open-source project** (Apache 2.0), VAMS is designed for extensibility. Organizations can integrate new viewer plugins, upstream data sources, downstream consumers, and custom workflow pipelines — adapting the platform to their specific requirements without vendor lock-in. Several ISVs have built commercial products on top of VAMS, and enterprise customers across defense, energy, manufacturing, and construction have adopted and contributed to the solution.
 
-:::info[Current Version]
-VAMS supports Python 3.12 Lambda runtime, Node.js 22.x, React 17 with Vite build tooling, and AWS CDK v2 infrastructure. See `infra/config/config.ts` for the current version.
+:::info[Runtimes and tooling]
+For the runtime versions and build tooling VAMS deploys with, and the versions you need to install to deploy it, see [Prerequisites](../deployment/prerequisites.md) and the [Developer Guide](../developer/setup.md).
 :::
 
 ---
@@ -41,7 +41,7 @@ VAMS supports Python 3.12 Lambda runtime, Node.js 22.x, React 17 with Vite build
 VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
--   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, and media files directly in the browser through 17 built-in viewer plugins
+-   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, and media files directly in the browser through 20 built-in viewer plugins
 -   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered labeling
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
@@ -53,17 +53,17 @@ VAMS delivers the following core capabilities:
 
 VAMS provides three primary methods for interacting with your visual asset management system. Each method is designed for different use cases and user profiles.
 
-| Feature               | Web Interface                        | Command Line Interface (CLI)                 | Direct API Access                  |
-| --------------------- | ------------------------------------ | -------------------------------------------- | ---------------------------------- |
-| **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations       | Custom integrations, applications  |
-| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 18+ command groups | Full programmatic control via REST |
-| **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic            | Custom upload with presigned URLs  |
-| **3D Viewing**        | 17 interactive viewer plugins        | Not applicable                               | Not applicable                     |
-| **Automation**        | Manual operations                    | Full automation with profile support         | Complete automation control        |
-| **Bulk Operations**   | Limited                              | Optimized for bulk tasks                     | Custom bulk implementations        |
-| **CI/CD Integration** | Not suitable                         | Designed for pipeline integration            | Full integration flexibility       |
-| **Output Modes**      | Visual dashboard                     | JSON output mode (`--json-output`)           | Native JSON responses              |
-| **Learning Curve**    | Minimal                              | Moderate                                     | Requires API knowledge             |
+| Feature               | Web Interface                        | Command Line Interface (CLI)                | Direct API Access                  |
+| --------------------- | ------------------------------------ | ------------------------------------------- | ---------------------------------- |
+| **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations      | Custom integrations, applications  |
+| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 22 command groups | Full programmatic control via REST |
+| **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic           | Custom upload with presigned URLs  |
+| **3D Viewing**        | 20 interactive viewer plugins        | Not applicable                              | Not applicable                     |
+| **Automation**        | Manual operations                    | Full automation with profile support        | Complete automation control        |
+| **Bulk Operations**   | Limited                              | Optimized for bulk tasks                    | Custom bulk implementations        |
+| **CI/CD Integration** | Not suitable                         | Designed for pipeline integration           | Full integration flexibility       |
+| **Output Modes**      | Visual dashboard                     | JSON output mode (`--json-output`)          | Native JSON responses              |
+| **Learning Curve**    | Minimal                              | Moderate                                    | Requires API knowledge             |
 
 ### Web Interface
 
@@ -71,7 +71,7 @@ The web-based interface provides an intuitive, browser-based experience for visu
 
 ### Command Line Interface (VamsCLI)
 
-The VamsCLI offers powerful automation capabilities through 18+ command groups covering assets, databases, files, metadata, pipelines, workflows, search, permissions, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
+The VamsCLI offers powerful automation capabilities through 22 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
 
 ### Direct API Access
 
@@ -97,7 +97,7 @@ AWS GovCloud deployments require `useGlobalVpc.enabled` set to `true`, `useCloud
 
 ## Architecture Overview
 
-VAMS deploys as an AWS CloudFormation stack managed by AWS CDK, consisting of 10 nested stacks that provide modular resource organization.
+VAMS deploys as an AWS CloudFormation stack managed by AWS CDK, organized into nested stacks so that storage, authentication, the API, search, the web distribution, and each optional processing pipeline are provisioned as separable units.
 
 ```mermaid
 graph TB

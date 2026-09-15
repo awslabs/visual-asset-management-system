@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Database User",
-        "description": "Standard user access for a specific database. Can view all data, create/update assets, archive (soft delete) assets, and execute workflows (execute, list, details, paged detail metadata, abort, re-run). Can create and execute workflows in the scoped database \u2014 the workflow POST action covers both. Cannot permanently delete assets, view detailed execution logs, permanently delete executions, create/update/delete pipelines, delete workflows or schemas, delete the database, or use asset ingestion. Can view and execute global pipelines and workflows.",
+        "description": "Standard user access for a specific database. Can view all data, create/update assets, archive (soft delete) assets, and execute workflows (execute, list, details, paged detail metadata, abort, re-run). Can create and execute workflows in the scoped database \u2014 the workflow POST action covers both. Cannot permanently delete assets, view detailed execution logs, permanently delete executions, create/update/delete pipelines, delete workflows or schemas, delete the database, list the registered asset buckets, or use asset ingestion. Can view and execute global pipelines and workflows.",
         "version": "1.0"
     },
     "variables": [
@@ -131,6 +131,11 @@
                 {
                     "field": "route__path",
                     "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
                     "value": "/asset-links"
                 },
                 {
@@ -192,11 +197,6 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/workflows"
-                },
-                {
-                    "field": "route__path",
-                    "operator": "starts_with",
-                    "value": "/buckets"
                 }
             ],
             "groupPermissions": [
@@ -216,6 +216,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/auth/routes"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
                 },
                 {
                     "field": "route__path",

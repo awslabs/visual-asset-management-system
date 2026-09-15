@@ -53,16 +53,38 @@ def _sibling(template_ids):
             "triggerConfig": {"defaultTemplateIds": template_ids}}
 
 
+# The bodies below pick default templates for GLOBAL:pipe1, and a trigger may only name templates of
+# pipelines its parent workflow SPECIFIES, so the workflow row these PUTs run against carries that
+# reference — a workflow specifying nothing has no in-scope template and every such PUT is refused.
+SPECIFIED_PIPELINE = {"pipelineDatabaseId": "GLOBAL", "pipelineId": "pipe1",
+                      "pipelineDatabaseId:pipelineId": "GLOBAL:pipe1",
+                      "jobName": "", "defaultTemplateId": ""}
+# The record the scope check authorizes that pipeline against. `systemConfig` requires no template, so
+# no default-template query follows.
+PIPELINE_ITEM = {"databaseId": "GLOBAL", "pipelineId": "pipe1", "pipelineName": "P",
+                 "systemConfig": {}, "executionConfig": {"executionType": "Lambda"}}
+
+
 @pytest.mark.unit
 class TestMultipleTriggersOfOneType:
     def _put(self, parent, enforcer, claims, params, body, siblings=(), restriction="none"):
         claims.return_value = {"tokens": ["u"]}
         enforcer.return_value = _enforcer()
         parent.return_value = (True, {"databaseId": "db1", "workflowId": "wflow1",
-                                      "systemConfig": {"concurrencyRestriction": restriction}})
+                                      "systemConfig": {"concurrencyRestriction": restriction},
+                                      "specifiedPipelines": [dict(SPECIFIED_PIPELINE)]})
+        # The pipeline the scope check reads and the pipeline the required-template check reads are the
+        # same table; a failed scope read refuses the save, so it is stubbed rather than left to a real
+        # DynamoDB resource.
+        pipelines = MagicMock()
+        pipelines.get_item.return_value = {"Item": dict(PIPELINE_ITEM)}
+        templates = MagicMock()
+        templates.query.return_value = {"Items": []}
         with patch(f"{MOD}._same_type_triggers", return_value=list(siblings)), \
              patch(f"{MOD}.get_trigger", return_value=None), \
              patch(f"{MOD}._triggers_table") as table, \
+             patch(f"{MOD}._pipelines_table", return_value=pipelines), \
+             patch(f"{MOD}._templates_table", return_value=templates), \
              patch(f"{MOD}.validate_trigger_default_templates", return_value=[]), \
              patch(f"{MOD}.log_actions"):
             table.return_value = MagicMock()

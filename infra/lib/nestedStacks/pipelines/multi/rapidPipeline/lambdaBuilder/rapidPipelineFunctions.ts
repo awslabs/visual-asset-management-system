@@ -92,6 +92,7 @@ export function buildOpenPipelineFunction(
     subnets: ec2.ISubnet[],
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
+    containerLogGroup: logs.ILogGroup,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -122,6 +123,10 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // The ECS container's own log group, registered as the run-task state's log source
+            // (streams are `ecs/<container>/<task-id>`).
+            CONTAINER_LOG_GROUP_NAME: containerLogGroup.logGroupName,
+            CONTAINER_LOG_GROUP_ARN: containerLogGroup.logGroupArn,
         },
     });
 
@@ -187,6 +192,30 @@ export function buildConstructPipelineFunction(
             actions: ["s3:PutObject"],
             effect: iam.Effect.ALLOW,
             resources: [assetAuxiliaryBucket.bucketArn + "/*"],
+        })
+    );
+
+    // constructPipeline reports the workflow's waitForCallback token when definition construction
+    // raises. This state is a `tasks.LambdaInvoke` with no `.addCatch`, so a raise ends the pipeline's
+    // state machine before `pipelineEnd` runs and nothing else can report on the token — the run would
+    // display RUNNING for its full taskTimeout.
+    //
+    // The grant must land in the SAME change as the handler's call. Without it the call raises
+    // AccessDeniedException, the handler logs it, and the task hangs exactly as before — the only
+    // difference being one log line. `taskTokenFailureGrants.test.ts` pairs the calling handler with its
+    // builder, so it passes while the handler makes no call and turns red the moment it starts.
+    // Scoped to this deployment's account and region, matching every other pipeline's task-token grant.
+    // A task token names no state machine the builder can resolve, so the resource part stays a
+    // wildcard; the partition/region/account prefix is what keeps it from being an unbounded `*`.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskFailure"],
+            effect: iam.Effect.ALLOW,
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
 

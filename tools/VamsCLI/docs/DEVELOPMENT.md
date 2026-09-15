@@ -403,12 +403,12 @@ Add file upload command with chunking support
 
 When adding new features, update the appropriate documentation files:
 
--   **New commands** → Update [COMMANDS.md](COMMANDS.md)
+-   **New commands** → Update [Command Reference](https://awslabs.github.io/visual-asset-management-system/cli/command-reference)
 -   **Authentication changes** → Update [AUTHENTICATION.md](AUTHENTICATION.md)
 -   **Installation changes** → Update [INSTALLATION.md](INSTALLATION.md)
--   **New troubleshooting** → Update [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+-   **New troubleshooting** → Update [CLI troubleshooting](https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/general)
 -   **Development changes** → Update this file
--   **Major features** → Update main [README.md](README.md)
+-   **Major features** → Update main [README.md](../README.md)
 
 ## Debugging
 
@@ -538,7 +538,7 @@ vamscli assets create
 
 1. **Check existing code** for similar patterns
 2. **Review documentation** in this guide
-3. **Check development workflow** in [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md)
+3. **Check development workflow** in [CLI development guide](https://awslabs.github.io/visual-asset-management-system/cli/development)
 4. **Create GitHub issue** for development questions
 
 ### Code Review
@@ -554,12 +554,12 @@ All contributions go through code review:
 
 -   **Main Repository**: [Visual Asset Management System](https://github.com/awslabs/visual-asset-management-system)
 -   **Issues**: [GitHub Issues](https://github.com/awslabs/visual-asset-management-system/issues)
--   **Development Workflow**: [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md)
+-   **Development Workflow**: [CLI development guide](https://awslabs.github.io/visual-asset-management-system/cli/development)
 -   **Python Packaging**: [Python Packaging Guide](https://packaging.python.org/)
 -   **Click Documentation**: [Click Framework](https://click.palletsprojects.com/)
 
 ## License
 
-VamsCLI is licensed under the Apache License 2.0. See [LICENSE](../../LICENSE) for details.
+VamsCLI is licensed under the Apache License 2.0. See [LICENSE](../../../LICENSE) for details.
 
 All contributions must be compatible with this license.

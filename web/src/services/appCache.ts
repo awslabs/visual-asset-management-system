@@ -21,6 +21,9 @@ class AppCache {
         try {
             localStorage.setItem(`vams_cache_${key}`, JSON.stringify(value));
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`AppCache: Failed to set item '${key}':`, error);
         }
     }
@@ -30,6 +33,9 @@ class AppCache {
             const item = localStorage.getItem(`vams_cache_${key}`);
             return item ? JSON.parse(item) : null;
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`AppCache: Failed to get item '${key}':`, error);
             return null;
         }

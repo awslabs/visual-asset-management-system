@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -11,7 +12,9 @@ from ..constants import (
     DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS, DEFAULT_PARALLEL_DOWNLOADS,
     DEFAULT_DOWNLOAD_RETRY_ATTEMPTS, DEFAULT_DOWNLOAD_TIMEOUT, DEFAULT_IGNORE_FILE_NAME
 )
-from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.decorators import (
+    requires_setup_and_auth, get_profile_manager_from_context, invoked_from_another_command
+)
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
 from ..utils.logging import log_debug
@@ -272,6 +275,9 @@ def push(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
     deleted with --permanent-delete --confirm). Files matching patterns in
     .vamsignore (gitignore syntax) are excluded from the comparison.
 
+    Exits non-zero when the sync did not fully apply, so a partial push is distinguishable from a
+    complete one. The response still reports `overall_success` and the per-file failures.
+
     Examples:
         vamscli sync file push ./models -d db1 -a asset1 --dryrun
         vamscli sync file push ./models -d db1 -a asset1 --allow-modify
@@ -481,6 +487,11 @@ def push(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
                        else "⚠️  Sync push completed with some failures")
         output_result(result, json_output, success_message=success_msg,
                       cli_formatter=format_push_result)
+        # A sync that did not fully apply must not exit 0. `vamscli sync file push ... && <next step>`
+        # would otherwise proceed against an asset missing the files that failed, and the connectors
+        # read the exit code rather than the payload.
+        if not overall_success and not invoked_from_another_command(ctx):
+            sys.exit(1)
         return result
 
     except (SyncError, InvalidFileError, FileTooLargeError, UploadSequenceError,
@@ -539,6 +550,9 @@ def pull(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
     are deleted. Downloaded files keep the remote modified timestamp so later
     syncs can detect changes. Files matching patterns in .vamsignore
     (gitignore syntax) are excluded from the comparison.
+
+    Exits non-zero when the sync did not fully apply, so a partial pull is distinguishable from a
+    complete one. The response still reports `overall_success` and the per-file failures.
 
     Examples:
         vamscli sync file pull ./models -d db1 -a asset1 --dryrun
@@ -752,6 +766,10 @@ def pull(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
                        else "⚠️  Sync pull completed with some failures")
         output_result(result, json_output, success_message=success_msg,
                       cli_formatter=format_pull_result)
+        # Same contract as push: an incomplete local copy must be distinguishable from a complete one
+        # at the exit-code level.
+        if not overall_success and not invoked_from_another_command(ctx):
+            sys.exit(1)
         return result
 
     except (SyncError, AssetNotFoundError, DatabaseNotFoundError) as e:

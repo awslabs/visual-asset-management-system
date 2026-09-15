@@ -51,7 +51,7 @@ export function buildAssetLinksService(
     });
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -89,45 +89,7 @@ export function buildCreateAssetLinkFunction(
     });
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagLambda(fun);
-    return fun;
-}
-
-// New function for metadata operations
-export function buildAssetLinksMetadataFunction(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    config: Config.Config,
-    storageResources: storageResources,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
-    kmsKey?: kms.IKey
-): lambda.Function {
-    const name = "assetLinksMetadataService";
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.assetLinks.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {},
-    });
-    storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
-    storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

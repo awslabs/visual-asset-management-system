@@ -115,6 +115,69 @@ class TestGeoJsonFilterValidation:
         assert model.geoSearch.geoJson["type"] == "Point"
 
 
+def _nested_collection(levels):
+    """A GeometryCollection chain `levels` nodes deep, innermost a valid Point."""
+    geometry = {"type": "Point", "coordinates": [1.0, 2.0]}
+    for _ in range(levels - 1):
+        geometry = {"type": "GeometryCollection", "geometries": [geometry]}
+    return geometry
+
+
+@pytest.mark.unit
+class TestGeoJsonNestingBound:
+    """A submitted geoJson nested past the bound is a 400, not a 500.
+
+    _count_geojson_positions runs before any structural validation and used to recurse once
+    per level, so a deeply nested shape exhausted the stack on the whole search request
+    rather than being refused. The bound itself is shared with the GEOJSON metadata value
+    type so the filter and the indexed value agree on what a valid shape is.
+    """
+
+    def test_accepts_nesting_at_the_bound(self):
+        from models.metadata import MAX_GEOJSON_NESTING_DEPTH
+        from models.search import GeoSearchModel
+        model = GeoSearchModel(geoJson=_nested_collection(MAX_GEOJSON_NESTING_DEPTH))
+        assert model.geoJson["type"] == "GeometryCollection"
+
+    def test_rejects_nesting_one_level_past_the_bound(self):
+        from models.metadata import MAX_GEOJSON_NESTING_DEPTH
+        from models.search import GeoSearchModel
+        with pytest.raises(ValueError) as exc:
+            GeoSearchModel(geoJson=_nested_collection(MAX_GEOJSON_NESTING_DEPTH + 1))
+        assert str(MAX_GEOJSON_NESTING_DEPTH) in str(exc.value)
+
+    def test_rejects_nesting_deep_enough_to_exhaust_the_stack(self):
+        from models.search import GeoSearchModel
+        with pytest.raises(ValueError):
+            GeoSearchModel(geoJson=_nested_collection(2000))
+
+    def test_position_count_walk_survives_deep_nesting(self):
+        """The count itself must not raise: it runs before the depth check refuses the shape."""
+        from models.search import _count_geojson_positions
+        assert _count_geojson_positions(_nested_collection(2000)) == 1
+
+    def test_position_counts_are_unchanged_for_real_shapes(self):
+        from models.search import _count_geojson_positions
+        ring = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0]]
+        assert _count_geojson_positions({"type": "Point", "coordinates": [1, 2]}) == 1
+        assert _count_geojson_positions({"type": "Polygon", "coordinates": [ring]}) == 4
+        assert _count_geojson_positions({
+            "type": "GeometryCollection",
+            "geometries": [
+                {"type": "Point", "coordinates": [0, 0]},
+                {"type": "MultiPoint", "coordinates": [[1, 1], [2, 2]]},
+            ],
+        }) == 3
+        assert _count_geojson_positions({
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}},
+            ],
+        }) == 1
+        assert _count_geojson_positions({"type": "Point"}) == 0
+        assert _count_geojson_positions(None) == 0
+
+
 @pytest.mark.unit
 class TestSearchFilterQueryString:
     """The query_string sub-object is forwarded to OpenSearch verbatim."""

@@ -9,16 +9,25 @@ import time
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="OpenPipelineEKS")
 
 sfn = boto3.client(
     'stepfunctions',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 events_client = boto3.client(
     'events',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 
 # State Machine ARN for starting pipeline execution
@@ -47,6 +56,7 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "RapidPipeline EKS processing",
         },
     }
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
@@ -54,6 +64,8 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
+            "sourceType": "stateMachine",
+            "label": "RapidPipeline EKS state machine",
         }]
     try:
         events_client.put_events(Entries=[{
@@ -182,7 +194,7 @@ def lambda_handler(event, context):
 
             # Log full event if small enough
             if event_size < 2000:
-                logger.info(f"Event: {event}")
+                logger.info("Event", event=event)
             else:
                 logger.info("Event too large to log in full")
 

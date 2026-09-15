@@ -83,13 +83,18 @@ export function Partition() {
 
 export function IAMArn(name: string) {
     return {
-        role: `arn:${
-            region_info.RegionInfo.get(config.env.region).partition || ""
-        }:iam::*:role/${name}`,
+        // The deployment's own account, like every other entry here. The account field was `*`, which
+        // read as a cross-account grant in every policy it rendered into. iam:PassRole only ever
+        // resolves a same-account role, so the effective scope was already this account and pinning it
+        // changes nothing at runtime — it removes a wildcard a reviewer cannot distinguish from a real
+        // cross-account grant.
+        role: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:iam::${
+            config.env.account
+        }:role/${name}`,
 
-        policy: `arn:${
-            region_info.RegionInfo.get(config.env.region).partition || ""
-        }:iam::*:policy/${name}`,
+        policy: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:iam::${
+            config.env.account
+        }:policy/${name}`,
 
         statemachine: `arn:${
             region_info.RegionInfo.get(config.env.region).partition || ""
@@ -98,12 +103,6 @@ export function IAMArn(name: string) {
         statemachineExecution: `arn:${
             region_info.RegionInfo.get(config.env.region).partition || ""
         }:states:${config.env.region}:${config.env.account}:execution:${name}`,
-
-        stateMachineEvents: `arn:${
-            region_info.RegionInfo.get(config.env.region).partition || ""
-        }:event:${config.env.region}:${
-            config.env.account
-        }:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule`,
 
         lambda: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:lambda:${
             config.env.region

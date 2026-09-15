@@ -71,7 +71,12 @@ export class SplatToolboxBuilderNestedStack extends NestedStack {
             // Batch container definition auto-grants the execution role ECR pull
             // permissions via ecs.ContainerImage.fromEcrRepository.
             ...(codeBuildConstruct?.splatToolboxRepo
-                ? { codeBuildRepository: codeBuildConstruct.splatToolboxRepo.repository }
+                ? {
+                      codeBuildImage: {
+                          repository: codeBuildConstruct.splatToolboxRepo.repository,
+                          tag: codeBuildConstruct.splatToolboxRepo.imageTag,
+                      },
+                  }
                 : {}),
         });
 

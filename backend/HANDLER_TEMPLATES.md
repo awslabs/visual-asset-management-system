@@ -82,19 +82,101 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
 
 def handle_get(event):
-    # TODO: Implement
-    pass
+    query_params = event.get('queryStringParameters', {}) or {}
+    item_id = query_params.get('itemId')
+
+    (valid, message) = validate({'itemId': {'value': item_id, 'validator': 'ID'}})
+    if not valid:
+        return validation_error(body={'message': message}, event=event)
+
+    item = table.get_item(Key={'itemId': item_id}).get('Item')
+    if not item:
+        return general_error(body={'message': 'Item not found'}, event=event)
+
+    # Tier-2 authorization. The empty-token guard is its own statement BEFORE enforce().
+    # Wrapping the enforce() in `if len(tokens) > 0:` instead would skip authorization
+    # entirely on an empty token list and fall through to the success below.
+    item['object__type'] = 'CHANGE_ME_objectType'
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not CasbinEnforcer(claims_and_roles).enforce(event, item):
+        return authorization_error()
+
+    return success(body=item)
+
+
+def handle_list(event):
+    """External paging: one page plus an opaque NextToken (see backend/CLAUDE.md Rule 15).
+
+    The token is Base64 so it is a string the request model can accept back, and opaque so
+    callers cannot depend on its interior. Returning the raw LastEvaluatedKey dict here caps
+    the listing at page one with no error anywhere.
+    """
+    query_params = event.get('queryStringParameters', {}) or {}
+    max_items = int(query_params.get('maxItems', str(DEFAULT_PAGE_SIZE)))
+    starting_token = query_params.get('startingToken')
+
+    query_kwargs = {
+        'KeyConditionExpression': Key('databaseId').eq(query_params['databaseId']),
+        'Limit': max_items,
+    }
+    if starting_token:
+        query_kwargs['ExclusiveStartKey'] = json.loads(
+            base64.b64decode(starting_token).decode('utf-8')
+        )
+
+    response = table.query(**query_kwargs)
+
+    allowed = []
+    for item in response.get('Items', []):
+        # List filtering is the one Tier-2 shape that may test tokens as a condition:
+        # it appends on success, so empty tokens produce an empty list, not an unfiltered one.
+        item['object__type'] = 'CHANGE_ME_objectType'
+        if len(claims_and_roles["tokens"]) > 0 and CasbinEnforcer(claims_and_roles).enforce(event, item):
+            allowed.append(item)
+
+    result = {'Items': allowed}
+    if 'LastEvaluatedKey' in response:
+        result['NextToken'] = base64.b64encode(
+            json.dumps(response['LastEvaluatedKey']).encode('utf-8')
+        ).decode('utf-8')
+    return success(body=result)
+
+
+def _all_rows_for_database(database_id):
+    """Read to exhaustion: for when THIS HANDLER needs every row (cascade delete, cycle
+    check, existence test) rather than the caller.
+
+    A single query returns at most 1 MB, and a FilterExpression is applied only to what
+    that call already read — so one un-looped call is neither a complete listing nor a
+    valid existence check (backend/CLAUDE.md Rule 14). Terminate on key PRESENCE: against
+    a MagicMock, `response.get('LastEvaluatedKey')` is truthy forever and the loop never
+    ends, while `in` resolves False and exits.
+    """
+    rows = []
+    query_kwargs = {'KeyConditionExpression': Key('databaseId').eq(database_id)}
+    while True:
+        response = table.query(**query_kwargs)
+        rows.extend(response.get('Items', []))
+        if 'LastEvaluatedKey' not in response:
+            break
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    return rows
 
 
 def handle_put(event):
-    # TODO: Implement
+    # TODO: Implement — same Tier-2 shape as handle_get before any write
     pass
 
 
 def handle_delete(event):
-    # TODO: Implement
+    # TODO: Implement — same Tier-2 shape as handle_get before any write
     pass
 ```
+
+The `handle_list` and `_all_rows_for_database` helpers above need these imports added to the
+header block: `import base64`, `import json`, `from boto3.dynamodb.conditions import Key`, and a
+`DEFAULT_PAGE_SIZE` module constant.
 
 ---
 
@@ -115,9 +197,16 @@ logger = safeLogger(service_name="CHANGE_ME_Models")
 
 class CreateItemRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new item"""
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    itemName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
-    description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
+    # `regex=` is the Pydantic v1 spelling. `pattern=` is v2 and is SILENTLY SWALLOWED into
+    # FieldInfo.extra — the model imports cleanly, every test passes, and the field is
+    # unconstrained. Same for `strip_whitespace=` on Field(): it is a Config/constr option,
+    # not a field constraint, so use the Config below when a value must be stripped.
+    databaseId: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    itemName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: str = Field(min_length=4, max_length=256)
+
+    class Config:
+        anystr_strip_whitespace = True
 
     @root_validator
     def validate_fields(cls, values):
@@ -135,9 +224,17 @@ class ItemResponseModel(BaseModel, extra='ignore'):
 
 class UpdateItemRequestModel(BaseModel, extra='ignore'):
     """Request model for updating an item"""
-    itemName: Optional[str] = Field(None, min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
-    description: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True)
+    itemName: Optional[str] = Field(None, min_length=1, max_length=256, regex=object_name_pattern)
+    description: Optional[str] = Field(None, min_length=4, max_length=256)
+
+    class Config:
+        anystr_strip_whitespace = True
 ```
+
+`tests/models/test_no_dead_field_kwargs.py` fails on any swallowed `pattern=`, so scaffolding a
+model with the v2 spelling breaks the suite rather than shipping an unconstrained field. That test
+also holds a hard count of the pre-existing inert `strip_whitespace=` declarations, so adding one
+more from a template would fail it too — which is why the template no longer carries any.
 
 ---
 

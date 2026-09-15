@@ -137,7 +137,12 @@ started with inputs that differ from what was named.
     (snapshots you can revert between).
 -   **Metadata** — key/value data on databases, assets, files, and asset links
     (may be governed by metadata schemas).
--   **Tag / Tag type** — categorization for assets.
+-   **Tag / Tag type** — categorization for assets. Each is either **GLOBAL** (usable in every
+    database) or scoped to one database, so a name is unique per database rather than system-wide:
+    the same tag name can exist independently in two databases. Identify one by name **and** scope,
+    never by name alone. A name cannot be both GLOBAL and database-specific, so an asset's tag names
+    always resolve unambiguously within its own database plus GLOBAL. Listing by database returns
+    only that database's entries — read the global scope separately when you need both.
 -   **Asset link** — a typed relationship between assets (related/parent/child).
 -   **Pipeline / Template / Workflow / Execution** — the processing engine. These
     are four distinct entities with their own command groups; see

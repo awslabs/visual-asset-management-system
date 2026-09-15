@@ -13,6 +13,8 @@ import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { CfnJobDefinition, CfnComputeEnvironment, CfnJobQueue } from "aws-cdk-lib/aws-batch";
 import path = require("path");
+import { suppressCdkNagEcrAuthTokenWildcard } from "../../../helper/security";
+import { Service } from "../../../helper/service-helper";
 
 export interface BatchGpuPipelineConstructProps extends cdk.StackProps {
     vpc: ec2.IVpc;
@@ -22,7 +24,11 @@ export interface BatchGpuPipelineConstructProps extends cdk.StackProps {
     executionRole: iam.Role;
     imageAssetPath: string;
     dockerfileName: string;
-    codeBuildRepository?: ecr.IRepository;
+    /**
+     * CodeBuild-produced ECR image. The tag travels with the repository in one prop because the tag
+     * the job definition names and the tag CodeBuild pushes have to be the same string.
+     */
+    codeBuildImage?: { repository: ecr.IRepository; tag: string };
     containerExecutionCommand: string[];
     batchJobDefinitionName: string;
     // Optional GPU-specific configurations
@@ -63,7 +69,7 @@ export class BatchGpuPipelineConstruct extends Construct {
 
         // Create batch service role
         const batchServiceRole = new iam.Role(this, "BatchServiceRole", {
-            assumedBy: new iam.ServicePrincipal("batch.amazonaws.com"),
+            assumedBy: Service("BATCH").Principal,
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSBatchServiceRole"),
             ],
@@ -71,7 +77,7 @@ export class BatchGpuPipelineConstruct extends Construct {
 
         // Create instance role and profile
         const instanceRole = new iam.Role(this, "BatchInstanceRole", {
-            assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
+            assumedBy: Service("EC2").Principal,
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonEC2ContainerServiceforEC2Role"
@@ -174,9 +180,16 @@ chmod 775 /mnt/workspace
         // Container image resolution. A CodeBuild-built ECR repository is used directly, which
         // avoids a slow local Docker build of the large GPU image; otherwise the image is built
         // locally from imageAssetPath.
-        const containerImage = props.codeBuildRepository
-            ? ecs.ContainerImage.fromEcrRepository(props.codeBuildRepository, "latest")
-            : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
+        const containerImage = props.codeBuildImage
+            ? ecs.ContainerImage.fromEcrRepository(
+                  props.codeBuildImage.repository,
+                  props.codeBuildImage.tag
+              )
+            : // Synth-time asset path built from __dirname and a construct prop that the calling
+              // construct hard-codes; CDK resolves it on the operator's machine, never from request
+              // input.
+              // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+              ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
                   file: props.dockerfileName,
                   platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
               });
@@ -193,6 +206,11 @@ chmod 775 /mnt/workspace
                 streamPrefix: "batch-temp",
             }),
         });
+
+        // Binding a container image gives this task definition's execution role
+        // `ecr:GetAuthorizationToken` on `*`, which is the only form Amazon ECR accepts for it. Named
+        // here rather than covered by a blanket, so an unrelated wildcard acquired later still surfaces.
+        suppressCdkNagEcrAuthTokenWildcard(tempTaskDef);
 
         // Build container properties dynamically based on configuration
         const containerProperties: any = {

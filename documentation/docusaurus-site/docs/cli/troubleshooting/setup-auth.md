@@ -87,7 +87,7 @@ The minimum supported VAMS API version is `2.2`. Connecting to an older deployme
 
 ## Authentication Issues
 
-VamsCLI supports two authentication paths: Amazon Cognito (username and password, including MFA and forced password changes) and override tokens for deployments that use an external identity provider.
+VamsCLI supports two authentication paths: Amazon Cognito (username and password, including MFA and forced password changes) and override tokens for identities that have no password in the user pool — a deployment with an external identity provider, or an Amazon Cognito user pool federated to SAML or OIDC.
 
 ### Cognito Authentication Failed
 
@@ -113,7 +113,7 @@ The username or password is incorrect, or the Amazon Cognito account has not bee
 
 **Cause:**
 
-The deployment uses an external identity provider rather than Amazon Cognito, so username and password login is unavailable.
+The deployment uses an external identity provider rather than Amazon Cognito, so username and password login is unavailable. A federated Amazon Cognito user pool (SAML or OIDC) produces the same result for a **federated** user: the identity lives in the external provider and has no password in the pool. The pool's **native** users, such as the initial administrator, can still sign in with `--username`.
 
 **Resolution:**
 

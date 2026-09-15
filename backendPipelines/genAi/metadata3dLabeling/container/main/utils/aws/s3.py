@@ -8,11 +8,18 @@ from botocore.exceptions import ClientError
 from ..logging import log
 from boto3.s3.transfer import TransferConfig
 from ..pipeline.extensions import split_large_file
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = log.get_logger()
 
-client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-s3 = boto3.resource('s3', region_name=os.getenv("AWS_REGION", "us-east-1"))
+client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
+s3 = boto3.resource('s3', region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
 
 
 def download(bucket_name, object_key, file_path):

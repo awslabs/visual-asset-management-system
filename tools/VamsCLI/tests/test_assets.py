@@ -1561,7 +1561,9 @@ class TestAssetDownloadCommand:
                 '-a', 'test-asset'
             ])
             
-            assert result.exit_code == 0
+            # A partial download must be distinguishable from a complete one at the exit-code level
+            # (FIX for S6-TOOLS-009); the payload and per-file detail are still emitted first.
+            assert result.exit_code != 0
             assert '⚠ Download completed with errors' in result.output
             assert 'Total files: 2' in result.output
             assert 'Successful: 1' in result.output

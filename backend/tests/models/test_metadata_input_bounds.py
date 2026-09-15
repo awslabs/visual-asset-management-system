@@ -9,6 +9,7 @@ large GeoJSON and JSON blobs, so the accept cases assert those stay valid.
 """
 
 import json
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -57,6 +58,104 @@ class TestMetadataItemValueBounds:
             metadataValueType="geojson",
         )
         assert json.loads(model.metadataValue)["type"] == "Polygon"
+
+
+def _nested_collection_json(levels):
+    """A GeometryCollection chain `levels` nodes deep, built as text.
+
+    json.dumps recurses once per level and would run out of stack building the deepest
+    fixtures here, so the string is assembled directly.
+    """
+    return (
+        '{"type":"GeometryCollection","geometries":[' * (levels - 1)
+        + '{"type":"Point","coordinates":[1.0,2.0]}'
+        + "]}" * (levels - 1)
+    )
+
+
+@pytest.mark.unit
+class TestGeoJsonNestingBound:
+    """A GeoJSON value nested past MAX_GEOJSON_NESTING_DEPTH is refused, not walked.
+
+    _validate_geometry recurses once per GeometryCollection level, so an unbounded value
+    exhausted the interpreter stack: the request 500'd instead of being rejected. The same
+    value is reachable through the metadata write API, metadata-schema defaults, asset-link
+    metadata and the search geoJson filter, which all run this one validator.
+    """
+
+    def _model(self, value):
+        from models.metadata import MetadataItemModel
+        return MetadataItemModel(
+            metadataKey="footprint", metadataValue=value, metadataValueType="geojson"
+        )
+
+    def test_accepts_nesting_at_the_bound(self):
+        from models.metadata import MAX_GEOJSON_NESTING_DEPTH
+        value = _nested_collection_json(MAX_GEOJSON_NESTING_DEPTH)
+        assert json.loads(value)["type"] == "GeometryCollection"
+        assert self._model(value).metadataValue == value
+
+    def test_rejects_nesting_one_level_past_the_bound(self):
+        from models.metadata import MAX_GEOJSON_NESTING_DEPTH
+        with pytest.raises(ValidationError) as exc:
+            self._model(_nested_collection_json(MAX_GEOJSON_NESTING_DEPTH + 1))
+        assert str(MAX_GEOJSON_NESTING_DEPTH) in str(exc.value)
+
+    def test_rejects_nesting_deep_enough_to_exhaust_the_stack(self):
+        """1200 levels parse cleanly, so the walk is what used to raise RecursionError."""
+        from models.metadata import MAX_METADATA_VALUE_LENGTH
+        value = _nested_collection_json(1200)
+        assert len(value) < MAX_METADATA_VALUE_LENGTH
+        assert json.loads(value)["type"] == "GeometryCollection"
+        with pytest.raises(ValidationError):
+            self._model(value)
+
+    def test_a_parser_recursion_error_is_refused_not_propagated(self):
+        """`json.loads` signals a value nested past its OWN limit with `RecursionError`, not a decode
+        error, so a guard catching only `json.JSONDecodeError` lets it escape the validator and become
+        a 500 instead of a 400.
+
+        The DEPTH at which the parser gives up is a property of the interpreter, not of VAMS. 4000
+        levels raise on CPython 3.13 for Windows and parse cleanly on the same version for Linux,
+        where the thread stack is larger — so an arm written against a literal depth asserted the host
+        and passed locally while failing in CI on identical code. The failure is forced directly here,
+        which tests the guard instead.
+        """
+        from models import metadata as metadata_module
+
+        # Shallow and valid on purpose: the forced RecursionError must be the ONLY reason this value
+        # can be refused. A value the depth bound rejects first would let the arm pass without ever
+        # reaching the except clause under test.
+        value = _nested_collection_json(1)
+        assert self._model(value).metadataValue == value, (
+            "control: this value must be ACCEPTED unpatched, otherwise the assertion below cannot "
+            "tell the RecursionError guard from an unrelated rejection")
+
+        def _exhaust_the_stack(*args, **kwargs):
+            raise RecursionError("maximum recursion depth exceeded while decoding a JSON object")
+
+        with patch.object(metadata_module.json, "loads", _exhaust_the_stack):
+            with pytest.raises(ValidationError):
+                self._model(value)
+
+    def test_geopoint_and_json_types_also_refuse_an_unparseable_value(self):
+        """Every JSON-parsing value type refuses a value the parser cannot read.
+
+        The value is TRUNCATED rather than deeply nested. Deep nesting is only unparseable on an
+        interpreter whose stack it happens to exhaust, and where it parses, a `json`-typed value that
+        parses is legitimately valid — so a nesting-based fixture made this arm assert the host rather
+        than the model.
+        """
+        from models.metadata import MetadataItemModel
+        value = '{"type": "Point", "coordinates": [1.0, 2.0'
+        # Control on the fixture: unparseable on every interpreter, for a reason that is not depth.
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(value)
+        for value_type in ("geopoint", "json", "matrix4x4", "xyz", "wxyz", "lla"):
+            with pytest.raises(ValidationError):
+                MetadataItemModel(
+                    metadataKey="k", metadataValue=value, metadataValueType=value_type
+                )
 
 
 def _items(count):

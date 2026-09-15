@@ -1,7 +1,7 @@
 {
     "pipelineName": "NVIDIA Cosmos Reason 8B",
-    "category": "GenAI",
-    "description": "NVIDIA Cosmos Reason 8B - Vision Language Model for video/image analysis and reasoning",
+    "category": "WFM",
+    "description": "NVIDIA Cosmos Reason 8B - Vision Language Model for video analysis and reasoning",
     "executionConfig": {
         "executionType": "Lambda",
         "waitForCallback": "Enabled",
@@ -22,7 +22,7 @@
         "requireTemplate": true,
         "allowCustomTemplateOverride": true,
         "inputFileFilters": {
-            "allow": ["*.mp4", "*.mov", "*.jpg", "*.jpeg", "*.png", "*.webp"],
+            "allow": ["*.mp4", "*.mov"],
             "exclude": []
         }
     }

@@ -8,16 +8,25 @@ import datetime
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="OpenPipeline")
 
 sfn = boto3.client(
     'stepfunctions',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 events_client = boto3.client(
     'events',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
@@ -26,6 +35,13 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# The ECS container's own log group; its log source is registered only when configured.
+CONTAINER_LOG_GROUP_NAME = os.environ.get("CONTAINER_LOG_GROUP_NAME", "")
+CONTAINER_LOG_GROUP_ARN = os.environ.get("CONTAINER_LOG_GROUP_ARN", "")
+# The ECS run-task state of this pipeline's state machine (its CDK construct id); the container
+# writes under the `ecs/` stream prefix of the group above.
+CONTAINER_STATE_NAME = "RapidPipelineRunFargate"
+CONTAINER_LOG_STREAM_PREFIX = "ecs/"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
@@ -37,9 +53,24 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def container_log_entry():
+    """The log source for the ECS run-task state's container. None when the group is not configured."""
+    if not (CONTAINER_LOG_GROUP_NAME or CONTAINER_LOG_GROUP_ARN):
+        return None
+    return {
+        "logGroupArn": CONTAINER_LOG_GROUP_ARN,
+        "logGroupName": CONTAINER_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": CONTAINER_LOG_STREAM_PREFIX,
+        "stageName": CONTAINER_STATE_NAME,
+        "sourceType": "container",
+        "label": f"{CONTAINER_STATE_NAME} container",
+    }
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    """Best-effort report of this sub-SFN execution to the VAMS orchestration bus; failures are swallowed."""
+    """Best-effort report of this sub-SFN execution + its log sources to the VAMS orchestration bus; failures are swallowed."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -53,14 +84,23 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "RapidPipeline processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "RapidPipeline state machine",
+        })
+    container_log = container_log_entry()
+    if container_log:
+        logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,
@@ -78,7 +118,7 @@ def lambda_handler(event, context):
     Starts StepFunctions State Machine for processing 
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     responses = []
@@ -86,6 +126,12 @@ def lambda_handler(event, context):
     # Get the input metadata + input-configuration S3 locations
     input_metadata_s3_location = event.get('inputMetadataS3Location', '')
     input_configuration_s3_location = event.get('inputConfigurationS3Location', '')
+
+    # The input manifest S3 location and the assetId locate the input file within its asset. The
+    # constructPipeline state reads them to keep the converted file under the same subdirectory
+    # within the asset as its source file, so both travel in the state machine input.
+    input_manifest_s3_location = event.get('inputManifestS3Location', '')
+    asset_id = event.get('assetId', '')
 
     # Orchestration event prefix for optional sub-process registration
     orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
@@ -116,8 +162,13 @@ def lambda_handler(event, context):
     # Extract the root name and extension from the input key
     file_root, extension = os.path.splitext(input_s3_asset_files_uri)
 
-    # Check to make sure we are working with the right file types (if not, exit)
-    if (not extension or extension == '' or extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
+    # Validate the extension against exact members of the comma-separated allow list. A containment
+    # test against the joined string accepts any prefix of a listed extension ('.gl' against
+    # '.glb,.gltf'), which admits a file the container cannot read.
+    allowed_extensions = [ext.strip().lower() for ext in ALLOWED_INPUT_FILEEXTENSIONS.split(',')
+                          if ext.strip()]
+
+    if (not extension or extension.lower() not in allowed_extensions):
         abort_external_workflow("Pipeline cannot process file type provided", external_sfn_task_token)
         return {
             'statusCode': 400,
@@ -139,6 +190,8 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        "inputManifestS3Location": input_manifest_s3_location,
+        "assetId": asset_id,
         "externalSfnTaskToken": external_sfn_task_token,
         "outputFileType": output_file_type
     }
@@ -185,7 +238,11 @@ def lambda_handler(event, context):
 
     # Loop through responses and see if any have errors; If so return 500 error response
     for response in responses:
-        if "error" in response['body']:
+        # Keyed on the status code, not on an "error" key. Every failure route above appends a
+        # body carrying only "message", so the key test matched nothing and execution fell
+        # through to the success return below -- which dereferences sfn_response, unbound
+        # whenever the failure happened before it was assigned.
+        if response.get('statusCode', 200) >= 400:
             return response
 
     # Return success 200 response

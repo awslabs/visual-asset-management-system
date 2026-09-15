@@ -19,7 +19,7 @@ describe("DataTable", () => {
             { header: "Name", accessorKey: "name" },
         ];
 
-        render(<DataTable columns={columns} rows={rows} pageSize={10} />);
+        render(<DataTable columns={columns} rows={rows} ariaLabel="Rows" pageSize={10} />);
 
         // Should see rows 1-10 initially
         expect(screen.getByText("Row 1")).toBeInTheDocument();
@@ -48,7 +48,9 @@ describe("DataTable", () => {
         ];
         const onRowClick = jest.fn();
 
-        render(<DataTable columns={columns} rows={rows} onRowClick={onRowClick} />);
+        render(
+            <DataTable columns={columns} rows={rows} ariaLabel="Rows" onRowClick={onRowClick} />
+        );
 
         await userEvent.click(screen.getByText("Beta"));
         expect(onRowClick).toHaveBeenCalledTimes(1);
@@ -62,7 +64,7 @@ describe("DataTable", () => {
         ];
         const columns = [{ header: "Name", accessorKey: "name" }];
 
-        render(<DataTable columns={columns} rows={rows} filtering={false} />);
+        render(<DataTable columns={columns} rows={rows} ariaLabel="Rows" filtering={false} />);
 
         const header = screen.getByRole("columnheader", { name: /Name/ });
         expect(header).toHaveAttribute("aria-sort", "none");
@@ -82,6 +84,7 @@ describe("DataTable", () => {
             <DataTable
                 columns={columns}
                 rows={rows}
+                ariaLabel="Rows"
                 onRowClick={onRowClick}
                 filtering={false}
                 sorting={false}
@@ -122,7 +125,13 @@ describe("DataTable", () => {
         const getRowId = (row: any) => String(row.id);
 
         const { rerender } = render(
-            <DataTable columns={columns} rows={first} getRowId={getRowId} filtering={false} />
+            <DataTable
+                columns={columns}
+                rows={first}
+                ariaLabel="Rows"
+                getRowId={getRowId}
+                filtering={false}
+            />
         );
 
         await userEvent.click(screen.getByRole("button", { name: "mark Alpha" }));
@@ -133,6 +142,7 @@ describe("DataTable", () => {
             <DataTable
                 columns={columns}
                 rows={[first[1], first[0]]}
+                ariaLabel="Rows"
                 getRowId={getRowId}
                 filtering={false}
             />
@@ -140,5 +150,96 @@ describe("DataTable", () => {
 
         expect(screen.getByRole("button", { name: "marked Alpha" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "mark Beta" })).toBeInTheDocument();
+    });
+
+    it("names the table, so several on one page can be told apart", () => {
+        render(
+            <DataTable
+                columns={[{ header: "Name", accessorKey: "name" }]}
+                rows={[{ name: "Alpha" }]}
+                ariaLabel="Output files"
+                filtering={false}
+            />
+        );
+
+        expect(screen.getByRole("table", { name: "Output files" })).toBeInTheDocument();
+        // Control: the name is the supplied one, not any table at all.
+        expect(screen.queryByRole("table", { name: "Input files" })).not.toBeInTheDocument();
+    });
+
+    it("offers a sort control only for a column that can actually sort", () => {
+        render(
+            <DataTable
+                columns={[
+                    { header: "Name", accessorKey: "name" },
+                    // No accessor — a display column, which react-table cannot sort even though it
+                    // still hands back a toggle handler for it.
+                    { header: "Duration", id: "duration", cell: () => <span>1m</span> },
+                ]}
+                rows={[{ name: "Alpha" }]}
+                ariaLabel="Rows"
+                filtering={false}
+            />
+        );
+
+        // Control: the sortable column DOES get a button, so the negative below is not vacuous.
+        expect(screen.getByRole("button", { name: /Name/ })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /Duration/ })).not.toBeInTheDocument();
+        expect(screen.getByRole("columnheader", { name: /Duration/ })).not.toHaveAttribute(
+            "aria-sort"
+        );
+    });
+
+    it("qualifies an applied sort when the caller says the rows are only part of the set", async () => {
+        render(
+            <DataTable
+                columns={[{ header: "Name", accessorKey: "name" }]}
+                rows={[{ name: "Beta" }, { name: "Alpha" }]}
+                ariaLabel="Rows"
+                filtering={false}
+                sortScopeNote="Sorted within the 2 rows loaded so far."
+            />
+        );
+
+        // Control: with no sort applied there is nothing to qualify, so the note must be absent.
+        expect(screen.queryByText(/Sorted within/)).not.toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole("button", { name: /Name/ }));
+        expect(screen.getByText("Sorted within the 2 rows loaded so far.")).toBeInTheDocument();
+    });
+
+    it("describes what activating a clickable row does", () => {
+        render(
+            <DataTable
+                columns={[{ header: "Name", accessorKey: "name" }]}
+                rows={[{ name: "Alpha" }]}
+                ariaLabel="Rows"
+                onRowClick={jest.fn()}
+                filtering={false}
+                sorting={false}
+            />
+        );
+
+        const row = screen.getByRole("row", { name: /Alpha/ });
+        const describedBy = row.getAttribute("aria-describedby");
+        expect(describedBy).toBeTruthy();
+        expect(document.getElementById(describedBy as string)).toHaveTextContent(
+            /Press Enter on a row/
+        );
+    });
+
+    it("does not describe rows as activatable when they are not", () => {
+        render(
+            <DataTable
+                columns={[{ header: "Name", accessorKey: "name" }]}
+                rows={[{ name: "Alpha" }]}
+                ariaLabel="Rows"
+                filtering={false}
+                sorting={false}
+            />
+        );
+
+        expect(screen.getByRole("row", { name: /Alpha/ })).not.toHaveAttribute("aria-describedby");
+        expect(screen.queryByText(/Press Enter on a row/)).not.toBeInTheDocument();
     });
 });

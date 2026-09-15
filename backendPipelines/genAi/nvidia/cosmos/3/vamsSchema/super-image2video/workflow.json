@@ -1,6 +1,6 @@
 {
     "workflowName": "NVIDIA Cosmos 3 Super Image2Video (64B)",
-    "category": "GenAI",
+    "category": "WFM",
     "description": "NVIDIA Cosmos 3 Super Image2Video (64B)",
     "triggers": [
         {

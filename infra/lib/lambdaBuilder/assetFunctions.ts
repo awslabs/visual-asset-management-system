@@ -33,6 +33,14 @@ import {
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
+/**
+ * Auxiliary-bucket prefix the asset export service stages an over-size export payload under
+ * before handing back a presigned URL for it. Mirrors EXPORT_STAGING_PREFIX in
+ * backend/backend/handlers/assets/assetExportService.py — the export function's S3 grant is
+ * scoped to this prefix, so the two values move together.
+ */
+export const ASSET_EXPORT_STAGING_PREFIX = "assetExports/";
+
 export function buildCreateAssetFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -41,7 +49,12 @@ export function buildCreateAssetFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
+    // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
+    // made this a publish grant against any account's topics of that name.
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const name = "createAsset";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
@@ -78,7 +91,7 @@ export function buildCreateAssetFunction(
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ["sns:CreateTopic", "sns:ListTopics"],
+            actions: ["sns:CreateTopic"],
             resources: [assetTopicWildcardArn],
         })
     );
@@ -97,7 +110,9 @@ export function buildAssetService(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const name = "assetService";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
@@ -124,6 +139,8 @@ export function buildAssetService(
     storageResources.dynamo.assetHistoryStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.tagStorageTable.grantReadData(fun);
+    storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
@@ -140,7 +157,7 @@ export function buildAssetService(
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ["sns:CreateTopic", "sns:ListTopics", "sns:DeleteTopic"],
+            actions: ["sns:CreateTopic", "sns:DeleteTopic"],
             resources: [assetTopicWildcardArn],
         })
     );
@@ -609,6 +626,20 @@ export function buildAssetExportService(
 
     // Grant read permissions to all asset buckets for file listing and presigned URLs
     grantReadPermissionsToAllAssetBuckets(fun);
+
+    // An export payload above the inline response size is written to the auxiliary bucket under
+    // the staging prefix and returned as a presigned GET. A query-string presigned URL is
+    // authorized as the signing role, so the same object needs s3:GetObject alongside
+    // s3:PutObject. KMS Decrypt/GenerateDataKey for a CMK-encrypted bucket come from
+    // kmsKeyLambdaPermissionAddToResourcePolicy below.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["s3:PutObject", "s3:GetObject"],
+            resources: [
+                `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${ASSET_EXPORT_STAGING_PREFIX}*`,
+            ],
+        })
+    );
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

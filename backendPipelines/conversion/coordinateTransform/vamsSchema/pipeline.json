@@ -1,7 +1,7 @@
 {
     "pipelineName": "Coordinate Transform",
     "category": "Conversion",
-    "description": "Coordinate Transform Pipeline - Reprojects E57, LAS, LAZ, and PLY point clouds between coordinate reference systems",
+    "description": "Coordinate Transform Pipeline - Reprojects E57, LAS, and LAZ point clouds between coordinate reference systems",
     "executionConfig": {
         "executionType": "Lambda",
         "waitForCallback": "Enabled",
@@ -22,7 +22,7 @@
         "requireTemplate": true,
         "allowCustomTemplateOverride": true,
         "inputFileFilters": {
-            "allow": ["*.e57", "*.las", "*.laz", "*.ply"],
+            "allow": ["*.e57", "*.las", "*.laz"],
             "exclude": []
         }
     }

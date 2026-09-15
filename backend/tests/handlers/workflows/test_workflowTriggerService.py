@@ -2,16 +2,37 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for the workflow trigger handler (workflowTriggerService). Parent-workflow Tier-2 auth
-+ trigger CRUD; CasbinEnforcer/request_to_claims/tables patched. IDs >=3 chars (isolation-safe)."""
++ trigger CRUD; CasbinEnforcer/request_to_claims/tables patched. IDs >=3 chars (isolation-safe).
 
+A trigger's default templates are additionally scoped to the pipelines the parent workflow specifies,
+so `WF_ITEM` carries the `specifiedPipelines` snapshot naming the pipeline these bodies pick a template
+for. That entry is load-bearing: a workflow row that specifies nothing can have no in-scope template,
+and every PUT below that names one would be refused. Scope-rejection behaviour itself is covered by
+test_workflowTriggerService_template_scope.py."""
+
+import importlib.util
 import json
+import os
+import pathlib
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.backend.handlers.workflows import workflowTriggerService as _wts
 from backend.backend.handlers.workflows.workflowTriggerService import lambda_handler
 
 MOD = "backend.backend.handlers.workflows.workflowTriggerService"
+
+# The root conftest replaces `common.dynamodb` with a MagicMock whose `validate_pagination_info`
+# fills nothing, so the listing's PaginationConfig would read absent keys. Load the real helper by
+# path for the listing test; the paging contract itself lives in
+# test_workflowTriggerService_paging.py.
+_real_ddb_spec = importlib.util.spec_from_file_location(
+    "_real_common_dynamodb_for_trigger_handler",
+    os.fspath(pathlib.Path(_wts.__file__).parents[2] / "common" / "dynamodb.py"))
+_real_ddb = importlib.util.module_from_spec(_real_ddb_spec)
+_real_ddb_spec.loader.exec_module(_real_ddb)
+REAL_VALIDATE_PAGINATION_INFO = _real_ddb.validate_pagination_info
 
 
 def _event(method, path, path_params, body=None):
@@ -31,10 +52,36 @@ def _enforcer(api=True, obj=True):
     return inst
 
 
-WF_ITEM = {"databaseId": "db1", "workflowId": "wflow1", "workflowName": "W"}
+WF_ITEM = {"databaseId": "db1", "workflowId": "wflow1", "workflowName": "W",
+           "specifiedPipelines": [
+               {"pipelineDatabaseId": "db1", "pipelineId": "pipe1",
+                "pipelineDatabaseId:pipelineId": "db1:pipe1",
+                "jobName": "", "defaultTemplateId": ""},
+           ]}
+# The record the scope check and the required-template check read for that pipeline. `systemConfig`
+# requires no template, so no default-template query follows.
+PIPELINE_ITEM = {"databaseId": "db1", "pipelineId": "pipe1", "pipelineName": "P",
+                 "systemConfig": {}, "executionConfig": {"executionType": "Lambda"}}
 BASE = "/database/db1/workflows/wflow1/triggers"
 PARAMS = {"databaseId": "db1", "workflowId": "wflow1"}
 TPARAMS = {"databaseId": "db1", "workflowId": "wflow1", "triggerType": "fileUpload"}
+
+
+@pytest.fixture(autouse=True)
+def _stub_lookup_tables():
+    """The two lookup tables the template checks read, stubbed for every test in this module.
+
+    An unstubbed read would reach a real DynamoDB resource and fail, which the two checks answer
+    differently: the required-template check treats a failed lookup as "skip the check" and would let
+    these tests pass for the wrong reason, while the template scope check authorizes against the
+    pipeline record and would refuse every PUT that names a template."""
+    pipelines = MagicMock()
+    pipelines.get_item.return_value = {"Item": dict(PIPELINE_ITEM)}
+    templates = MagicMock()
+    templates.query.return_value = {"Items": []}
+    with patch(f"{MOD}._pipelines_table", return_value=pipelines), \
+         patch(f"{MOD}._templates_table", return_value=templates):
+        yield
 
 
 @pytest.mark.unit
@@ -185,23 +232,27 @@ class TestWorkflowTriggerService:
         resp = lambda_handler(_event("GET", BASE + "/fileUpload", TPARAMS), MagicMock())
         assert resp["statusCode"] == 404
 
-    @patch(f"{MOD}._triggers_table")
+    @patch(f"{MOD}.validate_pagination_info", REAL_VALIDATE_PAGINATION_INFO)
+    @patch(f"{MOD}.dynamodb")
     @patch(f"{MOD}._enforce_parent_workflow")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
-    def test_list_triggers(self, mock_enforcer, mock_claims, mock_parent, mock_table):
+    def test_list_triggers(self, mock_enforcer, mock_claims, mock_parent, mock_dynamodb):
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, WF_ITEM)
-        table = MagicMock()
-        table.query.return_value = {"Items": [
+        # The listing is served through the botocore paginator, so the read is stubbed there
+        # rather than on the table resource.
+        paginator = MagicMock()
+        paginator.paginate.return_value.build_full_result.return_value = {"Items": [
             {"workflowDatabaseId": "db1", "workflowId": "wflow1", "triggerType": "fileUpload",
              "triggerConfig": {}, "enabled": True}]}
-        mock_table.return_value = table
+        mock_dynamodb.meta.client.get_paginator.return_value = paginator
         resp = lambda_handler(_event("GET", BASE, PARAMS), MagicMock())
         assert resp["statusCode"] == 200
         data = json.loads(resp["body"])["message"]
         assert data["Items"][0]["triggerType"] == "fileUpload"
+        assert data["NextToken"] is None
 
     @patch(f"{MOD}._triggers_table")
     @patch(f"{MOD}._enforce_parent_workflow")

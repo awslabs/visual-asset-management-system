@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getExecutionLogs } from "../api/executions";
+import type { AvailableLog, LogSourceReport, LogSourceStatus } from "../types";
 import ConfigEditor from "../components/ConfigEditor";
 import { findMatches, filterToMatches, stepIndex } from "./logSearch";
 
@@ -34,6 +35,8 @@ const LOGS_SOURCE_LABELS: Record<string, string> = {
 const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pipelines }) => {
     const [scope, setScope] = useState<string>(WHOLE_EXECUTION);
     const [source, setSource] = useState<LogSource>("full");
+    // One of the selected step's registered logs (its logId), or "" for all of them together.
+    const [logId, setLogId] = useState<string>("");
     const [loading, setLoading] = useState(false);
     const [logText, setLogText] = useState<string>("");
     const [emptyReason, setEmptyReason] = useState<string | null>(null);
@@ -41,6 +44,8 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
     // Where the returned text actually came from ("stored" | "live" | "sfnHistory"); Stored mode
     // falls back to live CloudWatch and the Step Functions history server-side.
     const [logsSource, setLogsSource] = useState<string | null>(null);
+    // Every source the last Live read consulted, with how the read of each one went.
+    const [logSources, setLogSources] = useState<LogSourceReport[]>([]);
     // Find-in-log. Entirely local over the already-fetched text, so stepping through matches costs
     // no further CloudWatch reads.
     const [query, setQuery] = useState("");
@@ -65,16 +70,34 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
 
     // Steps that carry a pipelineExecutionId can be scoped individually.
     const scopedPipelines = (pipelines || []).filter((p) => p && p.pipelineExecutionId);
+    // The logs the selected step can be read from (from details). Only a single step in Live mode
+    // can be narrowed to one of them: the logs API takes logId in full mode with a pipeline scope only.
+    const selectedPipeline = scopedPipelines.find((p) => p.pipelineExecutionId === scope);
+    const availableLogs: AvailableLog[] = Array.isArray(selectedPipeline?.availableLogs)
+        ? selectedPipeline.availableLogs
+        : [];
+    const canPickLogSource = scope !== WHOLE_EXECUTION && source === "full";
+
+    // Token of the request whose result may still be rendered. Live CloudWatch reads take seconds
+    // while a stored read returns at once, so responses arrive out of order: without this the earlier
+    // one lands last and paints another scope's log under the current selection, with the Source badge
+    // and the spinner taken from the superseded response too.
+    const requestTokenRef = useRef(0);
 
     const fetchLogs = useCallback(async () => {
+        const token = ++requestTokenRef.current;
+        const isCurrent = () => token === requestTokenRef.current;
         setLoading(true);
         setErrorMsg(null);
         setEmptyReason(null);
         setLogsSource(null);
+        setLogSources([]);
         try {
             const params: Record<string, string> = { mode: source };
             if (scope !== WHOLE_EXECUTION) params.pipelineExecutionId = scope;
+            if (canPickLogSource && logId) params.logId = logId;
             const [ok, data] = await getExecutionLogs(executionId, params);
+            if (!isCurrent()) return;
             if (!ok || typeof data !== "object" || data === null) {
                 setErrorMsg(typeof data === "string" ? data : "Failed to load logs");
                 setLogText("");
@@ -83,6 +106,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
             const text = extractLogText(data);
             setLogText(text);
             setLogsSource(typeof data.logsSource === "string" ? data.logsSource : null);
+            setLogSources(Array.isArray(data.logSources) ? data.logSources : []);
             if (!text) {
                 setEmptyReason(
                     source === "full"
@@ -91,16 +115,22 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                 );
             }
         } catch (err: any) {
+            if (!isCurrent()) return;
             setErrorMsg(err?.message || "Unknown error");
             setLogText("");
         } finally {
-            setLoading(false);
+            // A superseded request must not clear the spinner for the one still in flight.
+            if (isCurrent()) setLoading(false);
         }
-    }, [executionId, scope, source]);
+    }, [executionId, scope, source, logId, canPickLogSource]);
 
-    // Fetch on mount and whenever the scope or source changes.
+    // Fetch on mount and whenever the scope or source changes. Advancing the token on teardown is
+    // what retires the request in flight, so a change of selection — or an unmount — discards it.
     useEffect(() => {
         fetchLogs();
+        return () => {
+            requestTokenRef.current += 1;
+        };
     }, [fetchLogs]);
 
     return (
@@ -111,7 +141,11 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                     <select
                         aria-label="Log scope"
                         value={scope}
-                        onChange={(e) => setScope(e.target.value)}
+                        onChange={(e) => {
+                            setScope(e.target.value);
+                            // A source belongs to one step; a new scope starts from all sources.
+                            setLogId("");
+                        }}
                         className="orch-outline px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
                     >
                         <option value={WHOLE_EXECUTION}>Whole execution</option>
@@ -130,13 +164,37 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                     <select
                         aria-label="Log source"
                         value={source}
-                        onChange={(e) => setSource(e.target.value as LogSource)}
+                        onChange={(e) => {
+                            setSource(e.target.value as LogSource);
+                            setLogId("");
+                        }}
                         className="orch-outline px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
                     >
                         <option value="full">Live (CloudWatch)</option>
                         <option value="truncated">Stored</option>
                     </select>
                 </label>
+
+                {canPickLogSource && availableLogs.length > 0 && (
+                    // A span, not a label: the mode select above is already named "Log source", and a
+                    // wrapping label would associate this caption with the select as a second such name.
+                    <span className="flex items-center gap-2 text-sm text-text-primary">
+                        Log source
+                        <select
+                            aria-label="Available log source"
+                            value={logId}
+                            onChange={(e) => setLogId(e.target.value)}
+                            className="orch-outline px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
+                        >
+                            <option value="">All sources</option>
+                            {availableLogs.map((log) => (
+                                <option key={log.logId} value={log.logId}>
+                                    {logSourceOptionLabel(log)}
+                                </option>
+                            ))}
+                        </select>
+                    </span>
+                )}
 
                 <button
                     onClick={() => fetchLogs()}
@@ -152,6 +210,29 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                     </span>
                 )}
             </div>
+
+            {!loading && logSources.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2" data-testid="log-sources">
+                    <span className="text-sm text-text-secondary">Sources</span>
+                    <ul className="flex flex-wrap gap-1.5" aria-label="Log sources read">
+                        {logSources.map((s) => (
+                            <li
+                                key={s.logId}
+                                className={`orch-outline px-2 py-0.5 text-xs rounded-full border ${logSourceStatusClass(
+                                    s.status
+                                )}`}
+                                title={[s.sourceType, s.stageName, s.logGroupName]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                            >
+                                {`${s.label || s.logGroupName || s.logId} · ${logSourceStatusText(
+                                    s
+                                )}`}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
 
             {/* Find in log — local over the fetched text, so no extra CloudWatch reads. */}
             {logText && (
@@ -250,13 +331,43 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
     );
 };
 
+/** Chip text for how a source's read went; `read` carries the number of events it contributed. */
+export function logSourceStatusText(source: LogSourceReport): string {
+    switch (source.status) {
+        case "read":
+            return `read ${source.eventCount ?? 0}`;
+        case "notFound":
+            return "not found";
+        default:
+            return source.status;
+    }
+}
+
+// Red is reserved for the two reads whose cause is known (a permission, a missing group); a read that
+// failed for any other reason is amber so it is not mistaken for either.
+const logSourceStatusClass = (status: LogSourceStatus): string =>
+    status === "read"
+        ? "border-green-300 bg-green-100 text-green-800 dark:border-green-800 dark:bg-green-900/30 dark:text-green-300"
+        : status === "denied" || status === "notFound"
+        ? "border-red-300 bg-red-100 text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
+        : status === "error"
+        ? "border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+        : "border-border-default text-text-secondary";
+
+/** Option text for one available log: its label, then the kind of source and the stage it belongs to. */
+export function logSourceOptionLabel(log: AvailableLog): string {
+    return [log.label || log.logGroupName || log.logId, log.sourceType, log.stageName]
+        .filter(Boolean)
+        .join(" · ");
+}
+
 /**
  * Normalize the logs endpoint's several response shapes into displayable plain text:
- *  - full mode: { events: [{ timestamp, message }], sfnHistoryEvents?, subProcessEvents?, warnings? }
+ *  - full mode: { events: [{ timestamp, message }], sfnHistoryEvents?, subProcessEvents? (grouped by logId), logSources?, warnings? }
  *  - truncated whole-execution: { executionLog, executionError }
  *  - truncated per-pipeline: { resultLog, errorLog }
  */
-function extractLogText(data: any): string {
+export function extractLogText(data: any): string {
     // Full (live) mode — render events chronologically with a readable timestamp prefix.
     if (Array.isArray(data.events)) {
         const lines: string[] = [];
@@ -272,9 +383,19 @@ function extractLogText(data: any): string {
             lines.push("", "──── execution history (Step Functions) ────");
             render(data.sfnHistoryEvents);
         }
+        // Sub-process logs come from several sources — the step's state machine, each container job —
+        // so they are grouped under a heading per source. Events arrive in timestamp order; groups
+        // follow the order in which each source first appears.
         if (Array.isArray(data.subProcessEvents) && data.subProcessEvents.length) {
-            lines.push("", "──── sub-process logs ────");
-            render(data.subProcessEvents);
+            const labels = sourceLabelsById(data.logSources);
+            groupByLogId(data.subProcessEvents).forEach((group) => {
+                const label = group.logId ? labels[group.logId] || group.logId : "";
+                lines.push(
+                    "",
+                    label ? `──── sub-process logs: ${label} ────` : "──── sub-process logs ────"
+                );
+                render(group.events);
+            });
         }
         if (Array.isArray(data.warnings) && data.warnings.length) {
             lines.push("", "──── warnings ────", ...data.warnings);
@@ -289,6 +410,37 @@ function extractLogText(data: any): string {
     if (data.errorLog) parts.push(`ERROR:\n${data.errorLog}`);
     if (data.resultLog) parts.push(data.resultLog);
     return parts.join("\n\n").trim();
+}
+
+/**
+ * Sub-process events grouped by `logId`, groups ordered by first appearance; events without one form
+ * a single group.
+ */
+export function groupByLogId(events: any[]): Array<{ logId: string; events: any[] }> {
+    const groups: Array<{ logId: string; events: any[] }> = [];
+    const indexById = new Map<string, number>();
+    events.forEach((e) => {
+        const id = typeof e?.logId === "string" ? e.logId : "";
+        let i = indexById.get(id);
+        if (i === undefined) {
+            i = groups.length;
+            indexById.set(id, i);
+            groups.push({ logId: id, events: [] });
+        }
+        groups[i].events.push(e);
+    });
+    return groups;
+}
+
+/** Display label per `logId` from the response's `logSources`, for the group headings. */
+function sourceLabelsById(logSources: any): Record<string, string> {
+    const labels: Record<string, string> = {};
+    if (!Array.isArray(logSources)) return labels;
+    logSources.forEach((s) => {
+        if (s && typeof s.logId === "string")
+            labels[s.logId] = s.label || s.logGroupName || s.logId;
+    });
+    return labels;
 }
 
 export default ExecutionLogViewer;

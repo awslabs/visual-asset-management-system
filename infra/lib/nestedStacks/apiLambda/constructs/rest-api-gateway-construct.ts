@@ -22,6 +22,7 @@ import { generateUniqueNameHash } from "../../../helper/security";
 import { AmplifyConfigLambdaConstruct } from "./amplify-config-lambda-construct";
 import { VamsVersionLambdaConstruct } from "./vams-version-lambda-construct";
 import { samlSettings } from "../../../../config/saml-config";
+import { oidcSettings } from "../../../../config/oidc-config";
 import { HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 
 /**
@@ -125,27 +126,60 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         }
 
         // 2) Role API Gateway assumes to invoke the authorizer
+        //
+        // The trust narrows API Gateway to acting for this account, so an API in another account
+        // cannot name this role as its own `authorizerCredentials` and drive the authorizer with
+        // events it controls.
+        //
+        // The condition is one key under the `...IfExists` operator form, and both halves of that
+        // are load-bearing. API Gateway does not document which global condition keys it populates
+        // on the `sts:AssumeRole` it makes for authorizer credentials, and that assume-role is the
+        // only path to the authorizer — so a condition that fails closed returns 500 on every
+        // route, including the anonymous ones, since they share this authorizer. `...IfExists`
+        // denies a foreign account whenever the key is supplied and leaves the assume-role working
+        // when it is not. The key is `aws:SourceAccount` because it has a single possible value
+        // shape (this account id), whereas an API Gateway `aws:SourceArn` has two plausible ones —
+        // the `execute-api` data-plane ARN and the `apigateway` control-plane ARN, whose account
+        // field is empty — so a pattern written for either one fails closed against the other.
+        // Naming the API in an ARN is not available here in any case: the API's inline OpenAPI
+        // document carries this role's ARN, so referring to `this.restApiId` makes the two
+        // resources reference each other.
         const authInvokeRole = new iam.Role(this, "RestAuthorizerInvokeRole", {
-            assumedBy: Service("APIGATEWAY").Principal,
+            assumedBy: new iam.PrincipalWithConditions(Service("APIGATEWAY").Principal, {
+                StringEqualsIfExists: { "aws:SourceAccount": config.env.account },
+            }),
         });
         authorizerFn.grantInvoke(authInvokeRole);
 
-        // Cognito hosted UI domain for federated (SAML) sign-in. Amplify's oauth.domain
+        // Cognito hosted UI domain for federated (SAML or OIDC) sign-in. Amplify's oauth.domain
         // expects a bare hostname (it prepends https:// itself), and the suffix is
         // partition-specific (GovCloud uses auth-fips; EU Sovereign uses its own TLD).
         const cognitoHostedUiDomain = config.app.authProvider.useCognito.useSaml
             ? `${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
+            : config.app.authProvider.useCognito.useOidc
+            ? `${oidcSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
             : "";
+
+        // SAML and OIDC are mutually exclusive (enforced in getConfig), so at most one of these
+        // yields a federated config; neither does for a plain Cognito deployment, and the frontend
+        // then reports COGNITO_FEDERATED=false and renders the native Authenticator.
+        const federatedIdentitySettings = config.app.authProvider.useCognito.useSaml
+            ? samlSettings
+            : config.app.authProvider.useCognito.useOidc
+            ? oidcSettings
+            : undefined;
+
         const amplifyConfig = new AmplifyConfigLambdaConstruct(this, "AmplifyConfig", {
             config,
             authResources: props.authResources,
             region: config.env.region,
             apiUrl: "", // derived at runtime from the request context (see construct)
-            ...(config.app.authProvider.useCognito.useSaml
+            ...(federatedIdentitySettings
                 ? {
                       cognitoFederatedConfig: {
                           customCognitoAuthDomain: cognitoHostedUiDomain,
-                          customFederatedIdentityProviderName: samlSettings.name,
+                          customFederatedIdentityProviderName: federatedIdentitySettings.name,
+                          idpDisplayName: federatedIdentitySettings.displayName,
                       },
                   }
                 : {}),
@@ -192,10 +226,15 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             ],
             deploy: false,
             // Provision the account-level API Gateway CloudWatch role (required for the
-            // stage's execution logging) and tear it down with the stack. DESTROY avoids
-            // an orphaned, fixed-named role colliding on a later redeploy after a rollback.
+            // stage's execution logging). The policy applies to both the role and the
+            // AWS::ApiGateway::Account resource it is attached to, and that resource is an
+            // account + Region singleton shared by every REST API there — so RETAIN keeps
+            // API Gateway logging in place for co-resident deployments when this one is torn
+            // down. The retained role carries a fixed name (the IamRoleTransform aspect names
+            // every role in the tree), so it has to be deleted before this deployment is
+            // redeployed into the same account and Region.
             cloudWatchRole: true,
-            cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.DESTROY,
+            cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.RETAIN,
         });
 
         // Minimum TLS version + cipher suite on the REST API itself. `securityPolicy` is a
@@ -258,12 +297,15 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         for (const r of registry.list()) {
             if (invokedFns.has(r.lambdaFn.functionArn)) continue;
             invokedFns.add(r.lambdaFn.functionArn);
+            // Keyed on the function's construct path, which is fixed by the code. The ARN is an
+            // unresolved Token at synth, and hashing its string form made seven of these ids differ
+            // between two synths of one unchanged configuration -- a replaced permission on every deploy.
             new cdk.aws_lambda.CfnPermission(
                 this,
                 `Invoke-${generateUniqueNameHash(
                     config.env.coreStackName,
                     config.env.account,
-                    r.lambdaFn.functionArn,
+                    r.lambdaFn.node.path,
                     10
                 )}`,
                 {
@@ -276,6 +318,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         }
 
         const accessLogs = new logs.LogGroup(this, "VAMS-REST-API-AccessLogs", {
+            encryptionKey: storageResources.encryption.kmsKey,
             retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });

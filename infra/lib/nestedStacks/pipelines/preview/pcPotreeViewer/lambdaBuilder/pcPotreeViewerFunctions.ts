@@ -88,6 +88,18 @@ export function buildVamsExecutePcPotreeViewerPipelineFunction(
     return fun;
 }
 
+/**
+ * The two Fargate job definitions whose container log stream prefixes openPipeline registers, each
+ * with the VAMS-owned group its container output is written to. The two jobs write to two groups,
+ * so the producer is given one group per job rather than a shared `BATCH_JOB_LOG_GROUP_*` pair.
+ */
+export interface OpenPipelineBatchLogProps {
+    pdalJobDefinitionName: string;
+    pdalLogGroup: logs.ILogGroup;
+    potreeJobDefinitionName: string;
+    potreeLogGroup: logs.ILogGroup;
+}
+
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -99,6 +111,7 @@ export function buildOpenPipelineFunction(
     subnets: ec2.ISubnet[],
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
+    batchLogs: OpenPipelineBatchLogProps,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -132,6 +145,14 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // Each converter's vended container log group + job definition name, one registered log
+            // source per Batch state (streams are `<jobDefinitionName>/default/<task-id>`).
+            PDAL_JOB_LOG_GROUP_NAME: batchLogs.pdalLogGroup.logGroupName,
+            PDAL_JOB_LOG_GROUP_ARN: batchLogs.pdalLogGroup.logGroupArn,
+            PDAL_JOB_DEFINITION_NAME: batchLogs.pdalJobDefinitionName,
+            POTREE_JOB_LOG_GROUP_NAME: batchLogs.potreeLogGroup.logGroupName,
+            POTREE_JOB_LOG_GROUP_ARN: batchLogs.potreeLogGroup.logGroupArn,
+            POTREE_JOB_DEFINITION_NAME: batchLogs.potreeJobDefinitionName,
         },
     });
 
@@ -199,6 +220,20 @@ export function buildConstructPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagLambda(fun);
+    // constructPipeline reports the external VAMS workflow token when it fails before the Batch job
+    // starts. Without this the SendTaskFailure raises AccessDeniedException, the handler logs it, and the
+    // workflow task waits out its full taskTimeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
     return fun;
 }
 

@@ -12,6 +12,7 @@ from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS
 from .exceptions import FileUploadError, PartUploadError
 from .file_processor import UploadSequence, FileInfo, format_file_size
 from .api_client import APIClient
+from .logging import log_warning
 
 
 class PartUploadInfo:
@@ -261,22 +262,44 @@ class UploadManager:
         for file_info in sequence.files:
             file_key = file_info.relative_key
             parts = file_parts.get(file_key, [])
-            
-            # Zero-byte files have no parts, so they're automatically successful
-            if len(parts) == 0:
+            # What the LOCAL plan says this file needs. `parts` above is derived from the SERVER's
+            # initialize_upload response, so the two disagreeing means the server handed back fewer
+            # part upload URLs than were asked for, and the missing bytes were never sent.
+            # `calculate_file_parts` returns 0 parts for a 0-byte file and >=1 for anything larger,
+            # which is what makes this a sound discriminator rather than a size heuristic.
+            planned_parts = sequence.file_parts.get(file_key) or []
+
+            # Zero-byte files have no parts, so they're automatically successful. This is the ONLY
+            # case an empty part list may be read as success: previously any file with no parts took
+            # this branch, so a multi-megabyte file the server returned no part URLs for was added to
+            # successful_files and completed with "parts": [] — reported stored, never uploaded, exit
+            # code 0. That is the silent-loss shape measured as two absent objects on a 4,101-file
+            # directory upload that returned rc=0.
+            if len(planned_parts) == 0:
                 successful_files.add(file_key)
-                
+
                 # Find the corresponding file response to get uploadIdS3
                 file_response = next(f for f in init_response["files"] if f["relativeKey"] == file_key)
-                
+
                 completion_files.append({
                     "relativeKey": file_key,
                     "uploadIdS3": file_response["uploadIdS3"],
                     "parts": []  # Empty parts list for zero-byte files
                 })
+            elif len(parts) != len(planned_parts):
+                # A SHORT part list is worse than a missing one: S3's CompleteMultipartUpload accepts
+                # a subset of the initiated parts and produces a correspondingly TRUNCATED object, so
+                # completing this would store a file that exists, has a plausible size, and is wrong.
+                # Fail it instead, which surfaces in failed_files and makes the command exit non-zero.
+                failed_files.add(file_key)
+                log_warning(
+                    f"Upload of {file_key} is incomplete and was NOT stored: the upload "
+                    f"initialization returned {len(parts)} part upload URL(s) for a file needing "
+                    f"{len(planned_parts)}"
+                )
             else:
                 all_parts_successful = all(part.status == "completed" for part in parts)
-                
+
                 if all_parts_successful:
                     successful_files.add(file_key)
                     
@@ -311,7 +334,64 @@ class UploadManager:
                     )
             except Exception as e:
                 raise FileUploadError(f"Failed to complete upload for sequence {sequence.sequence_id}: {e}")
-        
+
+        # RECONCILE against the server's per-file verdict. Everything above decides success from
+        # whether OUR S3 part uploads finished, which is only half the story: completion runs the
+        # server-side validations, and a file it rejects is DELETED from the bucket. Without this the
+        # command reported "Successful files: 2/2" for an upload where one file had
+        # `success: false, error: "Error verifying base file for preview file"` and no object was left
+        # behind — silent data loss with a success report, measured live on a `.previewFile.` companion.
+        #
+        # The `except` above only fires when the call itself fails; a 200 carrying per-file failures
+        # passes through it untouched, which is why the check has to be on the RESPONSE.
+        if completion_result:
+            body = completion_result if isinstance(completion_result, dict) else {}
+            # Unwrap the legacy envelope ONLY when `message` carries a nested body. On this endpoint it
+            # does not: the completion response puts `fileResults`, `overallSuccess` and a HUMAN-READABLE
+            # `message` string side by side at the top level. The idiom `body.get("message", body)` then
+            # replaced the whole response with the string "No files were successfully uploaded", the
+            # `isinstance(body, dict)` guard below turned `file_results` into None, and this entire
+            # reconciliation became dead code — which is how a completion the server answered with
+            # `success: False, error: "Base files does not exist for all preview files"` and
+            # `overallSuccess: False` was still reported to the caller as a stored file with exit 0.
+            # Measured live: 14 of 14 reported successful, 13 objects in S3.
+            nested = body.get("message")
+            if isinstance(nested, dict):
+                body = nested
+
+            file_results = body.get("fileResults")
+            demoted = set()
+            for entry in (file_results or []):
+                if not isinstance(entry, dict):
+                    continue
+                key = entry.get("relativeKey")
+                # Only demote on an EXPLICIT false. A result omitting `success` is not evidence of
+                # failure, and treating a missing key as failure would fail every upload against a
+                # deployment whose response predates this field.
+                if key in successful_files and entry.get("success") is False:
+                    successful_files.discard(key)
+                    failed_files.add(key)
+                    demoted.add(key)
+                    log_warning(
+                        f"Upload of {key} was rejected at completion and is NOT stored: "
+                        f"{entry.get('error') or 'no reason given'}"
+                    )
+
+            # Backstop for the same class of defect one level up. `overallSuccess: False` is the
+            # server saying plainly that this completion stored nothing, and it must not be possible
+            # for the caller to see success anyway because the per-file list was missing, renamed, or
+            # keyed differently than `successful_files` is. Only fires when the per-file pass demoted
+            # NOTHING, so a partial rejection is still attributed to the exact files it names.
+            if body.get("overallSuccess") is False and not demoted and successful_files:
+                unstored = sorted(successful_files)
+                failed_files.update(unstored)
+                successful_files.clear()
+                log_warning(
+                    f"The server reported overallSuccess=False for this upload, so its "
+                    f"{len(unstored)} file(s) are NOT stored"
+                    + (f": {body.get('message')}" if isinstance(body.get('message'), str) else "")
+                )
+
         # Update completed sequences count
         progress.completed_sequences += 1
         if self.progress_callback:
@@ -475,21 +555,35 @@ class UploadManager:
             else:
                 regular_sequences.append(seq)
         
-        # Process regular sequences first, then preview sequences
-        # This ensures preview completion APIs are called after regular ones
         all_sequences_ordered = regular_sequences + preview_sequences
-        
-        # Process all sequences concurrently
-        # Each sequence will: initialize → upload parts → complete
-        # But preview sequences will wait for regular sequences to complete their APIs
-        sequence_tasks = [
-            self._process_sequence(seq, database_id, asset_id, upload_type, semaphore, progress)
-            for seq in all_sequences_ordered
-        ]
-        
-        # Wait for all sequences to complete
+
+        # A `.previewFile.` companion is ALWAYS placed in its own sequence, separate from its base file
+        # (see file_processor.create_upload_sequences), and the server's completion checks that the base
+        # file either accompanies the companion in the same request or already exists in S3. Neither
+        # holds unless the base file's sequence has COMPLETED first.
+        #
+        # Concatenating the two lists and handing them all to one `asyncio.gather` does not achieve
+        # that: gather starts every coroutine immediately, so list order carries no ordering guarantee
+        # and the previous comment ("preview sequences will wait for regular sequences") was
+        # aspirational. Measured consequence on a live deployment: a companion's completion frequently
+        # ran before its base file's and was refused with
+        # "Error verifying base file for preview file", the object was deleted server-side, and between
+        # 2 and 6 of 12 companions were lost per run — varying by run, because it was a race.
+        #
+        # So await the regular sequences to completion BEFORE starting the preview ones. Part uploads
+        # within each group stay fully parallel; only the group boundary is a barrier, and companions
+        # are small (MAX_PREVIEW_FILE_SIZE), so the added wall-clock is the tail of the regular group.
+        async def _run(group):
+            if not group:
+                return []
+            return await asyncio.gather(*[
+                self._process_sequence(seq, database_id, asset_id, upload_type, semaphore, progress)
+                for seq in group
+            ], return_exceptions=True)
+
         try:
-            sequence_results = await asyncio.gather(*sequence_tasks, return_exceptions=True)
+            sequence_results = list(await _run(regular_sequences))
+            sequence_results += list(await _run(preview_sequences))
         except Exception as e:
             sequence_results = [{
                 "sequence_id": seq.sequence_id,
@@ -497,16 +591,20 @@ class UploadManager:
                 "successful_files": [],
                 "failed_files": [f.relative_key for f in seq.files]
             } for seq in all_sequences_ordered]
-        
-        # Handle any exceptions in results
+
+        # Handle any exceptions in results.
+        # Indexed against all_sequences_ordered, NOT `sequences`: the two differ whenever any preview
+        # sequence exists, so indexing the original list attributed an exception to the wrong sequence
+        # and reported another sequence's files as the failed ones.
         final_results = []
         for i, result in enumerate(sequence_results):
             if isinstance(result, Exception):
+                failed_sequence = all_sequences_ordered[i]
                 final_results.append({
-                    "sequence_id": sequences[i].sequence_id,
+                    "sequence_id": failed_sequence.sequence_id,
                     "error": str(result),
                     "successful_files": [],
-                    "failed_files": [f.relative_key for f in sequences[i].files]
+                    "failed_files": [f.relative_key for f in failed_sequence.files]
                 })
             else:
                 final_results.append(result)
@@ -521,10 +619,39 @@ class UploadManager:
             failed = len(result.get("failed_files", []))
             total_successful_files += successful
             total_failed_files += failed
-            
+
             if failed > 0 or result.get("error"):
                 overall_success = False
-        
+
+        # RECONCILE the per-sequence verdicts against what was STAGED. Everything above derives
+        # success from the failure count, so a file that appears in NEITHER list is invisible: not
+        # successful, not failed, overall_success True, exit code 0. That is the only shape in which
+        # this command can report rc=0 while an object is absent from S3, and it is what a 4,101-file
+        # directory upload did — two objects missing, no failure reported.
+        #
+        # This is a net, not a diagnosis: it fires whatever upstream degradation dropped the file, and
+        # its job is to make the run LOUD. A caller can then retry, which a silent success denies them.
+        staged_keys = {f.relative_key for seq in sequences for f in seq.files}
+        accounted_keys = set()
+        for result in final_results:
+            accounted_keys.update(result.get("successful_files", []))
+            accounted_keys.update(result.get("failed_files", []))
+        unaccounted = sorted(staged_keys - accounted_keys)
+        if unaccounted:
+            overall_success = False
+            total_failed_files += len(unaccounted)
+            log_warning(
+                f"{len(unaccounted)} staged file(s) were neither confirmed nor reported failed and "
+                f"must be treated as NOT stored: {', '.join(unaccounted[:10])}"
+                + (f" (and {len(unaccounted) - 10} more)" if len(unaccounted) > 10 else "")
+            )
+            final_results.append({
+                "sequence_id": None,
+                "error": "files unaccounted for by any sequence result",
+                "successful_files": [],
+                "failed_files": unaccounted,
+            })
+
         return {
             "overall_success": overall_success,
             "total_files": progress.total_files,

@@ -22,6 +22,7 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
 import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
     grantExternalAssetBucketKmsKeys,
     kmsKeyPolicyStatementGenerator,
@@ -121,14 +122,10 @@ export class CoordinateTransformConstruct extends Construct {
             ],
         });
 
-        // Container execution role
+        // Container EXECUTION role: used by the ECS agent, not by the container's own process. It pulls
+        // the image and writes the task's log stream, and that is all the managed policy below grants.
         const containerExecutionRole = new iam.Role(this, "CoordTransformContainerExecutionRole", {
             assumedBy: Service("ECS_TASKS").Principal,
-            inlinePolicies: {
-                InputBucketPolicy: inputBucketPolicy,
-                OutputBucketPolicy: outputBucketPolicy,
-                StateTaskPolicy: stateTaskPolicy,
-            },
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonECSTaskExecutionRolePolicy"
@@ -179,17 +176,39 @@ export class CoordinateTransformConstruct extends Construct {
             });
         }
 
+        // The container's stdout/stderr. A named vended group under the /aws/vendedlogs/Pipelines/
+        // prefix the execution-service role is granted to read; KMS-encrypted and retained for a
+        // year, unlike Batch's default group.
+        const containerLogGroup = new logs.LogGroup(this, "CoordTransformBatchJobLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/Pipelines/CoordTransform" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "CoordTransformBatchJobLogGroup",
+                    10
+                ),
+            encryptionKey: props.kmsKey,
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
         // Batch Fargate pipeline
         const batchPipeline = new BatchFargatePipelineConstruct(
             this,
             "BatchFargatePipeline_CoordTransform",
             {
+                // Matches the 4-hour taskTimeout on the state that waits for this job. This
+                // pipeline submits its own job under WAIT_FOR_TASK_TOKEN, so Step Functions
+                // bounds only the token wait -- without this the container outlives the run.
+                attemptDuration: cdk.Duration.hours(4),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: containerLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",
@@ -207,8 +226,18 @@ export class CoordinateTransformConstruct extends Construct {
                     props.config.name +
                     "_" +
                     props.config.app.baseStackName,
-                ephemeralStorageGiB: 60,
-                ecrRepository: codeBuildConstruct?.repository,
+                // The transform spills every transformed point to this volume before writing an output,
+                // so the volume holds the downloaded input, one spill copy, and every requested output
+                // format at once. At ~32 bytes per spilled point an 800M-point cloud spills ~26 GB, on
+                // top of an ~8 GB LAZ input and, with all four output formats requested, ~80 GB of
+                // output -- which 60 GiB does not cover. Fargate permits 21-200 GiB.
+                ephemeralStorageGiB: 120,
+                ecrImage: codeBuildConstruct
+                    ? {
+                          repository: codeBuildConstruct.repository,
+                          tag: codeBuildConstruct.imageTag,
+                      }
+                    : undefined,
             }
         );
 
@@ -227,6 +256,7 @@ export class CoordinateTransformConstruct extends Construct {
             props.lambdaCommonBaseLayer,
             batchPipeline.batchJobQueue,
             batchPipeline.batchJobDefinition,
+            containerLogGroup,
             props.storageResources.eventBridge.orchestrationBus,
             props.config,
             props.vpc,
@@ -272,6 +302,22 @@ export class CoordinateTransformConstruct extends Construct {
             resultPath: "$",
         }).next(pipelineEndTask);
 
+        // ConstructPipelineTask is the first state, so a failure there ends the execution before
+        // PipelineEndTask runs -- and PipelineEndTask is the only state that reports on the parent
+        // workflow's callback token, which then pends for its full 14400s taskTimeout. The handler
+        // reports the token for the errors it raises itself; this covers the failures where it never
+        // runs at all: the function timeout, an out-of-memory kill, an import failure, or an invoke
+        // fault that exhausts the task's service-exception retries.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipelineEndTask);
+
+        // resultPath keeps the state and appends the error, so pipelineEnd still finds
+        // externalSfnTaskToken alongside it.
+        constructPipelineTask.addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
+
         // No heartbeatTimeout: the container reports only terminal success/failure on the
         // internal token (it sends no periodic heartbeats), so a heartbeat window would fail
         // any transform outlasting it. The 4-hour taskTimeout bounds the wait instead.
@@ -309,7 +355,8 @@ export class CoordinateTransformConstruct extends Construct {
                         "CoordTransformProcessing-StateMachineLogGroup",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                encryptionKey: props.kmsKey,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
         );
@@ -396,7 +443,7 @@ export class CoordinateTransformConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "ECS Container execution role uses AWS Managed Policies for task execution and X-Ray tracing.",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -411,7 +458,7 @@ export class CoordinateTransformConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "ECS Container job role uses AWS Managed Policies for task execution and X-Ray tracing.",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

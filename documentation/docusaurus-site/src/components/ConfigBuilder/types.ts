@@ -97,7 +97,7 @@ export interface RuleResult {
     rule: Rule;
 }
 
-/** A single field forced by the auto-toggle engine, surfaced to the user. */
+/** A single field a derivation forced, surfaced to the user. `changes` is empty today. */
 export interface DerivedChange {
     path: string;
     to: unknown;

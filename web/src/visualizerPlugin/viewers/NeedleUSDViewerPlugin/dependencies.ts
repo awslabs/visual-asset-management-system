@@ -4,6 +4,7 @@
  */
 
 import { StylesheetManager } from "../../core/StylesheetManager";
+import { loadExternalScript } from "../../core/loadExternalScript";
 
 // Export to make this a module for TypeScript
 export {};
@@ -19,44 +20,34 @@ export class NeedleUSDDependencyManager {
      * Load the USD viewer library dynamically
      */
     static async loadUSDViewer(): Promise<void> {
-        // Check if already loaded and bundle is present
-        if (this.isLoaded && this.usdBundle) {
+        // Check if already loaded and bundle is present. The bundle is captured into a static field
+        // and survives cleanup, so this also covers reopening the viewer after an unmount.
+        if (this.usdBundle) {
+            this.isLoaded = true;
             console.log("NeedleUSDViewer: Already loaded, reusing existing bundle");
             this.restoreGlobalsFromBundle();
-            return Promise.resolve();
+            return;
+        }
+
+        // A load is already running. Join it rather than starting a second one. This previously
+        // removed the script tags of an in-flight load to "force a reload"; removing an in-flight
+        // script fires no error event, so the first caller's promise never settled and its viewer
+        // waited forever. Script-level deduplication lives in loadExternalScript, but the bundle
+        // capture below also has to happen exactly once per load.
+        if (this.loadPromise) {
+            return this.loadPromise;
         }
 
         console.log("Loading Needle USD viewer library...");
-
-        // Check if scripts already exist in DOM
-        const bundleScript = document.querySelector(
-            'script[src="/viewers/needletools_usd_viewer/usd-viewer-bundle.js"]'
-        ) as HTMLScriptElement;
-        const wasmScript = document.querySelector(
-            'script[src="/viewers/needletools_usd_viewer/emHdBindings.js"]'
-        ) as HTMLScriptElement;
-
-        if (bundleScript && wasmScript && this.usdBundle) {
-            // Scripts loaded and bundle available, just restore globals
-            this.isLoaded = true;
-            this.restoreGlobalsFromBundle();
-            console.log("NeedleUSDViewer: Restored globals from existing bundle");
-            return Promise.resolve();
-        }
-
-        if ((bundleScript || wasmScript) && !this.usdBundle) {
-            // Scripts exist but bundle not loaded - remove and reload
-            console.log(
-                "NeedleUSDViewer: Scripts exist but bundle not loaded, removing to force reload..."
-            );
-            bundleScript?.remove();
-            wasmScript?.remove();
-            this.loadedDependencies.clear();
-        }
-
-        // Create new load promise
         this.loadPromise = this.loadUSDViewerFromAssets();
-        return this.loadPromise;
+
+        try {
+            await this.loadPromise;
+        } finally {
+            // Released once settled, so the promise is shared only by callers overlapping in time and
+            // a later attempt can retry after a failure.
+            this.loadPromise = null;
+        }
     }
 
     /**
@@ -126,59 +117,9 @@ export class NeedleUSDDependencyManager {
     /**
      * Load a script dynamically
      */
-    private static loadScript(src: string, asModule = false): Promise<void> {
-        return new Promise((resolve, reject) => {
-            // Check if script is in DOM
-            const existingScript = document.querySelector(
-                `script[src="${src}"]`
-            ) as HTMLScriptElement;
-
-            if (existingScript && this.loadedDependencies.has(src)) {
-                // Script already loaded successfully
-                console.log(`NeedleUSDViewer: Script ${src} already loaded`);
-                resolve();
-                return;
-            }
-
-            if (existingScript) {
-                // Script exists but may still be loading - wait for it
-                existingScript.addEventListener(
-                    "load",
-                    () => {
-                        this.loadedDependencies.add(src);
-                        resolve();
-                    },
-                    { once: true }
-                );
-
-                existingScript.addEventListener(
-                    "error",
-                    () => {
-                        reject(new Error(`Failed to load script: ${src}`));
-                    },
-                    { once: true }
-                );
-
-                return;
-            }
-
-            // Script not in DOM, create it
-            const script = document.createElement("script");
-            script.src = src;
-
-            if (asModule) {
-                script.type = "module";
-            } else {
-                script.async = true;
-            }
-
-            script.onload = () => {
-                this.loadedDependencies.add(src);
-                resolve();
-            };
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-            document.head.appendChild(script);
-        });
+    private static async loadScript(src: string, asModule = false): Promise<void> {
+        await loadExternalScript(src, { asModule });
+        this.loadedDependencies.add(src);
     }
 
     /**

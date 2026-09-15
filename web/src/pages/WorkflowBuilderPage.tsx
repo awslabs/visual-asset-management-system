@@ -6,6 +6,7 @@
 import React from "react";
 import { useParams } from "react-router-dom";
 import WorkflowBuilder from "../features/orchestration/workflows/WorkflowBuilder";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const WorkflowBuilderPage: React.FC = () => {
     const { databaseId, workflowId } = useParams<{
@@ -13,11 +14,15 @@ const WorkflowBuilderPage: React.FC = () => {
         workflowId?: string;
     }>();
 
+    usePageTitle(databaseId, "Workflows", workflowId ? "Edit Workflow" : "Create Workflow");
+
     if (!databaseId) {
         return (
-            <div className="flex items-center justify-center min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+            <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
                 <div className="text-center">
-                    <p className="text-red-600 dark:text-red-400 text-xl">Missing Database ID</p>
+                    <p role="alert" className="text-vams-error text-xl">
+                        Missing Database ID
+                    </p>
                 </div>
             </div>
         );

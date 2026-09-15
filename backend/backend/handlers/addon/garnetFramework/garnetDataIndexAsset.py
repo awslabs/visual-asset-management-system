@@ -22,6 +22,11 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from common.batchItemFailures import (
+    all_batch_item_failures,
+    batch_item_identifier,
+    with_batch_item_failures,
+)
 from common.syncTracking import (
     SYNC_OBJECT_TYPE_ASSET,
     SYNC_ACTION_CREATE,
@@ -32,6 +37,7 @@ from common.syncTracking import (
     write_outbound_sync_record,
 )
 from common.validators import validate
+from common.dynamodb import query_all_items, query_has_match
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
 
@@ -79,53 +85,23 @@ def _record_sync(object_type, action, success, database_id, asset_id=None,
 
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset storage table name")
-    asset_storage_table_name = None
-
-try:
     asset_file_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset file metadata table name")
-    asset_file_metadata_storage_table_name = None
-
-try:
     s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving S3 asset buckets table name")
-    s3_asset_buckets_storage_table_name = None
-
-try:
     asset_links_storage_table_v2_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
-except Exception as e:
-    logger.exception("Failed resolving asset links v2 table name")
-    asset_links_storage_table_v2_name = None
-
-try:
     asset_links_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset links metadata table name")
-    asset_links_metadata_storage_table_name = None
-
-try:
     asset_versions_storage_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset versions table name")
-    asset_versions_storage_table_name = None
-
-try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading Garnet environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
-asset_storage_table = dynamodb.Table(asset_storage_table_name) if asset_storage_table_name else None
-asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name) if asset_file_metadata_storage_table_name else None
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
-asset_links_table = dynamodb.Table(asset_links_storage_table_v2_name) if asset_links_storage_table_v2_name else None
-asset_links_metadata_table = dynamodb.Table(asset_links_metadata_storage_table_name) if asset_links_metadata_storage_table_name else None
-asset_versions_table = dynamodb.Table(asset_versions_storage_table_name) if asset_versions_storage_table_name else None
+asset_storage_table = dynamodb.Table(asset_storage_table_name)
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name)
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
+asset_links_table = dynamodb.Table(asset_links_storage_table_v2_name)
+asset_links_metadata_table = dynamodb.Table(asset_links_metadata_storage_table_name)
+asset_versions_table = dynamodb.Table(asset_versions_storage_table_name)
 
 #######################
 # Data Retrieval Functions - Asset Links
@@ -153,12 +129,13 @@ def get_asset_link_metadata(asset_link_id: str) -> Dict[str, Any]:
     Returns metadata as a dictionary with value and type information.
     """
     try:
-        response = asset_links_metadata_table.query(
+        items = query_all_items(
+            asset_links_metadata_table,
             KeyConditionExpression=Key('assetLinkId').eq(asset_link_id)
         )
-        
+
         all_metadata = {}
-        for item in response.get('Items', []):
+        for item in items:
             metadata_key = item.get('metadataKey')
             metadata_value = item.get('metadataValue')
             metadata_value_type = item.get('metadataValueType', 'string')
@@ -191,23 +168,25 @@ def get_all_asset_links_for_asset(database_id: str, asset_id: str) -> List[str]:
         asset_link_ids = []
         
         # Get links where this asset is the 'from' asset
-        from_response = asset_links_table.query(
+        from_items = query_all_items(
+            asset_links_table,
             IndexName='fromAssetGSI',
             KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key)
         )
-        
-        for item in from_response.get('Items', []):
+
+        for item in from_items:
             link_id = item.get('assetLinkId')
             if link_id:
                 asset_link_ids.append(link_id)
-        
+
         # Get links where this asset is the 'to' asset
-        to_response = asset_links_table.query(
+        to_items = query_all_items(
+            asset_links_table,
             IndexName='toAssetGSI',
             KeyConditionExpression=Key('toAssetDatabaseId:toAssetId').eq(asset_key)
         )
-        
-        for item in to_response.get('Items', []):
+
+        for item in to_items:
             link_id = item.get('assetLinkId')
             if link_id and link_id not in asset_link_ids:  # Avoid duplicates
                 asset_link_ids.append(link_id)
@@ -756,12 +735,13 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
         all_metadata = {}
         
         # Query assetFileMetadataStorageTable for metadata fields
-        response = asset_file_metadata_table.query(
+        items = query_all_items(
+            asset_file_metadata_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
+
+        for item in items:
             metadata_key = item.get('metadataKey')
             metadata_value = item.get('metadataValue')
             metadata_value_type = item.get('metadataValueType', 'string')
@@ -786,12 +766,14 @@ def get_asset_version_info(database_id: str, asset_id: str) -> Dict[str, Any]:
     """Get current asset version information using the table PK (databaseId:assetId is now the table PK)"""
     try:
         composite_key = f"{database_id}:{asset_id}"
-        response = asset_versions_table.query(
+        # The isCurrentVersion filter is applied after each page is read, so the current version
+        # of an asset with many versions can sit past the first page
+        items = query_all_items(
+            asset_versions_table,
             KeyConditionExpression=Key('databaseId:assetId').eq(composite_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('isCurrentVersion').eq(True)
         )
 
-        items = response.get('Items', [])
         if items:
             # Should only be one current version, but take the first if multiple exist
             version_info = items[0]
@@ -814,37 +796,35 @@ def get_asset_relationship_flags(database_id: str, asset_id: str) -> Dict[str, b
         asset_key = f"{database_id}:{asset_id}"
         
         # Check for children (where this asset is the 'from' in parentChild relationships)
-        children_response = asset_links_table.query(
+        has_children = query_has_match(
+            asset_links_table,
             IndexName='fromAssetGSI',
             KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('parentChild'),
         )
-        has_children = len(children_response.get('Items', [])) > 0
-        
+
         # Check for parents (where this asset is the 'to' in parentChild relationships)
-        parents_response = asset_links_table.query(
+        has_parents = query_has_match(
+            asset_links_table,
             IndexName='toAssetGSI',
             KeyConditionExpression=Key('toAssetDatabaseId:toAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('parentChild'),
         )
-        has_parents = len(parents_response.get('Items', [])) > 0
-        
+
         # Check for related assets (where this asset is in 'related' relationships)
-        related_from_response = asset_links_table.query(
+        has_related = query_has_match(
+            asset_links_table,
             IndexName='fromAssetGSI',
             KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('related'),
-        )
-        
-        related_to_response = asset_links_table.query(
+        ) or query_has_match(
+            asset_links_table,
             IndexName='toAssetGSI',
             KeyConditionExpression=Key('toAssetDatabaseId:toAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('related'),
         )
-        
-        has_related = (len(related_from_response.get('Items', [])) > 0 or 
-                      len(related_to_response.get('Items', [])) > 0)
-        
+
+
         return {
             'has_children': has_children,
             'has_parents': has_parents,
@@ -1285,6 +1265,9 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
         
         successful_records = 0
         failed_records = 0
+        # Identifiers of records the event-source mapping must redrive. Counting alone left a
+        # failed record deleted from the queue and its document never indexed.
+        batch_failures = []
         
         # Handle different event sources (same pattern as OpenSearch indexers)
         if 'Records' in event:
@@ -1316,6 +1299,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                     successful_records += 1
                                 else:
                                     failed_records += 1
+                                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                     
                             elif asset_file_metadata_storage_table_name in source_arn:
                                 # Asset metadata table stream
@@ -1324,12 +1308,21 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                     successful_records += 1
                                 else:
                                     failed_records += 1
+                                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                     
                             elif asset_links_storage_table_v2_name in source_arn:
                                 # Asset links table stream
                                 link_results = handle_asset_links_stream(sns_message)
                                 successful_records += sum(1 for r in link_results if r)
-                                failed_records += sum(1 for r in link_results if not r)
+                                link_failures = sum(1 for r in link_results if not r)
+                                failed_records += link_failures
+                                if link_failures:
+                                    # One SQS record can carry SEVERAL link writes, and the unit of
+                                    # redrive is the RECORD — so a single append covers any number of
+                                    # failed links, and the record is retried as a whole. Appending per
+                                    # failed link would report the same itemIdentifier repeatedly.
+                                    batch_failures.append(
+                                        {'itemIdentifier': batch_item_identifier(record)})
                                 
                             elif asset_links_metadata_storage_table_name in source_arn:
                                 # Asset link metadata table stream
@@ -1338,38 +1331,43 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                     successful_records += 1
                                 else:
                                     failed_records += 1
+                                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                     
                             else:
                                 logger.warning(f"Unknown table in source ARN: {source_arn}")
                                 failed_records += 1
+                                batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         else:
                             logger.warning("SQS message is not an SNS notification")
                             failed_records += 1
+                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                     except json.JSONDecodeError as e:
                         logger.exception(f"Error parsing SQS/SNS message: {e}")
                         failed_records += 1
+                        batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         
                 else:
                     logger.warning(f"Unknown event source: {event_source}")
                     failed_records += 1
+                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
         
         logger.info(f"Garnet asset indexing completed: {successful_records} successful, {failed_records} failed")
         
-        return {
+        return with_batch_item_failures({
             'statusCode': 200,
             'body': {
                 'message': 'Garnet asset indexing completed',
                 'successful_records': successful_records,
                 'failed_records': failed_records
             }
-        }
+        }, event, batch_failures)
         
     except Exception as e:
         logger.exception(f"Error in Garnet asset indexer lambda handler: {e}")
-        return {
+        return with_batch_item_failures({
             'statusCode': 500,
             'body': {
                 'message': 'Error processing Garnet asset indexing',
                 'error': str(e)
             }
-        }
+        }, event, all_batch_item_failures(event))

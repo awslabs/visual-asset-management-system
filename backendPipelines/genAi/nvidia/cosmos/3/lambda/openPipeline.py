@@ -4,15 +4,23 @@
 import os
 import boto3
 import json
+import math
 import uuid
 import datetime
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="OpenCosmos3Pipeline")
 
-sfn = boto3.client('stepfunctions', region_name=os.environ["AWS_REGION"])
-events_client = boto3.client('events', region_name=os.environ["AWS_REGION"])
+sfn = boto3.client('stepfunctions', region_name=os.environ["AWS_REGION"], config=retry_config)
+events_client = boto3.client('events', region_name=os.environ["AWS_REGION"], config=retry_config)
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get("ALLOWED_INPUT_FILEEXTENSIONS", ".mp4,.mov,.jpg,.jpeg,.png,.webp")
@@ -20,15 +28,117 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get("ALLOWED_INPUT_FILEEXTENSIONS", ".
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# AWS Batch's default container log group + this model's job definition name and Batch state
+# (`CosmosBatchJob-<modelKey>`; one openPipeline function exists per model). The container log
+# source is registered only when all three are configured.
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
+BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
+BATCH_STATE_NAME = os.environ.get("COSMOS_BATCH_STATE_NAME", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 # Task modes / variants that require an input file
 INPUT_FILE_MODES = ("image2video", "video2video", "transfer")
 
+# Variants whose model supports control-signal transfer. The container downgrades a transfer request
+# on any other variant to that variant's default mode and ignores the control settings, so those runs
+# are not gated on them here either.
+TRANSFER_CAPABLE_VARIANTS = ("nano", "super")
+
+
+def numeric_setting_error(raw, setting_name, integer=False, minimum=None):
+    """The reason `raw` cannot be used as a number, or None when it can.
+
+    Mirrors `parse_number_setting` in container/__main__.py so a value accepted here is one the
+    container accepts: blank and absent both mean "not supplied", a boolean is not read as 1/0, and a
+    fractional value for an integer setting is not truncated.
+    """
+    if raw is None or (not isinstance(raw, bool) and str(raw).strip() == ""):
+        return None
+    if isinstance(raw, bool):
+        return f"{setting_name} must be a number, but the boolean {raw} was supplied"
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return f"{setting_name} must be a number, but {raw!r} was supplied"
+    if not math.isfinite(value):
+        return f"{setting_name} must be a finite number, but {raw!r} was supplied"
+    if integer and not value.is_integer():
+        return f"{setting_name} must be a whole number, but {raw!r} was supplied"
+    if minimum is not None and value < minimum:
+        return f"{setting_name} must be at least {minimum}, but {raw!r} was supplied"
+    return None
+
+
+def numeric_list_setting_error(raw, setting_name, integer=False, minimum=None):
+    """The reason any entry of a comma-aligned numeric setting cannot be used, or None.
+
+    A control setting carries one entry per control type, aligned by position, so a value is usable
+    only when every entry is.
+    """
+    entries = raw.split(",") if isinstance(raw, str) else [raw]
+    for index, entry in enumerate(entries):
+        error = numeric_setting_error(
+            entry, f"{setting_name} (entry {index + 1})", integer=integer, minimum=minimum)
+        if error:
+            return error
+    return None
+
+
+def control_path_setting_error(raw):
+    """The reason a control-signal path cannot be used, or None.
+
+    The value is a complete `s3://bucket/key` URI, comma-aligned to the control types, and a blank
+    entry means the control signal is computed from the source video. The container restricts the
+    bucket to the deployment's own asset buckets, which only it can resolve; what is checkable here is
+    the shape, because an asset-relative value reaches `aws s3 cp` as a local path and fails on a
+    provisioned GPU instance.
+    """
+    entries = raw.split(",") if isinstance(raw, str) else [raw]
+    for index, entry in enumerate(entries):
+        value = str(entry or "").strip()
+        if not value:
+            continue
+        label = f"cosmosControlPath (entry {index + 1})"
+        if not value.startswith("s3://"):
+            return (f"{label} must be a complete S3 URI of the form s3://bucket/key, "
+                    f"but {entry!r} was supplied")
+        bucket, _, key = value[len("s3://"):].partition("/")
+        if not bucket or not key or key.endswith("/"):
+            return f"{label} must name an object, not a bucket or a prefix: {entry!r}"
+    return None
+
+
+def run_setting_error(event, model_variant, task_mode):
+    """The first reason this run's settings cannot be used, or None.
+
+    The container is where these are coerced, and that happens after the Batch job has provisioned a
+    GPU instance and pulled its image. They arrive as free text -- an asset-metadata value or a
+    hand-edited configuration body -- so a typo is fully knowable at launch.
+    """
+    errors = [
+        numeric_setting_error(event.get('cosmosSeed', ''), "cosmosSeed", integer=True),
+        numeric_setting_error(
+            event.get('cosmosNumFrames', ''), "cosmosNumFrames", integer=True, minimum=1),
+        numeric_setting_error(event.get('cosmosGuidance', ''), "cosmosGuidance"),
+    ]
+    if task_mode == "transfer" and model_variant in TRANSFER_CAPABLE_VARIANTS:
+        errors.extend([
+            numeric_list_setting_error(
+                event.get('cosmosControlWeight', ''), "cosmosControlWeight"),
+            numeric_setting_error(
+                event.get('cosmosControlGuidance', ''), "cosmosControlGuidance"),
+            control_path_setting_error(event.get('cosmosControlPath', '')),
+        ])
+    for error in errors:
+        if error:
+            return error
+    return None
+
 
 def abort_external_workflow(error, task_token):
     if task_token and task_token != "":
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
@@ -36,9 +146,26 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def batch_container_log_entry(job_definition_name, state_name):
+    """The log source for one Batch state's container: AWS Batch's default group, streamed under
+    `<jobDefinitionName>/default/`. None when the group, the job definition or the state is not configured."""
+    if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name \
+            or not state_name:
+        return None
+    return {
+        "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+        "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": f"{job_definition_name}/default/",
+        "stageName": state_name,
+        "sourceType": "batch",
+        "label": f"{state_name} container",
+    }
+
+
 def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
-    """Best-effort: report this sub-SFN execution + log group to the orchestration bus so VAMS can
-    track it, attempt sub-aborts, and pull sub-logs. Never fails the pipeline."""
+    """Best-effort: report this sub-SFN execution + its log sources to the orchestration bus so VAMS
+    can track it, attempt sub-aborts, and pull sub-logs. Never fails the pipeline."""
     if not ORCHESTRATION_BUS_NAME or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -52,14 +179,23 @@ def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
         "subExecution": {
             "stateMachineArn": STATE_MACHINE_ARN,
             "executionArn": sub_execution_arn or "",
+            "label": "Cosmos 3 processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "Cosmos 3 state machine",
+        })
+    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)
+    if container_log:
+        logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": ORCHESTRATION_BUS_NAME,
@@ -97,7 +233,7 @@ def lambda_handler(event, context):
     Starts the StepFunctions State Machine for a Cosmos 3 pipeline.
     Validates input based on task mode (input-file modes require a valid file).
     """
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     model_variant = event.get('modelVariant', 'nano')
     task_mode = event.get('taskMode', '')
@@ -135,6 +271,13 @@ def lambda_handler(event, context):
     if not output_s3_asset_files_uri:
         abort_external_workflow("Output file path could not be resolved for this run", external_sfn_task_token)
         return {'statusCode': 400, 'body': {"message": "Output file path could not be resolved for this run. The workflow manifest was unreadable or carried no outputs."}}
+
+    # The numeric run settings and the control-signal path are checked for the same reason: they are
+    # first read inside the container, once a GPU instance has been provisioned and its image pulled.
+    setting_error = run_setting_error(event, model_variant, task_mode)
+    if setting_error:
+        abort_external_workflow(setting_error, external_sfn_task_token)
+        return {'statusCode': 400, 'body': {"message": setting_error}}
 
     needs_input = task_mode in INPUT_FILE_MODES or model_variant == "super-image2video"
 

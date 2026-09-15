@@ -2,6 +2,9 @@
 <html>
     <body>
         <h2>Login</h2>
+        <!-- Flask template for the local-development OAuth2 mock server, not Django: there is -->
+        <!-- no csrf_token tag to add, and the server never leaves the developer's machine. -->
+        <!-- nosemgrep: python.django.security.django-no-csrf-token.django-no-csrf-token -->
         <form action="/signin" method="POST">
             <label for="username">Username</label><br />
             <input type="text" id="username" name="username" value="" />

@@ -13,6 +13,10 @@ VAMS supports four pipeline execution types. Each type determines how the pipeli
 | **EventBridge**   | Amazon EventBridge event | Async only | Loosely coupled integrations, cross-account pipelines               |
 | **DeadlineCloud** | AWS Deadline Cloud job   | Async only | Render-farm and batch job submission (callback always required)     |
 
+:::warning[Execution targets are shape-validated only, and pipeline authoring is administrator-equivalent]
+VAMS validates the form of the target a pipeline names -- an AWS Lambda function ARN or function name, an Amazon SQS queue URL, an Amazon EventBridge bus ARN -- and does not check that the resource exists or that it belongs to the deployment. IAM is the boundary. The shared VAMS workflow role that the generated AWS Step Functions state machines assume allows `lambda:InvokeFunction` and `sqs:SendMessage` on functions and queues in the deployment's own account and Region whose names contain the top-level `name` configuration value (default `vams`), plus Lambda functions matching `vams-*`, and `events:PutEvents` on event buses matching the same name pattern together with the account's `default` bus. A target outside those patterns is accepted when the pipeline is saved and the execution fails at invoke time with an access-denied error. Treat creating and updating pipelines as an administrator-equivalent capability and grant those routes only to roles trusted with that reach -- see [Pipeline permissions](../concepts/pipelines-and-workflows.md#pipeline-permissions).
+:::
+
 ### Synchronous vs. asynchronous execution
 
 -   **Synchronous (Lambda only)** -- The VAMS workflow invokes the Lambda function and waits for a response. Suitable for operations that complete within the Lambda timeout (15 minutes).
@@ -35,6 +39,14 @@ flowchart TD
 ## Creating a Lambda pipeline
 
 The most common pipeline type uses AWS Lambda for orchestration with AWS Batch or Amazon ECS for heavy compute. Follow these steps to create a new pipeline.
+
+:::tip[An AI coding agent can scaffold these steps for you]
+The steps below touch several components at once — handler code, a CDK nested stack, Lambda builders, the configuration interface and all three configuration templates, the pipeline builder, and the VPC endpoint conditions. Missing one of the later steps typically surfaces at deployment rather than at `cdk synth`, which makes it an expensive place to work by hand.
+
+If you are developing in a clone of this repository with [Claude Code](../developer/agentic-development.md), the **`/add-pipeline`** slash command scaffolds that set of files and wires the registration points, following the same conventions this page describes. It is also the quickest way to wrap an **existing** processing service as a VAMS pipeline, since the work is mostly the `vamsExecute` and `constructPipeline` handlers described below rather than the service itself. If your integration additionally needs a new VAMS API route — uncommon, but it happens when a pipeline is driven by something other than a workflow — **`/add-api-endpoint`** covers that separate set of files.
+
+The command scaffolds; it does not decide. You still own the output path conventions, the `assetId` threading, and the input contract described in the rest of this page, and the generated code is a starting point to review rather than a finished pipeline. See [Agentic development](../developer/agentic-development.md#claude-code-slash-commands) for the full list of available commands, and note they are repository-local development aids — they are not part of a deployed VAMS instance.
+:::
 
 ### Step 1: Create the pipeline handler code
 
@@ -111,14 +123,30 @@ def lambda_handler(event, context):
         "sfnExternalTaskToken": external_task_token,
     }
 
-    lambda_client.invoke(
+    lambda_response = lambda_client.invoke(
         FunctionName=OPEN_PIPELINE_FUNCTION_NAME,
         InvocationType="RequestResponse",
         Payload=json.dumps(message_payload).encode("utf-8"),
     )
 
+    # Check both results: the invoke status, and FunctionError for a function that raised.
+    if lambda_response.get("StatusCode") != 200:
+        raise Exception("Invoke Open Pipeline Lambda Failed.")
+    if lambda_response.get("FunctionError"):
+        raise Exception(
+            "Invoke Open Pipeline Lambda Failed: " + str(lambda_response.get("FunctionError"))
+        )
+
     return {"statusCode": 200, "body": "Success"}
 ```
+
+:::warning[A raised invoke still returns `StatusCode` 200]
+`RequestResponse` reports a function that raised in `FunctionError`, not in `StatusCode` -- the status
+describes the invocation, not the outcome. A `StatusCode`-only check therefore reads a failed launch as a
+successful one, so nothing reports against the task token and the workflow's task stays `RUNNING` until
+`taskTimeout`. Raise on either result and let the handler's `except` block send the callback -- see
+[Every failure route reports the token](#every-failure-route-reports-the-token).
+:::
 
 :::warning[Resolve inputs from the manifest, then pass every output path through]
 The payload does **not** contain `inputS3AssetFilePath` or the output paths -- resolve them from the
@@ -489,20 +517,35 @@ Write to the resolved output locations, preserving each input file's relative pa
 The workflow's process-output step then moves the results onto the asset. Metadata write-back has its
 own file convention:
 
-| Output         | Location                      | Naming                                                     |
-| -------------- | ----------------------------- | ---------------------------------------------------------- |
-| Files          | `outputS3AssetFilesPath`      | Preserve the input's relative path                         |
-| File previews  | `outputS3AssetFilesPath`      | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
-| Asset preview  | `outputS3AssetPreviewPath`    | Any allowed image name                                     |
-| File metadata  | `outputS3AssetMetadataPath`   | `{targetFilePath}.metadata.json`                           |
-| Asset metadata | `outputS3AssetMetadataPath`   | `asset.metadata.json`                                      |
-| Results        | The manifest's results prefix | Any name                                                   |
+| Output          | Location                      | Naming                                                     |
+| --------------- | ----------------------------- | ---------------------------------------------------------- |
+| Files           | `outputS3AssetFilesPath`      | Preserve the input's relative path                         |
+| File previews   | `outputS3AssetFilesPath`      | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
+| Asset preview   | `outputS3AssetPreviewPath`    | Any allowed image name                                     |
+| File metadata   | `outputS3AssetMetadataPath`   | `{targetFilePath}.metadata.json`                           |
+| File attributes | `outputS3AssetMetadataPath`   | `{targetFilePath}.attribute.json`                          |
+| Asset metadata  | `outputS3AssetMetadataPath`   | `asset.metadata.json` (reserved basename)                  |
+| Results         | The manifest's results prefix | Any name                                                   |
 
-Metadata files use the body
+Metadata and attribute files share one body:
 `{"metadata": [{"metadataKey": "...", "metadataValue": "..."}], "updateType": "update"}`, adding
-`"type": "metadata"` for file-level metadata. Only keys ending in `.metadata.json` are consumed -- a
+`"type": "metadata"` or `"type": "attribute"`. The file-name suffix decides where the values land and
+`type` is corrected to match it, so the file name is authoritative. `updateType` is `update` (upsert)
+or `replace_all`. Only keys ending in `.metadata.json` or `.attribute.json` are consumed -- a
 differently-named file is ignored silently, which looks like a pipeline that simply produced no
-metadata.
+metadata. `asset.metadata.json` is reserved for asset-level values: any other `*.metadata.json` is
+read as file-level, with its target path taken from the file name.
+
+:::tip[A pipeline can annotate a file it produces in the same run]
+Files written to `outputS3AssetFilesPath` are ingested onto the asset **before** the metadata path is
+read, so metadata naming a newly produced file is applied to a file that already exists. Write both in
+one execution; no second pass is required.
+
+Name the metadata file after the file's final **asset-relative** path, which includes the workflow's
+output base-execution path extension -- not the absolute Amazon S3 key. Metadata naming a file whose
+ingestion failed is rejected and the execution is recorded as failed, so metadata values never
+accumulate against files that did not land.
+:::
 
 ## Callbacks
 
@@ -541,9 +584,19 @@ Lambda is the only place that can.
 Cover every path that ends the invocation without success:
 
 -   each `except` block, including a broad catch-all;
--   every early `return` that emits a `4xx` **after** the token has been parsed from the body.
+-   every early `return` that emits a `4xx` **after** the token has been parsed from the body;
+-   the result of any nested `RequestResponse` invoke, checked for `FunctionError` as well as
+    `StatusCode` -- a nested function that raised reports 200 with `FunctionError` set, and reading only
+    the status turns that failure into an unreported success.
 
 An early return that fires before the body is parsed carries no token and needs no callback.
+
+A nested function's own callback attempt should propagate rather than swallow its error. When a nested
+Lambda's `SendTaskFailure` fails -- a transient error, a stale token, a missing grant on that one role --
+letting the error escape sets `FunctionError` on the invoke, so the caller sees the failure and reports the
+token under its own role. Catching it there returns a payload-level `4xx` under a clean invoke, which the
+caller does not inspect, and the task hangs for its full timeout. A duplicate `SendTaskFailure` against a
+token that was already failed raises `TaskDoesNotExist`, which the caller's own callback helper logs.
 
 :::warning[Verify the grant on the entry-point function, not the pipeline]
 A pipeline's AWS CDK builder file usually grants `states:SendTaskSuccess` and `states:SendTaskFailure` to
@@ -587,21 +640,94 @@ events_client.put_events(Entries=[{
         "pipelineExecutionId": pipeline_execution_id,
         "subExecution": {"resourceType": "stepFunctionsExecution",
                          "stateMachineArn": state_machine_arn,
-                         "executionArn": sub_execution_arn},
-        "logs": [{"logGroupArn": log_group_arn, "logGroupName": log_group_name}],
+                         "executionArn": sub_execution_arn,
+                         "label": "Thumbnail processing"},
+        "logs": [
+            {"logGroupArn": log_group_arn, "logGroupName": log_group_name,
+             "sourceType": "stateMachine", "label": "Thumbnail state machine"},
+            {"logGroupArn": batch_log_group_arn, "logGroupName": batch_log_group_name,
+             "logStreamPrefix": f"{job_definition_name}/default/",
+             "stageName": "ThumbnailBatchJob", "sourceType": "batch",
+             "label": "ThumbnailBatchJob container"},
+        ],
     }),
 }])
 ```
 
 Registration is **best-effort by design**: wrap it so a registration failure is logged and ignored rather
-than failing a pipeline whose real work already started. Re-reporting the same locator is safe — an
-already-registered resource is skipped, so an at-least-once event delivery does not duplicate it.
+than failing a pipeline whose real work already started. Re-reporting the same location is safe — a log
+entry is identified by its group and stream (or prefix), so an at-least-once event delivery does not
+duplicate it, and a redelivery that adds a `stageName`, `label`, or `sourceType` the stored entry lacks
+fills them in. At most 50 log entries and 50 sub-processes are kept per pipeline execution.
 
-| Register                                  | So that                                                                                              |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| A nested Step Functions execution         | Aborting the VAMS execution stops it, and its state history appears in the execution's logs.         |
-| A log group the pipeline writes to        | Its events appear under the step's logs without an operator needing to know where the pipeline logs. |
-| A compute job the pipeline submits itself | Aborting terminates the job rather than leaving it running and billing.                              |
+The `Source` must end in `.pipeline.<pipelineExecutionId>` for the pipeline execution the detail names —
+the prefix on the payload already has that form — and an event whose source names another pipeline
+execution is ignored. Each `logs[]` entry takes a location (`logGroupArn` or `logGroupName`, and optionally
+`logStreamName` or `logStreamPrefix`) plus three optional descriptors: `stageName`, the state of your nested
+state machine the log belongs to (1–80 printable characters, matching the ASL state name exactly); `label`,
+a display name (1–128 characters); and `sourceType`, one of `stateMachine`, `lambda`, `batch`, `ecs`,
+`container`, `custom` (anything else is stored as `custom`). `subExecution` takes the same `stageName` and
+`label`. The descriptors are what let the execution view label each log source and tie it to a stage; an
+entry without them is still read, with the log group's name as its label. For an AWS Batch job, register
+the group the job definition writes to with `logStreamPrefix` set to `<jobDefinitionName>/default/`, the
+prefix of the streams AWS Batch creates (`<jobDefinitionName>/default/<ecs-task-id>`). Which group that is
+depends on the job definition's log configuration: a Fargate job definition that routes its output through
+the `awslogs` driver writes to the group it names — for the built-in Fargate pipelines, a VAMS-owned,
+KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group — while a job definition with no log
+configuration, such as the built-in GPU pipelines, writes to AWS Batch's default `/aws/batch/job`.
+Registering a group the container does not write to is not caught at deploy time; the execution view
+resolves a stream in a group that holds nothing. A prefix registered on the pipeline execution is what
+allows VAMS to read the container stream, which does not print the execution id, without the
+execution-scope filter.
+
+For a pipeline deployed by the VAMS CDK, the builder of the lambda that publishes the event — the
+`openPipeline`-equivalent, not the `vamsExecute` entry point — supplies these values. It sets
+`ORCHESTRATION_BUS_NAME` from `storageResources.eventBridge.orchestrationBus.eventBusName`, grants the
+function `events:PutEvents` with `orchestrationBus.grantPutEventsTo(fn)`, and passes the name and ARN of
+the Amazon CloudWatch Logs group the construct created for the nested state machine. For an AWS Batch
+pipeline it spreads one of the two helpers in `infra/lib/helper/batchJobLogGroup.ts`, each of which sets
+`BATCH_JOB_LOG_GROUP_NAME` and `BATCH_JOB_LOG_GROUP_ARN` in the form the `CLOUDWATCH_LOG_GROUP_ARN`
+validator accepts: a Fargate pipeline spreads `vendedBatchJobLogGroupEnvironment(containerLogGroup)` with
+the VAMS-owned `/aws/vendedlogs/Pipelines/<Name><hash>` group it passed to `BatchFargatePipelineConstruct`
+as `logGroup` (the Potree viewer, whose two job definitions write to two groups, sets `PDAL_` /
+`POTREE_JOB_LOG_GROUP_NAME` / `_ARN` per job instead), while a GPU pipeline whose job definition sets no
+log configuration spreads `batchJobLogGroupEnvironment()`, which names AWS Batch's default `/aws/batch/job`.
+The builder also sets `BATCH_JOB_DEFINITION_NAME` to the job definition's
+**name**: a Fargate `EcsJobDefinition`'s `.jobDefinitionName`, the `jobDefinitionName` prop of a named
+`CfnJobDefinition`, or `jobDefinitionNameFromRef(jobDefinition.ref)` for an unnamed one. The Ref is an ARN
+with a revision, and a `:` in the prefix fails the `LOG_STREAM_NAME` validator, which leaves the container
+source permanently unscoped.
+
+```typescript
+import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
+
+const fun = new lambda.Function(scope, "openPipeline", {
+    // code, handler, runtime, layers, timeout, memorySize, vpc as in the other builders
+    environment: {
+        STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
+        ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+        STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+        STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+        // Fargate: the group the job definition writes to; a GPU pipeline with no log
+        // configuration spreads ...batchJobLogGroupEnvironment() instead.
+        ...vendedBatchJobLogGroupEnvironment(containerLogGroup),
+        BATCH_JOB_DEFINITION_NAME: batchPipeline.batchJobDefinition.jobDefinitionName,
+    },
+});
+
+pipelineStateMachine.grantStartExecution(fun);
+orchestrationBus.grantPutEventsTo(fun);
+```
+
+`stageName` is the state's name in the nested state machine's definition; with the CDK that is the construct
+id of the task, since no construct sets `stateName`. A pipeline deployed outside the VAMS CDK sets the same
+environment values itself and needs `events:PutEvents` on the orchestration bus.
+
+| Register                                  | So that                                                                                                                                                                             |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A nested Step Functions execution         | Aborting the VAMS execution stops it, its state history appears in the execution's logs, and the execution view reports each of its stages with a status derived from that history. |
+| A log group the pipeline writes to        | It is listed as a log source of the step, labelled and tied to its stage, and its events appear under the step's logs without an operator needing to know where the pipeline logs.  |
+| A compute job the pipeline submits itself | Aborting terminates the job rather than leaving it running and billing, and its status and container log stream are resolved from the job itself.                                   |
 
 `resourceType` is what keeps this open-ended: the registration path validates and stores whichever locator
 keys are reported (`executionArn`, `jobId`, `jobArn`, `taskArn`, `clusterArn`, `farmId`, `queueId`, or a
@@ -613,21 +739,31 @@ instead of silently forgetting it.
 A registration is a durable record on the pipeline-execution row, and three separate capabilities read it.
 Registering once is what turns each of them on:
 
-| Capability             | Reads                              | Behavior without registration                                                                                 |
-| ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **Abort**              | `registeredSubExecutions`          | Aborting the VAMS execution stops the workflow but leaves the pipeline's own work running — and billing.      |
-| **Logs**               | `registeredLogs`                   | The step's log viewer has no source, so it renders empty even though the pipeline is writing logs somewhere.  |
-| **Sub-process status** | `registeredSubExecutions` locators | The execution view cannot report what the sub-process is doing, because it does not know the resource exists. |
+| Capability             | Reads                                                                                                        | Behavior without registration                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Abort**              | `registeredSubExecutions`                                                                                    | Aborting the VAMS execution stops the workflow but leaves the pipeline's own work running — and billing.                                   |
+| **Logs**               | `registeredLogs` — listed as the step's `availableLogs` / `logSources`, each readable alone by `logId`       | The step's log viewer has only the invocation log, so a container's output is unreachable even though the pipeline is writing it.          |
+| **Sub-process status** | `registeredSubExecutions` locators, plus the sub-state-machine definition and execution history at read time | The execution view cannot report what the sub-process is doing, or which stage of it failed, because it does not know the resource exists. |
 
-The logs a step shows come from all three sources merged and sorted together — the pipeline's own Lambda log
-group, any group reported through `registeredLogs`, and the sub-process history. See
-[`GET /workflows/executions/{executionId}/logs`](../api/workflows.md) for the `subProcessEvents` and
-`sfnHistoryEvents` shape a client receives.
+The logs a step shows come from all three sources merged and sorted by timestamp — the pipeline's own Lambda
+log group, any group reported through `registeredLogs`, and the sub-process history — and every registered
+source is listed with a `logId` so a client can read it alone. Stage status is never stored: the execution
+details route derives it, when asked, from the registered sub-state-machine's definition and history. See
+[`GET /workflows/executions/{executionId}/details`](../api/workflows.md#get-execution-details) for the
+`availableLogs` and `subExecutions` shape and
+[`GET /workflows/executions/{executionId}/logs`](../api/workflows.md#get-execution-logs) for `logSources`,
+`subProcessEvents`, and `sfnHistoryEvents`.
 
 :::info[Stopping is type-aware; recording is not]
 Registration accepts any `resourceType`, but only the types VAMS has a stop API for are actually stopped
-today: a Step Functions execution (`stepFunctionsExecution`) and an AWS Batch job (`batchJob`). Any other
-type is stored and, on abort, reported back to the caller as left running rather than dropped.
+today: a Step Functions execution (`stepFunctionsExecution`), an AWS Batch job (`batchJob`), and an AWS
+Deadline Cloud farm job (`deadlineCloudJob`). A registered Deadline Cloud job is also reported with its live
+job status in the execution details, and its session logs appear as one of the step's log sources. Any
+other type is stored and reported back as left running rather than dropped.
+
+Stopping runs on both of the routes that end a run early. An abort names what it could not stop in the API
+response; a workflow failure stops each in-flight pipeline's sub-processes before stamping its row terminal,
+and records what was left running on that pipeline's log row.
 
 That distinction is deliberate — it means registering a resource is always worth doing. A type VAMS cannot
 stop yet becomes visible in the abort result immediately, and gains automatic stop and status handling when
@@ -925,6 +1061,24 @@ is checked against, and it is authored rather than derived from the pipeline:
     whose filters exclude a type its own pipeline requires produces a workflow that can never satisfy
     that pipeline — the API rejects such an execution, and the workflow editor warns while saving.
 
+-   **`outputTarget`** is `{ "locationType": "asset" | "none", "allowOverride": boolean }` and decides
+    where a run writes. `asset` (the default) writes the run's output files and metadata to a VAMS asset.
+    `none` is **results-only**: the run writes no asset files or metadata and records only results text
+    and logs against the execution — an analysis workflow that emits a report rather than a file. A
+    results-only workflow may still take input files, so its `inputFileArity` can be any of `none`, `one`
+    or `multi`. `allowOverride` gates redirecting the destination at execute time: with one input asset
+    the output is locked to that asset unless override is allowed.
+
+    :::warning[`locationType: "asset"` with `inputFileArity: "none"` needs `allowOverride: true`]
+    A run that selects no input file has no input asset to lock its output to, so a destination has to be
+    choosable per execution. Registration runs the same validation as the API and **fails the deployment**
+    on a bundle declaring `asset` + `none` + `allowOverride: false`, rather than storing a workflow whose
+    every execution would fail. Author it as results-only (`"locationType": "none"`) or as
+    `{"locationType": "asset", "allowOverride": true}`.
+    :::
+
+    See [Output target](../api/workflows.md#output-target) for the full override semantics.
+
 -   **`allowWorkflowTriggerChaining`** (default `false`) lets another workflow's _output_ fire this
     workflow's triggers — how a preview or metadata workflow runs on a conversion's result. A workflow
     never fires on output it wrote itself whatever the value, so it cannot loop on its own files, and a
@@ -1026,7 +1180,7 @@ pipeline is responsible for calling `SendTaskSuccess` or `SendTaskFailure` with 
 
 ## Input-configuration template tags
 
-A pipeline's input configuration (the input parameters supplied when the pipeline is registered or overridden at execute time) may contain `{{tagName}}` template tags. VAMS substitutes these tags with values from the running execution before the pipeline receives its configuration, so a pipeline can ship a fixed configuration file with placeholders instead of building it field-by-field. Tags are replaced **per pipeline run**, and — in a multi-pipeline workflow — **per pipeline step**, so each step's tags reflect its own inputs.
+A pipeline's input configuration (the configuration body of the template the run uses, or a per-run override of it) may contain `{{tagName}}` template tags. VAMS substitutes these tags with values from the running execution before the pipeline receives its configuration, so a pipeline can ship a fixed configuration file with placeholders instead of building it field-by-field. Tags are replaced **per pipeline run**, and — in a multi-pipeline workflow — **per pipeline step**, so each step's tags reflect its own inputs.
 
 Two kinds of tag resolve in a configuration body, and the difference is who supplies the value:
 
@@ -1059,7 +1213,7 @@ A template body whose `configFormat` is `json` is checked against those two shap
 ```
 
 :::info
-An unrecognized tag causes the execution to fail, so a typo is caught rather than silently passed through. A recognized tag whose value is not available for a given run (for example a `{{firstAssetFile...}}` tag on a run with no input files) resolves to an empty value rather than failing.
+A tag that is neither a system tag nor declared in the template's `tagSchema` is passed through unchanged: the pipeline receives the literal `{{tagName}}` text, because the configuration body is the pipeline's to interpret. A typo therefore surfaces as a placeholder in the configuration the pipeline reads rather than as a failed execution — check the configuration body a step ran with (`renderedConfigLocation` on the execution detail) when a value arrives unsubstituted. A recognized tag whose value is not available for a given run (for example a `{{firstAssetFile...}}` tag on a run with no input files) resolves to an empty value rather than failing.
 :::
 
 ### Available tags
@@ -1085,7 +1239,7 @@ Each of these resolves for the subject the pipeline task is running against: the
 The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request — or a workflow's `systemConfig.defaultOutputFileBaseExecutionPathExtension`, which supplies it when a request does not — can produce a per-run output sub-folder such as `/{{jobName}}/`, `/{{executionId}}/`, or `/{{jobStartDate}}/`. The prefix is inserted immediately before each output file's own name, so the folder structure a container writes below its output prefix is preserved: a container writing `render/thumb.png` under a prefix of `/{{jobName}}/` produces `render/<jobName>/thumb.png` in the asset. Containers should therefore not create their own per-job folder — the workflow's prefix is what separates runs.
 
 :::note
-One dynamic tag family is planned but not yet available: `{{metadata_<key>}}`, for looking up an individual metadata field by name. Using it today fails the execution as an unrecognized tag, and the `metadata_` prefix is reserved so a template's own tag key cannot collide with it. User-defined tags **are** available — they are declared per template rather than on the pipeline definition, as described next.
+One dynamic tag family is planned but not yet available: `{{metadata_<key>}}`, for looking up an individual metadata field by name. Using it today is rejected with a 400 — unlike an ordinary unrecognized tag, a name under the reserved `metadata_` prefix claims a value no renderer resolves, and the prefix is reserved so a template's own tag key cannot collide with it either. User-defined tags **are** available — they are declared per template rather than on the pipeline definition, as described next.
 :::
 
 ## Configuration templates and per-run options
@@ -1119,6 +1273,12 @@ Each entry in `tagSchema` describes one field:
 | `enumValues`  | For `enum` | The allowed values. An `enum` without them is rejected.                                   |
 | `label`       | No         | The field's label on the execute form.                                                    |
 | `description` | No         | Helper text on the execute form — where units, ranges, and fallbacks belong.              |
+
+An entry may carry only those seven keys. Any other key is rejected when the template is saved rather
+than ignored, because a stored definition is read a named key at a time: a misspelled `requried` would
+leave the field optional and a differently cased `Type` would leave it a `string`. For a template
+shipped in a `vamsSchema` bundle that rejection lands at deploy, as a failed template registration in
+the import custom resource's log — check that log rather than the stack's status, which reports success.
 
 ```json
 {
@@ -1166,7 +1326,8 @@ bodies are stored verbatim and are not shape-checked, though their tags still su
 Prefer several templates on one pipeline over several near-identical pipelines. A template may also
 narrow its pipeline's own input rules through `overrides`, which accepts exactly four keys:
 `inputFileArity`, `assetScope`, `metadataInputs`, and `inputFileFilters`. Any other key is rejected when
-the template is saved rather than ignored at execute time.
+the template is saved rather than ignored at execute time, and the block is bounded at 64 KB serialized —
+the same budget as the pipeline's own `systemConfig`, whose keys it replaces a subset of.
 
 That is what lets one pipeline offer a text-to-video mode needing no input file alongside a
 video-to-video mode that requires one: set the pipeline's own `inputFileArity` to the lowest any template
@@ -1208,7 +1369,10 @@ docker run -it \
 ### Lambda testing
 
 Test Lambda handlers locally with a mock event payload that carries the same body fields the state
-machine sends — the identity fields plus the two S3 locations, and nothing else:
+machine sends — the identity fields plus the two S3 locations, and nothing else. The two locations
+arrive as fully resolved `s3://` URIs, so a pipeline never has a prefix to join: the sample below shows
+them for a default asset bucket registered at its root, and a bucket registered under a
+`baseAssetsPrefix` yields `s3://bucket/<that prefix>/pipelines/…` in the same field.
 
 ```python
 event = {
@@ -1251,6 +1415,7 @@ Use this checklist when building a new pipeline:
 -   [ ] `assetId` resolved from the manifest in `vamsExecute` and threaded from there (vamsExecute -> constructPipeline -> container), never read off the task body or derived from S3 path segments
 -   [ ] Every sub-process and log location registered (nested state machines, log groups, and any compute job the pipeline submits itself) — see [Registering sub-processes and logs](#registering-sub-processes-and-logs)
 -   [ ] `SendTaskFailure` sent on every error path, not only the expected ones — including the pre-invoke rejections that fail before the container or job starts, and every post-token early `return` that emits a `4xx`
+-   [ ] Every nested `RequestResponse` invoke checked for `FunctionError`, not only `StatusCode` — a nested function that raised returns 200 with `FunctionError` set, which a status-only check reads as a successful launch
 -   [ ] `states:SendTaskFailure` granted on the **entry-point** Lambda builder specifically, not merely present somewhere in the builder file — see [Every failure route reports the token](#every-failure-route-reports-the-token)
 -   [ ] CDK nested stack created with Lambda builders, AWS Step Functions, and compute resources
 -   [ ] All Lambda builders follow the standard security pattern (4 required security calls)

@@ -35,15 +35,20 @@ MOD = "backend.backend.handlers.workflows.executionService"
 
 @pytest.fixture(autouse=True)
 def _clear_asset_cache():
-    # The per-request asset memo and the decision memo are module-level; clear both between tests so a
-    # cached row or authorization decision from one test cannot leak into another (mirrors the
-    # per-invocation clear in the real handlers). Clearing the decision memo here is what makes a future
-    # memo-scoping regression fail loudly in these tests rather than leak silently between them.
+    # The per-request asset memo, the decision memo, the state-machine describe memo and the Batch
+    # job describe memo are module-level; clear all four between tests so a cached row, authorization
+    # decision or description from one test cannot leak into another (mirrors the per-invocation clear
+    # in the real handlers). Clearing the decision memo here is what makes a future memo-scoping
+    # regression fail loudly in these tests rather than leak silently between them.
     le._asset_details_cache.clear()
     le._authz_decision_cache.clear()
+    le._state_machine_describe_cache.clear()
+    le._batch_job_describe_cache.clear()
     yield
     le._asset_details_cache.clear()
     le._authz_decision_cache.clear()
+    le._state_machine_describe_cache.clear()
+    le._batch_job_describe_cache.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -356,6 +361,60 @@ class TestRerunReconstruction:
         assert params["templateId"] == "t1"
         assert "customTemplateOverride" not in params
 
+    def test_truncated_template_tags_fail_rerun_even_with_a_template(self):
+        # The tags are the caller's input, so a templateId does not make a trimmed list recoverable:
+        # unlike the override guard, this one has no template escape hatch.
+        with patch(f"{MOD}._query_all", side_effect=[
+                [{"databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/x.glb", "assetRootS3Key": ""}],
+                [{"templateId": "t1", "templateTags": [{"key": "k", "value": "v"}],
+                  "templateTagsTruncated": True}]]), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[
+                {"pipelineExecutionId": "pe1", "pipelineId": "p1"}]):
+            with pytest.raises(le.VAMSGeneralErrorResponse):
+                le._reconstruct_execute_request(
+                    "e1000000000000000000000000000001", {"workflowId": "wf", "workflowDatabaseId": "db"},
+                    {"outputAssetId": "a1", "outputDatabaseId": "db"})
+
+    def test_template_tags_trimmed_to_empty_still_fails_rerun(self):
+        # The worst case: trimmed to nothing. A guard placed after the truthiness test would replay
+        # this as "no tags" and launch a divergent run silently.
+        with patch(f"{MOD}._query_all", side_effect=[
+                [{"databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/x.glb", "assetRootS3Key": ""}],
+                [{"templateId": "t1", "templateTags": [], "templateTagsTruncated": True}]]), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[
+                {"pipelineExecutionId": "pe1", "pipelineId": "p1"}]):
+            with pytest.raises(le.VAMSGeneralErrorResponse):
+                le._reconstruct_execute_request(
+                    "e1000000000000000000000000000001", {"workflowId": "wf", "workflowDatabaseId": "db"},
+                    {"outputAssetId": "a1", "outputDatabaseId": "db"})
+
+    def test_untruncated_template_tags_replay_verbatim(self):
+        # Positive control, flag present and False: the tag list still reaches the rebuilt body.
+        tags = [{"key": "k", "value": "v"}, {"key": "k2", "value": "v2"}]
+        with patch(f"{MOD}._query_all", side_effect=[
+                [{"databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/x.glb", "assetRootS3Key": ""}],
+                [{"templateId": "t1", "templateTags": tags, "templateTagsTruncated": False}]]), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[
+                {"pipelineExecutionId": "pe1", "pipelineId": "p1"}]):
+            body = le._reconstruct_execute_request(
+                "e1000000000000000000000000000001", {"workflowId": "wf", "workflowDatabaseId": "db"},
+                {"outputAssetId": "a1", "outputDatabaseId": "db"})
+        assert body["pipelineExecutionParameters"]["p1"]["templateTags"] == tags
+
+    def test_absent_truncation_flag_replays_template_tags(self):
+        # Positive control for rows written before the flag existed: the key is absent, not False, so
+        # the guard must not brick an ordinary re-run.
+        tags = [{"key": "k", "value": "v"}]
+        with patch(f"{MOD}._query_all", side_effect=[
+                [{"databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/x.glb", "assetRootS3Key": ""}],
+                [{"templateId": "t1", "templateTags": tags}]]), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[
+                {"pipelineExecutionId": "pe1", "pipelineId": "p1"}]):
+            body = le._reconstruct_execute_request(
+                "e1000000000000000000000000000001", {"workflowId": "wf", "workflowDatabaseId": "db"},
+                {"outputAssetId": "a1", "outputDatabaseId": "db"})
+        assert body["pipelineExecutionParameters"]["p1"]["templateTags"] == tags
+
 
 @pytest.mark.unit
 class TestRerunMfaPropagation:
@@ -656,7 +715,7 @@ class TestGetExecutionLogsLiveFallback:
                 "pipelineExecutionType": "Lambda", "pipelineResourceArn": "vams-vamsExecuteConv"}
         with patch(f"{MOD}.get_execution_main_row", return_value=main),              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")),              patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]),              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._sfn_execution_history_events",
                    return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events",
-                   return_value=(True, [{"timestamp": 5, "message": "START RequestId: abc"}])) as fetch:
+                   return_value=(True, [{"timestamp": 5, "message": "START RequestId: abc"}], None)) as fetch:
             resp = le.get_execution_logs(
                 {}, "e1000000000000000000000000000001", self._q(mode="full", pipelineExecutionId="pe-1"))
         assert resp["statusCode"] == 200
@@ -669,19 +728,21 @@ class TestGetExecutionLogsLiveFallback:
 
     def test_full_mode_scopes_the_invocation_log_to_this_execution(self):
         # A lambda's log group is shared across every execution of that pipeline, so the read MUST be
-        # filtered to this execution (and step) or one run's view leaks another's events.
+        # filtered to this execution or one run's view leaks another's events. It is scoped to the
+        # execution alone: the function logs the invoke body, which carries the workflow execution id
+        # but not the pipeline execution id, so requiring both read every plain Lambda step as empty.
         le.claims_and_roles = {"tokens": ["u1"]}
         main = {"workflowId": "wf", "workflowDatabaseId": "db",
                 "executionLogGroupArn": "arn:aws:logs:us-west-2:1:log-group:/g:*"}
         prow = {"pipelineExecutionId": "pe-1", "registeredLogs": [], "registeredSubExecutions": [],
                 "pipelineExecutionType": "Lambda", "pipelineResourceArn": "vams-fn"}
         with patch(f"{MOD}.get_execution_main_row", return_value=main),              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")),              patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]),              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._sfn_execution_history_events",
-                   return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [])) as fetch:
+                   return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [], None)) as fetch:
             le.get_execution_logs({}, "e1000000000000000000000000000001", self._q(mode="full", pipelineExecutionId="pe-1"))
         call = next(c for c in fetch.call_args_list
                     if "/aws/lambda/vams-fn" in c.args[0])
         scope = call.kwargs.get("scope_terms") or []
-        assert "e1000000000000000000000000000001" in scope and "pe-1" in scope
+        assert scope == ["e1000000000000000000000000000001"]
 
     @pytest.mark.parametrize("execution_type,resource", [
         ("SQS", "https://sqs.us-west-2.amazonaws.com/1/q"),
@@ -698,7 +759,7 @@ class TestGetExecutionLogsLiveFallback:
         prow = {"pipelineExecutionId": "pe-1", "registeredLogs": [], "registeredSubExecutions": [],
                 "pipelineExecutionType": execution_type, "pipelineResourceArn": resource}
         with patch(f"{MOD}.get_execution_main_row", return_value=main),              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")),              patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]),              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._sfn_execution_history_events",
-                   return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [])) as fetch:
+                   return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [], None)) as fetch:
             resp = le.get_execution_logs(
                 {}, "e1000000000000000000000000000001", self._q(mode="full", pipelineExecutionId="pe-1"))
         assert resp["statusCode"] == 200
@@ -715,7 +776,7 @@ class TestGetExecutionLogsLiveFallback:
                 "pipelineExecutionType": "Lambda", "pipelineResourceArn": "vams-fn"}
         with patch(f"{MOD}.get_execution_main_row", return_value=main),              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")),              patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]),              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._sfn_execution_history_events",
                    return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events",
-                   return_value=(False, "AccessDeniedException")):
+                   return_value=(False, "AccessDeniedException", None)):
             resp = le.get_execution_logs(
                 {}, "e1000000000000000000000000000001", self._q(mode="full", pipelineExecutionId="pe-1"))
         assert resp["statusCode"] == 200
@@ -745,7 +806,7 @@ class TestGetExecutionLogsLiveFallback:
                    return_value="arn:aws:logs:us-west-2:1:log-group:/aws/vendedlogs/sub") as resolve, \
              patch(f"{MOD}._fetch_registered_log_events",
                    return_value=(True, [{"timestamp": 3, "message": "sub log line",
-                                         "logGroupArn": "arn:...:/aws/vendedlogs/sub"}])) as fetch:
+                                         "logGroupArn": "arn:...:/aws/vendedlogs/sub"}], None)) as fetch:
             resp = le.get_execution_logs(
                 {}, "e1000000000000000000000000000001", self._q(mode="full", pipelineExecutionId="pe-1"))
         body = json.loads(resp["body"])["message"]
@@ -778,7 +839,7 @@ class TestGetExecutionLogsLiveFallback:
                    return_value={"events": [], "nextToken": None}), \
              patch(f"{MOD}._resolve_sfn_log_group_arn", return_value=shared), \
              patch(f"{MOD}._fetch_registered_log_events",
-                   return_value=(True, [])) as fetch:
+                   return_value=(True, [], None)) as fetch:
             le.get_execution_logs({}, "e1000000000000000000000000000001", self._q(mode="full", pipelineExecutionId="pe-1"))
         # The shared group is read exactly once (from registeredLogs), not again after resolution.
         assert fetch.call_count == 1
@@ -835,6 +896,178 @@ class TestSfnHistoryFormatting:
         with patch.object(le, "sfn") as m_sfn:
             m_sfn.describe_state_machine.return_value = {"loggingConfiguration": {"destinations": []}}
             assert le._resolve_sfn_log_group_arn("arn:sm") == ""
+
+    def test_the_cloudwatch_next_token_is_never_handed_to_step_functions(self):
+        with patch.object(le, "sfn") as m_sfn:
+            m_sfn.get_execution_history.return_value = {"events": []}
+            le._sfn_execution_history_events("arn:exec", {"nextToken": "cloudwatch-token", "limit": "50"})
+        kwargs = m_sfn.get_execution_history.call_args.kwargs
+        assert "nextToken" not in kwargs
+        assert kwargs["maxResults"] == 50
+
+    def test_a_stage_name_restricts_the_history_to_that_state(self):
+        import datetime
+        ts = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)
+        fake = {"events": [
+            {"id": 1, "previousEventId": 0, "type": "TaskStateEntered", "timestamp": ts,
+             "stateEnteredEventDetails": {"name": "Prepare"}},
+            {"id": 2, "previousEventId": 1, "type": "TaskStateExited", "timestamp": ts,
+             "stateExitedEventDetails": {"name": "Prepare"}},
+            {"id": 3, "previousEventId": 2, "type": "TaskStateEntered", "timestamp": ts,
+             "stateEnteredEventDetails": {"name": "Batch"}},
+            {"id": 4, "previousEventId": 3, "type": "TaskFailed", "timestamp": ts,
+             "taskFailedEventDetails": {"resourceType": "batch", "error": "E", "cause": "boom"}},
+            {"id": 5, "previousEventId": 4, "type": "TaskStateExited", "timestamp": ts,
+             "stateExitedEventDetails": {"name": "Batch"}},
+        ]}
+        with patch.object(le, "sfn") as m_sfn:
+            m_sfn.get_execution_history.return_value = fake
+            out = le._sfn_execution_history_events("arn:exec", {}, stage_name="Batch")
+        # The slice is Batch's Entered..Exited range: every line names that state or its task, none
+        # names Prepare, and the failure line carries the error and cause.
+        msgs = [e["message"] for e in out["events"]]
+        assert msgs and all("Batch" in m or "batch" in m for m in msgs)
+        assert not any("Prepare" in m for m in msgs)
+        assert any("TaskFailed" in m and "E" in m and "boom" in m for m in msgs)
+
+    def test_the_registered_log_reader_pages_and_returns_the_token(self):
+        with patch.object(le, "logs_client") as m_logs:
+            m_logs.filter_log_events.return_value = {
+                "events": [{"timestamp": 1, "message": "m"}], "nextToken": "page-2"}
+            ok, events, token = le._fetch_registered_log_events(
+                "arn:aws:logs:us-west-2:1:log-group:/g:*", "stream-1", {"limit": "10"},
+                next_token="page-1")
+        assert ok is True and token == "page-2"
+        assert events == [{"timestamp": 1, "message": "m", "logGroupName": "/g"}]
+        kwargs = m_logs.filter_log_events.call_args.kwargs
+        assert kwargs["nextToken"] == "page-1" and kwargs["logStreamNames"] == ["stream-1"]
+        assert "filterPattern" not in kwargs
+
+    def test_the_registered_log_reader_reports_failures_as_a_triple(self):
+        with patch.object(le, "logs_client") as m_logs:
+            m_logs.filter_log_events.side_effect = botocore.exceptions.ClientError(
+                {"Error": {"Code": "ResourceNotFoundException"}}, "FilterLogEvents")
+            assert le._fetch_registered_log_events("arn:aws:logs:us-west-2:1:log-group:/g", "", {}) == (
+                False, "ResourceNotFoundException", None)
+        # A location that is not a log-group ARN fails the same triple shape before any AWS call.
+        ok, reason, token = le._fetch_registered_log_events("not-an-arn", "", {})
+        assert ok is False and token is None and "ARN" in reason
+
+
+@pytest.mark.unit
+class TestStateMachineDescribeMemo:
+    """One DescribeStateMachine per state machine per invocation: the details view asks for each
+    registered sub-state-machine's log destination and definition, and a multi-step workflow registers
+    the same machine several times."""
+
+    SM = "arn:aws:states:us-west-2:1:stateMachine:sub"
+
+    def _details_event(self, execution_id="e0000000000000000000000000000001"):
+        return {
+            "requestContext": {"http": {"method": "GET",
+                                        "path": f"/workflows/executions/{execution_id}/details"},
+                               "authorizer": {}},
+            "pathParameters": {"executionId": execution_id},
+            "queryStringParameters": {},
+            "headers": {"authorization": "Bearer t"},
+        }
+
+    def test_one_describe_per_arn_serves_definition_name_and_log_group(self):
+        with patch.object(le, "sfn") as m_sfn:
+            m_sfn.describe_state_machine.return_value = {
+                "name": "sub",
+                "definition": json.dumps({"StartAt": "A", "States": {"A": {"Type": "Pass", "End": True}}}),
+                "loggingConfiguration": {"destinations": [
+                    {"cloudWatchLogsLogGroup": {"logGroupArn": "arn:aws:logs:us-west-2:1:log-group:/g:*"}}]}}
+            first = le._describe_state_machine_cached(self.SM)
+            second = le._describe_state_machine_cached(self.SM)
+            resolved = le._resolve_sfn_log_group_arn(self.SM)
+        assert m_sfn.describe_state_machine.call_count == 1
+        assert first is second
+        assert first["name"] == "sub" and first["definition"]["StartAt"] == "A"
+        assert resolved == "arn:aws:logs:us-west-2:1:log-group:/g:*"
+
+    def test_a_failed_describe_is_empty_named_by_arn_tail_and_memoised(self):
+        with patch.object(le, "sfn") as m_sfn:
+            m_sfn.describe_state_machine.side_effect = botocore.exceptions.ClientError(
+                {"Error": {"Code": "ThrottlingException"}}, "DescribeStateMachine")
+            out = le._describe_state_machine_cached(self.SM)
+            le._describe_state_machine_cached(self.SM)
+        assert out == {"definition": None, "logGroupArn": "", "name": "sub"}
+        assert m_sfn.describe_state_machine.call_count == 1
+
+    def test_an_oversized_or_invalid_definition_is_left_unparsed(self):
+        with patch.object(le, "sfn") as m_sfn:
+            m_sfn.describe_state_machine.return_value = {
+                "definition": "x" * (le.MAX_SUB_STATE_MACHINE_DEFINITION_BYTES + 1)}
+            assert le._describe_state_machine_cached(self.SM)["definition"] is None
+            le._state_machine_describe_cache.clear()
+            m_sfn.describe_state_machine.return_value = {"definition": "{not json"}
+            assert le._describe_state_machine_cached(self.SM)["definition"] is None
+            le._state_machine_describe_cache.clear()
+            m_sfn.describe_state_machine.return_value = {"definition": json.dumps(["a list"])}
+            assert le._describe_state_machine_cached(self.SM)["definition"] is None
+
+    def test_an_empty_arn_is_not_described(self):
+        with patch.object(le, "sfn") as m_sfn:
+            assert le._describe_state_machine_cached("") == {"definition": None, "logGroupArn": "", "name": ""}
+        m_sfn.describe_state_machine.assert_not_called()
+
+    def test_lambda_handler_clears_the_memos(self):
+        le._state_machine_describe_cache["arn:stale"] = {"definition": None, "logGroupArn": "x", "name": "n"}
+        le._batch_job_describe_cache["job-stale"] = ({"jobId": "job-stale", "status": "SUCCEEDED"}, "")
+        with patch(f"{MOD}.request_to_claims", return_value={"tokens": []}), \
+             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()), \
+             patch(f"{MOD}.get_execution_main_row", return_value=None):
+            le.lambda_handler(self._details_event(), MagicMock())
+        assert le._state_machine_describe_cache == {}
+        assert le._batch_job_describe_cache == {}
+
+    def test_the_constants_hold_the_documented_values(self):
+        assert le.MAX_SUB_STATE_MACHINE_DEFINITION_BYTES == 256 * 1024
+        assert le.MAX_SUB_STAGES_REPORTED == 50 and le.MAX_SUB_STAGE_DEPTH == 3
+        assert le.MAX_SUB_STAGE_HISTORY_PAGES == 5 and le.MAX_SUB_STAGE_HISTORY_PAGES_PER_REQUEST == 20
+        assert le.MAX_SUB_STAGE_ERROR_CHARS == 256
+        assert le.MAX_REGISTERED_LOGS_INSPECTED == 20
+
+
+@pytest.mark.unit
+class TestBatchJobDescribeMemo:
+    """One DescribeJobs per Batch job id per invocation. The built-in machines discard the SubmitJob
+    result (verified live on prod5), so every Batch stage's container log stream is resolved through this call, and a
+    step's details and logs views may ask about the same job more than once within one request."""
+
+    def test_one_describe_per_job_id_returns_the_job(self):
+        job = {"jobId": "job-1", "status": "SUCCEEDED", "container": {"logStreamName": "jd/default/t1"}}
+        with patch.object(le, "batch_client") as m_batch:
+            m_batch.describe_jobs.return_value = {"jobs": [job]}
+            first = le._describe_batch_job_cached("job-1")
+            second = le._describe_batch_job_cached("job-1")
+        m_batch.describe_jobs.assert_called_once_with(jobs=["job-1"])
+        assert first == (job, "")
+        assert second is first
+
+    def test_a_job_batch_no_longer_lists_is_none_without_an_error_code_and_memoised(self):
+        # Batch keeps terminal jobs for about seven days; afterwards DescribeJobs answers jobs: [].
+        with patch.object(le, "batch_client") as m_batch:
+            m_batch.describe_jobs.return_value = {"jobs": []}
+            assert le._describe_batch_job_cached("job-old") == (None, "")
+            assert le._describe_batch_job_cached("job-old") == (None, "")
+        assert m_batch.describe_jobs.call_count == 1
+
+    def test_a_failed_describe_is_none_with_the_error_code_and_memoised(self):
+        with patch.object(le, "batch_client") as m_batch:
+            m_batch.describe_jobs.side_effect = botocore.exceptions.ClientError(
+                {"Error": {"Code": "AccessDeniedException"}}, "DescribeJobs")
+            assert le._describe_batch_job_cached("job-1") == (None, "AccessDeniedException")
+            le._describe_batch_job_cached("job-1")
+        assert m_batch.describe_jobs.call_count == 1
+
+    def test_an_empty_job_id_is_not_described(self):
+        with patch.object(le, "batch_client") as m_batch:
+            assert le._describe_batch_job_cached("") == (None, "")
+            assert le._describe_batch_job_cached(None) == (None, "")
+        m_batch.describe_jobs.assert_not_called()
 
 
 @pytest.mark.unit

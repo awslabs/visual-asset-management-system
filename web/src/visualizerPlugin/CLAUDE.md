@@ -28,22 +28,180 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `html-viewer`                      | HTML Viewer                    | document | .html                                                                                                                                    | enabled                                             |
 | `video-viewer`                     | Video Player                   | media    | .mp4, .webm, .mov, .avi, .mkv, .flv, .wmv, .m4v                                                                                          | enabled                                             |
 | `audio-viewer`                     | Audio Player                   | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
-| `columnar-viewer`                  | Columnar Data Viewer           | data     | .rds, .fcs, .csv                                                                                                                         | enabled                                             |
+| `columnar-viewer`                  | Columnar Data Viewer           | data     | .fcs, .csv                                                                                                                               | enabled                                             |
 | `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled                                             |
-| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .parquet (plaintext only), etc.                                                            | enabled                                             |
+| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
+| `text-diff-viewer`                 | Text Diff Viewer               | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc. (same list as `text-viewer`)                                                    | enabled (compare-only: 2 files, cross-asset)        |
 | `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
 | `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
 | `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed)                             |
 | `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed)                             |
-| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled                                             |
-| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep                                                         | enabled                                             |
+| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
-> `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter.
+> `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter. The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+
+---
+
+## Compare Mode
+
+`PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` takes a
+`mode` of `"visualize"` (default, unchanged behavior) or `"compare"`. In compare mode the registry
+surfaces **only** viewers that declare a `compareMode` block with `enabled: true`, whose
+`[minFiles, maxFiles]` window admits the selected file count, and whose shape flags admit the
+selection: N versions of one file requires `allowSameFileDifferentVersions`, N distinct files
+requires `allowDifferentFiles`, and entries spanning assets require `allowCrossAsset`.
+
+The per-viewer admission predicates for both paths live in `core/viewerSelection.ts` (pure,
+unit-tested; the registry re-exports them): `admitsVisualizeSelection(config, exts, isMultiFile)` and
+`admitsCompareSelection(config, exts, compareContext)`. The classification lives in
+`core/compareShape.ts` (pure, unit-tested; the registry re-exports it):
+`deriveCompareContext(files)` returns `{ fileCount, shape, crossAsset }`. **Identity is database +
+asset + key, never the key alone** — `config.json` under assetA and `config.json` under assetB are two
+different files (`shape: "different-files"`, `crossAsset: true`), not two versions of one file.
+
+**Compare-only viewers.** A viewer that renders nothing but `compareFiles` (the Text Diff Viewer)
+declares `compareMode.compareOnly: true`. The visualize path then never offers it — for one file or
+many, whatever `supportsMultiFile` and the extension match say — because visualize never passes
+`compareFiles` and the viewer would fail at once with "needs exactly two files". Keep such a viewer's
+`supportsMultiFile: false`: that flag is the **visualize** multi-file capability (`multiFileKeys`);
+the compare file count is `compareMode.minFiles`/`maxFiles`. Without `compareOnly`, compare capability
+is orthogonal — a viewer may visualize single files and also compare two.
+
+`DynamicViewer` renders compare mode when passed `mode="compare"`; it forwards the ordered files to
+the viewer as `compareFiles` (index 0 = left/base) and sets `compareMode={true}`. Compare-capable
+viewers read `compareFiles` instead of the single-file props.
+
+### Mode availability (what a surface may offer)
+
+**The design rule: a viewer is EITHER a compare-differ (`compareMode.compareOnly: true`) OR a regular
+viewer (single-file, or multi-file via `supportsMultiFile`) — never a hybrid.** The shipped config is
+guarded by `core/viewerSelection.test.ts` ("shipped viewerConfig.json compare contract"): every
+compare-capable viewer is compare-only, and no compare-only viewer is admitted on the visualize path
+for any file count.
+
+Every entry point decides what to offer with the SAME predicates, never with its own extension list:
+
+| Question                                                 | Pure predicate (`core/viewerSelection.ts`)                 | Registry-facing lookup (`core/viewableExtensions.ts`)                |
+| -------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| Can one regular viewer visualize these files together?   | `hasVisualizeViewer(configs, exts, isMultiFile)`           | `areFilenamesViewableTogether(filenames)` / `hasViewerForExtensions` |
+| Can one compare viewer diff these files together?        | `hasCompareViewer(configs, exts, compareContext)`          | `areFilesComparableTogether(files)` (derives count + shape)          |
+| Can a differ diff two versions of ONE file of this type? | `LONE_FILE_COMPARE_CONTEXT` (the context it is asked with) | `isExtensionComparableAsVersions(ext)`                               |
+| Which modes may the modal offer for this selection?      | `availableViewerModes(configs, exts, isMultiFile, ctx)`    | `availableModesForFiles(files)` → `PluginRegistry.getAvailableModes` |
+| What pair does a lone file enter Compare with?           | `seedCompareFromSingleFile(file)` (`core/compareShape.ts`) | — (hosts call it directly)                                           |
+
+Rules the surfaces follow (and the Playwright spec `e2e/seeded.compare.spec.ts` proves):
+
+-   **`ViewerSelector`** filters its list through `listableViewers(viewers, mode)`: a compare-only
+    viewer is never an option in the Visualize dropdown, whatever list a caller hands it.
+-   **`FileViewerModal`** asks `availableModesForFiles(files)` once the registry is ready. Both modes
+    admitted → the Visualize/Compare toggle (top-right of the body); exactly one → that mode is
+    rendered and the toggle is hidden (a requested `initialMode` no viewer admits is replaced);
+    neither → a "No viewer for this selection" empty state (`data-testid="file-viewer-no-viewer"`)
+    instead of mounting `DynamicViewer`.
+-   **A lone file admits Compare as two versions of itself.** `availableViewerModes` judges a
+    one-file selection by `LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`, pure) — the same
+    question as `isExtensionComparableAsVersions` — so one `.txt` offers BOTH modes and one `.png`/`.glb`
+    (no differ admits it) offers Visualize only. In Compare the host hands the viewer
+    `seedCompareFromSingleFile(file)` = `[the viewed entry (pinned versionId, else latest), the same
+file at latest]`; the differ's per-side picker takes it from there, and toggling back shows the one
+    file. The visualize answer is untouched: a compare-only viewer is never offered there for one file.
+    Hosts: `FileViewerModal` (single-file view from `FileDetailsPanel`) and the `ViewFile` page (where
+    `FileVersionsList` / `AssetVersionComparison` "View File" land; toggle beside the File/Preview
+    control, File tab only).
+-   **Search "View Selected" / "Compare Selected"** (`SearchPageListView`) and the file manager's
+    **"Visualize Selected Files" / "Compare Selected Files"** icons (`FileDetailsPanel`) are gated
+    independently — View by the visualize lookup, Compare by the compare lookup with the selection's
+    real count and shape (two `.txt` rows: Compare only; two `.glb` rows: View only; `.txt` + `.png`:
+    neither).
+-   **Version lists** (`FileVersionsList`, `AssetVersionComparison`) render the per-row **Compare**
+    only when `isExtensionComparableAsVersions(ext)` holds; it opens the differ with the row's version
+    on the left and latest on the right. A `.png` row keeps View/Download but gets no Compare.
+
+All lookups return false until `PluginRegistry.initialize()` has run — gate them behind
+`useViewerRegistryReady()` so the control appears once the registry is ready rather than never.
+
+### Text Diff Viewer controls
+
+`TextDiffViewerPlugin/TextDiffViewerComponent.tsx` exposes the `react-diff-viewer-continued` modes as
+compact controls (`data-testid="text-diff-controls"`): layout (Side-by-side / Inline → `splitView`),
+granularity (Line / Word / Character → `compareMethod` `DiffMethod.LINES` / `WORDS` / `CHARS`; Line
+also sets `disableWordDiff`, since the library keeps marking words inside a changed line under any
+`compareMethod` — without it "Line" still shows word-level marks), a
+**Line numbers** toggle (`hideLineNumbers`), a **Collapse unchanged** toggle (`showDiffOnly`) with a
+context-lines picker (`extraLinesSurroundingDiff`, `data-testid="text-diff-context-lines"`, shown only
+while collapsing). The per-side labels (`text-diff-side-label-{left,right}`) and the titles handed to
+the library (`text-diff-title-{left,right}`) are single-line, ellipsis-truncated elements with the full
+label as a tooltip — the library's title block is a fixed 2.4em with a wrapping `<pre>`, so a long
+"name @ version · asset" label was otherwise cut off. In inline layout only the left title block
+renders, so it carries both names ("left → right").
+
+When both sides hold identical text the viewer shows an info notice
+(`data-testid="text-diff-identical-notice"`, "No differences to show — the selected versions are
+identical") above the diff: with **Collapse unchanged** on, the library folds an identical file into a
+single `@@ -0,N +0,N @@` expander and the pane otherwise reads as empty. This is the state a lone
+file's Compare seed (latest vs latest) starts in; the fold row stays so the content can be expanded.
+
+**Layout contract (host + library).** `DynamicViewer` mounts every plugin inside
+`.visualizer-container-canvases`, which `web/src/styles/index.scss` styles with `text-align: center`
+and `line-height: 100%` for the 3D canvases; inherited, they centered every diff line in its cell and
+stopped long lines wrapping. The differ resets both at its root (`textAlign: left`, `lineHeight:
+normal`), as `TextViewerPlugin` does on its highlighter. The library's `pre { margin: 0 }` reset covers
+only the diff table, so the `<pre>` inside each fixed-height (2.4em, overflow hidden) title block kept
+the browser's `1em` top margin and the labels — the first row of the surface — sat a line too low and
+were clipped; `styles={{ titleBlock: { pre: { margin: 0 } } }}` (hoisted, the library memoizes on the
+reference) zeroes it. `renderContent` highlights each line with react-syntax-highlighter's `Light` build
+as an INLINE run: `PreTag`/`CodeTag` spans, `display: inline`, every metric (font, size, line-height,
+colour, wrapping) inherited from the cell, the code tag's `white-space: pre` overridden to `inherit`
+so long lines wrap with the row, and the hljs theme passed explicitly (`Light` ships none — without it
+the tokens carry no colour). Do not give the per-line highlighter block metrics of its own.
+
+### Cross-asset / multi-version contract
+
+Each `compareFiles` entry is a fully resolved `{ databaseId, assetId, key, versionId? }`:
+
+-   `DynamicViewer` fills a missing per-entry `databaseId`/`assetId` from its **top-level** props
+    before classifying and before handing the list to the viewer. The visualize-path
+    `effectiveAssetId` (which falls back to `files[0]`) is never used in compare mode — a second entry
+    must not be re-homed under the first entry's asset.
+-   A missing `versionId` means **latest**. Search-result selections arrive this way
+    (`searchRowToFileInfo`); the version-list surfaces pin the left side to an S3 `versionId`.
+-   A viewer fetches every entry under **its own** database/asset via `downloadAsset` — never a shared
+    pair — and each asset is authorized independently (Casbin, per asset). A per-entry 401/403 (denied),
+    410 (archived) or 404 must be rendered as **that entry's** state while the other entries still
+    render; do not collapse the comparison into one error. `downloadAsset` returns
+    `[false, message, status]` on failure so the status can be classified.
+-   A viewer that opts into `allowCrossAsset` should offer a per-entry **version picker**
+    (`fetchFileVersions` from `AssetVersionService`, one list per db+asset+key) and re-fetch only the
+    entry whose version changed.
+
+Compare mode is reached from four surfaces, all hosted by `FileViewerModal` (which offers a
+Visualize/Compare toggle only when both modes are admitted — see Mode availability): the search
+results multi-select "Compare Selected" action (rows may span assets — each row carries its own
+db/asset), the asset file manager's "Compare Selected Files" icon (`FileDetailsPanel`), and the
+version-comparison "Compare" actions in `AssetVersionComparison.tsx` and `FileVersionsList.tsx`
+(diffing versions of the same file). A SINGLE viewed file reaches it too, through the same toggle, from
+`FileViewerModal` (file manager single-file view) and from the `ViewFile` page. The first
+compare viewer is `text-diff-viewer` (`TextDiffViewerPlugin`), which diffs two text files via
+`react-diff-viewer-continued` (dynamically imported by its `dependencies.ts` so it stays out of the
+base bundle), declares `allowCrossAsset`, keeps per-side state (content, error, version list), and
+renders a readable side beside a denied/archived one.
+
+### `compareMode` config fields
+
+| Field                            | Type     | Description                                                                             |
+| -------------------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `enabled`                        | boolean  | Offer this viewer in compare mode                                                       |
+| `compareOnly`                    | boolean? | Viewer renders only `compareFiles`; never offered on the visualize path (default: no)   |
+| `minFiles` / `maxFiles`          | number   | Inclusive file-count window                                                             |
+| `allowSameFileDifferentVersions` | boolean  | Admit N versions of one file (same db + asset + key)                                    |
+| `allowDifferentFiles`            | boolean  | Admit N distinct files                                                                  |
+| `allowCrossAsset`                | boolean? | Admit entries spanning assets/databases; viewer must handle per-entry 403 (default: no) |
 
 ---
 
@@ -143,16 +301,45 @@ export const VIEWER_COMPONENTS = {
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+| `compareMode`                | object?           | Compare-mode opt-in (see Compare Mode above)         |
 
 ---
 
 ## CSP / `unsafe-eval`
 
-Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`:
+Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Three carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
 
 -   Needle USD Viewer
 -   SuperSplat Editor (also iframe-embedded)
--   Three.js CAD-format loaders
 -   ThatOpen IFC BIM Viewer (web-ifc)
 
-These viewers are gated at runtime via `featuresEnabledRestriction` in `viewerConfig.json` and by the CDK CSP configuration (`allowUnsafeEvalFeatures` in the config). When adding a viewer that needs `eval`, add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) need no `eval`, and gating the whole plugin would remove them too. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
+
+`cesium-viewer` carried the gate until this release. The viewer now builds a `CesiumWidget` from the widget-less `@cesium/engine` (`CesiumViewerComponent.tsx`), which drops the `@cesium/widgets` Knockout layer whose `new Function` binding compiler was what required `unsafe-eval`; `'wasm-unsafe-eval'` in the base CSP covers what remains. See `web/customInstalls/cesium/README.md` for the build. KTX2/Basis textures and `.spz` splats are the known content types that still need the broader directive.
+
+When adding a viewer that needs `eval`, add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+
+---
+
+## A Framed Viewer Must Not Receive a Signed URL in the Query String
+
+A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
+expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
+are not treated as containing credentials and are retained for the log group's retention period.
+
+`supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
+`?load=<presigned>&filename=…`) and ships as a documented known issue for 2.6.0 — one object, expiring,
+but logged. **Do not copy the pattern into a new viewer.** Use the **URL fragment** instead: browsers do
+not transmit a fragment, so nothing reaches the server or its logs.
+
+For a vendored build that reads `location.search` and cannot be changed at the call site, inject a shim
+into its `index.html` from that viewer's `customInstalls/` script which moves the fragment into the query
+string with `history.replaceState` before the bundle runs — `replaceState` issues no request, so the
+value stays client-side. Patch the HTML entry rather than the minified bundle: the bundle is regenerated
+from a pinned upstream tag on every `npm install`, so a regex against its internals breaks on the next
+version bump while an injected `<script>` does not.
+
+Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
+value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
+same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
+breaks and S3 returns 400.

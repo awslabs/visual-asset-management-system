@@ -37,6 +37,11 @@ export function tableRows(page: Page): Locator {
     return page.locator("table tbody tr");
 }
 
+/** The execute dialog's step rail — one navigation landmark, present on every step of the dialog. */
+export function wizardRail(page: Page): Locator {
+    return page.getByRole("navigation", { name: "Execution steps" });
+}
+
 /**
  * Navigate to an orchestration page and wait for it to finish its first load. Waits on the page's
  * own heading — never on specific data — so an empty environment is a valid state.
@@ -126,4 +131,309 @@ export async function expectTableRendered(page: Page): Promise<number> {
         )
         .toBe(true);
     return rows.count();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Asset file viewer
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Click a locator, retrying when the element is present but not yet actionable.
+ *
+ * The asset page re-renders while its tree and detail panel settle, so a click can find its target and
+ * still fail the actionability checks — Playwright reports `locator.click: Timeout 20000ms exceeded`
+ * with no hint that the element was there all along. That produced intermittent failures in the viewer
+ * specs on roughly one run in three, on a different case each time.
+ *
+ * Retrying is correct here rather than papering over a defect: the target is proven present by the
+ * caller's own visibility assertion before this is reached.
+ */
+async function clickWhenActionable(target: Locator, what: string, attempts = 4): Promise<void> {
+    let last: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        try {
+            await target.scrollIntoViewIfNeeded().catch(() => undefined);
+            await target.click({ timeout: 8_000 });
+            return;
+        } catch (err) {
+            last = err;
+            await target.page().waitForTimeout(1_500);
+        }
+    }
+    throw new Error(
+        `could not click ${what} after ${attempts} attempts: ${String(last).slice(0, 200)}`
+    );
+}
+
+/**
+ * Open one of an asset's files in the File Visualizer, the way a user does.
+ *
+ * There is no deep link to a file. The app navigates to `.../assets/{id}/file` and passes the file
+ * through React Router STATE, so the only route in is the File Manager. Three things about that page
+ * are easy to get wrong and cost a long detour each:
+ *
+ *  - Its own heading is an **h2**. The orchestration routes have an h1; this page does not, so waiting
+ *    on `heading, level: 1` matches nothing and times out.
+ *  - Files are **tree nodes, not table rows**, and need an EXACT text match — the panel repeats file
+ *    names in its summary text, so a substring match resolves to a container.
+ *  - **View File is hidden when the asset is not distributable.** A non-distributable asset therefore
+ *    looks like a missing button rather than a permissions/flag condition.
+ *
+ * A render crash is also reported distinctly. The page's error boundary keeps the shell alive, so a
+ * crash's only symptom is the heading never arriving — which otherwise reads as "the file is not
+ * listed" and blames the data.
+ */
+export async function openAssetFile(
+    page: Page,
+    databaseId: string,
+    assetId: string,
+    filename: string
+): Promise<void> {
+    await openFileManager(page, databaseId, assetId);
+    await selectTreePath(page, filename);
+
+    const view = page.getByRole("button", { name: /view file/i }).first();
+    await expect(view, "View File is absent — is the asset distributable?").toBeVisible({
+        timeout: 30_000,
+    });
+    await clickWhenActionable(view, "the View File button");
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+}
+
+/**
+ * Land on an asset's File Manager tab with its tree rendered. The first half of {@link openAssetFile};
+ * on its own for specs that select files in the tree (multi-select, the detail panel's viewer icons)
+ * rather than opening one in the File Visualizer.
+ */
+export async function openFileManager(
+    page: Page,
+    databaseId: string,
+    assetId: string
+): Promise<void> {
+    await page.goto(`/#/databases/${databaseId}/assets/${assetId}`, {
+        waitUntil: "domcontentloaded",
+    });
+    try {
+        await expect(page.getByRole("heading", { level: 2 }).first()).toBeVisible({
+            timeout: 60_000,
+        });
+    } catch (err) {
+        if (await page.getByText(/Something went wrong on this page/i).count()) {
+            throw new Error(
+                `the asset detail page hit its error boundary for ${databaseId}/${assetId}. The ` +
+                    `shell survived, but a component threw during render — React error boundaries ` +
+                    `do not surface as 'pageerror', so check the console transcript and network log.`
+            );
+        }
+        throw err;
+    }
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+
+    const tab = page.getByRole("tab", { name: /file manager/i }).first();
+    if ((await tab.count()) && (await tab.getAttribute("aria-selected")) !== "true") {
+        await tab.click();
+    }
+
+    // Wait for the tree itself, not just the network. `networkidle` resolves before the File Manager
+    // has rendered its nodes, so clicking straight after it races an empty tree — which surfaces as
+    // "<file> is not listed" and looks like missing data.
+    await expect
+        .poll(async () => await page.getByText(/Hold Ctrl or Shift to select/i).count(), {
+            timeout: 60_000,
+        })
+        .toBeGreaterThan(0);
+}
+
+/**
+ * Select a file in the File Manager tree by its asset-relative path, expanding folders on the way.
+ * A file inside a folder is not visible until its folder is expanded, so walk the path segments and
+ * click each one; passing "tileset/tileset.json" as a single label matches nothing. Pass
+ * `modifiers: ["Control"]` to ADD the file to the current selection (multi-select).
+ */
+export async function selectTreePath(
+    page: Page,
+    filename: string,
+    options: { modifiers?: Array<"Control" | "Shift"> } = {}
+): Promise<void> {
+    const segments = filename.split("/").filter(Boolean);
+    for (const segment of segments) {
+        const node = treeNode(page, segment);
+        await expect(node, `${segment} is not listed in the file tree`).toBeVisible({
+            timeout: 60_000,
+        });
+        const isLeaf = segment === segments[segments.length - 1];
+        if (isLeaf && options.modifiers?.length) {
+            await node.scrollIntoViewIfNeeded().catch(() => undefined);
+            await node.click({ modifiers: options.modifiers, timeout: 8_000 });
+        } else {
+            await clickWhenActionable(node, `tree node "${segment}"`);
+        }
+        if (!isLeaf) {
+            // Give the tree a moment to render the newly revealed children.
+            await page.waitForTimeout(1200);
+        }
+    }
+}
+
+/**
+ * The seed fixture the compare-mode specs read, or null when none is configured.
+ *
+ * `E2E_COMPARE_SEED` names the JSON that `tools/VamsCLI/examples/seed_compare_smoke.py` writes, so a
+ * tracked spec never carries a seed id: the ids live in a generated, git-ignored file, and a spec skips
+ * with a reason when the variable is unset or the file is gone.
+ */
+export interface CompareSeed {
+    databases: string[];
+    assets: {
+        a: { databaseId: string; assetId: string; files: string[] };
+        b: { databaseId: string; assetId: string; files: string[] };
+    };
+    textFile: string;
+    jsonFile: string;
+    markdownFile: string;
+    binaryFile: string;
+    versionedFile: string;
+    versionedFileMinVersions: number;
+}
+
+export function compareSeed(): CompareSeed | null {
+    const path = process.env.E2E_COMPARE_SEED;
+    if (!path) return null;
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require("fs") as typeof import("fs");
+        return JSON.parse(fs.readFileSync(path, "utf8")) as CompareSeed;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * A row in the asset File Manager's file tree, by name.
+ *
+ * Two facts make a plain `getByText(name, { exact: true })` wrong here, and both fail in ways that do
+ * not look like selector problems:
+ *
+ *  1. **The page mounts TWO trees.** The visible one is `.directory-tree` (rows `.tree-item-name`); a
+ *     second, folder-only `.folder-tree-view` (rows `.folder-tree-item-name`) is mounted for the
+ *     move/copy destination picker and sits inside a `display:none` ancestor. Its folder labels ARE
+ *     exact matches, so `getByText` resolves to the hidden copy and the assertion fails as "not
+ *     visible" — reading like absent data rather than the wrong element. The give-away is a rect of
+ *     0×0 at x=0,y=0, which is what `getBoundingClientRect` returns inside `display:none`.
+ *  2. **A folder row's label includes its child count** — the node for `3DTiles` reads `3DTiles(2)`.
+ *     So exact matching cannot find a folder in the visible tree at all, whatever the scope.
+ *
+ * Scoping to `.directory-tree` and allowing the optional `(n)` suffix handles files and folders alike.
+ */
+export function treeNode(page: Page, name: string): Locator {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // e2e test helper: the tree-node name is escaped with the standard metacharacter escape before
+    // it is interpolated into the RegExp below.
+    return page
+        .locator(".directory-tree .tree-item-name")
+        .filter({ hasText: new RegExp(`^${escaped}(\\(\\d+\\))?$`) }) // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+        .first();
+}
+
+/**
+ * Choose a viewer in the File Visualizer's picker, by KEYBOARD.
+ *
+ * When more than one viewer claims a file's extension the page deliberately selects none and shows
+ * "Select viewer (required)" / "No Viewer Component Selected". That is correct behaviour, but it means
+ * any assertion about such a file's rendered content has to make the selection first — and `.csv`,
+ * `.json`, `.glb`, `.stp` and `.sog` all match two or more viewers.
+ *
+ * The selection mechanics live in `chooseSelectOption`; what is specific here is the confirmation. A
+ * selection that silently failed would leave the page on its placeholder, and the caller's content
+ * assertion would then fail for the wrong reason — blaming the viewer for a picker problem.
+ */
+export async function chooseViewer(page: Page, name: RegExp): Promise<void> {
+    await chooseSelectOption(page, page.getByLabel(/select viewer/i), name, "the viewer picker");
+    await expect
+        .poll(async () => await page.getByText(/No Viewer Component Selected/i).count(), {
+            timeout: 30_000,
+        })
+        .toBe(0);
+}
+
+/**
+ * Choose an option in a Cloudscape Select, by KEYBOARD.
+ *
+ * The trigger is passed as a LOCATOR rather than a label, because these controls are not labelled
+ * consistently: the viewer picker is reachable by label, while the File Manager's version selector is
+ * only reachable by its button role/name. Requiring one lookup strategy would exclude the other.
+ *
+ * Mouse routes into these controls do not work. Recorded so they are not retried: a normal
+ * `option.click()` races the dropdown's entry animation and its option-list re-render ("element is not
+ * stable", then "detached from the DOM"); a forced click lands after the list has closed; dispatching
+ * `.click()` on the option node in-page raises no error but never applies the selection; and a manual
+ * `mouse.down()/up()` on the option's box likewise does nothing.
+ *
+ * The keyboard route works because the control implements the ARIA listbox pattern: opening it moves
+ * focus to the listbox and highlights an option — the currently SELECTED one when the control has a
+ * value, the first one otherwise. So move by INDEX — read the option texts, find where the highlight
+ * starts, count ArrowDown presses from there, then Enter. Watching `aria-activedescendant` instead is
+ * unreliable, because `document.querySelector("[aria-activedescendant]")` can land on another widget
+ * entirely (the file tree carries one) and read an empty value while the listbox is perfectly healthy.
+ *
+ * Callers should confirm the selection took, in whatever terms their page expresses it — this helper
+ * can only verify that an option matching `option` existed to be chosen.
+ */
+export async function chooseSelectOption(
+    page: Page,
+    trigger: Locator,
+    option: RegExp,
+    describeTrigger = "the select"
+): Promise<void> {
+    const picker = trigger.first();
+    await expect(picker, `${describeTrigger} is absent`).toBeVisible({ timeout: 60_000 });
+
+    // Open it, and RETRY if the option list is not there a moment later. The file page is still
+    // re-rendering right after navigation — `networkidle` resolves before it settles — and a click that
+    // lands mid-render opens the dropdown and then loses it, so the option list reads as empty and the
+    // helper reports "no viewer option matching ..." with nothing offered.
+    let texts: string[] = [];
+    for (let attempt = 0; attempt < 5 && texts.length === 0; attempt++) {
+        if (attempt > 0) await page.waitForTimeout(2000);
+        if ((await page.locator('[role="option"]').count()) === 0) {
+            await clickWhenActionable(picker, describeTrigger);
+        }
+        await page.waitForTimeout(800);
+        texts = await page.locator('[role="option"]').allTextContents();
+    }
+
+    // Move by INDEX rather than by watching `aria-activedescendant`. Reading that attribute is not
+    // reliable here: `document.querySelector("[aria-activedescendant]")` returns the first match in
+    // document order, and the File Manager's own file tree carries one too, so the lookup can land on
+    // the tree and read an empty value while the listbox is perfectly healthy. That produced an empty
+    // "highlights walked" list and a false "no viewer option matching" failure.
+    //
+    // The walk starts from wherever the highlight lands on open, which is NOT always option 0: a Select
+    // that already has a value opens with the highlight on that value (Cloudscape's `use-select`), and
+    // ArrowDown wraps from the last option back to the first. Assuming 0 sent the compare differ's
+    // context-lines picker (default "3 lines", index 2) four presses toward "10 lines" — 3, 4, 0, 1 —
+    // and selected "1 line". So find the starting index first and walk the modular distance.
+    //
+    // The selected option is read from `aria-selected`, which Cloudscape sets from the same controlled
+    // `selectedOption` it uses to place the highlight. The trigger's text is NOT a substitute: it can
+    // be a placeholder, "1 line" is a prefix of "10 lines", and the highlighted option's textContent
+    // carries a duplicate screen-reader announcement of its own label, so text equality fails for the
+    // very option that matters. When nothing is marked selected the highlight is on option 0.
+    const options = page.locator('[role="option"]');
+    const index = texts.findIndex((t) => option.test(t));
+    expect(
+        index,
+        `no option matching ${option} in ${describeTrigger}; offered: ` +
+            texts.map((t) => t.slice(0, 34)).join(" | ")
+    ).toBeGreaterThanOrEqual(0);
+    const selected = await options.evaluateAll((nodes) =>
+        nodes.findIndex((n) => n.getAttribute("aria-selected") === "true")
+    );
+    const start = selected >= 0 ? selected : 0;
+    const presses = (index - start + texts.length) % texts.length;
+    for (let i = 0; i < presses; i++) {
+        await page.keyboard.press("ArrowDown");
+        await page.waitForTimeout(200);
+    }
+    await page.keyboard.press("Enter");
 }

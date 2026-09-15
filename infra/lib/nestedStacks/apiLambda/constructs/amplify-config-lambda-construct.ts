@@ -21,6 +21,10 @@ export interface AmplifyConfigFederatedIdentityProps {
      */
     customFederatedIdentityProviderName: string;
     /**
+     * Display name for the identity provider (shown on login button)
+     */
+    idpDisplayName?: string;
+    /**
      * The cognito auth domain
      */
     customCognitoAuthDomain: string;
@@ -56,6 +60,13 @@ interface InlineLambdaProps {
      * The Cognito IdentityPoolId to authenticate users in the front-end
      */
     cognitoIdentityPoolId: string;
+
+    /**
+     * Partition-aware Cognito user pool (IDP) endpoint for the front-end.
+     * Required because Amplify JS resolves only the `aws` / `aws-cn` partitions and
+     * would otherwise build a `.amazonaws.com` host in the EU Sovereign Cloud.
+     */
+    cognitoUserPoolEndpoint: string;
 
     /**
      * Additional configuration needed for federated auth
@@ -96,6 +107,11 @@ interface InlineLambdaProps {
      * External OAUTH IDP Discovery Endpoint Configuration
      */
     externalOAuthIdpDiscoveryEndpoint?: string;
+
+    /**
+     * External OAUTH IDP Display Name Configuration (shown on login button)
+     */
+    externalOAuthIdpDisplayName?: string;
 
     /**
      * Name of deployed stack
@@ -170,6 +186,15 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     cognitoIdentityPoolId: props.config.app.authProvider.useCognito.enabled
                         ? props.authResources.cognito.identityPoolId
                         : "undefined",
+                    // Amplify JS only knows the `aws` and `aws-cn` partitions, so it resolves
+                    // every region to the commercial `.amazonaws.com` suffix. In the EU
+                    // Sovereign Cloud the correct suffix is `.amazonaws.eu`, so the frontend
+                    // must be given explicit endpoints. Service() is partition-aware and
+                    // already backs the CSP allow-list, so this stays correct in every
+                    // partition (commercial and GovCloud keep resolving to .amazonaws.com).
+                    cognitoUserPoolEndpoint: props.config.app.authProvider.useCognito.enabled
+                        ? `https://${Service("COGNITO_IDP", false).Endpoint}`
+                        : "undefined",
                     cognitoFederatedConfig: props.cognitoFederatedConfig,
                     externalOAuthIdpURL:
                         props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
@@ -192,6 +217,9 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     externalOAuthIdpDiscoveryEndpoint:
                         props.config.app.authProvider.useExternalOAuthIdp
                             .idpAuthProviderDiscoveryEndpoint || "undefined",
+                    externalOAuthIdpDisplayName:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpDisplayName ||
+                        "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: "",
                     bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || "",
@@ -200,8 +228,11 @@ export class AmplifyConfigLambdaConstruct extends Construct {
             timeout: cdk.Duration.seconds(15),
         });
 
-        // add lambda policies
-        this.lambdaFn.grantInvoke(Service("APIGATEWAY").Principal);
+        // API Gateway invoke permission is granted by the REST API builder, which emits one
+        // CfnPermission per registered route Lambda scoped to this deployment's own execute-api
+        // source ARN. It cannot be granted here: the construct is created before the SpecRestApi
+        // (whose inline OpenAPI document names this function), so referring to the API id from here
+        // makes the two resources reference each other.
 
         suppressCdkNagLambda(this.lambdaFn);
     }

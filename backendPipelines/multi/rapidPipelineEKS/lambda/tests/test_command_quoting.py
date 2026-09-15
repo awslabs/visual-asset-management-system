@@ -116,9 +116,12 @@ class TestCommandQuoting:
         assert "touch" not in shell_text
 
     def test_benign_key_command_is_still_functional(self):
-        # A metacharacter-free key needs no quoting, so the command reads exactly as before.
+        # A metacharacter-free key needs no quoting, so the command reads as a plain shell chain. The
+        # output type here equals the input's, so the destination carries the same-format folder that
+        # keeps the write-back off the input's own key.
+        subdir = _load().SAME_FORMAT_OUTPUT_SUBDIR
         command = self._run(_event(key="xidM/test/pump.glb"))
         assert command == (
             "aws s3 cp s3://abkt/xidM/test/pump.glb . && /rpdx/rpdx -i pump.glb -c -e pump.glb "
-            "&& aws s3 cp pump.glb s3://abkt/pipelines/p1/MJOB/output/E1/files/pump.glb"
+            f"&& aws s3 cp pump.glb s3://abkt/pipelines/p1/MJOB/output/E1/files/{subdir}/pump.glb"
         )

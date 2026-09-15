@@ -516,7 +516,7 @@ class TestTagTypeDeleteCommand:
             assert 'priority' in result.output
             
             # Verify API call
-            mocks['api_client'].delete_tag_type.assert_called_once_with('priority')
+            mocks['api_client'].delete_tag_type.assert_called_once_with('priority', database_id=None)
     
     def test_delete_json_output(self, cli_runner, tag_type_command_mocks):
         """Test tag type deletion with JSON output."""
@@ -1074,7 +1074,7 @@ class TestTagTypeUtilityFunctions:
         ]
         
         result = format_tag_types_list_output(tag_types_data, json_output=True)
-        
+
         # Should be valid JSON
         parsed = json.loads(result)
         assert parsed == tag_types_data

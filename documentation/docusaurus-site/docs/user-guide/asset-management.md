@@ -82,9 +82,9 @@ VAMS keeps a permanent history of each asset's lifecycle operations: creation, e
 
 To view an asset's history:
 
-1. Open the asset detail page and select the **Files** tab.
+1. Open the asset detail page and select the **File Manager** tab.
 2. Select the asset's root node at the top of the file tree.
-3. In the details panel, select the **(History)** link next to the **Type** field.
+3. In the details panel, select the **(history)** link next to the **Type** field.
 4. The Asset History modal lists the operations newest first. Select an entry in the **Details** column to see the asset property snapshot for that operation. Use the pagination controls to load older records.
 
 History records persist after an asset is permanently deleted. If an asset is later created with the same asset ID, its history view includes the prior asset's records, providing a continuous audit trail for that ID.
@@ -193,15 +193,18 @@ The left panel displays a hierarchical directory tree:
 
 When you select a file in the tree, the right panel displays:
 
-| Property           | Description                                              |
-| ------------------ | -------------------------------------------------------- |
-| **File name**      | The name of the selected file.                           |
-| **File path**      | The full relative path within the asset.                 |
-| **File size**      | The size of the file in human-readable format.           |
-| **Last modified**  | The date and time the file was last modified.            |
-| **Archive status** | Whether the file is currently archived.                  |
-| **Preview**        | If the file has a preview image, it is displayed inline. |
-| **Actions**        | Contextual action buttons based on the file state.       |
+| Property           | Description                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **File name**      | The name of the selected file.                                                                                                                                                                                                                                                                                                                                                                              |
+| **File path**      | The full relative path within the asset.                                                                                                                                                                                                                                                                                                                                                                    |
+| **File size**      | The size of the file in human-readable format.                                                                                                                                                                                                                                                                                                                                                              |
+| **Last modified**  | The date and time the file was last modified.                                                                                                                                                                                                                                                                                                                                                               |
+| **Archive status** | Whether the file is currently archived.                                                                                                                                                                                                                                                                                                                                                                     |
+| **Change source**  | How the current version was created (for example **Upload**, **Workflow Execution**, or **File Copy**) and the user it is attributed to. When a workflow execution wrote the version, a **View execution** link opens that execution's quick view beside the page; its **Open full details** link leads to the execution detail page. The link appears only when you are allowed to view execution details. |
+| **Preview**        | If the file has a preview image, it is displayed inline.                                                                                                                                                                                                                                                                                                                                                    |
+| **Actions**        | Contextual action buttons based on the file state.                                                                                                                                                                                                                                                                                                                                                          |
+
+Select **(versions)** beside the **Version Date** to open the file's version history. Each version lists its date, size, the asset versions that include it, and its change source, with the workflow and execution for a version written by a workflow. Selecting **View execution** on such a version closes the version history and opens the execution detail page. From the version history you can also download a version, view it, or revert the file to it.
 
 ### Uploading Additional Files
 
@@ -267,7 +270,7 @@ Archiving a file moves it to lower-cost storage while retaining it in the file l
 
 To unarchive:
 
-1. Enable the **Show Archived** toggle in the File Manager to display archived files.
+1. Enable the **Show archived files** toggle at the bottom of the File Manager file tree to display archived files.
 2. Select the archived file.
 3. Select the **Unarchive** action.
 4. Confirm the operation.
@@ -438,12 +441,12 @@ The **Executions** tab shows the execution history of all workflows that have be
 
 ### Executing a Workflow from the Asset Page
 
-You can start a new workflow execution directly from the asset detail page:
+You can start a new workflow execution directly from the asset detail page, from either of two places:
 
-1. Select the **Execute Workflow** button above the Executions tab.
-2. Choose the workflow to run from the dropdown.
-3. Select the input file(s) for processing (or select the entire asset).
-4. Confirm the execution.
+-   **Executions tab** -- Select **Execute workflow** in the tab's toolbar.
+-   **File Manager tab** -- Select the files you want to process, then choose **Execute Workflow** from the **Automation** menu in the file details toolbar, beside **Export**. Launching from here pre-fills your file selection.
+
+Either entry point opens the same execution dialog: a step rail walks through choosing the workflow, the inputs, the configuration for each pipeline step, then a review before launching. For a walkthrough of each step, see [Executing workflows](pipelines-and-workflows.md#executing-workflows).
 
 The new execution appears in the Executions tab immediately with a **Running** status. The tab auto-refreshes to show status updates.
 
@@ -491,3 +494,4 @@ Asset operations can also be performed via the command line. See [CLI Asset Comm
 -   [Pipelines and Workflows](pipelines-and-workflows.md) -- Automating asset processing
 -   [Tags](tags.md) -- Organizing assets with tags
 -   [Subscriptions](subscriptions.md) -- Receiving change notifications
+-   [Automating VAMS](automating-vams.md) -- Scripting bulk asset operations from the command line

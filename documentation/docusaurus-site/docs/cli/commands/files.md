@@ -7,6 +7,17 @@ title: File Commands
 
 Manage files within assets, including upload, listing, folder creation, move, copy, archive, unarchive, permanent deletion, version revert, primary type metadata, and preview management.
 
+:::warning[Asset-relative paths on Windows]
+Options that address a location inside an asset — `-p`/`--path`, `--source`, `--dest`, and `--asset-location` — take an asset-relative path that begins with a single `/`, such as `/model.gltf` or `/textures/diffuse.png`. A file path without the leading slash is rejected.
+
+Git Bash, MSYS2, and Cygwin shells on Windows rewrite any argument that begins with `/` into a Windows path before the CLI receives it, and quoting does not prevent it. An argument passed as `-p "/model.gltf"` therefore arrives as `-p "C:/Program Files/Git/model.gltf"`, which either fails validation or resolves to a path the asset does not contain. Prefix the command with `MSYS_NO_PATHCONV=1`, or run it from PowerShell or the Command Prompt, where no rewriting occurs:
+
+```bash
+MSYS_NO_PATHCONV=1 vamscli file info -d my-db -a my-asset -p "/model.gltf"
+```
+
+:::
+
 ---
 
 ## file upload
@@ -62,7 +73,7 @@ Only individual-file constraint violations stop an upload. A file requiring more
 :::
 
 :::tip[File Extension Restrictions]
-A database can restrict uploads to specific extensions (`restrictFileUploadsToExtensions`). When set, VamsCLI validates every file before upload and reports all violations at once. Asset preview uploads and `.previewFile.` auxiliary files are exempt; an empty list or `.all` allows any extension. Use `vamscli database get -d my-db` to view the restrictions.
+A database can restrict uploads to specific extensions (`restrictFileUploadsToExtensions`). When set, VamsCLI validates every file before upload and reports all violations at once. Asset preview uploads and `.previewFile.` auxiliary files are exempt from that list, but must still carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`; an empty list or `.all` allows any extension. Use `vamscli database get -d my-db` to view the restrictions.
 :::
 
 :::note[Large-File Asynchronous Processing]
@@ -111,7 +122,7 @@ vamscli file list -d my-db -a my-asset --starting-token "token123" --page-size 2
 `--auto-paginate` and `--starting-token` cannot be combined. `--max-items` is a CLI-side aggregation limit (default 10,000) applied only in auto-paginate mode and is never sent to the API; supplying it in manual mode prints a warning and ignores it. `--page-size` is passed to the API in both modes.
 :::
 
-Each file entry shows its relative path, size, primary type, and change source on the main line, with the current-version creation date, version ID, Amazon S3 ETag, storage class, and preview file listed as indented detail sub-lines. Version-mismatch and permanently-deleted files are flagged. Fields skipped in `--basic` mode (such as version ID and preview file) are omitted. In manual pagination, the response includes a next token to retrieve the following page.
+Each file entry shows its relative path, size, primary type, and change source on the main line, with the current-version creation date, version ID, Amazon S3 ETag, storage class, preview file, and — for a version written by a workflow execution — the workflow and execution ids (`Change Workflow`, `Change Execution`) listed as indented detail sub-lines. Version-mismatch and permanently-deleted files are flagged. Fields skipped in `--basic` mode (such as version ID and preview file) are omitted. In manual pagination, the response includes a next token to retrieve the following page.
 
 ---
 
@@ -137,7 +148,7 @@ vamscli file info -d my-db -a my-asset -p "/model.gltf"
 vamscli file info -d my-db -a my-asset -p "/model.gltf" --include-versions
 ```
 
-With `--include-versions`, each version lists its version ID, current/previous status, last-modified timestamp, size, associated asset versions, and any change-tracking fields (change source, user, workflow, and originating file path).
+The output names the current version's change source and the user it is attributed to (`Change Source`, `Changed By`) and, when a workflow execution wrote it, the workflow and execution ids (`Change Workflow`, `Change Execution`) — the same pair the [file info API](../../api/files.md#get-file-info) returns as `changeWorkflowId` / `changeWorkflowExecutionId`. With `--include-versions`, each version lists its version ID, current/previous status, last-modified timestamp, size, associated asset versions, and any change-tracking fields (change source, user, workflow, and originating file path).
 
 ---
 

@@ -210,19 +210,16 @@ Each tracked file version records a change source, the responsible user, and -- 
 | `fileUnarchive`     | The version was created by unarchiving (restoring) the file.      |
 | `fileRevert`        | The version was created by reverting the file to a prior version. |
 
-For copy, move, and rename operations, the source location (`changeAssetIdFrom`, `changeDatabaseIdFrom`, `changeAssetFilePathFrom`) and the source S3 version (`changeAssetFileVersionFrom`) are recorded. For revert operations, `changeAssetFileVersionFrom` records the S3 version that was reverted to. For workflow-produced versions, the originating `changeWorkflowId` and `changeWorkflowExecutionId` are recorded.
+For copy, move, and rename operations, the source location (`changeAssetIdFrom`, `changeDatabaseIdFrom`, `changeAssetFilePathFrom`) and the source Amazon S3 version (`changeAssetFileVersionFrom`) are recorded. For revert operations, `changeAssetFileVersionFrom` records the Amazon S3 version that was reverted to. For workflow-produced versions, the originating `changeWorkflowId` and `changeWorkflowExecutionId` are recorded.
 
-When an action creates a new file version, it stamps the provenance onto the Amazon S3 object as `vams-change*` object metadata. The `sqsBucketSync` process reads this metadata on ingest and records it into the [Asset File Version History Storage Table](../architecture/data-model.md#asset-file-version-history-storage-table). Archive operations create a delete marker (which carries no object metadata), so the archive handler records that provenance directly.
-
-Provenance is surfaced in several places:
+Provenance is recorded as each version is created, and is surfaced in two places:
 
 -   **File listings and current-file details** show the current version's change source and the user who created it.
 -   **Version history** (file details requested with versions included) shows the full per-version provenance, including workflow and source-location fields.
--   **CLI:** run `vamscli file info -d <DB> -a <ASSET> -p <PATH> --include-versions` to view per-version provenance.
 
-:::note[Legacy versions]
-File versions created before change history tracking was introduced have no provenance record. For these versions, the change fields are returned blank or absent.
-:::
+A version that carries no provenance record returns its change fields blank or absent.
+
+The same per-version provenance is available from the CLI for scripted review -- see [CLI: Files](../cli/commands/files.md#file-info). For how the records are stored, see the [Asset File Version History Storage Table](../architecture/data-model.md#asset-file-version-history-storage-table).
 
 ## File metadata and file attributes
 
@@ -316,7 +313,7 @@ If the destination file already has metadata with the same keys, the copy operat
 
 ## Viewing files
 
-VAMS includes 17 built-in viewer plugins that render files directly in the browser. When you select a file in the file manager, VAMS automatically selects the best viewer based on the file extension. Viewers cover 3D models, point clouds, Gaussian splats, USD scenes, images, video, audio, documents, and tabular data.
+VAMS includes 20 built-in viewer plugins that render files directly in the browser. When you select a file in the file manager, VAMS automatically selects the best viewer based on the file extension. Viewers cover 3D models, point clouds, Gaussian splats, USD scenes, images, video, audio, documents, and tabular data.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](viewers.md).
 

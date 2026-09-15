@@ -1,6 +1,6 @@
 {
     "workflowName": "NVIDIA Cosmos 3 Nano (16B)",
-    "category": "GenAI",
+    "category": "WFM",
     "description": "NVIDIA Cosmos 3 Nano (16B) omni world model",
     "triggers": [
         {

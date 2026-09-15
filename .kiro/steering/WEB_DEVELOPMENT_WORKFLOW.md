@@ -2,7 +2,7 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS web frontend application. Follow these rules to ensure consistency, quality, and maintainability across all frontend implementations.
 
-> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `web/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
 ## 🏗️ **Architecture Overview**
 
@@ -37,17 +37,23 @@ web/
     features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
+                            #   triggerCache.ts
       permissions/          # useAllowedRoutes.ts (Tier-1 gating)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, ConfigEditor, ToastProvider, ...)
+                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider, ...)
       pipelines/            # PipelinesPage, PipelineForm (wizard), TemplateEditor, TemplateForm,
                             #   TagSchemaBuilder, TemplateOverridesEditor, pipelineValidation
-      workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor,
+      workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor (live),
+                            #   TriggerDraftsEditor (create), TriggerList, TriggerForm, triggerDraft,
                             #   WorkflowSystemConfigFields, DagPreview, workflowValidation
       executions/           # ExecutionsBoard, ExecutionDetailPage, ExecutionLogViewer,
-                            #   ExecutionQuickView, ExecuteWorkflowModal, logSearch
-      wizard/               # ExecuteWizard + pipeline/input/review stages, InputFileSelector,
-                            #   MetadataSourceSelector, resolveRestrictions, resolveTemplate
+                            #   ExecutionQuickView, ExecuteWorkflowModal, SubProcessesSection, StageTimeline,
+                            #   logSearch
+      wizard/               # ExecuteWizard (+ExecuteWizardBody), WizardRail, RequirementsStrip, WorkflowPicker,
+                            #   pipeline/input/review stages, InputFileSelector, MetadataSourceSelector,
+                            #   SelectedInputFilesList, BulkFilePicker, selectedInputFiles (multi-file
+                            #   selection: windowed list, bulk/paste picker, dedupe, 1000 cap),
+                            #   railSteps, reviewBlockers, resolveRestrictions, resolveTemplate
       types.ts reservedTagKeys.ts
 
     FedAuth/                # Authentication orchestrator
@@ -436,6 +442,39 @@ When system-wide frontend standards change (new rules, new patterns, new convent
 2. `.kiro/steering/WEB_FRONTEND.md` -- Kiro mirror of `web/CLAUDE.md`
 3. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
 
+### **Rule 18: Regenerate the CSP Hashes After Editing an Inline Script in `index.html`**
+
+`web/index.html` carries inline `<script>` blocks (the `__publicField` polyfill, the `SharedArrayBuffer` probe, the pre-render theme application). The CDK Content-Security-Policy allows them by **SHA-256 hash** rather than by `'unsafe-inline'`, so an injected inline script is still blocked.
+
+A CSP hash covers the **exact text content** of the element -- every byte between the tags, indentation included. Adding a line, renaming a variable, or letting Prettier reindent the block invalidates its hash. The browser then refuses to run that script, the app breaks at runtime, and **nothing fails at build time**.
+
+**Any edit to an inline `<script>` block in `web/index.html` -- including a pure reformat -- requires regenerating the hashes and updating the CDK constant in the same change:**
+
+```bash
+cd web && npm run build                        # hash the HTML that is actually served
+node scripts/cspInlineScriptHashes.js --ts     # emit the TypeScript constant
+# paste over INDEX_HTML_INLINE_SCRIPT_HASHES in infra/lib/helper/cspInlineScriptHashes.ts
+cd ../infra && npx jest test/web/cspInlineScriptHashes.test.ts   # drift guard must pass
+```
+
+Omit `--ts` for a readable per-block listing.
+
+| File                                           | Role                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `web/index.html`                               | The inline scripts being hashed                                          |
+| `web/scripts/cspInlineScriptHashes.js`         | Generator -- hashes every inline block, skips any with a `src` attribute |
+| `infra/lib/helper/cspInlineScriptHashes.ts`    | The generated constant. **Generated -- do not hand-edit**                |
+| `infra/lib/helper/security.ts`                 | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
+| `infra/test/web/cspInlineScriptHashes.test.ts` | Recomputes from `index.html` and fails on drift                          |
+
+**A hash and `'unsafe-inline'` are mutually exclusive.** A CSP may allow inline script by hash **or** by the `'unsafe-inline'` keyword, never both -- when a hash source is present, browsers ignore `'unsafe-inline'` entirely. The two are not additive, so `'unsafe-inline'` cannot be kept as a fallback.
+
+For that reason `generateContentSecurityPolicy()` emits `'unsafe-inline'` in **no** configuration, the Physna add-on included. The add-on's viewer frames Physna's own HTTPS origin rather than a `blob:` document, so that page loads under Physna's own CSP and its inline scripts are outside this policy's reach; the keyword would also be ignored on a VAMS page, because the hash sources are present. The add-on contributes `frame-src` and `connect-src` origins and no `script-src` source.
+
+If a **new** viewer plugin needs inline script, hash that document's own inline blocks rather than returning `'unsafe-inline'` to `script-src` -- a hash source makes the keyword inert, so adding it would relax nothing and remove the protection the hashes give every other page.
+
+An external `<script src="...">` needs no hash; it is matched by host-source. It may still need its origin added to `script-src`/`connect-src`.
+
 ---
 
 ## 📐 **Implementation Standards**
@@ -772,6 +811,24 @@ npm test              # Run tests with coverage (Jest 30 + @testing-library/reac
 npx jest              # Run tests without coverage (faster)
 ```
 
+**Label a temporary test with a `TEMPORARY-TEST` comment.** Jest has no marker system, so a test written to
+prove one specific change landed — a removed prop, a deleted branch, a reworded string — carries a
+`TEMPORARY-TEST` token in a comment directly above its `it(...)`, naming what it pins:
+
+```ts
+// TEMPORARY-TEST: pins the removal of the duplicate upload summary branch; drop once released.
+it("no longer renders the second summary", () => {
+```
+
+Release cleanup finds them with `grep -rn "TEMPORARY-TEST" web/src web/e2e`. The token is needed because a
+temporary test and a durable guardrail read identically afterwards — both may assert an absence and both
+explain themselves.
+
+Do **not** label a test whose forbidden construct is still writable: a CSP that must not gain
+`'unsafe-inline'`, a component that must not import `apiClient` directly, a div that must not be named after
+a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
+counterpart: `web/CLAUDE.md` section 11.4.1.
+
 **Lint and format (from project root):**
 
 ```bash
@@ -793,7 +850,7 @@ npm run prettier-fix
 -   [ ] `Synonyms` used for all user-visible entity names
 -   [ ] All pages lazy-loaded in `routes.tsx`
 -   [ ] HashRouter used (no BrowserRouter)
--   [ ] React 17 compatible (no React 18 APIs)
+-   [ ] React 18 APIs kept to the orchestration module unless there is a reason otherwise
 -   [ ] TypeScript used for all new files
 -   [ ] `appCache` used instead of Amplify Cache
 -   [ ] `getDualValidAccessToken` used for auth tokens
@@ -861,7 +918,7 @@ npm run prettier-fix
 6. **Using Amplify Cache** -- use appCache
 7. **Manually getting auth tokens** -- use getDualValidAccessToken
 8. **Hardcoding entity display names** -- use Synonyms
-9. **Using React 18 APIs** -- project is React 17
+9. **Spreading React 18 APIs across the codebase** -- allowed in `features/orchestration/`, used sparingly elsewhere
 10. **Using yarn** -- project uses npm
 11. **Creating .js files** -- all new files must be TypeScript
 12. **Hardcoding colors/spacing** -- use Cloudscape design tokens or theme.css

@@ -8,16 +8,25 @@ import datetime
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="OpenPipeline")
 
 sfn = boto3.client(
     'stepfunctions',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 events_client = boto3.client(
     'events',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
@@ -26,11 +35,23 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# Each converter job definition writes its container output to its own VAMS-owned vended log group
+# (`/aws/vendedlogs/Pipelines/PcPotreeViewer{PDAL,Potree}<hash>`); a container log source is
+# registered only when that job's group and job definition name are both configured.
+PDAL_JOB_LOG_GROUP_NAME = os.environ.get("PDAL_JOB_LOG_GROUP_NAME", "")
+PDAL_JOB_LOG_GROUP_ARN = os.environ.get("PDAL_JOB_LOG_GROUP_ARN", "")
+PDAL_JOB_DEFINITION_NAME = os.environ.get("PDAL_JOB_DEFINITION_NAME", "")
+POTREE_JOB_LOG_GROUP_NAME = os.environ.get("POTREE_JOB_LOG_GROUP_NAME", "")
+POTREE_JOB_LOG_GROUP_ARN = os.environ.get("POTREE_JOB_LOG_GROUP_ARN", "")
+POTREE_JOB_DEFINITION_NAME = os.environ.get("POTREE_JOB_DEFINITION_NAME", "")
+# The two Batch states of this pipeline's state machine (their CDK construct ids).
+PDAL_BATCH_STATE_NAME = "PdalConverterBatchJob"
+POTREE_BATCH_STATE_NAME = "PotreeConverterBatchJob"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
     if (task_token != None and task_token != ""):
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
@@ -38,9 +59,26 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def batch_container_log_entry(log_group_name, log_group_arn, job_definition_name, state_name):
+    """The log source for one Batch state's container: that job's vended group, streamed under
+    `<jobDefinitionName>/default/` (the job definition's awslogs stream prefix is its own name).
+    None when the group or the job definition is not configured."""
+    if not (log_group_name or log_group_arn) or not job_definition_name:
+        return None
+    return {
+        "logGroupArn": log_group_arn,
+        "logGroupName": log_group_name,
+        "logStreamName": "",
+        "logStreamPrefix": f"{job_definition_name}/default/",
+        "stageName": state_name,
+        "sourceType": "batch",
+        "label": f"{state_name} container",
+    }
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    """Best-effort: register this sub-SFN execution with the orchestration bus; failures are swallowed."""
+    """Best-effort: register this sub-SFN execution + its log sources with the orchestration bus; failures are swallowed."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -54,14 +92,29 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "Potree viewer processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "Potree viewer state machine",
+        })
+    for log_group_name, log_group_arn, job_definition_name, state_name in (
+            (PDAL_JOB_LOG_GROUP_NAME, PDAL_JOB_LOG_GROUP_ARN,
+             PDAL_JOB_DEFINITION_NAME, PDAL_BATCH_STATE_NAME),
+            (POTREE_JOB_LOG_GROUP_NAME, POTREE_JOB_LOG_GROUP_ARN,
+             POTREE_JOB_DEFINITION_NAME, POTREE_BATCH_STATE_NAME)):
+        container_log = batch_container_log_entry(
+            log_group_name, log_group_arn, job_definition_name, state_name)
+        if container_log:
+            logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,
@@ -79,7 +132,7 @@ def lambda_handler(event, context):
     Starts StepFunctions State Machine for processing 
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     responses = []
@@ -117,8 +170,13 @@ def lambda_handler(event, context):
     file_root, extension = os.path.splitext(input_s3_asset_files_uri)
 
     logger.info(f"Checking for valid file")
-    # Check to make sure we are working with the right file types (if not, exit)
-    if (not extension or extension == '' or extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
+    # Validate the extension against exact members of the comma-separated allow list. A containment
+    # test against the joined string accepts any prefix of a listed extension ('.la' against
+    # '.las,.laz'), which admits a file the container cannot read.
+    allowed_extensions = [ext.strip().lower() for ext in ALLOWED_INPUT_FILEEXTENSIONS.split(',')
+                          if ext.strip()]
+
+    if (not extension or extension.lower() not in allowed_extensions):
         abort_external_workflow("Pipeline cannot process file type provided", external_sfn_task_token)
         return {
             'statusCode': 400,
@@ -185,7 +243,11 @@ def lambda_handler(event, context):
 
     # Loop through responses and see if any have errors; If so return 500 error response
     for response in responses:
-        if "error" in response['body']:
+        # Keyed on the status code, not on an "error" key. Every failure route above appends a
+        # body carrying only "message", so the key test matched nothing and execution fell
+        # through to the success return below -- which dereferences sfn_response, unbound
+        # whenever the failure happened before it was assigned.
+        if response.get('statusCode', 200) >= 400:
             return response
 
     # Return success 200 response

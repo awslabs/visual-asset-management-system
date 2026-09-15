@@ -4,7 +4,8 @@
  */
 
 import { apiClient } from "../../../services/apiClient";
-import { toTuple } from "./client";
+import { toTuple, toTupleWithWarnings } from "./client";
+import type { ResultWithWarnings } from "./client";
 import type { ExecuteRequest, Execution, ExecutionDetail, ExecuteResponse } from "../types";
 
 export async function executeWorkflow(
@@ -38,10 +39,20 @@ export async function listExecutionsForAsset(
     });
 }
 
+/**
+ * The execution's details. `includeSubExecutions: "true"` asks for each step's registered
+ * sub-processes with their stage statuses; without it the read is the cheaper default.
+ */
 export async function getExecutionDetails(
-    executionId: string
+    executionId: string,
+    params?: Record<string, string>
 ): Promise<[boolean, ExecutionDetail | string]> {
-    return toTuple(() => apiClient.get(`workflows/executions/${executionId}/details`));
+    return toTuple(() => {
+        const path = `workflows/executions/${executionId}/details`;
+        return params
+            ? apiClient.get(path, { queryStringParameters: params })
+            : apiClient.get(path);
+    });
 }
 
 /** The metadata collections the paged detail-metadata route serves, in its own vocabulary. */
@@ -81,11 +92,18 @@ export async function getExecutionLogs(
     });
 }
 
+/**
+ * Abort an execution, or every active execution in a group. The abort itself always succeeds, but
+ * the response carries a `warnings` array when a registered sub-process could not be stopped — a
+ * Batch job or Deadline Cloud farm job left running after the execution is marked ABORTED. Read with
+ * `toTupleWithWarnings` because the backend puts `warnings` beside `message`, which the plain
+ * `toTuple` reader would drop; that array is the only signal the compute was not released.
+ */
 export async function abortExecution(
     executionId: string,
     groupId?: string
-): Promise<[boolean, any]> {
-    return toTuple(() => {
+): Promise<[boolean, ResultWithWarnings | string]> {
+    return toTupleWithWarnings(() => {
         const opts = groupId ? { queryStringParameters: { groupId } } : {};
         return apiClient.del(`workflows/executions/${executionId}`, opts);
     });

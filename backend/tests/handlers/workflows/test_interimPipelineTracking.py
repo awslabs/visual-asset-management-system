@@ -26,6 +26,7 @@ for _k, _v in {
     "PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME": "t-pexec",
     "PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME": "t-of",
     "WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME": "t-wf-inputs",
+    "PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME": "t-pin-cfg",
     "S3_ASSETAUXILIARY_STORAGE_BUCKET": "t-aux",
 }.items():
     os.environ.setdefault(_k, _v)
@@ -337,3 +338,126 @@ class TestConfigRenderReadFaults:
             with pytest.raises(ClientError):
                 ipt._render_next_pipeline_config(
                     self._body(), manifest, "runbkt", "in/EXEC1/pipeline2/config.json")
+
+
+@pytest.mark.unit
+class TestNextStepConfigFormat:
+    """The next step's declared configFormat decides how a system tag's scalar value is escaped.
+
+    Step 1's render is done at launch with the format resolved alongside the template body; steps
+    2..n are rendered here, so the format is read back from the input-configuration row executeWorkflow
+    persisted for the step. Rendering an `xml` body under the json escape leaves `&`, `<` and `>` raw,
+    which is markup the pipeline's parser rejects or misreads.
+
+    The table stub is dispatched by NAME rather than returned for every call: the module builds
+    `dynamodb.Table(...)` per use, so a single shared return value makes the config-row read resolve to
+    whichever other table the test happens to stub, and `row.get("configFormat")` then yields a truthy
+    MagicMock that silently takes the json branch — a test that asserts nothing.
+    """
+
+    # A key carrying both characters the xml escape handles and the json escape leaves alone.
+    FILE_KEY = "a1/parts/a&b<c>.step"
+    RAW_CFG = '<p>{{firstAssetFileKey}}</p>'
+    CONFIG_KEY = "in/EXEC1/pipeline2/config.json"
+
+    def _body(self):
+        return {
+            "workflowExecutionId": "EXEC1",
+            "nextPipelineExecutionId": "PEXEC2",
+            "nextPipelineConfigS3Key": self.CONFIG_KEY,
+            "nextPipelineId": "convertPipe",
+        }
+
+    def _manifest(self):
+        return {"inputFiles": [{"databaseId": "db", "assetId": "a1", "bucket": "abkt",
+                               "key": self.FILE_KEY, "relativePath": "/parts/a&b<c>.step"}]}
+
+    def _render(self, config_row, fault=None):
+        """Render the next step's config with the config table answering `config_row`.
+
+        Returns (rendered body, the config table stub) so a caller can assert the stub was reached —
+        without that the whole test could pass having never consulted the row.
+        """
+        cfg_table = MagicMock()
+        if fault is not None:
+            cfg_table.get_item.side_effect = fault
+        else:
+            cfg_table.get_item.return_value = ({"Item": config_row} if config_row is not None else {})
+        other_table = MagicMock()
+
+        def table_for(name):
+            # Dispatch on the resolved table NAME so the config row cannot be answered by another
+            # table's stub. An unexpected name is a test bug, not a silent json fallback.
+            if name == ipt.pipeline_execution_input_configuration_table:
+                return cfg_table
+            return other_table
+
+        put_object = MagicMock()
+        with patch.object(ipt.s3c, "get_object", MagicMock(return_value={
+                    "Body": MagicMock(read=lambda: self.RAW_CFG.encode("utf-8"))})), \
+             patch.object(ipt.s3c, "put_object", put_object), \
+             patch.object(ipt.dynamodb, "Table", MagicMock(side_effect=table_for)):
+            ipt._render_next_pipeline_config(
+                self._body(), self._manifest(), "runbkt", self.CONFIG_KEY)
+        body = put_object.call_args.kwargs["Body"].decode("utf-8")
+        return body, cfg_table
+
+    def test_an_xml_row_gets_the_xml_escape(self):
+        rendered, _ = self._render({"configFormat": "xml"})
+        assert "a&amp;b&lt;c&gt;.step" in rendered
+        # The raw characters must be gone from the element text, not merely accompanied by escapes.
+        assert "a&b<c>" not in rendered
+
+    def test_the_format_is_read_from_the_next_step_own_configuration_row(self):
+        """The lookup is keyed on the NEXT step's execution id, so step 2's declared format cannot be
+        answered by step 1's row. Asserted separately from the escape tests: an escape assertion is
+        satisfied by the default as well, so on its own it does not prove the row was consulted."""
+        _, cfg_table = self._render({"configFormat": "json"})
+        cfg_table.get_item.assert_called_once_with(
+            Key={"pipelineExecutionId": "PEXEC2", "recordType": "configuration"})
+
+    def test_a_json_row_keeps_the_characters_raw(self):
+        """Negative control: only `xml` differs. json/yaml/openjd/raw deliberately leave `&`, `<`
+        and `>` intact, and every shipped vamsSchema template declares `json` — so a blanket XML
+        escape here would corrupt all of them while passing the xml test above."""
+        rendered, _ = self._render({"configFormat": "json"})
+        assert self.FILE_KEY in rendered
+        assert "&amp;" not in rendered
+
+    def test_an_absent_row_degrades_to_the_json_escape(self):
+        """An execution launched before the format was persisted has no row at all. It must render
+        (today's behaviour) rather than fail the step mid-run."""
+        rendered, _ = self._render(None)
+        assert self.FILE_KEY in rendered
+        assert "&amp;" not in rendered
+
+    def test_a_row_carrying_no_format_degrades_to_the_json_escape(self):
+        """A template-less custom-override body resolves as `raw`, and a row can carry an empty
+        string. Both share the json escape, so the fallback must be applied to the empty value too."""
+        rendered, _ = self._render({"configFormat": ""})
+        assert self.FILE_KEY in rendered
+        assert "&amp;" not in rendered
+
+    def test_a_read_fault_on_the_row_raises(self):
+        """A transient or AccessDenied fault is not an absent row: rendering under a guessed format
+        would hand the step a body escaped for the wrong syntax. It must surface so the interim
+        state's Catch reconciles the run as failed."""
+        with pytest.raises(ClientError):
+            self._render(None, fault=ClientError(
+                {"Error": {"Code": "AccessDeniedException"}}, "GetItem"))
+
+    def test_no_next_execution_id_reads_no_row(self):
+        """Nothing to look the format up by, so the lookup is skipped rather than issuing a read on
+        an empty key. Keeps the default identical to the pre-existing behaviour."""
+        body = self._body()
+        del body["nextPipelineExecutionId"]
+        table = MagicMock()
+        put_object = MagicMock()
+        with patch.object(ipt.s3c, "get_object", MagicMock(return_value={
+                    "Body": MagicMock(read=lambda: self.RAW_CFG.encode("utf-8"))})), \
+             patch.object(ipt.s3c, "put_object", put_object), \
+             patch.object(ipt.dynamodb, "Table", MagicMock(return_value=table)):
+            ipt._render_next_pipeline_config(
+                body, self._manifest(), "runbkt", self.CONFIG_KEY)
+        table.get_item.assert_not_called()
+        assert self.FILE_KEY in put_object.call_args.kwargs["Body"].decode("utf-8")

@@ -4,13 +4,17 @@
 import os
 import boto3
 import json
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from common.validators import validate
 from customLogging.logger import safeLogger
 from common.constants import UNALLOWED_MIME_LIST, UNALLOWED_FILE_EXTENSION_LIST
 
 logger = safeLogger(service_name="S3Common")
-s3c = boto3.client('s3')
+
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+
+s3c = boto3.client('s3', config=retry_config)
 
 # Per-call S3 list page sizes. These are pagination batch sizes (round-trip
 # tuning), not result caps — the helpers below page to exhaustion.
@@ -26,8 +30,10 @@ def is_object_version_archived(bucket: str, key: str, version_id: str = None, cl
       - With version_id: heads that exact version. A delete marker returns
         405 MethodNotAllowed (archived=True); a live version returns 200
         (archived=False); a missing version returns 404 (archived=False).
-      - Without version_id: heads the current version. The DeleteMarker flag (or
-        a 404 NoSuchKey when only delete markers remain) indicates archived state.
+      - Without version_id: heads the current version. A live current version
+        returns 200 (archived=False). A current version that is a delete marker
+        returns 404, which is indistinguishable from a key that never existed, so
+        that case falls back to a single-entry version listing to tell them apart.
 
     Args:
         bucket: The S3 bucket name
@@ -59,9 +65,22 @@ def is_object_version_archived(bucket: str, key: str, version_id: str = None, cl
             except ClientError as e:
                 error_code = e.response.get('Error', {}).get('Code')
                 if error_code in ('NoSuchKey', '404', 'NotFound'):
-                    # Current object missing; archived only if a delete marker exists.
-                    versions_response = s3.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
-                    return len(versions_response.get('DeleteMarkers', [])) > 0
+                    # Current object missing; archived when the key's CURRENT version is a
+                    # delete marker. Three properties of ListObjectVersions make one entry
+                    # sufficient, and all three are load-bearing:
+                    #   - Prefix is a prefix match, so the listing also carries longer sibling
+                    #     keys (file.glb -> file.glb.previewFile.png); entries are matched back
+                    #     to the key so a sibling's delete marker cannot answer for this key.
+                    #   - Keys sort ascending and this key is a prefix of every longer sibling,
+                    #     so its own entries lead the first page and cannot be paged past.
+                    #   - A key's versions are returned newest first, so the single entry is
+                    #     this key's current version. IsLatest is asserted rather than assumed:
+                    #     an archived-then-restored key keeps its old delete marker in history,
+                    #     and matching on the key alone would report it as archived.
+                    versions_response = s3.list_object_versions(
+                        Bucket=bucket, Prefix=key, MaxKeys=1)
+                    return any(marker.get('Key') == key and marker.get('IsLatest')
+                               for marker in versions_response.get('DeleteMarkers', []))
                 raise
     except Exception as e:
         logger.warning(f"Error checking archive status for {key}: {e}")

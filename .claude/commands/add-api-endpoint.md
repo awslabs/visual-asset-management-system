@@ -13,8 +13,9 @@ You are scaffolding a new VAMS API endpoint. Follow root `CLAUDE.md` "Pattern 1:
 5. **API route binding** - Route registry registration (prefer `apiBuilder2-nestedStack.ts`)
 6. **Frontend service** (`web/src/services/APIService.ts`) - API call method (if exposed to web UI)
 7. **CLI command** (`tools/VamsCLI/vamscli/`) - Endpoint constant + command (if applicable)
-8. **Documentation** - `documentation/VAMS_API.yaml` AND `documentation/docusaurus-site/docs/api/{domain}.md` (both must be updated together)
-9. **Tests** - Unit tests for the handler
+8. **MCP server** (`tools/VamsMCP/vams_mcp/server.py`) - `@mcp.tool()` in the correct gate section, if agents should reach the endpoint (root `CLAUDE.md` Pattern 7)
+9. **Documentation** - `documentation/VAMS_API.yaml` AND `documentation/docusaurus-site/docs/api/{domain}.md` (both must be updated together)
+10. **Tests** - Unit tests for the handler
 
 ### Step 1: Gather Requirements
 
@@ -275,7 +276,7 @@ export function buildMyFunction(
 
 ### Step 6: Add API Route Binding
 
-**Prefer `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`** for new endpoints — the primary `apiBuilder-nestedStack.ts` is near the CloudFormation per-stack resource limit. Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there.
+**Prefer `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`** for new endpoints — it exists to keep both API stacks clear of the two per-template CloudFormation ceilings (500 resources, and a 1 MB template body, which `apiBuilder` fills roughly twice as fast because its Lambdas carry long inline IAM policies). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there. Note the split does **not** relieve the API Gateway resources-per-REST-API quota: both stacks register into one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. See "API Stack Ceilings" in `infra/CLAUDE.md`.
 
 1. Add import for the new builder function at the top
 2. Build the Lambda function in the constructor
@@ -320,7 +321,25 @@ Add an API call method to `web/src/services/APIService.ts` following the existin
 1. Define the endpoint path constant in `tools/VamsCLI/vamscli/constants.py` (Rule 7: never hardcode endpoint paths in command files or API client methods)
 2. Add the command in `tools/VamsCLI/vamscli/commands/{group}.py` following `roleUserConstraints.py` patterns (Click decorators, profile support, `--json-output`, error handling)
 
-### Step 9: Update Documentation (both sources)
+### Step 9: Propagate to the MCP Server and External Connectors
+
+The MCP server and the two external connectors sit downstream of the CLI, and nothing catches drift at build or import time (root `CLAUDE.md` Pattern 7; full checklist in `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` "Step 9: MCP and Connector Propagation").
+
+**MCP server** — do this whenever a new `APIClient` method is something an agent should be able to call, or an existing one changed:
+
+1. Add an `@mcp.tool()` + `@tool_result` function in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section: reads at the top, writes under `if CONFIG.enable_writes:`, destructive operations under `if CONFIG.enable_destructive:`. A `def` outside its gate block or past the `if __name__` entrypoint is never executed and the module still imports cleanly.
+2. Forward every narrowing parameter the CLI command accepts — an omitted optional parameter silently pins the agent to the server default.
+3. Check pagination: `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope, so confirm the `items_key` matches the new response. Use `_paginate_with_page_metadata(...)` for a list endpoint that reports `warnings` or other out-of-band bound signals, or they are dropped.
+4. Add a unit test in `tools/VamsMCP/tests/` asserting the params that reach the `APIClient`, and add the tool to the `tools/VamsMCP/README.md` tool list (plus the `autoApprove` array of that README's sample host config if it is a safe read).
+5. If the server's contract with the CLI changed, roll `tools/VamsMCP/pyproject.toml`, `tools/VamsMCP/vams_mcp/__init__.py`, and `tools/VamsCLI/vamscli/version.py` together.
+
+**External connectors** — required whenever a CLI command name, subcommand, option/flag, or `--json-output` response shape changes. They shell out to the `vamscli` executable and parse its JSON keys, so a renamed flag fails only at connector runtime and a renamed or removed key silently yields a blank field:
+
+-   `tools/ExternalIntegrations/isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py` — the argument lists passed to `subprocess.run`, and each `@dataclass` field's `item.get("jsonKey", ...)` mapping.
+-   `tools/ExternalIntegrations/arcgispro-connector-for-vams/Services/VamsCliService.cs` — the argument token lists, plus the `[JsonPropertyName("jsonKey")]` attributes in `Models/VamsModels.cs`.
+-   Map a key only onto the command that actually returns it: `file list` items and the `file info` response are different shapes.
+
+### Step 10: Update Documentation (both sources)
 
 API documentation lives in **two places that must be updated together**:
 
@@ -329,7 +348,7 @@ API documentation lives in **two places that must be updated together**:
 
 If a CLI command was added, also update the relevant `documentation/docusaurus-site/docs/cli/commands/{group}.md` page.
 
-### Step 10: Create Test File
+### Step 11: Create Test File
 
 Create `backend/tests/handlers/{domain}/test_{handlerName}.py`:
 
@@ -381,7 +400,7 @@ class TestHandlerName:
 
 Also create `backend/tests/handlers/{domain}/__init__.py` if it does not exist. Include at least one test with the REST API (v1) event shape (top-level `path`/`httpMethod`, explicit `null` `pathParameters`) — v2-shaped-only tests miss event-normalization regressions.
 
-### Step 11: Validate Cross-References
+### Step 12: Validate Cross-References
 
 After creating all files, verify:
 
@@ -396,12 +415,15 @@ After creating all files, verify:
 -   [ ] Import statement in the api builder stack matches the export in the lambdaBuilder file
 -   [ ] `VAMS_API.yaml` AND `docs/api/{domain}.md` both updated
 -   [ ] CLI endpoint constant in `constants.py` (if CLI-exposed)
+-   [ ] MCP tool added in the correct gate section of `tools/VamsMCP/vams_mcp/server.py`, with a unit test and a `tools/VamsMCP/README.md` tool-list entry (if agent-exposed)
+-   [ ] MCP pagination `items_key` matches the handler's list field name
+-   [ ] Both external connectors validated if a CLI command name, flag, or `--json-output` key changed (Isaac Sim `vams_cli_service.py`, ArcGIS Pro `VamsCliService.cs` + `Models/VamsModels.cs`)
 
 ## Workflow
 
 1. Gather requirements from the user (or parse from $ARGUMENTS)
 2. Check if a similar domain/handler already exists to avoid conflicts
-3. Create all files in order: master route -> models -> handler -> CDK builder -> API route -> frontend/CLI -> docs -> tests
+3. Create all files in order: master route -> models -> handler -> CDK builder -> API route -> frontend/CLI -> MCP/connectors -> docs -> tests
 4. Run a quick validation that all imports and references are consistent
 5. Summarize what was created and what manual steps remain (e.g., adding new DynamoDB tables to the storage stack — see root `CLAUDE.md` "Adding a New DynamoDB Table" for the three-way constants update)
 

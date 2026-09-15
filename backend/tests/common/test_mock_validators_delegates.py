@@ -55,6 +55,9 @@ REJECTED_VALUES = [
     ('USERID_ARRAY', ['ab']),
     ('RELATIVE_FILE_PATH_ARRAY', ['no-leading-slash']),
     ('DOWNLOAD_KEY_ARRAY', ['../escape']),
+    ('SFN_STATE_NAME', 'x' * 81),
+    ('DISPLAY_LABEL', 'tab\tin label'),
+    ('LOG_SOURCE_TYPE', 'kubernetes'),
 ]
 
 ACCEPTED_VALUES = [
@@ -66,6 +69,9 @@ ACCEPTED_VALUES = [
     ('ARN', 'arn:aws:states:us-east-1:123456789012:execution:sm:exec'),
     ('ISO8601_UTC', '2026-01-31T12:00:00Z'),
     ('ID_ARRAY', ['my-pipeline-1', 'my-pipeline-2']),
+    ('SFN_STATE_NAME', 'Job Complete?'),
+    ('DISPLAY_LABEL', 'Potree converter container'),
+    ('LOG_SOURCE_TYPE', 'stateMachine'),
 ]
 
 

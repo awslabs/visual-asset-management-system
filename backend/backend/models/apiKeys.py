@@ -6,7 +6,7 @@ from typing import Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator, ValidationError
 from customLogging.logger import safeLogger
-from common.validators import validate, object_name_pattern
+from common.validators import validate, normalize_userid, object_name_pattern, trim_name
 
 logger = safeLogger(service_name="ApiKeyModels")
 
@@ -57,14 +57,22 @@ def parse_iso8601_datetime(value):
 
 class CreateApiKeyRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new API key"""
-    apiKeyName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    userId: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    expiresAt: Optional[str] = Field(None, max_length=30, strip_whitespace=True)
+    apiKeyName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    userId: str = Field(min_length=1, max_length=256)
+    description: str = Field(min_length=1, max_length=256)
+    expiresAt: Optional[str] = Field(None, max_length=30)
+
+    _trim_names = validator('apiKeyName', 'userId', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
         logger.info("Validating API key creation parameters")
+        # The key record is stored against this id and the authorizer resolves the caller by it,
+        # so the normalized form is what is validated and stored
+        values['userId'] = normalize_userid(values.get('userId'))
         validation_map = {
             'apiKeyName': {
                 'value': values.get('apiKeyName'),
@@ -93,9 +101,12 @@ class CreateApiKeyRequestModel(BaseModel, extra='ignore'):
 
 class UpdateApiKeyRequestModel(BaseModel, extra='ignore'):
     """Request model for updating an API key"""
-    description: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
-    expiresAt: Optional[str] = Field(None, max_length=30, strip_whitespace=True)
+    description: Optional[str] = Field(None, max_length=256)
+    expiresAt: Optional[str] = Field(None, max_length=30)
     isActive: Optional[str] = Field(None, regex=r'^(true|false)$')
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_at_least_one_field(cls, values):
@@ -131,9 +142,14 @@ class CreateUserApiKeyRequestModel(BaseModel, extra='ignore'):
     expiration date is required. The handler enforces the maximum expiration
     window (USER_API_KEY_MAX_EXPIRATION_DAYS from creation).
     """
-    apiKeyName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    expiresAt: str = Field(min_length=1, max_length=30, strip_whitespace=True)
+    apiKeyName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: str = Field(min_length=1, max_length=256)
+    expiresAt: str = Field(min_length=1, max_length=30)
+
+    _trim_names = validator('apiKeyName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -165,9 +181,12 @@ class UpdateUserApiKeyRequestModel(BaseModel, extra='ignore'):
     provided it must be a non-empty valid date. The handler enforces ownership
     and the maximum expiration window from the key's original creation.
     """
-    description: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
-    expiresAt: Optional[str] = Field(None, min_length=1, max_length=30, strip_whitespace=True)
+    description: Optional[str] = Field(None, max_length=256)
+    expiresAt: Optional[str] = Field(None, min_length=1, max_length=30)
     isActive: Optional[str] = Field(None, regex=r'^(true|false)$')
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):

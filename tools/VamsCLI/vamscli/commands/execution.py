@@ -12,6 +12,7 @@ files across multiple assets, so these are keyed on the executionId, not an asse
     execution permanent-delete   remove the execution's DynamoDB rows only (admin, guarded)
 """
 
+import sys
 from typing import Dict, Any, Optional
 
 import click
@@ -92,9 +93,13 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                     starting_token: Optional[str], auto_paginate: bool, json_output: bool):
     """List workflow executions globally (permission-filtered), with optional filters.
 
-    Only executions whose workflow you can read AND whose input/output asset you can read are shown.
-    By default only recent executions (started within the last 90 days) are listed; use
-    --filter-start-date / --filter-end-date to query an explicit date range.
+    Only executions whose workflow you can read are listed, and then only when you can read every
+    asset the run read and the asset it wrote to. By default only recent executions (started within
+    the last 90 days) are listed; use --filter-start-date / --filter-end-date to query an explicit
+    date range.
+
+    A page shorter than --page-size is a stated bound rather than an absence of matches: the reason
+    is reported under Warnings, and a NextToken continues from where the page stopped.
 
     Examples:
         vamscli execution list
@@ -140,16 +145,37 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
         return params
 
     def _fmt(data: Dict[str, Any]) -> str:
+        def _rendered(lines) -> str:
+            # The date window the service actually applied — the caller's --filter-start-date, or
+            # the 90-day default it substitutes. Shown in text mode too, since an execution older
+            # than the window is absent by design and a listing that never names the bound reads
+            # as the complete history.
+            start = data.get('filterStartDate')
+            if start:
+                end = data.get('filterEndDate')
+                lines.append(f"\nStart date filter applied: {start}"
+                             + (f" (through {end})" if end else ""))
+            # Every reason a page can be shorter than --page-size: the cap on distinct assets it
+            # resolves for permission checks, and its per-request work budget. Rendered on the empty
+            # page too, because that is the case a bare "No executions found." misreports as an
+            # absence of matches rather than a stated bound.
+            warnings = data.get('warnings')
+            if warnings:
+                lines.append(f"\nWarnings ({len(warnings)}):")
+                lines.extend(f"  - {w}" for w in warnings)
+            return '\n'.join(lines)
+
         items = data.get('Items', [])
         if not items:
-            # The backend applies filters after the DynamoDB page limit, so an empty page may still
-            # carry a NextToken for later pages that do contain matches.
+            # The service fills a page by walking its query, so an empty page means either that no
+            # visible execution matched or that a bound stopped the walk first — `warnings` names the
+            # bound when one fired. A NextToken continues either way.
             if not data.get('autoPaginated') and data.get('NextToken'):
-                return ("No executions on this page; more pages available."
-                        f"\n\nNext token: {data['NextToken']}")
+                return _rendered(["No executions on this page; more pages available.",
+                                  f"\nNext token: {data['NextToken']}"])
             if data.get('note'):
-                return f"No executions found.\n\n{data['note']}"
-            return "No executions found."
+                return _rendered(["No executions found.", f"\n{data['note']}"])
+            return _rendered(["No executions found."])
         out = []
         if data.get('autoPaginated'):
             out.append(f"Auto-paginated: {data.get('totalItems', 0)} item(s) in "
@@ -175,13 +201,22 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             out.append(f"\nNext token: {data['NextToken']}")
         if data.get('note'):
             out.append(f"\n{data['note']}")
-        return '\n'.join(out)
+        return _rendered(out)
 
     try:
         if auto_paginate:
             max_total = max_items or 10000
             output_status(f"Listing executions (auto-paginating up to {max_total})...", json_output)
             all_items = []
+            # Each page reports the bounds that shortened it in its own `warnings`; the aggregate is
+            # rebuilt from the accumulated items alone, so they are collected here (deduplicated, in
+            # order) or a walk of 200 pages loses every bound that fired along the way and reads as a
+            # complete listing.
+            all_warnings = []
+            # Every page echoes the date window the service applied, and the aggregate below is
+            # rebuilt from the accumulated items — so the echo is carried across or the one mode
+            # whose purpose is a complete listing is the one that never states its own bounds.
+            applied_window: Dict[str, Any] = {}
             next_token = None
             page_count = 0
             while True:
@@ -192,6 +227,12 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                 page = _message(api_client.list_executions(params=params))
                 items = page.get('Items', [])
                 all_items.extend(items)
+                for warning in page.get('warnings') or []:
+                    if warning not in all_warnings:
+                        all_warnings.append(warning)
+                for key in ('filterStartDate', 'filterEndDate'):
+                    if key not in applied_window and page.get(key):
+                        applied_window[key] = page[key]
                 if not json_output:
                     output_status(f"Fetched {len(all_items)} executions (page {page_count})...", False)
                 next_token = page.get('NextToken')
@@ -200,6 +241,9 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                     break
             result = {'Items': all_items, 'totalItems': len(all_items),
                       'autoPaginated': True, 'pageCount': page_count}
+            result.update(applied_window)
+            if all_warnings:
+                result['warnings'] = all_warnings
             # Both stop conditions carry the outstanding token: it is the only way to continue, and
             # without it a caller chunking a large deployment has to re-walk every page already paid
             # for (each of which re-pays the per-page authorization fan-out).
@@ -230,15 +274,23 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
 
 @execution.command('details')
 @click.argument('execution_id')
+@click.option('--include-sub-executions', is_flag=True,
+              help="Also report each step's registered sub-processes with per-stage status "
+                   "(reads the sub-process execution history)")
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def details(ctx: click.Context, execution_id: str, json_output: bool):
+def details(ctx: click.Context, execution_id: str, include_sub_executions: bool, json_output: bool):
     """Get an execution's full detail and traceability (pipelines, inputs, outputs, metadata).
 
     Asset/file metadata (inputMetadata) and database metadata (inputDatabaseMetadata) are separate
     collections, and each is reported as a row count here — use --json-output for the rows themselves.
     The metadata sources the run read from are listed alongside them.
+
+    Every pipeline step lists the log sources known for it (Logs available) with the logId that
+    'vamscli execution logs --log-id' reads. With --include-sub-executions a step that runs its own
+    nested state machine or container job also reports each registered sub-process and every stage
+    of it with its status; a failure the sub-process caught and reported is marked (caught).
 
     Large collections are bounded server-side. Any section that came back partial is named in
     truncatedCollections and marked in the output; a pipeline whose configuration body was truncated
@@ -247,11 +299,13 @@ def details(ctx: click.Context, execution_id: str, json_output: bool):
 
     Examples:
         vamscli execution details my-execution-id
+        vamscli execution details my-execution-id --include-sub-executions
     """
     api_client = _api(ctx)
     output_status(f"Retrieving details for execution '{execution_id}'...", json_output)
     try:
-        result = api_client.get_execution_details(execution_id)
+        params = {'includeSubExecutions': 'true'} if include_sub_executions else None
+        result = api_client.get_execution_details(execution_id, params=params)
         message = _message(result)
 
         def _fmt(_r):
@@ -261,6 +315,18 @@ def details(ctx: click.Context, execution_id: str, json_output: bool):
 
             def _mark(collection_name):
                 return " [PARTIAL - more rows exist]" if collection_name in truncated else ""
+
+            def _span(entry):
+                start, stop = entry.get('startDate') or '', entry.get('stopDate') or ''
+                return f" {start} → {stop}" if (start or stop) else ""
+
+            def _error(entry):
+                return f"  {entry['error']}" if entry.get('error') else ""
+
+            def _sub_label(sub):
+                label = sub.get('label') or sub.get('resourceType', '?')
+                name = sub.get('resourceName')
+                return f"{label} ({name})" if name else label
 
             out = [
                 f"Execution ID: {message.get('workflowExecutionId', 'N/A')}",
@@ -286,6 +352,38 @@ def details(ctx: click.Context, execution_id: str, json_output: bool):
                     if location.get('key'):
                         out.append(f"    Full config body: s3://{location.get('bucket', '?')}/"
                                    f"{location['key']}")
+                    # Registered sub-processes (a nested state machine, a container job) with the
+                    # stage status derived from their own execution history; present only with
+                    # --include-sub-executions.
+                    subs = p.get('subExecutions') or []
+                    if subs:
+                        out.append(f"    Sub-processes ({len(subs)}):")
+                        for sub in subs:
+                            out.append(f"      {_sub_label(sub)} [{sub.get('status', 'UNKNOWN')}]"
+                                       f"{_span(sub)}{_error(sub)}")
+                            for stage in sub.get('stages') or []:
+                                status = stage.get('status', 'UNKNOWN')
+                                if stage.get('caught'):
+                                    status += ' (caught)'
+                                out.append(f"        {stage.get('stageName', '?')} [{status}]"
+                                           f"{_span(stage)}{_error(stage)}")
+                            if sub.get('stagesTruncated'):
+                                out.append("        (stages truncated in this response)")
+                            if sub.get('historyTruncated'):
+                                out.append("        (history truncated: later stages may be missing)")
+                    if p.get('subExecutionsTruncated'):
+                        out.append("    (Sub-processes truncated in this response)")
+                    for warning in p.get('subExecutionWarnings') or []:
+                        out.append(f"    Sub-process warning: {warning}")
+                    # Every log source known for the step, keyed by the logId that
+                    # 'execution logs --log-id' accepts.
+                    logs_available = p.get('availableLogs') or []
+                    if logs_available:
+                        out.append(f"    Logs available ({len(logs_available)}):")
+                        for log in logs_available:
+                            out.append(f"      {log.get('logId', '?')}  {log.get('kind', '')}  "
+                                       f"{log.get('sourceType', '')}  {log.get('stageName') or '-'}  "
+                                       f"{log.get('logGroupName', '')}")
             inputs = message.get('inputFiles', [])
             if inputs:
                 out.append(f"\nInput files ({len(inputs)}){_mark('inputFiles')}:")
@@ -495,33 +593,77 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
 @click.option('--start-time', type=int, help='(full mode) start time, epoch milliseconds')
 @click.option('--end-time', type=int, help='(full mode) end time, epoch milliseconds')
 @click.option('--next-token', help='(full mode) CloudWatch pagination token')
+@click.option('--log-id', help='(full mode, with --pipeline-execution-id) read one log source by the '
+                               'logId "execution details" lists under Logs available')
+@click.option('--stage-name', help='(full mode, with --pipeline-execution-id) only the log sources and '
+                                   'sub-execution history of one sub-state-machine stage')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id: Optional[str],
          filter_pattern: Optional[str], limit: Optional[int], start_time: Optional[int],
-         end_time: Optional[int], next_token: Optional[str], json_output: bool):
+         end_time: Optional[int], next_token: Optional[str], log_id: Optional[str],
+         stage_name: Optional[str], json_output: bool):
     """Retrieve an execution's logs (truncated stored text or full live CloudWatch search).
+
+    --filter-pattern, --limit, --start-time, --end-time, --next-token, --log-id and --stage-name act
+    on the live CloudWatch search only, so they require --mode full; supplying one without it is
+    rejected rather than ignored. --log-id and --stage-name read a single step's sources, so they
+    also require --pipeline-execution-id. With a step scoped, full mode lists every log source the
+    step has (Log sources) and whether each could be read; each Sub-Process Logs line ends with the
+    logId of its source.
 
     Examples:
         vamscli execution logs my-execution-id
         vamscli execution logs my-execution-id --mode full --limit 200
+        vamscli execution logs my-execution-id --mode full --pipeline-execution-id my-pipeline-exec
+        vamscli execution logs my-execution-id --mode full --pipeline-execution-id my-pipeline-exec --log-id 3f9a0c1d2e4b5a67
     """
     api_client = _api(ctx)
     params: Dict[str, Any] = {'mode': mode}
     if pipeline_execution_id:
         params['pipelineExecutionId'] = pipeline_execution_id
-    if mode == 'full':
+    # Truncated mode returns one joined blob of stored text with no continuation token, so the
+    # CloudWatch search parameters have nothing to act on there. Rejected rather than warned:
+    # output_warning is suppressed under --json-output, which is exactly where a silently
+    # unfiltered log reads as "no matching events".
+    full_mode_only = [
+        name for name, value in (('--filter-pattern', filter_pattern), ('--limit', limit),
+                                 ('--start-time', start_time), ('--end-time', end_time),
+                                 ('--next-token', next_token), ('--log-id', log_id),
+                                 ('--stage-name', stage_name))
+        if value is not None
+    ]
+    if mode != 'full':
+        if full_mode_only:
+            raise click.ClickException(
+                f"{', '.join(full_mode_only)} only appl{'ies' if len(full_mode_only) == 1 else 'y'} "
+                f"with --mode full.")
+    else:
         if filter_pattern:
             params['filterPattern'] = filter_pattern
-        if limit:
+        if limit is not None:
+            if limit < 1:
+                raise click.ClickException("--limit must be 1 or greater.")
             params['limit'] = limit
-        if start_time:
+        if start_time is not None:
             params['startTime'] = start_time
-        if end_time:
+        if end_time is not None:
             params['endTime'] = end_time
         if next_token:
             params['nextToken'] = next_token
+        # Both read one step's sources, so neither has a meaning without the step; the server
+        # answers 400, and the CLI names the missing option before the call.
+        source_scoped = [name for name, value in (('--log-id', log_id), ('--stage-name', stage_name))
+                         if value is not None]
+        if source_scoped and not pipeline_execution_id:
+            raise click.ClickException(
+                f"{', '.join(source_scoped)} require{'s' if len(source_scoped) == 1 else ''} "
+                f"--pipeline-execution-id.")
+        if log_id:
+            params['logId'] = log_id
+        if stage_name:
+            params['stageName'] = stage_name
 
     output_status(f"Retrieving {mode} logs for execution '{execution_id}'...", json_output)
     try:
@@ -549,8 +691,10 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
                     line = f"  [{ev.get('timestamp', '')}] {ev.get('message', '')}".rstrip()
                     # subProcessEvents mix several log groups; name the source so a step's own
                     # invocation log is distinguishable from the pipeline's registered logs.
-                    if ev.get('logGroupArn'):
-                        line += f"  ({ev['logGroupArn'].rsplit(':log-group:', 1)[-1]})"
+                    if ev.get('logGroupName'):
+                        line += f"  ({ev['logGroupName']})"
+                    if ev.get('logId'):
+                        line += f"  [{ev['logId']}]"
                     out.append(line)
 
             _events('events', 'Events')
@@ -560,6 +704,17 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
             # pipeline's registered logs, any sub-execution history) were reachable only via
             # --json-output before; they are the logs that explain a failed launch.
             _events('sfnHistoryEvents', 'State Machine History')
+            # Every log source known for the step and whether it could be read. The logId column is
+            # what --log-id takes and what each Sub-Process Logs line ends with.
+            sources = message.get('logSources')
+            if sources:
+                out.append(f"\n== Log sources ({len(sources)}) ==")
+                for s in sources:
+                    status = s.get('status', '')
+                    if status == 'read' and s.get('eventCount') is not None:
+                        status = f"read {s['eventCount']}"
+                    out.append(f"  {s.get('logId', '?')}  {s.get('kind', '')}  {s.get('sourceType', '')}  "
+                               f"{s.get('stageName') or '-'}  {s.get('logGroupName', '')}  [{status}]")
             _events('subProcessEvents', 'Sub-Process Logs')
             warnings = message.get('warnings')
             if warnings:
@@ -607,7 +762,12 @@ def abort(ctx: click.Context, execution_id: Optional[str], group_id: Optional[st
         raise click.ClickException(
             "Provide a member EXECUTION_ID along with --group-id (the group abort route is keyed on "
             "an execution id).")
-    if group_id and not yes and not json_output:
+    if group_id and not yes:
+        if json_output:
+            output_result({"error": "Confirmation required",
+                           "message": "Aborting an execution group requires the --yes flag",
+                           "groupId": group_id}, json_output=True)
+            sys.exit(1)
         click.confirm(
             f"Abort every active execution in group '{group_id}'? This cannot be undone.",
             abort=True)
@@ -700,13 +860,19 @@ def rerun(ctx: click.Context, execution_id: str, execution_group_id: Optional[st
 def permanent_delete(ctx: click.Context, execution_id: str, yes: bool, json_output: bool):
     """Permanently delete an execution's DynamoDB records (admin; does not touch Step Functions history).
 
-    The execution must not be in progress. This is irreversible.
+    The execution must not be in progress. This is irreversible. `--yes` is required in JSON mode,
+    where no interactive prompt is possible.
 
     Examples:
         vamscli execution permanent-delete my-execution-id --yes
     """
     api_client = _api(ctx)
-    if not yes and not json_output:
+    if not yes:
+        if json_output:
+            output_result({"error": "Confirmation required",
+                           "message": "Permanently deleting an execution requires the --yes flag",
+                           "executionId": execution_id}, json_output=True)
+            sys.exit(1)
         click.confirm(
             f"Permanently delete all DynamoDB records for execution '{execution_id}'? "
             "This is irreversible.", abort=True)

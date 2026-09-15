@@ -259,6 +259,19 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                 },
             });
             console.log(response);
+            // createComment resolves with [false, message] for a rejected request — a body over
+            // the API's length limit, a comment id that already exists, a permission denial — so
+            // the failure never reaches the catch below and has to be read off the result.
+            if (response[0] === false) {
+                setShowLoadingIcon(false);
+                const reason = response[1] || "Unknown error";
+                showMessage({
+                    type: "error",
+                    message: `Unable to add ${Synonyms.comment}: ${reason}`,
+                    dismissible: true,
+                });
+                return;
+            }
             showMessage({
                 type: "success",
                 message: `${Synonyms.Comment} added successfully`,

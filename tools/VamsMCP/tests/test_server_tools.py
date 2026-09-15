@@ -77,6 +77,213 @@ def test_search_files_entity_type(mock_client):
     assert request["entityTypes"] == ["file"]
 
 
+# --- Database-scoped search must not over-match sibling databases ------------
+#
+# S6-TOOLS-003. The filter was `str_databaseid:"{database_id}"` on the ANALYZED field, so the standard
+# analyzer split on hyphens and the quoted phrase matched the adjacent token sequence [smoke, db] —
+# which smoke-db-2 ([smoke, db, 2]) also contains. Verified against a deployed index: 24 smoke-db
+# assets PLUS one from smoke-db-2. The same defect was fixed at four web call sites by targeting
+# `.keyword`; this builder was missed, and it is shared by search_assets, search_files and
+# find_and_summarize, so all three leaked.
+
+
+def _search_filter_query(mock_client):
+    request = mock_client.api.search_query.call_args.args[0]
+    return request["filters"][0]["query_string"]["query"]
+
+
+@pytest.fixture
+def searching_client(mock_client):
+    mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    return mock_client
+
+
+@pytest.mark.parametrize("tool", ["search_assets", "search_files"])
+def test_database_filter_targets_the_keyword_subfield(searching_client, tool):
+    getattr(server, tool)(query="x", database_id="smoke-db")
+    query = _search_filter_query(searching_client)
+    assert query == 'str_databaseid.keyword:"smoke-db"'
+    # Stated separately: the exact-string assertion above would still pass if someone "fixed" it by
+    # dropping the quotes, which re-tokenizes a hyphenated id.
+    assert ".keyword" in query
+
+
+def test_find_and_summarize_uses_the_same_scoped_filter(searching_client):
+    """`_build_search_request` is shared, so this is the third caller that leaked."""
+    server.find_and_summarize("x", database_id="smoke-db")
+    assert ".keyword" in _search_filter_query(searching_client)
+
+
+def test_database_filter_escapes_an_embedded_quote(searching_client):
+    """An agent-supplied id must not be able to close the phrase and alter the query syntax."""
+    server.search_assets(query="x", database_id='a"b')
+    assert _search_filter_query(searching_client) == 'str_databaseid.keyword:"a\\"b"'
+
+
+def test_database_filter_escapes_a_backslash(searching_client):
+    server.search_assets(query="x", database_id="a\\b")
+    assert _search_filter_query(searching_client) == 'str_databaseid.keyword:"a\\\\b"'
+
+
+def test_global_is_treated_as_unscoped(searching_client):
+    """There is no asset database called GLOBAL — it is the unscoped keyword for the shared
+    pipeline/workflow catalogs — so filtering on it returns zero rows while other tool docstrings
+    actively teach the agent that GLOBAL is a valid database id."""
+    server.search_assets(query="x", database_id="GLOBAL")
+    request = searching_client.api.search_query.call_args.args[0]
+    assert "filters" not in request
+
+
+def test_no_database_id_adds_no_filter(searching_client):
+    """Negative control: unscoped must stay unscoped."""
+    server.search_assets(query="x")
+    assert "filters" not in searching_client.api.search_query.call_args.args[0]
+
+
+# --- Search paging and ordering ---------------------------------------------
+#
+# S6-TOOLS-008. `from` and `sort` were literals, so results past `size` were unreachable except by
+# re-issuing with a huge `size` (the unbounded response the server otherwise avoids), and
+# "the 10 most recently created assets" was inexpressible.
+
+
+def test_search_forwards_the_offset(searching_client):
+    server.search_assets(query="x", from_offset=25)
+    assert searching_client.api.search_query.call_args.args[0]["from"] == 25
+
+
+def test_search_defaults_to_relevance_ordering(searching_client):
+    server.search_assets(query="x")
+    assert searching_client.api.search_query.call_args.args[0]["sort"] == ["_score"]
+
+
+@pytest.mark.parametrize("descending,expected", [(True, "desc"), (False, "asc")])
+def test_search_orders_by_a_named_field(searching_client, descending, expected):
+    server.search_assets(query="x", sort_field="dateCreated", sort_desc=descending)
+    assert searching_client.api.search_query.call_args.args[0]["sort"] == [
+        {"dateCreated": {"order": expected}}
+    ]
+
+
+def test_search_negative_offset_is_clamped(searching_client):
+    server.search_assets(query="x", from_offset=-5)
+    assert searching_client.api.search_query.call_args.args[0]["from"] == 0
+
+
+def test_search_trims_to_the_clamped_size_not_the_raw_one(searching_client):
+    """`trim_search_results(raw, max_hits=size)` received the RAW value, so size=0 or a negative
+    truncated the hit list to nothing while the request itself asked for one hit."""
+    server.search_assets(query="x", size=0)
+    request = searching_client.api.search_query.call_args.args[0]
+    assert request["size"] == 1
+    assert searching_client.trim_search_results.call_args.kwargs["max_hits"] == 1
+
+
+# --- find_and_summarize fan-out ---------------------------------------------
+#
+# S6-TOOLS-012. `size` was passed through unclamped and each hit ran a paginated version walk with no
+# max_items, so `find_and_summarize(query, size=500)` issued 1 search plus up to 500 x max_pages
+# requests — thousands of authenticated calls and minutes of wall clock from one tool call that the
+# README's autoApprove sample includes.
+
+
+def test_find_and_summarize_clamps_the_hit_count(mock_client):
+    hits = [
+        {"_id": f"a{i}", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": f"a{i}"}}
+        for i in range(100)
+    ]
+    mock_client.api.search_query.return_value = {"hits": {"total": {"value": 100}, "hits": hits}}
+    mock_client.trim_search_results.side_effect = (
+        lambda raw, max_hits=50: server.VamsClient.trim_search_results(raw, max_hits=max_hits)
+    )
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+
+    result = server.find_and_summarize("q", size=100)
+
+    assert mock_client.api.search_query.call_args.args[0]["size"] <= 25
+    assert len(result["assets"]) <= 25
+    # One inner request per hit, and no more.
+    assert mock_client.paginate.call_count == len(result["assets"])
+    assert "note" in result, "a clamped size must be reported, or the count reads as the real total"
+
+
+def test_find_and_summarize_bounds_each_inner_version_walk_to_one_page(mock_client):
+    """Only `count` is read off the version walk, so the extra pages were fetched and discarded."""
+    hits = [{"_id": "a1", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": "a1"}}]
+    mock_client.api.search_query.return_value = {"hits": {"total": {"value": 1}, "hits": hits}}
+    mock_client.trim_search_results.side_effect = (
+        lambda raw, max_hits=50: server.VamsClient.trim_search_results(raw, max_hits=max_hits)
+    )
+    mock_client.config = server.CONFIG
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+
+    server.find_and_summarize("q")
+
+    assert mock_client.paginate.call_args.kwargs["max_items"] == server.CONFIG.page_size
+
+
+def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
+    """Negative control: the note must mark a clamp that happened, not appear unconditionally."""
+    mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    result = server.find_and_summarize("q", size=5)
+    assert "note" not in result
+
+
+# --- starting_token reaches the endpoint ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: server.list_databases(starting_token="tok"),
+        lambda: server.list_buckets(starting_token="tok"),
+        lambda: server.list_assets(starting_token="tok"),
+        lambda: server.list_asset_files("db1", "a1", starting_token="tok"),
+        lambda: server.list_asset_versions("db1", "a1", starting_token="tok"),
+        lambda: server.get_asset_metadata("db1", "a1", starting_token="tok"),
+        lambda: server.get_database_metadata("db1", starting_token="tok"),
+        lambda: server.get_asset_history("db1", "a1", starting_token="tok"),
+        lambda: server.list_metadata_schemas(starting_token="tok"),
+        lambda: server.list_workflows(starting_token="tok"),
+        lambda: server.list_workflow_executions("db1", "a1", starting_token="tok"),
+        lambda: server.list_tags(starting_token="tok"),
+        lambda: server.list_tag_types(starting_token="tok"),
+        lambda: server.list_pipelines(starting_token="tok"),
+        lambda: server.list_workflow_triggers("db1", "w1", starting_token="tok"),
+        lambda: server.list_executions(starting_token="tok"),
+        lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
+        lambda: server.list_subscriptions(starting_token="tok"),
+    ],
+)
+def test_every_paginated_read_tool_forwards_starting_token(mock_client, call):
+    """A ceiling without a resumption path is a wall. Asserted on the value that reaches paginate(),
+    which is where it becomes the first page's startingToken."""
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    # list_executions routes through _paginate_with_page_metadata, which wraps paginate().
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    result = call()
+    assert not (isinstance(result, dict) and result.get("error_type")), result
+    assert mock_client.paginate.call_args.kwargs.get("starting_token") == "tok"
+
+
+def test_starting_token_becomes_the_first_pages_request_parameter(mock_client):
+    """End-to-end control for the parametrized test above: the token has to reach the endpoint, not
+    merely reach paginate()."""
+    mock_client.config = server.CONFIG
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.paginate = lambda *args, **kwargs: server.VamsClient.paginate(
+        mock_client, *args, **kwargs
+    )
+    mock_client.api.list_asset_files.return_value = {"items": [], "NextToken": None}
+
+    server.list_asset_files("db1", "a1", starting_token="resume-here")
+
+    params = mock_client.api.list_asset_files.call_args.kwargs["params"]
+    assert params["startingToken"] == "resume-here"
+
+
 def test_search_assets_passes_geo_search(mock_client):
     mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
     mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
@@ -143,6 +350,51 @@ def test_list_workflow_executions_omits_absent_filters(mock_client):
     kwargs = mock_client.api.list_workflow_executions.call_args.kwargs
     assert kwargs["workflow_id"] is None
     assert kwargs["workflow_database_id"] is None
+
+
+# --- list_tags / list_tag_types database + scope --------------------------
+
+
+def test_list_tags_forwards_database_and_scope(mock_client):
+    """database/scope must reach get_tags by KEYWORD as database_id/scope, or the tag namespacing
+    filter silently does nothing."""
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_tags(database="db1", scope="all")
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    kwargs = mock_client.api.get_tags.call_args.kwargs
+    assert kwargs["database_id"] == "db1"
+    assert kwargs["scope"] == "all"
+
+
+def test_list_tags_omits_absent_database_and_scope(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_tags()
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    kwargs = mock_client.api.get_tags.call_args.kwargs
+    assert kwargs["database_id"] is None
+    assert kwargs["scope"] is None
+
+
+def test_list_tag_types_forwards_database_and_scope(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_tag_types(database="db1", scope="global")
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    kwargs = mock_client.api.get_tag_types.call_args.kwargs
+    assert kwargs["database_id"] == "db1"
+    assert kwargs["scope"] == "global"
+
+
+def test_list_tag_types_omits_absent_database_and_scope(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_tag_types()
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    kwargs = mock_client.api.get_tag_types.call_args.kwargs
+    assert kwargs["database_id"] is None
+    assert kwargs["scope"] is None
 
 
 @pytest.mark.asyncio
@@ -232,8 +484,13 @@ def test_mutating_tools_live_inside_their_gate_block():
     main = _line_of("def main()")
 
     by_name = {name: line for line, name in _tool_definitions()}
-    # Representative tools that must be gated; a read tool must NOT be.
-    for name in ("create_pipeline", "execute_workflow", "update_workflow"):
+    # Representative tools that must be gated; a read tool must NOT be. `abort_execution` is
+    # deliberately write-tier rather than destructive (S6-TOOLS-014): it removes no stored data, so
+    # requiring VAMS_ENABLE_DESTRUCTIVE for it would force an operator who wants abort to also enable
+    # every delete. Its risk is compute, which the README caution paragraph and CLAUDE.md Rule 4 name
+    # alongside execute_workflow / rerun_execution, and its group fan-out takes an explicit
+    # confirmation argument.
+    for name in ("create_pipeline", "execute_workflow", "update_workflow", "abort_execution"):
         assert writes < by_name[name] < destructive, f"{name} is outside the writes block"
     for name in ("archive_pipeline", "permanent_delete_execution", "delete_asset"):
         assert destructive < by_name[name] < main, f"{name} is outside the destructive block"
@@ -344,6 +601,39 @@ def test_list_executions_surfaces_page_warnings_and_flags_truncated(real_paginat
     assert result["truncated"] is True
 
 
+_WORK_BUDGET_WARNING = (
+    "This page stopped at its per-request work budget after reading 20 pages of the execution "
+    "index, so executions that match may not be listed."
+)
+
+
+def test_list_executions_surfaces_the_work_budget_bound(real_paginate_client):
+    """The second bound that can shorten a page. It arrives as another `warnings` string rather than
+    a new key, so it needs no entry in `passthrough_keys` (which drops unknown scalars silently) —
+    this pins that it genuinely reaches the agent."""
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [], "NextToken": "t1", "warnings": [_WORK_BUDGET_WARNING]}},
+        {"message": {"Items": [{"workflowExecutionId": "e1"}]}},
+    ]
+
+    result = server.list_executions()
+
+    assert result["warnings"] == [_WORK_BUDGET_WARNING]
+    assert result["truncated"] is True
+
+
+def test_list_executions_keeps_both_bounds_in_the_order_they_fired(real_paginate_client):
+    # The distinct-asset bound is reported first by the service; collapsing the two or reordering them
+    # would leave an agent unable to say which limit it hit.
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [], "warnings": [_WITHHELD_WARNING, _WORK_BUDGET_WARNING]}},
+    ]
+
+    result = server.list_executions()
+
+    assert result["warnings"] == [_WITHHELD_WARNING, _WORK_BUDGET_WARNING]
+
+
 def test_list_executions_echoes_the_applied_date_window(real_paginate_client):
     real_paginate_client.api.list_executions.side_effect = [
         {"message": {"Items": [], "filterStartDate": "2026-05-11", "filterEndDate": "2026-08-09"}},
@@ -440,6 +730,55 @@ def test_get_execution_logs_sends_only_mode_when_nothing_is_narrowed(mock_client
     server.get_execution_logs("e1")
 
     assert mock_client.api.get_execution_logs.call_args.kwargs["params"] == {"mode": "full"}
+
+
+# --- get_execution_details sub-execution flag ------------------------------
+
+
+def test_get_execution_details_sends_no_params_by_default(mock_client):
+    """The default read is the cheap one: no includeSubExecutions, no history reads server-side."""
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_details.return_value = {"pipelines": []}
+
+    server.get_execution_details("e1")
+
+    mock_client.api.get_execution_details.assert_called_once_with("e1", params=None)
+
+
+def test_get_execution_details_forwards_the_sub_execution_flag(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_details.return_value = {"pipelines": []}
+
+    server.get_execution_details("e1", include_sub_executions=True)
+
+    params = mock_client.api.get_execution_details.call_args.kwargs["params"]
+    assert params == {"includeSubExecutions": "true"}
+
+
+def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_logs.return_value = {"events": []}
+
+    server.get_execution_logs(
+        "e1", mode="full", pipeline_execution_id="pe1", log_id="3f9a0c1d2e4b5a67",
+        stage_name="PdalConverterBatchJob",
+    )
+
+    params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
+    assert params == {"mode": "full", "pipelineExecutionId": "pe1",
+                      "logId": "3f9a0c1d2e4b5a67", "stageName": "PdalConverterBatchJob"}
+
+
+def test_get_execution_logs_omits_log_id_and_stage_name_in_truncated_mode(mock_client):
+    """Both read a live source, so like the paging options they are not sent in truncated mode."""
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_logs.return_value = {}
+
+    server.get_execution_logs("e1", mode="truncated", pipeline_execution_id="pe1",
+                              log_id="3f9a0c1d2e4b5a67", stage_name="Convert")
+
+    params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
+    assert params == {"mode": "truncated", "pipelineExecutionId": "pe1"}
 
 
 # --- page_execution_detail_metadata ---------------------------------------
@@ -625,11 +964,22 @@ def test_get_execution_logs_docstring_scopes_the_token_to_the_events_list():
 
 @pytest.mark.parametrize(
     "fragment",
-    # A page can withhold rows; the docstring is where an agent learns a short list may be one.
-    ["warnings", "WITHHELD", "truncated", "filterStartDate"],
+    # A page can withhold rows; the docstring is where an agent learns a short list may be one. Two
+    # bounds can shorten it — the distinct-asset cap and the per-request work budget — and an agent
+    # told about only one will read the other as an absence of matches.
+    ["warnings", "WITHHELD", "truncated", "filterStartDate",
+     "distinct assets", "work budget"],
 )
 def test_list_executions_docstring_describes_withheld_rows(fragment):
     assert fragment in _docstring_of("list_executions")
+
+
+def test_list_executions_docstring_names_the_output_asset_gate():
+    """Visibility is filtered on the asset a run WROTE to as well as the assets it read, so a run can
+    be absent for a reason the date window and the filters do not explain. An agent that does not
+    know this reports the run as non-existent."""
+    docstring = _docstring_of("list_executions")
+    assert "wrote to" in docstring
 
 
 @pytest.mark.parametrize("tool", ["create_pipeline", "update_pipeline"])
@@ -637,8 +987,125 @@ def test_pipeline_save_docstrings_tell_the_agent_to_relay_warnings(tool):
     assert "warnings" in _docstring_of(tool)
 
 
+@pytest.mark.parametrize(
+    "fragment",
+    # The two new per-step keys and the flag that gates one of them; `logId` is how an agent moves
+    # from a listed source to reading it with get_execution_logs.
+    ["availableLogs", "subExecutions", "include_sub_executions", "logId", "caught",
+     "pipelines.subExecutions"],
+)
+def test_get_execution_details_docstring_describes_sub_processes_and_log_sources(fragment):
+    assert fragment in _docstring_of("get_execution_details")
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # The source list and its statuses, the two narrowing parameters, and the scope they need.
+    ["logSources", "log_id", "stage_name", "pipeline_execution_id", "unscoped", "404"],
+)
+def test_get_execution_logs_docstring_describes_log_sources(fragment):
+    assert fragment in _docstring_of("get_execution_logs")
+
+
 def test_list_workflows_docstring_mentions_archived_discovery():
     assert "include_archived" in _docstring_of("list_workflows")
+
+
+# --- Every paginated read tool must describe its bound ----------------------
+#
+# S6b-mcp#9. `paginate()` emitted `truncated` and `note`, but only list_executions and
+# page_execution_detail_metadata mentioned a bound in their docstrings. The rest were one-liners that
+# assert completeness — "List files belonging to an asset (auto-paginated)." — so an agent that
+# received 2,000 of an asset's 12,000 files had nothing telling it not to report that as the count, or
+# not to answer "file X is not in this asset". Mandatory Rule 8: the docstring must say what the flag
+# means for the agent's CONCLUSION, not merely that the field exists.
+
+_PAGINATED_READ_TOOLS = (
+    "list_databases",
+    "list_buckets",
+    "list_assets",
+    "list_asset_files",
+    "get_asset_metadata",
+    "get_database_metadata",
+    "list_asset_versions",
+    "get_asset_history",
+    "list_metadata_schemas",
+    "list_workflows",
+    "list_workflow_executions",
+    "list_tags",
+    "list_tag_types",
+    "list_pipelines",
+    "list_executions",
+    "page_execution_detail_metadata",
+    "list_subscriptions",
+    "list_api_keys",
+    "list_user_api_keys",
+)
+
+
+@pytest.mark.parametrize("tool", _PAGINATED_READ_TOOLS)
+def test_paginated_read_docstrings_describe_the_bound(tool):
+    docstring = _docstring_of(tool)
+    assert docstring, f"{tool} has no docstring, so this assertion would be vacuous"
+    assert "truncated" in docstring, f"{tool} does not tell the agent a short list may be bounded"
+    assert "starting_token" in docstring, f"{tool} does not say how to continue the walk"
+
+
+@pytest.mark.parametrize("tool", _PAGINATED_READ_TOOLS)
+def test_paginated_read_tools_accept_a_starting_token(tool):
+    """The docstring promise above has to be backed by a real parameter.
+
+    Read off the live signature rather than the source text: a docstring that describes a parameter
+    the function does not take is worse than silence — the agent's call is rejected by the schema.
+    """
+    import inspect
+
+    parameters = inspect.signature(getattr(server, tool)).parameters
+    assert "starting_token" in parameters, f"{tool} documents starting_token but does not accept it"
+    assert parameters["starting_token"].default is None
+
+
+def test_the_docstring_bound_check_would_fire_on_a_one_liner():
+    """Positive control for the two tests above.
+
+    `_docstring_of` resolves by AST over the file, so a renamed helper or a changed decorator order
+    would make it raise rather than silently pass — but a tool whose docstring simply lacks the
+    sentence must fail, and this proves the assertion is capable of failing. `get_search_fields` is a
+    non-paginated read tool: it is a genuine one-liner and correctly says nothing about a bound.
+    """
+    one_liner = _docstring_of("get_search_fields")
+    assert one_liner
+    assert "truncated" not in one_liner
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # generate_download_url sits in the unconditional read gate, so it hands out an S3 bearer
+    # credential on a deployment with writes and destructive operations both disabled. The docstring
+    # is the only place the operator reading the tool list, and the agent deciding whether to call
+    # it, learn what the returned string is, how long it stays usable, where it ends up, and the one
+    # deployment setting that bounds it. Matched on identifiers and one exact phrase rather than
+    # prose, so a copy-edit does not fail the suite.
+    [
+        "bearer credential",
+        "presignedUrlTimeoutSeconds",
+        "24 hours",
+        "transcript",
+        "presignedUrlNetworkRestrictions",
+        "allowedIpRanges",
+        "allowedVpceIds",
+    ],
+)
+def test_generate_download_url_docstring_names_the_credential_exposure(fragment):
+    assert fragment in _docstring_of("generate_download_url")
+
+
+def test_generate_download_url_docstring_positive_control():
+    """Control for the assertions above: prove the helper read this tool's real docstring rather
+    than an empty one, by pinning text that predates them."""
+    docstring = _docstring_of("generate_download_url")
+    assert docstring, "no docstring was read, so every fragment assertion above is vacuous"
+    assert "presigned download URL for an asset file" in docstring
 
 
 # Every pipeline/workflow/execution APIClient method returns the handler's raw
@@ -655,7 +1122,6 @@ def test_list_workflows_docstring_mentions_archived_discovery():
         lambda: server.get_pipeline_template("db1", "p1", "t1"),
         lambda: server.get_pipeline_template_tag_schema("db1", "p1", "t1"),
         lambda: server.get_workflow("db1", "w1"),
-        lambda: server.list_workflow_triggers("db1", "w1"),
         lambda: server.get_workflow_trigger("db1", "w1", "fileUpload"),
         lambda: server.get_execution_details("e1"),
         lambda: server.get_execution_logs("e1"),
@@ -672,7 +1138,6 @@ def test_orchestration_reads_unwrap_the_message_envelope(mock_client, call):
         "get_pipeline_template",
         "get_pipeline_template_tag_schema",
         "get_workflow",
-        "list_workflow_triggers",
         "get_workflow_trigger",
         "get_execution_details",
         "get_execution_logs",
@@ -783,3 +1248,296 @@ def test_non_pipeline_saves_stay_on_plain_unwrap(tool):
     source = _source_of(tool)
     assert "_unwrap_message_with_warnings" not in source
     assert "unwrap_message" in source
+
+
+# --- The compute cautions must name the same three tools everywhere ----------
+#
+# S6-TOOLS-014. `abort_execution` sat in the writes gate — correctly, since it removes no stored data
+# — but its own docstring says "Aborting is not reversible" and the group form terminates every active
+# run in a group. `CLAUDE.md` Rule 4 and the README's autoApprove caution named only
+# `execute_workflow` and `rerun_execution`, so an operator who enabled writes while deliberately
+# leaving destructive off had nothing telling them the writes gate included an irreversible group-wide
+# kill of running AWS compute. The classification is now stated in all three places, so the risk of
+# drift moves to keeping them in step — which is what this asserts.
+
+_COMPUTE_CAUTION_TOOLS = ("execute_workflow", "rerun_execution", "abort_execution")
+
+
+def _sibling_doc(name):
+    return (SOURCE_PATH.resolve().parents[1] / name).read_text(encoding="utf-8")
+
+
+def _readme_compute_caution_paragraph():
+    """The README paragraph that tells the reader what to keep out of `autoApprove`.
+
+    Located by content rather than by an offset from one phrase: an offset window silently excludes
+    whichever tool happens to be named before the anchor, which is how a green assertion can cover
+    two of the three names.
+    """
+    paragraphs = [p for p in _sibling_doc("README.md").split("\n\n")
+                  if "autoApprove" in p and "incur cost" in p]
+    assert len(paragraphs) == 1, (
+        f"expected exactly one compute-caution paragraph in README.md, found {len(paragraphs)}")
+    return paragraphs[0]
+
+
+@pytest.mark.parametrize("tool", _COMPUTE_CAUTION_TOOLS)
+def test_readme_autoapprove_caution_names_every_compute_tool(tool):
+    paragraph = _readme_compute_caution_paragraph()
+    assert f"`{tool}`" in paragraph, f"the README autoApprove caution does not name {tool}"
+
+
+@pytest.mark.parametrize("tool", _COMPUTE_CAUTION_TOOLS)
+def test_steering_rule_4_names_every_compute_tool(tool):
+    steering = _sibling_doc("CLAUDE.md")
+    assert f"`{tool}`" in steering, f"CLAUDE.md Rule 4 does not classify {tool}"
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # An operator who enables writes while deliberately leaving destructive off has to be able to
+    # learn from the tool description that this one irreversibly stops running compute and fans out
+    # across a group. Read from the source docstring because the tool is absent at the default gates.
+    ["NOT reversible", "STOPS running AWS compute", "fans out", "autoApprove"],
+)
+def test_abort_execution_docstring_states_the_compute_risk(fragment):
+    docstring = _docstring_of("abort_execution")
+    assert docstring, "no docstring was read, so this assertion would be vacuous"
+    assert fragment in docstring
+
+
+# --- The per-asset execution list must not swallow its page metadata --------
+#
+# The asset-scoped listing returns `filterStartDate` (and `filterEndDate`) and a `warnings` array as
+# SIBLINGS of `Items` inside the `message` envelope, exactly as the global one does. paginate()
+# rebuilds its result from the accumulated items alone, so on that helper an asset whose last run
+# predates the default 90-day window reads as an asset that has never been processed, and a page
+# capped by the executions-inspected limit reads as the asset's complete history.
+
+_ASSET_INSPECT_WARNING = (
+    "This page reached the limit of 200 executions inspected for this asset, so older executions "
+    "are not listed. Narrow the filters or continue with NextToken to see the rest."
+)
+
+
+def test_list_workflow_executions_surfaces_page_warnings_and_flags_truncated(real_paginate_client):
+    # The last page carries no NextToken, so the warning is the only thing that can mark this
+    # result incomplete.
+    real_paginate_client.api.list_workflow_executions.side_effect = [
+        {"message": {"Items": [{"workflowExecutionId": "e1"}], "NextToken": "t1",
+                     "warnings": [_ASSET_INSPECT_WARNING]}},
+        {"message": {"Items": [{"workflowExecutionId": "e2"}], "warnings": [_ASSET_INSPECT_WARNING]}},
+    ]
+
+    result = server.list_workflow_executions("db1", "a1")
+
+    assert [row["workflowExecutionId"] for row in result["Items"]] == ["e1", "e2"]
+    # Reported once even though both pages carried it.
+    assert result["warnings"] == [_ASSET_INSPECT_WARNING]
+    assert result["truncated"] is True
+
+
+def test_list_workflow_executions_echoes_the_applied_date_window(real_paginate_client):
+    """The 90-day lower bound is applied whether or not the caller asked for one, so without the echo
+    an empty list is indistinguishable from an asset that has never been processed."""
+    real_paginate_client.api.list_workflow_executions.side_effect = [
+        {"message": {"Items": [], "filterStartDate": "2026-05-20T00:00:00Z",
+                     "filterEndDate": "2026-08-18T00:00:00Z"}},
+    ]
+
+    result = server.list_workflow_executions("db1", "a1")
+
+    assert result["filterStartDate"] == "2026-05-20T00:00:00Z"
+    assert result["filterEndDate"] == "2026-08-18T00:00:00Z"
+
+
+def test_list_workflow_executions_clean_walk_adds_no_warning_keys(real_paginate_client):
+    """Negative control: the helper must not manufacture a bound on a complete page, or `truncated`
+    stops meaning anything."""
+    real_paginate_client.api.list_workflow_executions.side_effect = [
+        {"message": {"Items": [{"workflowExecutionId": "e1"}]}},
+    ]
+
+    result = server.list_workflow_executions("db1", "a1")
+
+    assert result["count"] == 1, "items must still be read from the page (one unwrap, not two)"
+    assert "warnings" not in result
+    assert result.get("truncated") is None
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # The date bound went unmentioned entirely, which is the half of this an agent cannot infer: an
+    # empty result reads as "never processed" rather than "older than the window".
+    ["filterStartDate", "90 days", "warnings", "WITHHELD", "truncated", "starting_token"],
+)
+def test_list_workflow_executions_docstring_describes_the_window_and_withheld_rows(fragment):
+    assert fragment in _docstring_of("list_workflow_executions")
+
+
+# --- Both execution list tools forward every filter the endpoint applies -----
+#
+# Both endpoints accept six equality filters plus the date window. A parameter absent from the tool
+# surface pins the agent to the server default with no error, so "why did this fail in March?" and
+# "list this group's members" are unanswerable rather than unsupported. Asserted on the params that
+# reach the APIClient, since a dropped one is a silent server default no return-value check catches.
+
+_GLOBAL_LIST_FILTER_PARAMETERS = (
+    "status", "workflow_id", "workflow_database_id", "trigger_type", "group_id",
+    "triggered_by_user_id", "filter_start_date", "filter_end_date",
+)
+
+_ASSET_LIST_FILTER_PARAMETERS = (
+    "workflow_id", "workflow_database_id", "status", "trigger_type", "group_id",
+    "triggered_by_user_id", "filter_start_date", "filter_end_date",
+)
+
+
+@pytest.mark.parametrize(
+    ("tool", "parameters"),
+    [
+        ("list_executions", _GLOBAL_LIST_FILTER_PARAMETERS),
+        ("list_workflow_executions", _ASSET_LIST_FILTER_PARAMETERS),
+    ],
+)
+def test_execution_list_tools_accept_every_narrowing_parameter(tool, parameters):
+    """Read off the live signature: the agent's call is rejected by the schema for a parameter the
+    docstring describes but the function does not take."""
+    import inspect
+
+    declared = inspect.signature(getattr(server, tool)).parameters
+    missing = [name for name in parameters if name not in declared]
+    assert not missing, f"{tool} does not accept {missing}"
+
+
+_FILTER_ARGUMENTS = {
+    "status": "FAILED",
+    "workflow_id": "wf1",
+    "workflow_database_id": "wdb1",
+    "trigger_type": "Manual",
+    "group_id": "grp-1",
+    "triggered_by_user_id": "u1",
+    "filter_start_date": "2026-01-01T00:00:00Z",
+    "filter_end_date": "2026-02-01T00:00:00Z",
+}
+
+_EXPECTED_QUERY_KEYS = {
+    "status": "status",
+    "workflow_id": "workflowId",
+    "workflow_database_id": "workflowDatabaseId",
+    "trigger_type": "triggerType",
+    "group_id": "groupId",
+    "triggered_by_user_id": "triggeredByUserId",
+    "filter_start_date": "filterStartDate",
+    "filter_end_date": "filterEndDate",
+}
+
+
+def test_list_executions_forwards_every_filter_on_every_page(real_paginate_client):
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [], "NextToken": "t1"}},
+        {"message": {"Items": []}},
+    ]
+
+    result = server.list_executions(**_FILTER_ARGUMENTS)
+
+    assert "error_type" not in result, result
+    calls = real_paginate_client.api.list_executions.call_args_list
+    assert len(calls) == 2, "a filter-pinned walk must repeat its filters, so both pages are checked"
+    for call in calls:
+        sent = call.kwargs["params"]
+        for argument, key in _EXPECTED_QUERY_KEYS.items():
+            assert sent.get(key) == _FILTER_ARGUMENTS[argument], f"{key} did not reach the endpoint"
+
+
+def test_list_workflow_executions_forwards_every_filter_on_every_page(real_paginate_client):
+    """workflow_id / workflow_database_id keep travelling as the APIClient's own keyword arguments
+    (it folds them into the query itself); the rest ride in `params`."""
+    real_paginate_client.api.list_workflow_executions.side_effect = [
+        {"message": {"Items": [], "NextToken": "t1"}},
+        {"message": {"Items": []}},
+    ]
+
+    result = server.list_workflow_executions("db1", "a1", **_FILTER_ARGUMENTS)
+
+    assert "error_type" not in result, result
+    calls = real_paginate_client.api.list_workflow_executions.call_args_list
+    assert len(calls) == 2
+    for call in calls:
+        assert call.kwargs["workflow_id"] == "wf1"
+        assert call.kwargs["workflow_database_id"] == "wdb1"
+        sent = call.kwargs["params"]
+        for argument in ("status", "trigger_type", "group_id", "triggered_by_user_id",
+                         "filter_start_date", "filter_end_date"):
+            key = _EXPECTED_QUERY_KEYS[argument]
+            assert sent.get(key) == _FILTER_ARGUMENTS[argument], f"{key} did not reach the endpoint"
+
+
+@pytest.mark.parametrize(
+    ("call", "recorder"),
+    [
+        (lambda: server.list_executions(), "list_executions"),
+        (lambda: server.list_workflow_executions("db1", "a1"), "list_workflow_executions"),
+    ],
+)
+def test_execution_list_tools_send_no_filter_the_caller_did_not_set(real_paginate_client, call,
+                                                                   recorder):
+    """An unset filter must be absent, not empty. The handler compares these for equality after
+    stripping, and an empty date would be read as a sort-key bound."""
+    getattr(real_paginate_client.api, recorder).side_effect = [{"message": {"Items": []}}]
+
+    call()
+
+    sent = getattr(real_paginate_client.api, recorder).call_args.kwargs["params"]
+    leaked = sorted(set(_EXPECTED_QUERY_KEYS.values()) & set(sent))
+    assert not leaked, f"filters sent without being asked for: {leaked}"
+
+
+# --- Workflow ids are unique across databases, and every doc must say so -----
+#
+# create_workflow rejects an id owned by any other database including GLOBAL
+# (workflowService.find_workflow_id_owner), and create_pipeline does the same. So a database id is
+# never needed to disambiguate one; supplying a guessed one only narrows the result to nothing. The
+# agent skill states the rule correctly, and it is the authority for identifier semantics, so the
+# MCP text must not teach the opposite.
+
+_DATABASE_SCOPED_CLAIM = "unique only within its database"
+_CROSS_DATABASE_RULE = "unique across every database"
+
+
+def _agent_facing_vamsmcp_texts():
+    """server.py plus the operator-facing docs beside it.
+
+    `tests/` is deliberately excluded: this module names the wrong claim as a literal, so scanning
+    itself would make the assertion below fail on its own fixture data.
+    """
+    root = SOURCE_PATH.resolve().parents[1]
+    paths = [SOURCE_PATH.resolve(), root / "README.md", root / "CLAUDE.md"]
+    return {path.name: path.read_text(encoding="utf-8") for path in paths}
+
+
+def test_no_vamsmcp_text_claims_a_workflow_id_is_database_scoped():
+    offenders = sorted(name for name, text in _agent_facing_vamsmcp_texts().items()
+                       if _DATABASE_SCOPED_CLAIM in text)
+    assert not offenders, (
+        f"{offenders} state the id is only database-unique, which the backend rejects at create")
+
+
+def test_the_database_scoped_claim_scan_reads_real_files():
+    """Positive control for the scan above: prove it read the shipped text rather than empty strings,
+    by pinning a sentence that has to be present for the corrected rule to be stated at all."""
+    texts = _agent_facing_vamsmcp_texts()
+    assert set(texts) == {"server.py", "README.md", "CLAUDE.md"}, sorted(texts)
+    assert all(texts.values()), "one of the scanned files read as empty"
+    stating = [name for name, text in texts.items() if _CROSS_DATABASE_RULE in text]
+    assert "server.py" in stating and "README.md" in stating, (
+        f"only {stating} state the cross-database rule")
+
+
+def test_list_workflow_executions_docstring_states_the_id_identifies_the_workflow():
+    """The direction matters: told the id is ambiguous, an agent supplies a guessed database and the
+    equality filter empties the page — a successful call reporting the workflow never ran."""
+    docstring = _docstring_of("list_workflow_executions")
+    assert _CROSS_DATABASE_RULE in docstring
+    assert "narrowing filter" in docstring
+    assert _DATABASE_SCOPED_CLAIM not in docstring

@@ -1,0 +1,81 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# A FIXTURE, not a test module. It is read as TEXT by test_assertion_shapes.py and never imported,
+# executed, or collected -- hence the .py.txt extension and the undefined helper names.
+#
+# Every line marked "# PLANT: <category>" is a deliberate instance of the OVER-TIGHT direction: an
+# assertion that a strictly SAFER implementation would fail. The detector must report each of them,
+# with that category, on that line. It must report nothing else here. The markers are the control's
+# only source of truth, so adding a plant extends the control automatically.
+
+
+def pins_a_mock_call_count():
+    table = MagicMock()
+    read_everything(table)
+    table.query.assert_called_once_with(Limit=10)                  # PLANT: pinned-call-count
+    assert table.query.call_count == 3                             # PLANT: pinned-call-count
+    table.scan.assert_has_calls([FIRST_READ, SECOND_READ])         # PLANT: pinned-call-count
+
+
+def pins_the_length_of_a_recorded_read_list():
+    pager = Pager(FIRST_PAGE, LAST_PAGE)
+    read_everything(pager)
+    assert len(pager.calls) == 3                                   # PLANT: pinned-call-count
+
+
+def pins_the_exact_upload_sequence():
+    state = {"uploads": []}
+    resync(state)
+    assert [rel for rel, _b in state["uploads"]] == ["/a.stl"]      # PLANT: pinned-exact-sequence
+
+
+def pins_a_read_expression_to_its_exact_text():
+    pager = Pager(ONLY_PAGE)
+    read_everything(pager)
+    kwargs = pager.calls[0]
+    assert kwargs["ProjectionExpression"] == "databaseId, workflowId"   # PLANT: pinned-read-expression
+    assert kwargs["FilterExpression"] == "roleName = :roleName"     # PLANT: pinned-read-expression
+
+
+def pins_a_requested_page_size_to_its_budget():
+    pager = Pager(ONLY_PAGE)
+    read_everything(pager)
+    assert pager.calls[0]["Limit"] == MAX_WORKFLOW_PAGE_SIZE        # PLANT: pinned-bound-equality
+
+
+def pins_a_source_text_occurrence_count():
+    source = read_handler_source()
+    assert source.count("LastEvaluatedKey") == 2                    # PLANT: pinned-source-text-count
+
+
+def classifies_a_returned_set_by_message_wording():
+    warnings = save_the_pipeline()
+    per_workflow = [w for w in warnings if "is part of" in w]       # PLANT: wording-classified-collection
+    assert len(warnings) > len(per_workflow)
+
+
+def pins_the_length_of_a_returned_warning_list():
+    warnings = save_the_pipeline()
+    assert len(warnings) == 2                                       # PLANT: pinned-collection-length
+
+
+def pins_exactly_one_reported_label():
+    labels = referencing_workflow_labels("db1", "pipe1")
+    assert len(labels) == 1                                         # PLANT: pinned-collection-length
+
+
+def pins_a_reported_label_count_to_the_production_cap():
+    labels = referencing_workflow_labels("db1", "pipe1")
+    assert len(labels) == MAX_REFERENCING_WORKFLOWS                 # PLANT: pinned-bound-equality
+
+
+def pins_the_wording_of_one_returned_warning():
+    warnings = save_the_pipeline()
+    assert warnings[0] == "workflow db1:wf1 is part of an auto-triggered workflow"  # PLANT: pinned-message-wording
+
+
+def pins_an_exact_list_reached_through_a_helper():
+    batch = MagicMock()
+    delete_everything(batch)
+    assert recorded_deletes(batch) == ["/a.stl", "/b.stl"]           # PLANT: pinned-exact-sequence

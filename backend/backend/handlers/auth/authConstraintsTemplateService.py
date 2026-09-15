@@ -52,18 +52,13 @@ claims_and_roles = {}
 
 try:
     constraints_table_name = get_table_name(ResourceKeys.CONSTRAINTS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving constraints table name")
-    constraints_table_name = None
-
-try:
     roles_table_name = get_table_name(ResourceKeys.ROLES_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed resolving roles table name")
-    roles_table_name = None
+    logger.exception("Failed loading resource names")
+    raise e
 
-constraints_table = dynamodb.Table(constraints_table_name) if constraints_table_name else None
-roles_table = dynamodb.Table(roles_table_name) if roles_table_name else None
+constraints_table = dynamodb.Table(constraints_table_name)
+roles_table = dynamodb.Table(roles_table_name)
 
 
 #######################
@@ -120,6 +115,40 @@ def substitute_variables(constraints_data, var_values):
     return substituted
 
 
+def validate_substituted_criteria_values(constraints_data):
+    """Re-check every criteria value after variable substitution.
+
+    The template body is checked when the request is parsed, but the value written to DynamoDB is the
+    substituted one: a caller-supplied variableValues entry is spliced in afterwards, and it is that
+    result which becomes the Casbin regexMatch pattern re-evaluated on every authorization decision
+    for the object type. The same REGEX rule the constraint create/update route applies is therefore
+    applied here, to the value actually being stored.
+
+    Args:
+        constraints_data: List of constraint dictionaries after substitution
+
+    Raises:
+        VAMSGeneralErrorResponse: If a substituted criteria value is not a usable criteria value
+    """
+    for constraint in constraints_data:
+        for criteria_key in ('criteriaAnd', 'criteriaOr'):
+            for criteria in constraint.get(criteria_key, []) or []:
+                value = criteria.get('value')
+                for entry in (value if isinstance(value, list) else [value]):
+                    if not isinstance(entry, str):
+                        continue
+                    (valid, message) = validate({
+                        'criteriaValue': {
+                            'value': entry,
+                            'validator': 'REGEX',
+                            'allowGlobalKeyword': True
+                        }
+                    })
+                    if not valid:
+                        logger.error(f"Substituted criteria value rejected: {message}")
+                        raise VAMSGeneralErrorResponse(message)
+
+
 def find_unreplaced_variables(constraints_data):
     """Scan constraints for remaining {{VAR}} patterns after substitution.
 
@@ -157,18 +186,15 @@ def validate_constraint_role_exists(group_id):
         group_id: The role/group ID to validate
 
     Returns:
-        True if role exists, False otherwise
+        True only when the lookup succeeds and the role exists; False when the role
+        is absent or the lookup could not be completed
     """
-    if not roles_table:
-        logger.warning(f"Roles table not configured, skipping role validation for {group_id}")
-        return True
-
     try:
         role_response = roles_table.get_item(Key={'roleName': group_id})
         return 'Item' in role_response
     except Exception as e:
-        logger.warning(f"Could not validate groupId '{group_id}': {e}")
-        return True  # Allow if validation fails
+        logger.exception(f"Could not validate groupId '{group_id}': {e}")
+        return False
 
 
 def _transform_to_denormalized_format(constraint_data):
@@ -330,11 +356,15 @@ def import_template_constraints(template_data, claims_and_roles):
             f"Provide values for these in variableValues."
         )
 
-    # Validate role exists (warn but don't block)
+    # Check the criteria values that are about to be stored, not the ones that were submitted
+    validate_substituted_criteria_values(substituted_constraints)
+
+    # Validate role exists (warn but don't block). The check reports False both when the role
+    # is absent and when the lookup could not be completed, so the warning covers either.
     role_exists = validate_constraint_role_exists(role_name)
     if not role_exists:
-        logger.warning(f"Role '{role_name}' does not exist in roles table. "
-                       f"Constraints will be created but may not be effective until the role is created.")
+        logger.warning(f"Role '{role_name}' could not be confirmed in the roles table. "
+                       f"Constraints will be created but may not be effective until the role exists.")
 
     # Create each constraint
     created_constraint_ids = []

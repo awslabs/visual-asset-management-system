@@ -57,6 +57,12 @@ class TestConstraintMappingConsistency:
         assert get_constraint_fields_for_object_type("nope") == []
         assert get_constraint_fields_for_object_type(None) == []
 
+    def test_tag_and_tagtype_support_databaseid_scope(self):
+        # Scoped tag/tag-type admin relies on a databaseId constraint surviving the
+        # object-type matrix (write-time validation + enforce-time scrubbing).
+        assert "databaseId" in get_constraint_fields_for_object_type("tag")
+        assert "databaseId" in get_constraint_fields_for_object_type("tagType")
+
 
 @pytest.mark.unit
 class TestPermissionObjectsRouteConstant:

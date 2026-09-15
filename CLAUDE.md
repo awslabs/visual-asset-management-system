@@ -8,19 +8,25 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 
 -   **React frontend** (`web/`) — Cloudscape UI, many viewer plugins for 3D/media
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
--   **CDK TypeScript infrastructure** (`infra/`) — 11 nested stacks, multi-partition support
+-   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) — 3D conversion, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos 3 (omni), and more
+-   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, and more
 
 ### **Version Info**
 
-VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 20.x (Lambda). React 17.0.2 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
+VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 22.x (Lambda). React 18.3 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
 
-**Rolling the VAMS version** — the version string is duplicated across three files; update all of them together in the same change:
+**Rolling the VAMS version** — the version string is duplicated across seven files; update all of them together in the same change:
 
 1. Root `package.json` (`"version"` field)
-2. `tools/VamsCLI/vamscli/version.py` (both `__version__` and `CLI_VERSION`)
+2. Root `package-lock.json` (both `project-root` `"version"` fields: top-level and `packages[""]`)
 3. `infra/config/config.ts` (`VAMS_VERSION` constant)
+4. `tools/VamsCLI/vamscli/version.py` (both `__version__` and `CLI_VERSION`)
+5. `tools/VamsCLI/tests/test_log_redaction.py` (the `vamscli/X.Y.Z` User-Agent fixture value and its assertion)
+6. `tools/VamsMCP/pyproject.toml` (`[project]` `version`)
+7. `tools/VamsMCP/vams_mcp/__init__.py` (`__version__` — what the running MCP server reports; Pattern 7 rule 6)
+
+The sub-package `package.json`/`package-lock.json` files under `infra/`, `web/`, and `documentation/docusaurus-site/` carry their own versions and are not part of the roll, nor are third-party pins that happen to share the digits (`urllib3`, `pdal`, `cadquery`). Each release also gets a new `## [X.Y.Z] (YYYY-MM-DD)` section at the top of `CHANGELOG.md` and a matching row plus `### X.Y.Z` section in `documentation/docusaurus-site/docs/additional/revisions.md`.
 
 ---
 
@@ -50,16 +56,19 @@ root/
 │   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
 │   ├── genAi/
 │   │   ├── nvidia/
-│   │   │   └── cosmos/
-│   │   │       ├── 3/         # NVIDIA Cosmos 3 (omni generation)
-│   │   │       └── predict/   # NVIDIA Cosmos Predict (Text2World, Video2World)
+│   │   │   ├── cosmos/
+│   │   │   │   ├── 3/         # NVIDIA Cosmos 3 (omni generation)
+│   │   │   │   ├── predict/   # NVIDIA Cosmos Predict (Text2World, Video2World)
+│   │   │   │   ├── reason/    # NVIDIA Cosmos Reason (video captioning)
+│   │   │   │   └── transfer/  # NVIDIA Cosmos Transfer (control-signal video restyle)
+│   │   │   └── gr00t/         # NVIDIA GR00T N1.5 fine-tuning
 │   │   └── metadata3dLabeling/
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
 │   └── CLAUDE.md              # Documentation development guide
 ├── .kiro/steering/            # Detailed workflow docs (Kiro steering, supplementary)
 ├── .claude/commands/          # Claude Code skills (slash commands)
-└── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.4_to_v2.5)
+└── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.5_to_v2.6)
 ```
 
 ---
@@ -87,7 +96,7 @@ Cognito/External OAuth → ID Token → Custom Lambda Authorizer
 ### **Frontend Architecture**
 
 ```
-React 17 + Cloudscape → HashRouter → apiClient (fetch-based)
+React 18 + Cloudscape → HashRouter → apiClient (fetch-based)
   → Feature switches from /api/secure-config → conditional UI rendering
 ```
 
@@ -101,7 +110,7 @@ CDK config (infra/config/config.json)
 
 ### **Pipeline Architecture**
 
-Three creatable execution types: **Lambda** (sync/async invoke), **SQS** (async queue), **EventBridge** (async event). SQS and EventBridge are async-only with optional Step Functions Task Token callback. A fourth type, **DeadlineCloud** (async-only, callback mandatory), is supported at the execution layer (`DeadlineCloudTaskBuilder` + `deadlineCloudJobCallback` lambda, gated by `app.pipelines.deadlineCloudExecutionTypeEnabled`); pipeline creation with this type lands with the pipeline/workflow table overhaul.
+Four creatable execution types: **Lambda** (sync/async invoke), **SQS** (async queue), **EventBridge** (async event), and **DeadlineCloud** (AWS Deadline Cloud job). SQS and EventBridge are async-only with optional Step Functions Task Token callback. DeadlineCloud is async-only with a **mandatory** callback (`waitForCallback` must be `Enabled`), is built by `DeadlineCloudTaskBuilder` + the `deadlineCloudJobCallback` lambda, and is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled` — accepted only in the commercial `aws` partition, and rejected at pipeline create when the deployment has not enabled it.
 
 ```
 S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBridge → AWS Batch containers (optional)
@@ -135,7 +144,7 @@ Adding a new API endpoint requires coordinated changes across multiple component
 | 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()`                              |
 | 3. Pydantic model         | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic **v1**)                                                                 |
 | 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with env vars, permissions, VPC config                                                              |
-| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route (prefer `apiBuilder2`; `apiBuilder` is near the CFN per-stack resource limit) |
+| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route (prefer `apiBuilder2`; the two API stacks stay split — see `infra/CLAUDE.md`) |
 | 6. Frontend service       | `web/src/services/APIService.ts`                              | Add API call method                                                                                              |
 | 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command (if applicable) — also add the endpoint path to `vamscli/constants.py` (Rule 7)                  |
 | 8. MCP server             | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it (see Pattern 7)                                                  |
@@ -162,7 +171,7 @@ backend API (apiRoutes.py + handler + model)
 
 1. **Any change to a `vamscli` command or `APIClient` method requires reviewing the MCP server in the same change.** Renamed methods, changed parameters, new required arguments, and changed response shapes all break MCP tools silently — the MCP tool calls the CLI method directly, so a signature change surfaces only at agent runtime.
 2. **New `APIClient` methods that agents should be able to use get a matching MCP tool** in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section (read / `enable_writes` / `enable_destructive`), plus a unit test and a README tool-list entry. See `tools/VamsMCP/CLAUDE.md`.
-3. **Response-shape changes must be checked against MCP pagination.** `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope. A handler that changes either one breaks the corresponding MCP tool without any error.
+3. **Response-shape changes must be checked against MCP pagination.** `VamsClient.paginate()` is driven by the list field name -- whatever field the handler returns the list under, passed as `items_key` -- and unwraps the legacy `message` envelope. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions` and `metadata`, and an earlier enumeration here omitted `metadata` while two call sites passed it. A handler that changes either one breaks the corresponding MCP tool without any error.
 4. **The agent skill (`tools/VamsAgentSkill/SKILL.md`) does not list commands** — it self-discovers them via `vamscli --help`, so ordinary command additions need no skill edit. Update it only when a _structural_ rule changes: entity creation/deletion ordering, identifier semantics, permission scoping, or a new mutating category.
 5. **Any change to a CLI command name, subcommand, option/flag, or `--json-output` response shape requires validating the external connectors in the same change.** Unlike the MCP server, the connectors are **not** Python importers of `APIClient` — they build argument strings and parse JSON keys, so nothing at build or import time catches a drift. A renamed flag surfaces as a non-zero CLI exit at connector runtime; a renamed or removed JSON key surfaces as a silently blank field, which is worse. Both must be checked:
 
@@ -173,7 +182,7 @@ backend API (apiRoutes.py + handler + model)
 
     In the ArcGIS models, a computed convenience property whose name matches a mapped JSON field (for example `Key` alongside `[JsonPropertyName("key")]`) **must** carry `[JsonIgnore]`. The deserializer runs with `PropertyNameCaseInsensitive`, so the collision throws `InvalidOperationException` while building type metadata — failing the whole response, not just that field.
 
-6. **Roll the CLI version and MCP version together** when the MCP server's contract with the CLI changes (`tools/VamsCLI/vamscli/version.py`, `tools/VamsMCP/pyproject.toml`).
+6. **Roll the CLI version and MCP version together** when the MCP server's contract with the CLI changes. The MCP version is duplicated, so all three files move in the same change: `tools/VamsCLI/vamscli/version.py`, `tools/VamsMCP/pyproject.toml`, and `tools/VamsMCP/vams_mcp/__init__.py` (`__version__`). Bumping the package metadata without the importable `__version__` leaves a diagnostic that reports the running server version silently wrong.
 7. **A change to these rules lands in both steering families** (Rule 11). This pattern is restated for Claude Code in `tools/VamsCLI/CLAUDE.md` and `tools/VamsMCP/CLAUDE.md`, and for Kiro in the MCP propagation section of `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`. Editing the chain here without updating those leaves one agent scaffolding the old workflow.
 
 Reverse direction applies too: a change to the MCP server or a connector that reveals a missing or wrong `APIClient` method should be fixed in the CLI rather than worked around with raw requests in the consumer.
@@ -241,7 +250,7 @@ ASSET_STORAGE_TABLE_NAME = "vams-asset-storage"  # VIOLATION
 
 CDK publishes each resource name as an SSM parameter under `VAMS_RESOURCE_PARAM_PREFIX` (see `ResourceNamesBuilder` nested stack; Lambda env is set via `globalLambdaEnvironmentsAndPermissions`). Keys are defined in `infra/common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS.*`) and mirrored in `backend/backend/common/resourceNames.py` (`ResourceKeys`).
 
-**Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → one paginated `GetParametersByPath` fetch of all resource names. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
+**Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call → one paginated `GetParametersByPath` fetch of all resource names. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
 
 ### **Pattern 5: Multi-Partition Support**
 
@@ -344,9 +353,9 @@ Structural changes to the codebase require updating the relevant `CLAUDE.md` fil
 | New CLI command group                                          | `tools/VamsCLI/CLAUDE.md` (command list, directory structure)                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | New/changed CLI command, option, or `--json-output` shape      | `tools/VamsMCP/vams_mcp/server.py` + `tools/VamsMCP/README.md` tool list; **and** the external connectors (`tools/ExternalIntegrations/isaacsim_vams_integration/.../vams_cli_service.py`, `tools/ExternalIntegrations/arcgispro-connector-for-vams/Services/VamsCliService.cs` + `Models/VamsModels.cs`) — they shell out to the CLI and parse its JSON, so nothing catches drift at build time (Pattern 7 rule 5); `tools/VamsAgentSkill/SKILL.md` only if an order-of-operations rule changed |
 | New MCP tool or MCP module                                     | `tools/VamsMCP/CLAUDE.md` (directory structure, tool sections), `tools/VamsMCP/README.md` (tool list, `autoApprove` sample)                                                                                                                                                                                                                                                                                                                                                                      |
-| Configuration system (new field, switch, changed default)      | `infra/CLAUDE.md`, `documentation/docusaurus-site/docs/deployment/configuration-reference.md`, and the **ConfigBuilder** component; then run `infra/test/configBuilderSync.test.ts`. The test guards only `schema.ts` fields + `defaults.ts` presets — new/changed `getConfig()` validation logic must be hand-ported into `validation.ts` (not test-covered)                                                                                                                                    |
+| Configuration system (new field, switch, changed default)      | `infra/CLAUDE.md`, `documentation/docusaurus-site/docs/deployment/configuration-reference.md`, and the **ConfigBuilder** component; then run `infra/test/config/configBuilderSync.test.ts`. The test guards only `schema.ts` fields + `defaults.ts` presets — new/changed `getConfig()` validation logic must be hand-ported into `validation.ts`, and added/changed/removed `getConfig()` auto-mutations into `derived.ts` (neither is test-covered)                                            |
 | New/changed S3 bucket, DynamoDB table, or CloudWatch log group | `documentation/docusaurus-site/docs/architecture/aws-resources.md` and `documentation/docusaurus-site/docs/deployment/uninstall.md` — record removal policy (RETAIN vs DESTROY) and whether the resource has a custom/explicit name (custom-named resources can collide on redeploy). See `infra/CLAUDE.md` "Documentation Rule: Storage Resources and Log Groups"                                                                                                                               |
-| New pipeline                                                   | `backendPipelines/CLAUDE.md`, root `CLAUDE.md` (pipeline list), `documentation/docusaurus-site/docs/deployment/configuration-reference.md`                                                                                                                                                                                                                                                                                                                                                       |
+| New pipeline                                                   | `backendPipelines/CLAUDE.md` (new-pipeline checklist), root `CLAUDE.md` (**both** the Project Overview pipeline list **and** the directory tree — the tree's glyphs assert which entry is a parent's last child), `documentation/docusaurus-site/docs/deployment/configuration-reference.md`                                                                                                                                                                                                     |
 | Cross-component pattern change                                 | `CLAUDE.md` root (cross-component patterns section)                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | New skill                                                      | `CLAUDE.md` root (Available Claude Code Skills table)                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
@@ -354,15 +363,23 @@ Update the directory structure tree, key files tables, and any affected rules or
 
 **Keep Kiro steering in sync (bidirectional).** The `.kiro/steering/` documents mirror the `CLAUDE.md` guidance for the Kiro agent. A change to any `CLAUDE.md` rule, pattern, or convention must land in the corresponding Kiro steering document in the same commit — and vice versa. Mapping:
 
-| CLAUDE.md file            | Corresponding Kiro steering document(s)                                                            |
-| ------------------------- | -------------------------------------------------------------------------------------------------- |
-| `CLAUDE.md` (root)        | The relevant workflow doc(s) for the changed area; cross-cutting rules go in all affected docs     |
-| `infra/CLAUDE.md`         | `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` |
-| `backend/CLAUDE.md`       | `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                                               |
-| `web/CLAUDE.md`           | `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/WEB_FRONTEND.md`                     |
-| `tools/VamsCLI/CLAUDE.md` | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`                                                       |
-| `tools/VamsMCP/CLAUDE.md` | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` (MCP propagation section)                             |
-| `documentation/CLAUDE.md` | `.kiro/steering/DOCUMENTATION_WORKFLOW.md`                                                         |
+The mapping covers every `CLAUDE.md` in the repository plus `tools/VamsAgentSkill/SKILL.md`; a new steering document gets a row here when it is created.
+
+| CLAUDE.md file                               | Corresponding Kiro steering document(s)                                                            |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `CLAUDE.md` (root)                           | The relevant workflow doc(s) for the changed area; cross-cutting rules go in all affected docs     |
+| `infra/CLAUDE.md`                            | `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` |
+| `infra/lib/nestedStacks/pipelines/CLAUDE.md` | `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md` (pipeline development section)                        |
+| `backend/CLAUDE.md`                          | `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                                               |
+| `backend/tests/CLAUDE.md`                    | `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` (testing section)                             |
+| `backendPipelines/CLAUDE.md`                 | `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md` (pipeline development section)                        |
+| `web/CLAUDE.md`                              | `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/WEB_FRONTEND.md`                     |
+| `web/e2e/CLAUDE.md`                          | `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` (testing section)                                     |
+| `web/src/visualizerPlugin/CLAUDE.md`         | `.kiro/steering/WEB_FRONTEND.md` (viewer plugin section)                                           |
+| `tools/VamsCLI/CLAUDE.md`                    | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`                                                       |
+| `tools/VamsMCP/CLAUDE.md`                    | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` (MCP propagation section)                             |
+| `tools/VamsAgentSkill/SKILL.md`              | No Kiro mirror — the skill is agent-portable and self-discovers commands                           |
+| `documentation/CLAUDE.md`                    | `.kiro/steering/DOCUMENTATION_WORKFLOW.md`                                                         |
 
 ### **Rule 12: Keep Claude Code Skills in Sync with Steering Documents**
 
@@ -370,16 +387,73 @@ The skills in `.claude/commands/` scaffold work by restating steering-document r
 
 **Which skills depend on which steering content:**
 
-| Skill                          | Sensitive to changes in                                                                                                                       |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/add-api-endpoint`            | Root Pattern 1, `backend/CLAUDE.md` (handler/model patterns, apiRoutes), `infra/CLAUDE.md` (lambda builder, route registry, security helpers) |
-| `/add-pipeline`                | `backendPipelines/CLAUDE.md` (output paths, assetId threading, lambda dirs), `infra/CLAUDE.md` (pipeline stack, VPC builder blocks, config)   |
-| `/generate-permissions`        | Permission model docs, `documentation/permissionsTemplates/`, constraint fields in `backend/CLAUDE.md`                                        |
-| `/deploy-check`                | Root development commands (lint/prettier from repo root), config validation rules                                                             |
-| `/update-docs`, `/verify-docs` | `documentation/CLAUDE.md` (writing style, source-to-doc mappings, dual API doc sources)                                                       |
-| `/update-changelog`            | Root git workflow / changelog format                                                                                                          |
-| `/refresh-steering-docs`       | Root Rules 11–12                                                                                                                              |
-| `/vams-agent`                  | `tools/VamsAgentSkill/SKILL.md` (canonical definition), VAMS entity/order-of-operations rules, `tools/VamsCLI` auth and permission commands   |
+| Skill                          | Sensitive to changes in                                                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/add-api-endpoint`            | Root Pattern 1, `backend/CLAUDE.md` (handler/model patterns, apiRoutes), `infra/CLAUDE.md` (lambda builder, route registry, security helpers)                                         |
+| `/add-pipeline`                | `backendPipelines/CLAUDE.md` (output paths, assetId threading, lambda dirs), `infra/lib/nestedStacks/pipelines/CLAUDE.md` (pipeline nested stack pattern, VPC builder blocks, config) |
+| `/generate-permissions`        | Permission model docs, `documentation/permissionsTemplates/`, constraint fields in `backend/CLAUDE.md`                                                                                |
+| `/deploy-check`                | Root development commands (lint/prettier from repo root), config validation rules                                                                                                     |
+| `/update-docs`, `/verify-docs` | `documentation/CLAUDE.md` (writing style, source-to-doc mappings, dual API doc sources)                                                                                               |
+| `/update-changelog`            | Root git workflow / changelog format                                                                                                                                                  |
+| `/refresh-steering-docs`       | Root Rules 11–13                                                                                                                                                                      |
+| `/vams-agent`                  | `tools/VamsAgentSkill/SKILL.md` (canonical definition), VAMS entity/order-of-operations rules, `tools/VamsCLI` auth and permission commands                                           |
+
+### **Rule 13: Label a Temporary Test So It Can Be Found and Removed**
+
+A test written to prove one specific change landed is a different artifact from a test that holds a
+rule in place, and **the two are indistinguishable by reading them afterwards.** Both may scan source,
+both may assert an absence, and both may carry a careful docstring explaining why. So the distinction
+has to be recorded when the test is written — it cannot be reconstructed at release time.
+
+Mark a temporary test at the point of writing:
+
+| Stack                                                                    | Marker                                                             |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| Python (`backend`, `backendPipelines`, `tools/VamsCLI`, `tools/VamsMCP`) | `@pytest.mark.temporary` on the test or its class                  |
+| TypeScript (`web`, `infra`)                                              | a `TEMPORARY-TEST` token in a comment directly above the `it(...)` |
+
+Add one line naming what it pins, so a later reader does not have to re-derive it:
+
+```python
+@pytest.mark.temporary  # pins the removal of the duplicated tag block in tagService.py
+```
+
+Finding them is then one command per stack, which is the whole point of the marker:
+
+```bash
+cd backend && python -m pytest -m temporary -q --collect-only     # also tools/VamsCLI, tools/VamsMCP
+grep -rn "TEMPORARY-TEST" web/src web/e2e infra/test
+```
+
+The marker is registered in `backend/pytest.ini`, `tools/VamsCLI/pyproject.toml`, and
+`tools/VamsMCP/pyproject.toml`. **`backend` and `tools/VamsCLI` run `--strict-markers`**, so an
+unregistered marker fails those suites outright rather than being ignored — register it before using
+it in a new Python test tree there. `backendPipelines` has no pytest configuration at all (which is
+why its existing `@pytest.mark.unit` is unregistered too), so a marker there only warns; `-m temporary`
+still selects correctly.
+
+**Which tests are temporary.** Ask whether a future edit could plausibly reintroduce what the test
+forbids:
+
+-   **Durable — do not mark, do not remove.** The forbidden thing is still writable, so the guard can
+    still fire for a good reason: a weaker TLS policy, a broader IAM wildcard, a `cdk-nag` suppression,
+    `'unsafe-inline'` in the base CSP, a mutating client call from a read-only path, a credential
+    reaching a synthesized template. Also durable: a positive or negative **control** for another
+    assertion, whose subject is deliberately a string that does not exist.
+-   **Temporary — mark it.** The test pins one past edit that nothing would reintroduce: a named file
+    that was deleted, a removed test seam, a specific dead branch, a comment string that was reworded.
+    It went green once, and its only remaining way to fail is an innocent refactor of the file it reads.
+
+:::warning[Absence of the literal does NOT identify a temporary test]
+The tempting shortcut — "the forbidden string appears nowhere in the source, so the test is spent" — is
+**wrong**, and it yields confident false positives. A forbid-forever guardrail also has zero
+occurrences; that absence is the guard succeeding, not the test expiring. `TLS13_1_3_2025_09`,
+`arn:aws:s3:::*`, and an `AwsSolutions-EKS1` suppression each appear nowhere precisely because a test
+forbids them. Judge by whether the construct is re-writable, never by counting occurrences.
+:::
+
+Scanning source is not the signal either: `backend/tests/common/test_userid_identity_normalization.py`
+walks the handler tree and fails on a route that does not normalize, which must keep holding forever.
 
 ---
 
@@ -487,7 +561,7 @@ Runtime versions are in the Project Overview version table.
 
 -   **Frontend (`web/`)**: Cloudscape Design System, AWS Amplify v6 (auth), custom fetch-based `apiClient` (auto auth headers), HashRouter, TypeScript throughout (`__mocks__/*.js` remain JS). Viewer plugins: Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, IFC/BIM.
 -   **Backend (`backend/`)**: Casbin ABAC/RBAC, boto3, AWS Lambda Powertools (logging, tracing). Pydantic v1 only.
--   **Infrastructure (`infra/`)**: AWS CDK (TypeScript), 11 nested stacks, CDK Nag security checks, REST API (v1), custom Lambda authorizer (unified JWT + IP).
+-   **Infrastructure (`infra/`)**: AWS CDK (TypeScript), 14 nested stacks, CDK Nag security checks, REST API (v1), custom Lambda authorizer (unified JWT + IP).
 -   **CLI (`tools/VamsCLI/`)**: Click command framework, profile-based multi-environment config, `--json-output` for machine-readable output.
 -   **MCP server (`tools/VamsMCP/`)**: Model Context Protocol server (`mcp` SDK) exposing the VAMS API as agent tools over stdio. Stores no credentials — reuses the `vamscli` profile and `APIClient`. Write and destructive tools are gated off by default via `VAMS_ENABLE_WRITES` / `VAMS_ENABLE_DESTRUCTIVE`.
 -   **Agent skill (`tools/VamsAgentSkill/`)**: Portable skill for operating a live deployment through `vamscli`; self-discovers commands, read-only by default. Surfaced in Claude Code as `/vams-agent`.
@@ -500,7 +574,7 @@ Runtime versions are in the Project Overview version table.
 
 Non-pipeline handlers receive `VAMS_RESOURCE_PARAM_PREFIX` (SSM prefix, e.g. `/{config.name}-{baseStackName}/resourceNames`) and resolve DynamoDB table names, auxiliary/artefacts bucket names, and audit log group names from SSM using `get_table_name`, `get_bucket_name`, `get_log_group_name` in `backend.common.resourceNames` (60-minute in-module cache; legacy env vars provide a break-glass path). **Pipeline Lambdas** in `backendPipelines/` are excluded from SSM resolution and continue to use legacy table-name env vars.
 
-All handlers additionally receive `AWS_REGION` (set by the Lambda runtime) and `PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL). The API Gateway authorizer Lambda also receives `COGNITO_AUTH_ENABLED` — the authorizer resolves the user's MFA status and passes it to handlers as the `vams:mfaEnabled` authorizer context value, so handler Lambdas make no Cognito calls. The authorizer likewise resolves the caller's roles from the user roles table (60-second per-user cache) and passes them as `vams:roles`, so roles are present for every auth mode — Cognito, external OAuth IDP, and API keys — and a role change takes effect without re-issuing a token. The Cognito pre-token-generation triggers populate only `vams:tokens` and `email`. Domain-specific handlers receive additional env vars for their resources (e.g. `SEND_EMAIL_FUNCTION_NAME` for notification handlers).
+All handlers additionally receive `AWS_REGION` (set by the Lambda runtime). `PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL) is **not** global — only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, for the asset handlers that mint presigned URLs, and those handlers read it as `os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]` with no default. A new handler that needs it must set it in its own builder; copying the `os.environ[...]` idiom into a Lambda whose builder does not set it raises `KeyError` at module import, so every request 500s on cold start and CDK synth, lint, and env-patching unit tests all pass. The API Gateway authorizer Lambda also receives `COGNITO_AUTH_ENABLED` — the authorizer resolves the user's MFA status and passes it to handlers as the `vams:mfaEnabled` authorizer context value, so handler Lambdas make no Cognito calls. The authorizer likewise resolves the caller's roles from the user roles table (60-second per-user cache) and passes them as `vams:roles`, so roles are present for every auth mode — Cognito, external OAuth IDP, and API keys — and a role change takes effect without re-issuing a token. The Cognito pre-token-generation triggers populate only `vams:tokens` and `email`. Domain-specific handlers receive additional env vars for their resources (e.g. `SEND_EMAIL_FUNCTION_NAME` for notification handlers).
 
 ### **DynamoDB Access Pattern**
 
@@ -539,7 +613,7 @@ VAMS uses single-table design with composite keys. Common patterns:
 3. Add validation in `getConfig()`
 4. Push to `enabledFeatures` array in `infra/lib/core-stack.ts`
 5. Read in frontend from `/api/secure-config` response and gate UI with a feature check
-6. Mirror the new option into the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/` — see its `README.md` for which files to touch: `schema.ts`, `defaults.ts`, `validation.ts`), then confirm `infra/test/configBuilderSync.test.ts` passes. The sync test covers only `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts`, so when `getConfig()` validation logic changes you must hand-port the matching rule into `validation.ts` and rely on review (not the test) to keep it in sync.
+6. Mirror the new option into the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/` — see its `README.md` for which files to touch: `schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm `infra/test/config/configBuilderSync.test.ts` passes. The sync test covers only `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts` or `derived.ts`, so when `getConfig()` validation logic changes you must hand-port the matching rule into `validation.ts`, and when `getConfig()` adds, changes, or **removes** an auto-mutation (an assignment that rewrites the operator's config, including any feature list that implies such a state) you must mirror that in `derived.ts`. Both rely on review, not the test, to stay in sync. A removed `getConfig()` auto-mutation left in `derived.ts` makes the builder keep rewriting the downloaded `config.json`.
 
 ### **Adding a New DynamoDB Table**
 
@@ -562,7 +636,7 @@ The same three-way constants update applies to new audit CloudWatch log groups. 
 
 ### **Adding a New Processing Pipeline**
 
-See `backendPipelines/CLAUDE.md` for the full 12-step checklist, S3 output-path conventions, and `assetId` threading pattern. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to all three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, and update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to all three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, register the step's sub-process and log sources on the orchestration bus (the `pipeline.execution.register` event with stage-aware log entries; a Batch pipeline's lambda gets its log-group env from `infra/lib/helper/batchJobLogGroup.ts`), update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
 
 ---
 

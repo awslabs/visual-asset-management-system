@@ -105,16 +105,39 @@ creating any new streams. Follow the conventions the existing add-ons use:
 -   Visibility timeout roughly the Lambda timeout plus 60 seconds.
 -   KMS encryption from the shared key and `enforceSSL`.
 -   `grantSendMessages` to the Amazon SNS principal.
+-   `reportBatchItemFailures` on the event source mapping, so the handler can report the
+    individual records that failed instead of the whole batch. Without it AWS Lambda
+    ignores the report and deletes every message in a batch that returned successfully.
 -   A GovCloud branch that uses an explicit `EventSourceMapping` with a `Tags` property
     deletion override (Amazon SQS event-source tags are unsupported on GovCloud).
 
-:::note[No dead-letter queue by design]
-The Garnet and Physna queues do not use dead-letter queues, because every message is
-regenerable from authoritative VAMS state — a failed change can be replayed with the
-[reindex utility](../utilities/reindex.md). They rely on the Amazon SQS visibility
-timeout and Lambda retry instead, and add an `AwsSolutions-SQS3` CDK Nag suppression
-with that justification. Follow the same approach unless your target system cannot
-tolerate replayed events.
+:::note[Two conventions for a failed message]
+The Physna queues each have their own dead-letter queue. A message the consumer cannot
+process is moved there after three delivery attempts and retained for 14 days rather than
+deleted, and one dead-letter queue per source queue keeps the file sync's failures
+distinguishable from the asset sync's. Both Physna consumers report partial batch failures,
+so a handler that reports one record as failed has that record redelivered while the rest of
+the batch drains. A record counts as failed whenever a push the sync needed did not land:
+file bytes that reached Physna without the metadata half that carries the version marker, a
+metadata update or a stale-key removal Physna rejected, a stale copy Physna would not
+replace, or a Physna copy of a permanently deleted VAMS file that could not be removed. Each
+of those also writes a `failed` sync-tracking record, so the queue and the audit trail agree.
+A record that resolves to no outbound push at all — an unsupported file type, an Amazon S3
+object whose version state does not show every version purged, or a key that cannot be
+resolved to a VAMS asset — is acknowledged, because a redelivery has nothing to complete.
+The `AwsSolutions-SQS3` CDK Nag suppression sits on the dead-letter queues
+themselves: a dead-letter queue is the terminal destination for messages the consumer could
+not process, so a redrive policy of its own would only defer the same failure to a further
+queue.
+
+The Garnet queues rely on the Amazon SQS visibility timeout and AWS Lambda retry instead, and
+add an `AwsSolutions-SQS3` CDK Nag suppression on the ground that every message is regenerable
+from authoritative VAMS state — a failed change can be replayed with the
+[reindex utility](../utilities/reindex.md).
+
+Add a dead-letter queue when the messages your target system rejected need to be inspectable,
+or when the outcome of a push is not fully recoverable from a replay. Rely on replay when the
+target tolerates repeated events.
 :::
 
 #### 4. Handle the event envelope
@@ -130,6 +153,12 @@ Amazon SQS → Amazon SNS → (stream record | S3 event) envelope, then:
     arrive out of order or are retried.
 -   Transform the entity into your target system's format and push it.
 -   Isolate failures per record so one bad record never aborts the whole Amazon SQS batch.
+-   Return the records that failed in `batchItemFailures` so only those are redelivered, and
+    count a push that landed only partly as a failure. Acknowledging it deletes the message,
+    and the divergence then persists with nothing but a log line recording it. Where a
+    redelivery would repeat an operation that is not idempotent, record the failure in the
+    sync-tracking table instead — the rule is that neither the queue nor the audit trail
+    reports an outcome the push did not achieve.
 
 #### 5. Detect what is already up to date
 

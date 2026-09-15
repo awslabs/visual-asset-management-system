@@ -145,7 +145,7 @@ vamscli search assets --metadata-query "Training" --metadata-mode value
 ```
 
 :::tip
-Run `vamscli search mapping` to list the searchable fields per index. Metadata fields are prefixed with `MD_` (for example, `MD_str_product`, `MD_num_version`).
+Run `vamscli search mapping` to list the searchable fields per index. It returns the live index mapping, so metadata appears as the single `flat_object` field `MD_` (and file attributes as `AB_`) rather than as one field per key — the keys themselves are inside those objects and are not part of the mapping. A `--metadata-query` key may be written bare (`product`), with the entity prefix (`MD_product`), or with a type prefix (`MD_str_product`).
 :::
 
 ### Invalid JSON in an Input File

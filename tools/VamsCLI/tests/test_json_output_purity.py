@@ -105,3 +105,71 @@ def test_the_fixture_really_satisfies_the_setup_gate(cli_env):
     assert "Setup Required" not in combined, combined[:300]
     assert rc != 0
     assert json.loads(combined.strip())["error_type"] == "UsageError"
+
+
+class TestCancellationIsAlsoJson:
+    """Ctrl-C must produce a cancellation payload, not an empty stdout.
+
+    S6-TOOLS-020. `global_exceptions.py` carried a `KeyboardInterrupt` branch that emitted
+    `{"error": "Operation cancelled by user"}` under `--json-output` — but it sat inside
+    `except Exception as e:` and `KeyboardInterrupt` derives from `BaseException`, so `e` could never
+    be bound to one and the branch was dead. What actually happened: Click converts the interrupt into
+    `Abort` and, under `standalone_mode=False`, re-raises it; `main()` swallowed it with a bare
+    `sys.exit(1)`. A wrapper that SIGINTs on timeout therefore got nothing on stdout, and its
+    `json.loads(stdout)` failed on empty input instead of reading a structured cancellation. The dead
+    branch also read as working code to anyone maintaining the handler.
+
+    Driven at the unit level rather than by SIGINT-ing a subprocess. Sending a real SIGINT portably is
+    the problem: on Windows a console interrupt needs `CREATE_NEW_PROCESS_GROUP` plus
+    `CTRL_BREAK_EVENT` and is delivered to the whole group, which makes the test flaky on the
+    development platform for this repository. What has to be pinned is `main()`'s handling of the
+    `Abort` Click hands it, and that is exactly what this drives.
+    """
+
+    @staticmethod
+    def _run_main_with_abort(monkeypatch, argv):
+        import click
+
+        import vamscli.main as main_module
+
+        def raise_abort(*args, **kwargs):
+            raise click.exceptions.Abort()
+
+        monkeypatch.setattr(main_module, "cli", raise_abort)
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit) as exit_info:
+            main_module.main()
+        return exit_info.value.code
+
+    def test_abort_emits_a_json_payload_when_the_flag_is_present(self, monkeypatch, capsys):
+        code = self._run_main_with_abort(
+            monkeypatch, ["vamscli", "execution", "logs", "e1", "--json-output"])
+        assert code == 1
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out.strip())  # raises if anything non-JSON was emitted
+        assert payload["error_type"] == "Aborted"
+        assert payload["error"] == "Operation cancelled by user"
+
+    def test_without_the_flag_a_human_readable_line_goes_to_stderr(self, monkeypatch, capsys):
+        """Negative control: the JSON path is conditional on the flag, and stdout stays clean so a
+        pipeline consuming stdout is unaffected."""
+        code = self._run_main_with_abort(monkeypatch, ["vamscli", "execution", "logs", "e1"])
+        assert code == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "cancelled" in captured.err.lower()
+
+    def test_the_dead_interrupt_branch_is_gone(self):
+        """The reason it was dead, asserted rather than described.
+
+        A future edit that reinstates an `isinstance(e, KeyboardInterrupt)` test inside that
+        `except Exception` handler is unreachable code again, and looks like a working guard.
+        """
+        import inspect
+
+        from vamscli.utils import global_exceptions
+
+        assert not issubclass(KeyboardInterrupt, Exception), (
+            "KeyboardInterrupt is now an Exception subclass, so the reasoning above no longer holds")
+        source = inspect.getsource(global_exceptions)
+        assert "isinstance(e, KeyboardInterrupt)" not in source

@@ -16,6 +16,7 @@ import * as path from "path";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagLambda } from "../../../../../helper/security";
+import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 
 export interface IsaacLabTrainingFunctionsProps {
     config: Config.Config;
@@ -75,6 +76,16 @@ export class IsaacLabTrainingFunctions extends Construct {
             record.bucket.grantRead(this.openPipelineFunction);
         });
 
+        // openPipeline rejects an input before the internal state machine starts, so it owns the
+        // external workflow token on that route -- nothing downstream exists yet to report for it.
+        this.openPipelineFunction.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+                resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
+            })
+        );
+
         // ExecuteBatchJob - internal function that submits Batch job
         this.executeBatchJobFunction = new lambda.Function(this, "ExecuteBatchJobFunction", {
             ...commonProps,
@@ -88,6 +99,9 @@ export class IsaacLabTrainingFunctions extends Construct {
                 // sub-process
                 ORCHESTRATION_BUS_NAME:
                     props.storageResources.eventBridge.orchestrationBus.eventBusName,
+                // Batch default container log group, registered with the job as the
+                // ExecuteBatchJobState log source (streams are `<jobDefinitionName>/default/<task-id>`).
+                ...batchJobLogGroupEnvironment(),
             },
         });
 

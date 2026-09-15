@@ -14,8 +14,83 @@ from urllib.parse import quote, urljoin
 # the access token already changed since its failed request reuses it instead of refreshing again.
 _TOKEN_REFRESH_LOCK = threading.Lock()
 
+# Keys an error body may carry the server's message under, in preference order. VAMS handlers return
+# `message`; Amazon API Gateway's own responses use `Message` — an authorizer deny and an unknown
+# route both take that form. Reading only the lowercase spelling discards the more informative of the
+# two: an explicit-deny explanation is replaced by the requests library's generic
+# "403 Client Error: Forbidden for url: …", which reads as a malformed request rather than a
+# permissions problem.
+_ERROR_MESSAGE_KEYS = ("message", "Message", "errorMessage", "error")
+
+# Amazon API Gateway answers a request for a path outside any deployed route — most often a base URL
+# whose deployment stage is missing or misspelled — with a 403 whose body is exactly this. It is
+# indistinguishable from an authorization denial without the hint below.
+_GATEWAY_UNKNOWN_ROUTE_MESSAGE = "Forbidden"
+_STAGE_HINT = (
+    " (a bare \"Forbidden\" from Amazon API Gateway usually means the request reached no deployed "
+    "route rather than that access was denied — most often the configured base URL is missing the "
+    "REST API stage path, or names the wrong one. Check `vamscli profile info` and re-run "
+    "`vamscli setup <base-url>` if the stored API Gateway URL has no stage segment.)"
+)
+
+
+def _is_cognito_unavailable(error_message: str) -> bool:
+    """True when a 400 from the Cognito user routes says the feature is off, not that the input is bad.
+
+    The handler refuses every Cognito user-management call with "Cognito user management is not
+    available" (Cognito disabled in the deployment) or "Cognito configuration error" (no user pool id),
+    both as an ordinary 400 -- the same status a malformed request gets. The two are told apart by the
+    message alone.
+    """
+    text = (error_message or "").lower()
+    return "cognito user management is not available" in text or "cognito configuration error" in text
+
+
+def _api_error_message(response, fallback: str) -> str:
+    """The server's error text from an HTTP error response, or `fallback` when it carries none.
+
+    Reads every key an error body is known to use rather than only `message`, and never raises: the
+    body of an error response is not guaranteed to be JSON, and this runs inside an exception handler
+    where a second exception would mask the first.
+    """
+    data = None
+    parsed_as_json = False
+    try:
+        if getattr(response, "content", None):
+            data = response.json()
+            parsed_as_json = True
+    except Exception:
+        data = None
+
+    if isinstance(data, dict):
+        for key in _ERROR_MESSAGE_KEYS:
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                message = value.strip()
+                if message == _GATEWAY_UNKNOWN_ROUTE_MESSAGE:
+                    return message + _STAGE_HINT
+                return message
+
+    # A body that PARSED as JSON but carried no message under any known key has nothing to show: its
+    # raw text is a serialized object, and rendering `{"message": "   "}` or `["forbidden"]` as the
+    # error reads worse than the status line, which at least names the request. Only a body that is
+    # not JSON at all can carry the server's own words as plain text.
+    if parsed_as_json:
+        return fallback
+
+    # An HTML error page is noise rather than a message, and neither is a long body.
+    try:
+        text = (response.text or "").strip()
+    except Exception:
+        text = ""
+    if text and len(text) <= 200 and not text.startswith("<"):
+        return text
+
+    return fallback
+
 from ..constants import (
-    API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, MAX_AUTH_RETRIES, MINIMUM_API_VERSION,
+    API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT, MAX_AUTH_RETRIES,
+    MINIMUM_API_VERSION,
     API_LOGIN_PROFILE, API_SECURE_CONFIG, API_ASSETS, API_DATABASE_ASSETS, API_DATABASE_ASSET,
     API_CREATE_FOLDER, API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_ASSET_PREVIEW, 
@@ -25,8 +100,10 @@ from ..constants import (
     API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION, API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION,
     API_ASSET_VERSION_BY_ID, API_ASSET_VERSION_ARCHIVE, API_ASSET_VERSION_UNARCHIVE,
     API_ASSET_LINKS, API_ASSET_LINKS_SINGLE, API_ASSET_LINKS_UPDATE, API_ASSET_LINKS_DELETE, API_ASSET_LINKS_FOR_ASSET,
-    API_ASSET_LINKS_METADATA, API_ASSET_LINKS_METADATA_KEY, API_METADATA, API_METADATA_SCHEMA,
+    API_METADATA,
     API_METADATA_SCHEMA_LIST, API_METADATA_SCHEMA_BY_ID,
+    API_COMMENTS_ASSET, API_COMMENTS_ASSET_VERSION, API_COMMENTS_ASSET_VERSION_COMMENT,
+    API_SUBSCRIPTIONS, API_CHECK_SUBSCRIPTION, API_UNSUBSCRIBE,
     API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING,
     API_PIPELINES, API_DATABASE_PIPELINES, API_DATABASE_PIPELINE,
     API_PIPELINE_TEMPLATES, API_PIPELINE_TEMPLATE, API_PIPELINE_TEMPLATE_TAG_SCHEMA,
@@ -63,6 +140,35 @@ from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
 
 
+def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
+    """Build the comment route whose last segment is the composite `assetVersionId:commentId` key.
+
+    The two values are joined with a colon into ONE path segment, so the constant cannot be
+    formatted: `str.format` treats the text after the colon in `{assetVersionId:commentId}` as a
+    format spec and raises. The parts are substituted literally instead.
+
+    Neither part may contain a colon. The handlers split the segment on ':' and read element [1]
+    as the commentId, so a third colon shifts which value is validated, and a missing one makes
+    that index raise — a 500 rather than a rejected request.
+    """
+    from .exceptions import InvalidCommentDataError
+
+    for label, value in (('asset version ID', asset_version_id), ('comment ID', comment_id)):
+        if not value:
+            raise InvalidCommentDataError(f"A {label} is required to address a comment")
+        if ':' in value:
+            raise InvalidCommentDataError(
+                f"The {label} may not contain a colon; it is the separator of the "
+                "assetVersionId:commentId key"
+            )
+
+    return API_COMMENTS_ASSET_VERSION_COMMENT.replace(
+        '{assetId}', str(asset_id)
+    ).replace(
+        '{assetVersionId:commentId}', f"{asset_version_id}:{comment_id}"
+    )
+
+
 class APIClient:
     """HTTP client for VAMS API Gateway."""
     
@@ -72,8 +178,10 @@ class APIClient:
         # constructed without one would read another deployment's credentials.
         self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
         self.session = requests.Session()
-        self.session.timeout = DEFAULT_TIMEOUT
-        
+        # requests reads a timeout only from the per-request keyword, never from an attribute on the
+        # Session, so the pair is applied in _make_request instead.
+        self.request_timeout = (DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT)
+
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get request headers."""
         headers = {
@@ -133,6 +241,9 @@ class APIClient:
             # Don't fail if logging fails
             pass
         
+        # setdefault, so a caller that names its own timeout (the availability probe) keeps it.
+        kwargs.setdefault('timeout', self.request_timeout)
+
         try:
             start_time = time.time()
             response = self.session.request(method, url, headers=headers, **kwargs)
@@ -267,42 +378,22 @@ class APIClient:
                 raise RateLimitExceededError(f"Rate limit exceeded: {e}")
             elif status_code >= 500:
                 # Server errors (500, 502, 503, 504, etc.)
-                error_data = {}
-                try:
-                    error_data = e.response.json() if e.response.content else {}
-                except Exception:
-                    pass
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(
                     f"Server error ({status_code}): {error_message}. "
                     "The VAMS API is experiencing issues. Please try again later."
                 )
             elif status_code == 404:
                 # Not found errors
-                error_data = {}
-                try:
-                    error_data = e.response.json() if e.response.content else {}
-                except Exception:
-                    pass
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(f"Resource not found (404): {error_message}")
             elif status_code == 400:
                 # Bad request errors
-                error_data = {}
-                try:
-                    error_data = e.response.json() if e.response.content else {}
-                except Exception:
-                    pass
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(f"Invalid request (400): {error_message}")
             else:
                 # Other HTTP errors
-                error_data = {}
-                try:
-                    error_data = e.response.json() if e.response.content else {}
-                except Exception:
-                    pass
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(f"API request failed ({status_code}): {error_message}")
         except requests.exceptions.ConnectionError as e:
             raise APIError(
@@ -525,14 +616,14 @@ class APIClient:
         """Make GET request."""
         return self._make_request('GET', endpoint, include_auth, **kwargs)
         
-    def post(self, endpoint: str, data: Optional[Dict[str, Any]] = None, 
+    def post(self, endpoint: str, data: Optional[Dict[str, Any]] = None,
              include_auth: bool = True, **kwargs) -> requests.Response:
         """Make POST request."""
         if data:
             kwargs['json'] = data
         return self._make_request('POST', endpoint, include_auth, **kwargs)
-        
-    def put(self, endpoint: str, data: Optional[Dict[str, Any]] = None, 
+
+    def put(self, endpoint: str, data: Optional[Dict[str, Any]] = None,
             include_auth: bool = True, **kwargs) -> requests.Response:
         """Make PUT request."""
         if data:
@@ -723,8 +814,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'already exists' in error_message.lower():
                     raise AssetAlreadyExistsError(f"Asset already exists: {error_message}")
@@ -766,13 +856,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid update data: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -815,8 +903,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -849,8 +936,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid upload data: {error_message}")
                 
             elif e.response.status_code == 404:
@@ -897,13 +983,11 @@ class APIClient:
                 }
                 
             elif e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid completion data: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'upload' in error_message.lower():
                     raise FileUploadError(f"Upload '{upload_id}' not found")
                 else:
@@ -933,8 +1017,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid folder data: {error_message}")
                 
             elif e.response.status_code == 404:
@@ -976,8 +1059,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'file' in error_message.lower():
                     raise APIError(f"File not found: {error_message}")
                 else:
@@ -1000,13 +1082,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid move operation: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'file' in error_message.lower():
                     raise APIError(f"File not found: {error_message}")
                 else:
@@ -1029,13 +1109,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid copy operation: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'file' in error_message.lower():
                     raise APIError(f"File not found: {error_message}")
                 else:
@@ -1058,13 +1136,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid archive operation: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'file' in error_message.lower():
                     raise APIError(f"File not found: {error_message}")
                 else:
@@ -1087,13 +1163,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid unarchive operation: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'file' in error_message.lower():
                     raise APIError(f"File not found: {error_message}")
                 else:
@@ -1116,8 +1190,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'preview' in error_message.lower():
                     raise APIError(f"Asset preview not found: {error_message}")
                 else:
@@ -1140,13 +1213,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid delete operation: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'auxiliary' in error_message.lower() or 'preview' in error_message.lower():
                     raise APIError(f"Auxiliary files not found: {error_message}")
                 else:
@@ -1169,13 +1240,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid delete operation: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'file' in error_message.lower():
                     raise APIError(f"File not found: {error_message}")
                 else:
@@ -1198,13 +1267,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid revert operation: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'version' in error_message.lower() or 'file' in error_message.lower():
                     raise APIError(f"File or version not found: {error_message}")
                 else:
@@ -1227,13 +1294,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid primary file operation: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'file' in error_message.lower():
                     raise APIError(f"File not found: {error_message}")
                 else:
@@ -1280,8 +1345,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'already archived' in error_message.lower():
                     raise AssetAlreadyArchivedError(f"Asset is already archived: {error_message}")
@@ -1289,8 +1353,7 @@ class APIClient:
                     raise InvalidAssetDataError(f"Invalid archive operation: {error_message}")
                     
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -1344,8 +1407,7 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
 
                 if 'not archived' in error_message.lower() or 'not in a valid archived state' in error_message.lower():
                     raise AssetNotArchivedError(f"Asset is not archived: {error_message}")
@@ -1353,8 +1415,7 @@ class APIClient:
                     raise InvalidAssetDataError(f"Invalid unarchive operation: {error_message}")
 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -1401,8 +1462,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'confirmation' in error_message.lower() or 'confirm' in error_message.lower():
                     raise AssetDeletionError(f"Deletion confirmation required: {error_message}")
@@ -1410,8 +1470,7 @@ class APIClient:
                     raise InvalidAssetDataError(f"Invalid delete operation: {error_message}")
                     
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -1450,8 +1509,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'already exists' in error_message.lower():
                     raise DatabaseAlreadyExistsError(f"Database already exists: {error_message}")
@@ -1504,8 +1562,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'bucket' in error_message.lower() and 'not found' in error_message.lower():
                     raise BucketNotFoundError(f"Bucket not found: {error_message}")
@@ -1610,8 +1667,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise DatabaseDeletionError(f"Database deletion failed: {error_message}")
                 
             elif e.response.status_code == 404:
@@ -1653,21 +1709,28 @@ class APIClient:
 
     # Tag Management API Methods
 
-    def get_tags(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def get_tags(self, params: Dict[str, Any] = None, database_id: str = None,
+                 scope: str = None) -> Dict[str, Any]:
         """
         List all tags using the /tags GET endpoint.
-        
+
         Args:
             params: Optional pagination parameters (maxItems, pageSize, startingToken)
-        
+            database_id: Optional database to scope results to (returns only tags scoped to this database; global tags are not included -- use scope='global'/'all' for those)
+            scope: Optional scope filter ('global' = global tags only; 'all' = every tag)
+
         Returns:
             API response data with tags list
-        
+
         Raises:
             APIError: When API call fails
         """
         try:
-            query_params = params or {}
+            query_params = dict(params) if params else {}
+            if database_id:
+                query_params['databaseId'] = database_id
+            if scope:
+                query_params['scope'] = scope
             response = self.get(API_TAGS, include_auth=True, params=query_params)
             return response.json()
             
@@ -1702,8 +1765,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'already exists' in error_message.lower():
                     raise TagAlreadyExistsError(f"Tag already exists: {error_message}")
@@ -1742,8 +1804,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'tagname or tagtype' in error_message.lower() and "don't exist" in error_message.lower():
                     if 'tagtype' in error_message.lower():
@@ -1761,29 +1822,32 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to update tags: {e}")
 
-    def delete_tag(self, tag_id: str) -> Dict[str, Any]:
+    def delete_tag(self, tag_id: str, database_id: str = None) -> Dict[str, Any]:
         """
         Delete a tag using the /tags/{tagId} DELETE endpoint.
-        
+
         Args:
             tag_id: Tag ID (tag name)
-        
+            database_id: Optional database the tag is scoped to (omit for a global tag)
+
         Returns:
             API response data with deletion result
-        
+
         Raises:
             TagNotFoundError: When tag is not found
             APIError: When API call fails
         """
         try:
             endpoint = API_TAG_DELETE.format(tagId=tag_id)
-            response = self.delete(endpoint, include_auth=True)
+            query_params = {}
+            if database_id:
+                query_params['databaseId'] = database_id
+            response = self.delete(endpoint, include_auth=True, params=query_params)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidTagDataError(f"Invalid tag deletion: {error_message}")
                 
             elif e.response.status_code == 404:
@@ -1796,21 +1860,28 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to delete tag: {e}")
 
-    def get_tag_types(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def get_tag_types(self, params: Dict[str, Any] = None, database_id: str = None,
+                      scope: str = None) -> Dict[str, Any]:
         """
         List all tag types using the /tag-types GET endpoint.
-        
+
         Args:
             params: Optional pagination parameters (maxItems, pageSize, startingToken)
-        
+            database_id: Optional database to scope results to (returns only tag types scoped to this database; global tag types are not included -- use scope='global'/'all' for those)
+            scope: Optional scope filter ('global' = global tag types only; 'all' = every tag type)
+
         Returns:
             API response data with tag types list
-        
+
         Raises:
             APIError: When API call fails
         """
         try:
-            query_params = params or {}
+            query_params = dict(params) if params else {}
+            if database_id:
+                query_params['databaseId'] = database_id
+            if scope:
+                query_params['scope'] = scope
             response = self.get(API_TAG_TYPES, include_auth=True, params=query_params)
             return response.json()
             
@@ -1844,8 +1915,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'already exists' in error_message.lower():
                     raise TagTypeAlreadyExistsError(f"Tag type already exists: {error_message}")
@@ -1881,8 +1951,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidTagTypeDataError(f"Invalid tag type data: {error_message}")
                 
             elif e.response.status_code == 404:
@@ -1895,16 +1964,17 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to update tag types: {e}")
 
-    def delete_tag_type(self, tag_type_id: str) -> Dict[str, Any]:
+    def delete_tag_type(self, tag_type_id: str, database_id: str = None) -> Dict[str, Any]:
         """
         Delete a tag type using the /tag-types/{tagTypeId} DELETE endpoint.
-        
+
         Args:
             tag_type_id: Tag type ID (tag type name)
-        
+            database_id: Optional database the tag type is scoped to (omit for a global tag type)
+
         Returns:
             API response data with deletion result
-        
+
         Raises:
             TagTypeNotFoundError: When tag type is not found
             TagTypeInUseError: When tag type is currently in use by tags
@@ -1912,13 +1982,15 @@ class APIClient:
         """
         try:
             endpoint = API_TAG_TYPE_DELETE.format(tagTypeId=tag_type_id)
-            response = self.delete(endpoint, include_auth=True)
+            query_params = {}
+            if database_id:
+                query_params['databaseId'] = database_id
+            response = self.delete(endpoint, include_auth=True, params=query_params)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'currently in use' in error_message.lower() or 'cannot delete' in error_message.lower():
                     raise TagTypeInUseError(f"Tag type is in use: {error_message}")
@@ -1963,13 +2035,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetVersionDataError(f"Invalid version data: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2016,13 +2086,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetVersionDataError(f"Invalid revert data: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2064,8 +2132,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2105,8 +2172,7 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2150,8 +2216,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2200,13 +2265,11 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetVersionDataError(f"Invalid update data: {error_message}")
 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2253,13 +2316,11 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetVersionArchiveError(f"Archive failed: {error_message}")
 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2306,13 +2367,11 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetVersionArchiveError(f"Unarchive failed: {error_message}")
 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2355,8 +2414,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'already exists' in error_message.lower():
                     raise AssetLinkAlreadyExistsError(f"Asset link already exists: {error_message}")
@@ -2368,8 +2426,7 @@ class APIClient:
                     raise AssetLinkValidationError(f"Invalid asset link data: {error_message}")
                     
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkPermissionError(f"Not authorized to create asset link: {error_message}")
             else:
                 raise APIError(f"Asset link creation failed: {e}")
@@ -2401,8 +2458,7 @@ class APIClient:
             if e.response.status_code == 404:
                 raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkPermissionError(f"Not authorized to view asset link: {error_message}")
             else:
                 raise APIError(f"Failed to get asset link: {e}")
@@ -2434,15 +2490,13 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkValidationError(f"Invalid update data: {error_message}")
                 
             elif e.response.status_code == 404:
                 raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkPermissionError(f"Not authorized to update asset link: {error_message}")
             else:
                 raise APIError(f"Asset link update failed: {e}")
@@ -2474,8 +2528,7 @@ class APIClient:
             if e.response.status_code == 404:
                 raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkPermissionError(f"Not authorized to delete asset link: {error_message}")
             else:
                 raise APIError(f"Asset link deletion failed: {e}")
@@ -2512,13 +2565,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkValidationError(f"Invalid parameters: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2526,8 +2577,7 @@ class APIClient:
                     raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
                     
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkPermissionError(f"Not authorized to view asset links: {error_message}")
             else:
                 raise APIError(f"Failed to get asset links: {e}")
@@ -2537,14 +2587,14 @@ class APIClient:
 
     # Unified Metadata API Methods (v2.2+)
 
-    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 3000, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
+    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 100, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
         """
         Get metadata for an asset using the new unified API.
 
         Args:
             database_id: Database ID
             asset_id: Asset ID
-            page_size: Page size for pagination (default: 3000)
+            page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
             asset_version_id: Optional asset version ID to retrieve metadata snapshot
 
@@ -2570,8 +2620,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2618,13 +2667,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid metadata data: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2666,8 +2713,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2683,7 +2729,7 @@ class APIClient:
             raise APIError(f"Failed to delete asset metadata: {e}")
 
     def get_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str = 'metadata',
-                            page_size: int = 3000, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
+                            page_size: int = 100, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
         """
         Get metadata or attributes for a file using the new unified API.
 
@@ -2692,7 +2738,7 @@ class APIClient:
             asset_id: Asset ID
             file_path: Relative file path
             metadata_type: 'metadata' or 'attribute'
-            page_size: Page size for pagination (default: 3000)
+            page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
             asset_version_id: Optional asset version ID to retrieve metadata snapshot
 
@@ -2722,8 +2768,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2777,13 +2822,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid metadata data: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2833,8 +2876,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -2851,13 +2893,13 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to delete file metadata: {e}")
 
-    def get_asset_link_metadata_v2(self, asset_link_id: str, page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
+    def get_asset_link_metadata_v2(self, asset_link_id: str, page_size: int = 100, starting_token: str = None) -> Dict[str, Any]:
         """
         Get metadata for an asset link using the new unified API.
         
         Args:
             asset_link_id: Asset link ID
-            page_size: Page size for pagination (default: 3000)
+            page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
         
         Returns:
@@ -2882,8 +2924,7 @@ class APIClient:
             if e.response.status_code == 404:
                 raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkPermissionError(f"Not authorized to view metadata for this asset link: {error_message}")
             else:
                 raise APIError(f"Failed to get asset link metadata: {e}")
@@ -2922,15 +2963,13 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkValidationError(f"Invalid metadata data: {error_message}")
                 
             elif e.response.status_code == 404:
                 raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkPermissionError(f"Not authorized to update metadata for this asset link: {error_message}")
             else:
                 raise APIError(f"Asset link metadata update failed: {e}")
@@ -2966,8 +3005,7 @@ class APIClient:
             if e.response.status_code == 404:
                 raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AssetLinkPermissionError(f"Not authorized to delete metadata for this asset link: {error_message}")
             else:
                 raise APIError(f"Asset link metadata deletion failed: {e}")
@@ -2975,13 +3013,13 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to delete asset link metadata: {e}")
 
-    def get_database_metadata_v2(self, database_id: str, page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
+    def get_database_metadata_v2(self, database_id: str, page_size: int = 100, starting_token: str = None) -> Dict[str, Any]:
         """
         Get metadata for a database using the new unified API.
         
         Args:
             database_id: Database ID
-            page_size: Page size for pagination (default: 3000)
+            page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
         
         Returns:
@@ -3042,8 +3080,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidDatabaseDataError(f"Invalid metadata data: {error_message}")
                 
             elif e.response.status_code == 404:
@@ -3094,46 +3131,48 @@ class APIClient:
 
     def get_metadata_schema(self, database_id: str, max_items: int = 1000, page_size: int = 100, starting_token: str = None) -> Dict[str, Any]:
         """
-        Get metadata schema for a database using the /metadataschema/{databaseId} GET endpoint.
-        
+        Get the metadata schemas of one database from the /metadataschema GET endpoint.
+
         DEPRECATED: Use list_metadata_schemas() instead for the new V2 API.
         This method is kept for backward compatibility.
-        
+
         Args:
             database_id: Database ID
             max_items: Maximum number of items to return (default: 1000)
             page_size: Number of items per page (default: 100)
             starting_token: Token for pagination (optional)
-        
+
         Returns:
             API response data with metadata schema list
-        
+
         Raises:
             DatabaseNotFoundError: When database doesn't exist
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
         try:
-            endpoint = API_METADATA_SCHEMA.format(databaseId=database_id)
+            # The database is a query filter on the collection route, not a path segment: the API
+            # serves /metadataschema and /database/{databaseId}/metadataSchema/{metadataSchemaId},
+            # so a path-scoped request is rejected by API Gateway before reaching a handler.
+            endpoint = API_METADATA_SCHEMA_LIST
             params = {
+                'databaseId': database_id,
                 'maxItems': max_items,
                 'pageSize': page_size
             }
             if starting_token:
                 params['startingToken'] = starting_token
-                
+
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise DatabaseNotFoundError(f"Database '{database_id}' not found: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AuthenticationError(f"Authentication failed: {error_message}")
             else:
                 raise APIError(f"Failed to get metadata schema: {e}")
@@ -3186,21 +3225,18 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(f"Invalid parameters: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if database_id and 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found: {error_message}")
                 else:
                     raise APIError(f"Metadata schemas not found: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AuthenticationError(f"Authentication failed: {error_message}")
             else:
                 raise APIError(f"Failed to list metadata schemas: {e}")
@@ -3234,8 +3270,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found: {error_message}")
@@ -3243,14 +3278,168 @@ class APIClient:
                     raise APIError(f"Metadata schema '{metadata_schema_id}' not found: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise AuthenticationError(f"Authentication failed: {error_message}")
             else:
                 raise APIError(f"Failed to get metadata schema: {e}")
                 
         except Exception as e:
             raise APIError(f"Failed to get metadata schema by ID: {e}")
+
+    def create_metadata_schema(self, schema_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a metadata schema using the /metadataschema POST endpoint.
+
+        Args:
+            schema_data: Schema definition:
+                - databaseId: Database ID, or 'GLOBAL' (required)
+                - metadataSchemaEntityType: databaseMetadata | assetMetadata | fileMetadata |
+                  fileAttribute | assetLinkMetadata (required)
+                - schemaName: Schema name (required)
+                - fields: {'fields': [field definitions]} (required)
+                - fileKeyTypeRestriction: Comma-delimited extensions (fileMetadata/fileAttribute only)
+                - enabled: Whether the schema is enabled (defaults to true server-side)
+
+        Returns:
+            API response data with the operation result and the new metadataSchemaId
+
+        Raises:
+            DatabaseNotFoundError: When the database does not exist
+            InvalidMetadataSchemaDataError: When the schema definition is rejected
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import InvalidMetadataSchemaDataError
+
+        try:
+            # The collection route carries GET, POST and PUT; the id-scoped route is GET/DELETE only.
+            response = self.post(API_METADATA_SCHEMA_LIST, data=schema_data, include_auth=True,
+                                 raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                if 'database' in error_message.lower() and 'not exist' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database not found: {error_message}")
+                raise InvalidMetadataSchemaDataError(
+                    f"Metadata schema creation failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Metadata schema creation failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to create metadata schema: {e}")
+
+    def update_metadata_schema(self, metadata_schema_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update a metadata schema using the /metadataschema PUT endpoint.
+
+        The schema is identified by a metadataSchemaId in the request body, not in the path.
+
+        Args:
+            metadata_schema_id: ID of the metadata schema to update
+            update_data: Fields to change; at least one of:
+                - schemaName
+                - fields: {'fields': [field definitions]}
+                - fileKeyTypeRestriction
+                - enabled
+
+        Returns:
+            API response data with the operation result
+
+        Raises:
+            MetadataSchemaNotFoundError: When the metadata schema is not found
+            InvalidMetadataSchemaDataError: When the update is rejected
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import InvalidMetadataSchemaDataError, MetadataSchemaNotFoundError
+
+        body = dict(update_data)
+        body['metadataSchemaId'] = metadata_schema_id
+
+        try:
+            response = self.put(API_METADATA_SCHEMA_LIST, data=body, include_auth=True,
+                                raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise MetadataSchemaNotFoundError(
+                    f"Metadata schema '{metadata_schema_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                if 'not found' in error_message.lower():
+                    raise MetadataSchemaNotFoundError(
+                        f"Metadata schema '{metadata_schema_id}' not found: {error_message}")
+                raise InvalidMetadataSchemaDataError(
+                    f"Metadata schema update failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Metadata schema update failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to update metadata schema: {e}")
+
+    def delete_metadata_schema(self, database_id: str, metadata_schema_id: str) -> Dict[str, Any]:
+        """
+        Delete a metadata schema using the
+        /database/{databaseId}/metadataSchema/{metadataSchemaId} DELETE endpoint.
+
+        Args:
+            database_id: Database ID owning the schema (or 'GLOBAL')
+            metadata_schema_id: ID of the metadata schema to delete
+
+        Returns:
+            API response data with the operation result
+
+        Raises:
+            MetadataSchemaNotFoundError: When the metadata schema is not found
+            MetadataSchemaDeletionError: When deletion is rejected
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import MetadataSchemaDeletionError, MetadataSchemaNotFoundError
+
+        endpoint = API_METADATA_SCHEMA_BY_ID.format(
+            databaseId=database_id,
+            metadataSchemaId=metadata_schema_id
+        )
+        # The endpoint requires a body carrying the confirmation interlock; it rejects the request
+        # when the flag is absent or false.
+        body = {'confirmDelete': True}
+
+        try:
+            response = self.delete(endpoint, include_auth=True, json=body,
+                                   raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise MetadataSchemaNotFoundError(
+                    f"Metadata schema '{metadata_schema_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                if 'not found' in error_message.lower():
+                    raise MetadataSchemaNotFoundError(
+                        f"Metadata schema '{metadata_schema_id}' not found: {error_message}")
+                raise MetadataSchemaDeletionError(
+                    f"Metadata schema deletion failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Metadata schema deletion failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to delete metadata schema: {e}")
 
     # Asset Download API Methods
 
@@ -3294,21 +3483,18 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(f"Invalid download request: {error_message}")
                 
             elif e.response.status_code == 401:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'not distributable' in error_message.lower():
                     raise APIError(f"Asset not distributable: {error_message}")
                 else:
                     raise AuthenticationError(f"Authentication failed: {e}")
                     
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -3371,12 +3557,10 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(f"Invalid download request: {error_message}")
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
                 else:
@@ -3416,21 +3600,18 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(f"Invalid download request: {error_message}")
                 
             elif e.response.status_code == 401:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'not distributable' in error_message.lower():
                     raise APIError(f"Asset not distributable: {error_message}")
                 else:
                     raise AuthenticationError(f"Authentication failed: {e}")
                     
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -3448,6 +3629,70 @@ class APIClient:
             raise APIError(f"Failed to download asset preview: {e}")
 
     # Asset Export API Methods
+
+    def _resolve_staged_export_payload(self, response: requests.Response) -> Dict[str, Any]:
+        """Return the export payload, fetching it from its presigned URL when it was staged.
+
+        An export payload above the backend's inline size limit is not in the response body. The
+        backend writes it to the VAMS auxiliary Amazon S3 bucket and answers `303 See Other` with a
+        presigned URL in `Location`, plus a JSON envelope carrying the same URL as
+        `presignedExportPayloadUrl` for clients that do not follow redirects.
+
+        Two paths therefore arrive here, and both must yield the payload:
+
+        1.  **The redirect was followed** (the default: `requests.Session.request` sets
+            `allow_redirects=True`, and `Session.rebuild_auth` drops the `Authorization` header on
+            the host change, which Amazon S3 requires since the presigned URL carries its own
+            authorization in the query string). `response` is already the staged object and its body
+            is the payload — returned unchanged.
+        2.  **The redirect was not followed**, so `response` is the envelope. Left unhandled this is
+            the damaging case: the envelope parses cleanly as JSON, so the caller receives a dict
+            with a 200-shaped success and simply no `assets` key. This method detects the envelope
+            and fetches the URL itself.
+
+        Handling case 2 explicitly is what makes the behavior a property of this client rather than
+        of a library default it never states.
+        """
+        payload = response.json()
+
+        # The envelope is identified by its own field, not by status code: by the time a followed
+        # redirect returns, the status is 200 and the 303 is only visible in response.history.
+        if not isinstance(payload, dict):
+            return payload
+        staged_url = payload.get('presignedExportPayloadUrl')
+        if not staged_url:
+            # A 303 whose body was not the expected envelope: fall back to the Location header
+            # rather than returning a body that is definitely not the payload.
+            if response.status_code == 303:
+                staged_url = response.headers.get('Location')
+            if not staged_url:
+                return payload
+
+        from .logging import get_logger
+        logger = get_logger()
+        # Never log the URL itself — a presigned URL is a bearer credential in its query string.
+        logger.debug("Export payload was staged; retrieving it from its presigned URL")
+
+        try:
+            # A separate request with no VAMS auth: the presigned URL authorizes itself, and Amazon
+            # S3 rejects a request presenting two authorization mechanisms. `self.session` carries no
+            # default Authorization header (headers are built per request in _make_request), so this
+            # sends none.
+            staged_response = self.session.get(staged_url, timeout=self.request_timeout)
+            staged_response.raise_for_status()
+            return staged_response.json()
+        except requests.exceptions.RequestException as e:
+            raise APIError(
+                "Asset export failed: the export payload was staged for download but could not be "
+                f"retrieved from its presigned URL ({e}). The URL expires after "
+                f"{payload.get('presignedExportPayloadExpiresIn', 'the configured')} seconds; retry "
+                "the export if it has elapsed."
+            )
+        except ValueError as e:
+            raise APIError(
+                "Asset export failed: the staged export payload was retrieved but is not valid "
+                f"JSON ({e})."
+            )
 
     def export_asset(self, database_id: str, asset_id: str, export_params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -3468,11 +3713,15 @@ class APIClient:
                 - includeArchivedFiles: Include archived files
                 - fileExtensions: Filter by file extensions
                 - maxAssets: Max assets per page (1-1000)
+                - maxFiles: Max files per page across the page's assets (1-10000)
                 - startingToken: Pagination token
-        
+
         Returns:
-            API response with assets, relationships, and pagination info
-        
+            API response with assets, relationships, and pagination info. An asset holding more
+            files than maxFiles is returned over successive pages: its entry reports
+            files_truncated and NextToken resumes that asset's remaining files, so a caller
+            accumulating pages merges an asset's files rather than appending a second entry.
+
         Raises:
             AssetNotFoundError: When asset is not found
             DatabaseNotFoundError: When database doesn't exist
@@ -3481,19 +3730,17 @@ class APIClient:
         """
         try:
             endpoint = API_ASSET_EXPORT.format(databaseId=database_id, assetId=asset_id)
-            # Backend expects POST with JSON body
+            # Backend expects POST with JSON body.
             response = self.post(endpoint, data=export_params, include_auth=True)
-            return response.json()
+            return self._resolve_staged_export_payload(response)
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid export parameters: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'database' in error_message.lower():
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -3557,6 +3804,22 @@ class APIClient:
         if isinstance(msg, list):
             return "\n".join(str(item) for item in msg)
         return msg
+
+    @staticmethod
+    def _pwe_handler_message(e: "requests.exceptions.HTTPError") -> Optional[str]:
+        """The handler's own `message` string, or None when the response carries no JSON body with
+        one. Unlike _pwe_error_message this never substitutes str(e) — the "404 Client Error: Not Found
+        for url: ..." text requests composes — so a caller can tell a handler-authored 404 from a
+        body-less one (API Gateway, a WAF page) and choose its own wording for the latter."""
+        response = e.response
+        if response is None or not response.content:
+            return None
+        try:
+            data = response.json()
+        except ValueError:
+            return None
+        msg = data.get('message') if isinstance(data, dict) else None
+        return msg if isinstance(msg, str) and msg else None
 
     # ---- Pipeline CRUD ------------------------------------------------
 
@@ -3868,11 +4131,16 @@ class APIClient:
 
     # ---- Workflow triggers --------------------------------------------
 
-    def list_workflow_triggers(self, database_id: str, workflow_id: str) -> Dict[str, Any]:
-        """List a workflow's triggers. GET .../workflows/{workflowId}/triggers."""
+    def list_workflow_triggers(self, database_id: str, workflow_id: str,
+                               params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """List a workflow's triggers. GET .../workflows/{workflowId}/triggers.
+
+        The response is one bounded page: `{"message": {"Items": [...], "NextToken": ...}}`, with
+        `NextToken` set while more triggers remain. `params` carries maxItems/pageSize/startingToken.
+        """
         try:
             endpoint = API_WORKFLOW_TRIGGERS.format(databaseId=database_id, workflowId=workflow_id)
-            return self._pwe_request('GET', endpoint)
+            return self._pwe_request('GET', endpoint, params=dict(params or {}))
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
@@ -4012,17 +4280,25 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to list executions: {e}")
 
-    def get_execution_details(self, execution_id: str) -> Dict[str, Any]:
+    def get_execution_details(self, execution_id: str,
+                              params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Get an execution's full detail/traceability. GET /workflows/executions/{executionId}/details.
 
-        Collections are bounded server-side; truncatedCollections names any that came back partial.
+        params may include: includeSubExecutions ('true' | 'false'). Every pipeline entry carries
+        availableLogs — the step's log sources, each with the logId that get_execution_logs reads one
+        source by — and with includeSubExecutions='true' also subExecutions (the registered
+        sub-processes with per-stage status derived from the sub-state-machine history),
+        subExecutionsTruncated and subExecutionWarnings. All dates are ISO-8601 UTC strings; no ARNs.
+
+        Collections are bounded server-side; truncatedCollections names any that came back partial
+        ('pipelines.subExecutions' means every sub-execution kept its summary but lost its stages).
         A pipeline entry carries renderedConfigLocation ({bucket, key}) whenever that object exists
         — not only on truncation — because it is the FULLY substituted body the step ran with,
         while the inline renderedConfig is pre-system-tag. renderedConfigTruncated reports only
         whether the inline copy was shortened."""
         try:
             endpoint = API_WORKFLOW_EXECUTION_DETAILS.format(executionId=execution_id)
-            return self._pwe_request('GET', endpoint)
+            return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
@@ -4060,13 +4336,29 @@ class APIClient:
         """Get an execution's logs. GET /workflows/executions/{executionId}/logs.
 
         params may include: mode (truncated|full), pipelineExecutionId, and (full mode)
-        filterPattern/limit/startTime/endTime/nextToken.
+        filterPattern/limit/startTime/endTime/nextToken, plus — full mode with pipelineExecutionId
+        only — logId (read one log source; events and nextToken then describe that source alone,
+        and a source that is a registered sub-state-machine's log destination also returns that
+        sub-execution's sfnHistoryEvents) and stageName (restrict the sources and the sub-execution
+        history to one sub-state-machine stage). A step-scoped full-mode response carries logSources
+        (each known source with a read status and eventCount) and every CloudWatch subProcessEvents
+        item names its source by logId (a sub-state-machine history line carries the logId of the
+        source its state machine logs to, or "" when it has none). An unknown logId is a 404 whose
+        message is raised as ExecutionNotFoundError text.
         """
         try:
             endpoint = API_WORKFLOW_EXECUTION_LOGS.format(executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
+                # Three 404s share this route. A step-scoped one (a logId or pipelineExecutionId the
+                # execution does not have) carries a handler message that names the rule and is raised
+                # verbatim. A missing execution carries the id-less "Execution not found", and a
+                # body-less 404 (API Gateway, a WAF page) carries no handler message at all; both are
+                # raised as the id-bearing text the details read uses, never as requests' URL text.
+                msg = self._pwe_handler_message(e)
+                if msg and msg != "Execution not found":
+                    raise ExecutionNotFoundError(msg)
                 raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
             if e.response.status_code == 400:
                 raise InvalidExecutionDataError(self._pwe_error_message(e))
@@ -4166,13 +4458,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(f"Invalid search parameters: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'not available' in error_message.lower() or 'opensearch' in error_message.lower():
                     raise APIError(f"Search is not available: {error_message}")
                 else:
@@ -4220,13 +4510,11 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise APIError(f"Invalid search parameters: {error_message}")
                 
             elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'not available' in error_message.lower() or 'opensearch' in error_message.lower():
                     raise APIError(f"Search is not available: {error_message}")
                 else:
@@ -4257,8 +4545,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 if 'not available' in error_message.lower() or 'opensearch' in error_message.lower():
                     raise APIError(f"Search is not available: {error_message}")
                 else:
@@ -4335,8 +4622,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'already exists' in error_message.lower():
                     raise RoleAlreadyExistsError(f"Role already exists: {error_message}")
@@ -4354,13 +4640,16 @@ class APIClient:
     def update_role(self, role_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update an existing role using the /roles PUT endpoint.
-        
+
+        The update is partial -- a field absent from role_data keeps its stored value, so
+        clearing one takes sending it explicitly (mfaRequired False, or source None).
+
         Args:
             role_data: Role update data matching UpdateRoleRequestModel:
                 - roleName: Role name (required)
                 - description: Role description (required)
-                - source: Optional source
-                - sourceIdentifier: Optional source identifier
+                - source: Optional source, None to remove the stored value
+                - sourceIdentifier: Optional source identifier, None to remove the stored value
                 - mfaRequired: Optional MFA requirement
         
         Returns:
@@ -4381,8 +4670,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'does not exist' in error_message.lower() or 'not found' in error_message.lower():
                     raise RoleNotFoundError(f"Role not found: {error_message}")
@@ -4425,8 +4713,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise RoleDeletionError(f"Role deletion failed: {error_message}")
                 
             elif e.response.status_code == 404:
@@ -4453,26 +4740,24 @@ class APIClient:
         
         Raises:
             AuthenticationError: When authentication fails
-            APIError: When API call fails or Cognito is not enabled
+            CognitoUserOperationError: When the parameters are invalid or Cognito is not enabled
+            APIError: When the API call fails
         """
         from ..constants import API_COGNITO_USERS
         from .exceptions import CognitoUserOperationError
         
         try:
             query_params = params or {}
-            response = self.get(API_COGNITO_USERS, include_auth=True, params=query_params)
+            response = self.get(API_COGNITO_USERS, include_auth=True, params=query_params,
+                                raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 raise CognitoUserOperationError(f"Invalid list parameters: {error_message}")
-                
-            elif e.response.status_code == 503:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -4508,24 +4793,21 @@ class APIClient:
         )
         
         try:
-            response = self.post(API_COGNITO_USERS, data=user_data, include_auth=True)
+            response = self.post(API_COGNITO_USERS, data=user_data, include_auth=True,
+                                 raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 
                 if 'already exists' in error_message.lower() or 'user exists' in error_message.lower():
                     raise CognitoUserAlreadyExistsError(f"User already exists: {error_message}")
                 else:
                     raise InvalidCognitoUserDataError(f"Invalid user data: {error_message}")
                     
-            elif e.response.status_code == 503:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
-                
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
@@ -4561,22 +4843,20 @@ class APIClient:
         
         try:
             endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
-            response = self.put(endpoint, data=update_data, include_auth=True)
+            response = self.put(endpoint, data=update_data, include_auth=True, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                if 'user not found' in error_message.lower():
+                    raise CognitoUserNotFoundError(f"User '{user_id}' not found")
                 raise InvalidCognitoUserDataError(f"Invalid update data: {error_message}")
                 
             elif e.response.status_code == 404:
                 raise CognitoUserNotFoundError(f"User '{user_id}' not found")
-                
-            elif e.response.status_code == 503:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -4607,17 +4887,20 @@ class APIClient:
         
         try:
             endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
-            response = self.delete(endpoint, include_auth=True)
+            response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+            if e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                if 'user not found' in error_message.lower():
+                    raise CognitoUserNotFoundError(f"User '{user_id}' not found")
+                raise CognitoUserOperationError(f"Invalid delete request: {error_message}")
+
+            elif e.response.status_code == 404:
                 raise CognitoUserNotFoundError(f"User '{user_id}' not found")
-                
-            elif e.response.status_code == 503:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -4653,22 +4936,20 @@ class APIClient:
         try:
             endpoint = API_COGNITO_USER_RESET_PASSWORD.format(userId=user_id)
             data = {'confirmReset': confirm_reset}
-            response = self.post(endpoint, data=data, include_auth=True)
+            response = self.post(endpoint, data=data, include_auth=True, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                if 'user not found' in error_message.lower():
+                    raise CognitoUserNotFoundError(f"User '{user_id}' not found")
                 raise InvalidCognitoUserDataError(f"Invalid reset request: {error_message}")
                 
             elif e.response.status_code == 404:
                 raise CognitoUserNotFoundError(f"User '{user_id}' not found")
-                
-            elif e.response.status_code == 503:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -4890,8 +5171,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'already exists' in error_message.lower():
                     raise ConstraintAlreadyExistsError(f"Constraint already exists: {error_message}")
@@ -4938,8 +5218,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'does not exist' in error_message.lower() or 'not found' in error_message.lower():
                     raise ConstraintNotFoundError(f"Constraint not found: {error_message}")
@@ -4982,8 +5261,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise ConstraintDeletionError(f"Constraint deletion failed: {error_message}")
                 
             elif e.response.status_code == 404:
@@ -5030,8 +5308,7 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise InvalidConstraintDataError(f"Invalid template data: {error_message}")
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -5108,8 +5385,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'already exist' in error_message.lower():
                     raise UserRoleAlreadyExistsError(f"User role already exists: {error_message}")
@@ -5151,8 +5427,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 
                 if 'does not exist' in error_message.lower() or 'not found' in error_message.lower():
                     raise UserRoleNotFoundError(f"User role not found: {error_message}")
@@ -5195,8 +5470,7 @@ class APIClient:
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise UserRoleDeletionError(f"User role deletion failed: {error_message}")
                 
             elif e.response.status_code == 404:
@@ -5211,21 +5485,47 @@ class APIClient:
 
     # API Key Management API Methods
 
-    def list_api_keys(self) -> Dict[str, Any]:
+    @staticmethod
+    def _api_key_pagination_params(max_items: Optional[int] = None,
+                                   page_size: Optional[int] = None,
+                                   starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """Pagination query parameters for an API key listing, omitting the ones not asked for.
+
+        All three are optional on the wire — the handler fills its own defaults (maxItems 3000,
+        pageSize 1000) — so an omitted option leaves the deployment's default in force rather
+        than pinning a CLI-side one.
+        """
+        params: Dict[str, Any] = {}
+        if max_items is not None:
+            params['maxItems'] = max_items
+        if page_size is not None:
+            params['pageSize'] = page_size
+        if starting_token:
+            params['startingToken'] = starting_token
+        return params
+
+    def list_api_keys(self, max_items: Optional[int] = None, page_size: Optional[int] = None,
+                      starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
         List all API keys using the /auth/api-keys GET endpoint.
 
+        Args:
+            max_items: Maximum number of API keys in this response (optional)
+            page_size: API keys read per DynamoDB page (optional)
+            starting_token: Pagination token from a prior response's NextToken (optional)
+
         Returns:
-            API response data with API keys list
+            API response data with API keys list: {"Items": [...], "NextToken": "...",
+            "truncated": true}. NextToken and truncated appear only when keys remain.
 
         Raises:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        from .exceptions import ApiKeyError
+        params = self._api_key_pagination_params(max_items, page_size, starting_token)
 
         try:
-            response = self.get(API_AUTH_API_KEYS, include_auth=True)
+            response = self.get(API_AUTH_API_KEYS, include_auth=True, params=params)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -5236,6 +5536,50 @@ class APIClient:
 
         except Exception as e:
             raise APIError(f"Failed to list API keys: {e}")
+
+    def get_api_key(self, api_key_id: str) -> Dict[str, Any]:
+        """
+        Get a single API key using the /auth/api-keys/{apiKeyId} GET endpoint.
+
+        Args:
+            api_key_id: ID of the API key (a UUID)
+
+        Returns:
+            API response data with the API key record. The stored hash is never returned, and
+            neither is the key value — that is shown only once, at creation.
+
+        Raises:
+            ApiKeyNotFoundError: When the API key is not found
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import ApiKeyNotFoundError
+
+        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.get(endpoint, include_auth=True, raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                # A missing key is answered with 400, not 404: the handler reports it through
+                # general_error so it cannot be told apart from a rejected apiKeyId by status alone.
+                error_message = _api_error_message(e.response, str(e))
+                if 'not found' in error_message.lower():
+                    raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+                raise APIError(f"Invalid request (400): {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get API key: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to get API key: {e}")
 
     def create_api_key(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -5264,8 +5608,7 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise ApiKeyCreationError(f"API key creation failed: {error_message}")
 
             elif e.response.status_code in [401, 403]:
@@ -5308,8 +5651,7 @@ class APIClient:
                 raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
 
             elif e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise ApiKeyUpdateError(f"API key update failed: {error_message}")
 
             elif e.response.status_code in [401, 403]:
@@ -5349,8 +5691,7 @@ class APIClient:
                 raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
 
             elif e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise ApiKeyDeletionError(f"API key deletion failed: {error_message}")
 
             elif e.response.status_code in [401, 403]:
@@ -5361,12 +5702,21 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to delete API key: {e}")
 
-    def list_user_api_keys(self) -> Dict[str, Any]:
+    def list_user_api_keys(self, max_items: Optional[int] = None,
+                           page_size: Optional[int] = None,
+                           starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
         List the current user's own API keys using the /auth/user/api-keys GET endpoint.
 
+        Args:
+            max_items: Maximum number of API keys in this response (optional)
+            page_size: API keys read per DynamoDB page (optional)
+            starting_token: Pagination token from a prior response's NextToken (optional)
+
         Returns:
-            API response data with the user's API keys list
+            API response data with the user's API keys list: {"Items": [...],
+            "NextToken": "...", "truncated": true}. NextToken and truncated appear only when
+            keys remain.
 
         Raises:
             AuthenticationError: When authentication fails
@@ -5374,8 +5724,10 @@ class APIClient:
         """
         from ..constants import API_AUTH_USER_API_KEYS
 
+        params = self._api_key_pagination_params(max_items, page_size, starting_token)
+
         try:
-            response = self.get(API_AUTH_USER_API_KEYS, include_auth=True)
+            response = self.get(API_AUTH_USER_API_KEYS, include_auth=True, params=params)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -5386,6 +5738,52 @@ class APIClient:
 
         except Exception as e:
             raise APIError(f"Failed to list user API keys: {e}")
+
+    def get_user_api_key(self, api_key_id: str) -> Dict[str, Any]:
+        """
+        Get one of the current user's own API keys using the
+        /auth/user/api-keys/{apiKeyId} GET endpoint.
+
+        A key owned by another user is reported as not found, so the user scope never reveals
+        that it exists.
+
+        Args:
+            api_key_id: ID of the API key (a UUID, owned by the current user)
+
+        Returns:
+            API response data with the API key record
+
+        Raises:
+            ApiKeyNotFoundError: When the API key is not found or not owned by the user
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_USER_API_KEY
+        from .exceptions import ApiKeyNotFoundError
+
+        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.get(endpoint, include_auth=True, raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                if 'not found' in error_message.lower():
+                    raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+                raise APIError(f"Invalid request (400): {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get user API key: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to get user API key: {e}")
 
     def create_user_api_key(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -5417,8 +5815,7 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise ApiKeyCreationError(f"API key creation failed: {error_message}")
 
             elif e.response.status_code in [401, 403]:
@@ -5465,8 +5862,7 @@ class APIClient:
                 raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
 
             elif e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise ApiKeyUpdateError(f"API key update failed: {error_message}")
 
             elif e.response.status_code in [401, 403]:
@@ -5508,8 +5904,7 @@ class APIClient:
                 raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
 
             elif e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
+                error_message = _api_error_message(e.response, str(e))
                 raise ApiKeyDeletionError(f"API key deletion failed: {error_message}")
 
             elif e.response.status_code in [401, 403]:
@@ -5519,3 +5914,603 @@ class APIClient:
 
         except Exception as e:
             raise APIError(f"Failed to delete user API key: {e}")
+
+    # ------------------------------------------------------------------
+    # Comments API Methods
+    # ------------------------------------------------------------------
+    # Every comment route answers with the legacy {"message": ...} envelope, and what sits under
+    # it differs by verb: a LIST of comments for the two listing routes, a single comment object
+    # (or {} when there is none) for the single-comment GET, and a status string for POST, PUT and
+    # DELETE. These methods return the body with the envelope intact so a caller can tell those
+    # apart; get_comment is the one exception, because an absent comment is otherwise a 200.
+
+    @staticmethod
+    def _comment_pagination_params(max_items: Optional[int] = None, page_size: Optional[int] = None,
+                                   starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """Pagination query parameters for a comment listing, omitting the ones not asked for.
+
+        All three are optional on the wire — the handler fills its own defaults — so an omitted
+        option leaves the deployment's default in force rather than pinning a CLI-side one.
+        """
+        params: Dict[str, Any] = {}
+        if max_items is not None:
+            params['maxItems'] = max_items
+        if page_size is not None:
+            params['pageSize'] = page_size
+        if starting_token:
+            params['startingToken'] = starting_token
+        return params
+
+    def list_asset_comments(self, asset_id: str, max_items: Optional[int] = None,
+                            page_size: Optional[int] = None,
+                            starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List every comment on an asset using the /comments/assets/{assetId} GET endpoint.
+
+        Args:
+            asset_id: Asset ID
+            max_items: Maximum number of comments to return (optional)
+            page_size: Comments per page (optional)
+            starting_token: Pagination token (optional)
+
+        Returns:
+            API response data: {"message": [comments]}. The route bounds the read with the
+            pagination parameters but returns no NextToken, so the token cannot be followed.
+
+        Raises:
+            AssetNotFoundError: When the asset cannot be resolved
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        endpoint = API_COMMENTS_ASSET.format(assetId=asset_id)
+
+        try:
+            response = self.get(
+                endpoint, include_auth=True, raise_http_errors=True,
+                params=self._comment_pagination_params(max_items, page_size, starting_token))
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list comments: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list comments: {e}")
+
+    def list_asset_version_comments(self, asset_id: str, asset_version_id: str,
+                                    max_items: Optional[int] = None,
+                                    page_size: Optional[int] = None,
+                                    starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List the comments on one version of an asset using the
+        /comments/assets/{assetId}/assetVersionId/{assetVersionId} GET endpoint.
+
+        Args:
+            asset_id: Asset ID
+            asset_version_id: Asset version ID
+            max_items: Maximum number of comments to return (optional)
+            page_size: Comments per page (optional)
+            starting_token: Pagination token (optional)
+
+        Returns:
+            API response data: {"message": [comments]}
+
+        Raises:
+            AssetNotFoundError: When the asset cannot be resolved
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        endpoint = API_COMMENTS_ASSET_VERSION.format(
+            assetId=asset_id, assetVersionId=asset_version_id)
+
+        try:
+            response = self.get(
+                endpoint, include_auth=True, raise_http_errors=True,
+                params=self._comment_pagination_params(max_items, page_size, starting_token))
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list version comments: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list version comments: {e}")
+
+    def get_comment(self, asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
+        """
+        Get a single comment using the composite-key GET endpoint
+        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+
+        Args:
+            asset_id: Asset ID
+            asset_version_id: Asset version ID the comment is attached to
+            comment_id: Comment ID
+
+        Returns:
+            API response data: {"message": {comment}}
+
+        Raises:
+            CommentNotFoundError: When no such comment exists. The endpoint answers 200 with an
+                empty object rather than a 404, so the emptiness is what identifies it.
+            InvalidCommentDataError: When the two key parts cannot form the composite key
+            AssetNotFoundError: When the asset cannot be resolved
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import CommentNotFoundError
+
+        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+
+        try:
+            response = self.get(endpoint, include_auth=True, raise_http_errors=True)
+            body = response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get comment: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to get comment: {e}")
+
+        if isinstance(body, dict) and not body.get('message'):
+            raise CommentNotFoundError(f"Comment '{comment_id}' not found")
+        return body
+
+    def add_comment(self, asset_id: str, asset_version_id: str, comment_id: str,
+                    comment_body: str) -> Dict[str, Any]:
+        """
+        Add a comment using the composite-key POST endpoint
+        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+
+        Args:
+            asset_id: Asset ID
+            asset_version_id: Asset version ID to attach the comment to
+            comment_id: Comment ID (the caller owns this value; the endpoint writes
+                unconditionally, so reusing an existing one overwrites that comment)
+            comment_body: Comment text
+
+        Returns:
+            API response data: {"message": "Succeeded"}
+
+        Raises:
+            InvalidCommentDataError: When the request is rejected, including a comment body over
+                the endpoint's length limit
+            AssetNotFoundError: When the asset cannot be resolved
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import InvalidCommentDataError
+
+        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+
+        try:
+            response = self.post(endpoint, data={'commentBody': comment_body},
+                                 include_auth=True, raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise InvalidCommentDataError(f"Comment could not be added: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to add comment: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to add comment: {e}")
+
+    def update_comment(self, asset_id: str, asset_version_id: str, comment_id: str,
+                       comment_body: str) -> Dict[str, Any]:
+        """
+        Replace a comment's text using the composite-key PUT endpoint
+        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+
+        Only the comment's creator may edit it; the endpoint answers 403 otherwise.
+
+        Args:
+            asset_id: Asset ID
+            asset_version_id: Asset version ID the comment is attached to
+            comment_id: Comment ID
+            comment_body: New comment text
+
+        Returns:
+            API response data: {"message": "Succeeded"}
+
+        Raises:
+            CommentNotFoundError: When no such comment exists
+            InvalidCommentDataError: When the request is rejected
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import CommentNotFoundError, InvalidCommentDataError
+
+        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+
+        try:
+            response = self.put(endpoint, data={'commentBody': comment_body},
+                                include_auth=True, raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                # The endpoint reports both a missing comment ("Record not found") and an
+                # unresolvable asset ("Asset not found") as 404, so its message is carried through.
+                error_message = _api_error_message(e.response, str(e))
+                raise CommentNotFoundError(f"Comment could not be updated: {error_message}")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise InvalidCommentDataError(f"Comment could not be updated: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to update comment: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to update comment: {e}")
+
+    def delete_comment(self, asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
+        """
+        Delete a comment using the composite-key DELETE endpoint
+        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+
+        The comment is soft-deleted: the record moves to a '#deleted' partition rather than being
+        removed. Only the comment's creator may delete it; the endpoint answers 403 otherwise.
+
+        Args:
+            asset_id: Asset ID
+            asset_version_id: Asset version ID the comment is attached to
+            comment_id: Comment ID
+
+        Returns:
+            API response data: {"message": "Comment deleted"}
+
+        Raises:
+            CommentNotFoundError: When no such comment exists
+            InvalidCommentDataError: When the request is rejected
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import CommentNotFoundError, InvalidCommentDataError
+
+        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+
+        try:
+            response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_message = _api_error_message(e.response, str(e))
+                raise CommentNotFoundError(f"Comment could not be deleted: {error_message}")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise InvalidCommentDataError(f"Comment could not be deleted: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to delete comment: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to delete comment: {e}")
+
+    # ------------------------------------------------------------------
+    # Subscription API Methods
+    # ------------------------------------------------------------------
+    # /subscriptions carries all four verbs and keys a subscription on
+    # (eventName, entityName, entityId); the subscribers list is part of the record. The endpoint
+    # requires a non-empty subscribers list on DELETE as well, even though the delete removes the
+    # whole record. /unsubscribe is the different operation: it removes ONE subscriber from a
+    # record that otherwise stays. Both answer with the {"message": ...} envelope.
+
+    def list_subscriptions(self, max_items: Optional[int] = None, page_size: Optional[int] = None,
+                           starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List subscriptions using the /subscriptions GET endpoint.
+
+        Args:
+            max_items: Maximum number of subscriptions to return (optional)
+            page_size: Subscriptions per page (optional)
+            starting_token: Pagination token (optional)
+
+        Returns:
+            API response data: {"message": {"Items": [...], "NextToken": "..."}}. Each item
+            carries eventName, entityName, entityId, subscribers, entityValue and databaseId.
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        params: Dict[str, Any] = {}
+        if max_items is not None:
+            params['maxItems'] = max_items
+        if page_size is not None:
+            params['pageSize'] = page_size
+        if starting_token:
+            params['startingToken'] = starting_token
+
+        try:
+            response = self.get(API_SUBSCRIPTIONS, include_auth=True, params=params,
+                                raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list subscriptions: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list subscriptions: {e}")
+
+    @staticmethod
+    def _subscription_body(event_name: str, entity_name: str, entity_id: str,
+                           subscribers: List[str]) -> Dict[str, Any]:
+        """The request body every /subscriptions and /unsubscribe write takes.
+
+        All four keys are required on all of them — the endpoint rejects a body missing any one,
+        including a DELETE, where the subscribers list is validated but not used.
+        """
+        return {
+            'eventName': event_name,
+            'entityName': entity_name,
+            'entityId': entity_id,
+            'subscribers': list(subscribers),
+        }
+
+    def create_subscription(self, event_name: str, entity_name: str, entity_id: str,
+                            subscribers: List[str]) -> Dict[str, Any]:
+        """
+        Create a subscription, or add subscribers to an existing one, using the
+        /subscriptions POST endpoint.
+
+        Args:
+            event_name: Event to subscribe to (the API accepts 'Asset Version Change')
+            entity_name: Entity type (the API accepts 'Asset')
+            entity_id: ID of the entity — the assetId for an Asset subscription
+            subscribers: VAMS user IDs to subscribe. Each is resolved to the e-mail on the
+                user's profile, falling back to the user ID when it is itself an e-mail address.
+
+        Returns:
+            API response data: {"message": "success"}
+
+        Raises:
+            SubscriptionAlreadyExistsError: When a listed subscriber is already subscribed
+            InvalidSubscriptionDataError: When the request is rejected
+            AssetNotFoundError: When the entity's asset cannot be resolved
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import InvalidSubscriptionDataError, SubscriptionAlreadyExistsError
+
+        try:
+            response = self.post(
+                API_SUBSCRIPTIONS,
+                data=self._subscription_body(event_name, entity_name, entity_id, subscribers),
+                include_auth=True, raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetNotFoundError(f"Asset '{entity_id}' not found")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                if 'already exists' in error_message.lower():
+                    raise SubscriptionAlreadyExistsError(error_message)
+                raise InvalidSubscriptionDataError(
+                    f"Subscription could not be created: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to create subscription: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to create subscription: {e}")
+
+    def update_subscription(self, event_name: str, entity_name: str, entity_id: str,
+                            subscribers: List[str]) -> Dict[str, Any]:
+        """
+        Replace a subscription's subscriber list using the /subscriptions PUT endpoint.
+
+        The list is a replacement, not an addition: subscribers absent from it are unsubscribed
+        from the underlying SNS topic.
+
+        Args:
+            event_name: Event the subscription is for
+            entity_name: Entity type
+            entity_id: ID of the entity
+            subscribers: The complete new list of VAMS user IDs
+
+        Returns:
+            API response data: {"message": "success"}
+
+        Raises:
+            SubscriptionNotFoundError: When no subscription exists for the event and entity
+            InvalidSubscriptionDataError: When the request is rejected
+            AssetNotFoundError: When the entity's asset cannot be resolved
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import InvalidSubscriptionDataError, SubscriptionNotFoundError
+
+        try:
+            response = self.put(
+                API_SUBSCRIPTIONS,
+                data=self._subscription_body(event_name, entity_name, entity_id, subscribers),
+                include_auth=True, raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetNotFoundError(f"Asset '{entity_id}' not found")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                if 'not exist' in error_message.lower() or 'not found' in error_message.lower():
+                    raise SubscriptionNotFoundError(error_message)
+                raise InvalidSubscriptionDataError(
+                    f"Subscription could not be updated: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to update subscription: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to update subscription: {e}")
+
+    def delete_subscription(self, event_name: str, entity_name: str, entity_id: str,
+                            subscribers: List[str]) -> Dict[str, Any]:
+        """
+        Delete a whole subscription using the /subscriptions DELETE endpoint. For an Asset
+        subscription this also deletes the asset's SNS topic, unsubscribing everyone.
+
+        Args:
+            event_name: Event the subscription is for
+            entity_name: Entity type
+            entity_id: ID of the entity
+            subscribers: Required by the endpoint, which validates the list and then removes the
+                whole record regardless of its contents
+
+        Returns:
+            API response data: {"message": "success"}
+
+        Raises:
+            SubscriptionNotFoundError: When no subscription exists for the event and entity
+            InvalidSubscriptionDataError: When the request is rejected
+            AssetNotFoundError: When the entity's asset cannot be resolved
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import InvalidSubscriptionDataError, SubscriptionNotFoundError
+
+        try:
+            response = self.delete(
+                API_SUBSCRIPTIONS,
+                include_auth=True, raise_http_errors=True,
+                json=self._subscription_body(event_name, entity_name, entity_id, subscribers))
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetNotFoundError(f"Asset '{entity_id}' not found")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                if 'not exist' in error_message.lower() or 'not found' in error_message.lower():
+                    raise SubscriptionNotFoundError(error_message)
+                raise InvalidSubscriptionDataError(
+                    f"Subscription could not be deleted: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to delete subscription: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to delete subscription: {e}")
+
+    def unsubscribe(self, event_name: str, entity_name: str, entity_id: str,
+                    subscriber: str) -> Dict[str, Any]:
+        """
+        Remove one subscriber from a subscription using the /unsubscribe DELETE endpoint. The
+        subscription itself stays, with the remaining subscribers.
+
+        Args:
+            event_name: Event the subscription is for
+            entity_name: Entity type
+            entity_id: ID of the entity
+            subscriber: The one VAMS user ID to remove. The endpoint reads only the first entry
+                of the list it is sent, so this takes a single value rather than a list.
+
+        Returns:
+            API response data: {"message": "success"}
+
+        Raises:
+            SubscriptionNotFoundError: When no subscription record exists for the event and entity
+            InvalidSubscriptionDataError: When the request is rejected
+            AssetNotFoundError: When the entity's asset cannot be resolved
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import InvalidSubscriptionDataError, SubscriptionNotFoundError
+
+        try:
+            response = self.delete(
+                API_UNSUBSCRIBE,
+                include_auth=True, raise_http_errors=True,
+                json=self._subscription_body(event_name, entity_name, entity_id, [subscriber]))
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetNotFoundError(f"Asset '{entity_id}' not found")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                if 'not exist' in error_message.lower() or 'not found' in error_message.lower():
+                    raise SubscriptionNotFoundError(error_message)
+                raise InvalidSubscriptionDataError(f"Unsubscribe failed: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to unsubscribe: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to unsubscribe: {e}")
+
+    def check_subscription(self, asset_id: str, user_id: str) -> Dict[str, Any]:
+        """
+        Check whether a user is subscribed to an asset's version changes using the
+        /check-subscription POST endpoint.
+
+        The endpoint fixes the event and entity itself ('Asset Version Change' on 'Asset'), so
+        neither is a parameter here.
+
+        Args:
+            asset_id: Asset ID to check
+            user_id: VAMS user ID to look for among the subscribers
+
+        Returns:
+            API response data: {"message": "success"} when subscribed, or
+            {"message": "Subscription doesn't exists."} when not. Both are 200 responses, so the
+            answer is the message rather than the status.
+
+        Raises:
+            InvalidSubscriptionDataError: When the request is rejected
+            AssetNotFoundError: When the asset cannot be resolved
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import InvalidSubscriptionDataError
+
+        try:
+            response = self.post(
+                API_CHECK_SUBSCRIPTION,
+                data={'assetId': asset_id, 'userId': user_id},
+                include_auth=True, raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise InvalidSubscriptionDataError(
+                    f"Subscription check failed: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to check subscription: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to check subscription: {e}")

@@ -53,6 +53,10 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     // confirmation dialog that triggered it (the dialog stays open so the action can be retried or
     // cancelled), and in a page-level banner for rerun, which has no dialog.
     const [actionError, setActionError] = useState<string | null>(null);
+    // Notices from a successful action's own response. An abort that could not stop a registered
+    // sub-process leaves a Batch or Deadline Cloud job running after the execution reads ABORTED, so
+    // the record has to outlive the toast that announced it.
+    const [actionWarnings, setActionWarnings] = useState<string[]>([]);
     const [searchText, setSearchText] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [triggerFilter, setTriggerFilter] = useState("");
@@ -61,10 +65,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     // there rather than offering a choice that would be overridden.
     const [workflowDatabaseFilter, setWorkflowDatabaseFilter] = useState("");
     const [workflowFilter, setWorkflowFilter] = useState("");
-    // The asset tab's workflow filter, held as the composite "databaseId:workflowId" because a
-    // workflowId is unique only within its database. Kept separate from the two global controls so
-    // one dropdown picks both halves at once — the asset tab has no workflow-database dropdown to
-    // pair with, and sending half a composite would filter against ":wf1" and match nothing.
+    // The asset tab's workflow filter, held as the composite "databaseId:workflowId" so ONE
+    // dropdown carries both halves and the value splits back into the two request filters below.
+    // Kept separate from the two global controls because the asset tab has no workflow-database
+    // dropdown to pair with. A workflow id is unique across every database, so the database half
+    // narrows rather than disambiguates; it is read off the row so it is the workflow's own, since
+    // any other value silently empties the result.
     const [assetWorkflowFilter, setAssetWorkflowFilter] = useState("");
     // Time-window filter (executions started within the window). A preset ("90"/"120"/"180" days)
     // resolves to a filterStartDate N days before now; "custom" reveals an explicit from/to date
@@ -297,13 +303,26 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const handleAbort = async (executionId: string, groupId?: string) => {
         setActionError(null);
         try {
-            await abortExecution.mutateAsync({ executionId, groupId });
+            const result: any = await abortExecution.mutateAsync({ executionId, groupId });
             setAbortConfirm(null);
-            toast.success(groupId ? "Aborting execution group" : "Aborting execution", {
-                description: groupId
-                    ? `Every active execution in group ${groupId} was signalled to stop.`
-                    : `Execution ${executionId.slice(0, 12)}… was signalled to stop.`,
-            });
+            // The abort response carries `warnings` when a registered sub-process could not be
+            // stopped. The execution still reads ABORTED, so without surfacing these the compute left
+            // running is invisible — which is the opposite of what the operator asked for.
+            const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+            setActionWarnings(warnings);
+            const what = groupId
+                ? `Every active execution in group ${groupId} was signalled to stop.`
+                : `Execution ${executionId.slice(0, 12)}… was signalled to stop.`;
+            if (warnings.length) {
+                toast.warning(
+                    groupId ? "Aborting execution group with warnings" : "Aborting with warnings",
+                    { description: `${what} ${warnings.join(" ")}` }
+                );
+            } else {
+                toast.success(groupId ? "Aborting execution group" : "Aborting execution", {
+                    description: what,
+                });
+            }
         } catch (err) {
             const message = toastErrorMessage(err, "Failed to abort execution");
             setActionError(message);
@@ -396,7 +415,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         }
     };
 
-    const columns: ColumnDef<Execution>[] = useMemo(
+    // The generic is on useMemo, not just the variable: with only the variable annotated TS infers
+    // the array literal's own union type first and then reports it unassignable, because some
+    // members carry `sortingFn` and others do not. Supplying it here gives the literal a
+    // contextual type so each member is checked against ColumnDef directly.
+    const columns = useMemo<ColumnDef<Execution>[]>(
         () => [
             {
                 accessorKey: "executionStatus",
@@ -406,6 +429,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             {
                 accessorKey: "workflowExecutionId",
                 header: "Execution ID",
+                // Sort as opaque TEXT. The table's default is react-table's `auto`, which picks its
+                // `alphanumeric` function for strings — that splits a value into text and number chunks
+                // and compares the number chunks numerically, which is what makes "item2" precede
+                // "item10". Applied to a 32-hex-character id it is meaningless: the header showed
+                // "sorted ascending" while the rows came out in an order matching no column at all.
+                sortingFn: "text",
                 cell: ({ row }) => (
                     <span className="font-mono text-sm">{row.original.workflowExecutionId}</span>
                 ),
@@ -443,8 +472,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             // output target lives on, so on the asset tab these would be permanently blank. Adding
             // them there would cost one extra read per row, which is the N+1 the global list is
             // deliberately shaped to avoid.
+            // The inner array carries its own annotation: members of a conditional spread get no
+            // contextual type from the outer literal, so `accessorKey` and `sortingFn` widen to
+            // `string` and stop satisfying ColumnDef.
             ...(isGlobalScope
-                ? [
+                ? ([
                       {
                           accessorKey: "outputLocationType",
                           header: "Output Type",
@@ -466,13 +498,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                       {
                           accessorKey: "outputAssetId",
                           header: "Output Asset ID",
+                          // Opaque id, so text ordering for the same reason as Execution ID above.
+                          sortingFn: "text",
                           cell: ({ row }: { row: { original: Execution } }) => (
                               <span className="font-mono text-xs">
                                   {row.original.outputAssetId || "—"}
                               </span>
                           ),
                       },
-                  ]
+                  ] as ColumnDef<Execution>[])
                 : []),
             {
                 accessorKey: "executionStartDate",
@@ -753,14 +787,16 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 </div>
             )}
 
-            {/* Notices from the list response itself, above the rows they qualify — the count on
-                screen is not the whole answer when one of these is present. */}
-            {listWarnings.length > 0 && (
+            {/* Notices from the list response itself and from the last action that succeeded with
+                caveats, above the rows they qualify — the count on screen is not the whole answer
+                when one of these is present, and an abort that left compute running is not visible
+                anywhere else on the board. */}
+            {[...listWarnings, ...actionWarnings].length > 0 && (
                 <div
                     role="status"
                     className="p-3 rounded bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300"
                 >
-                    {listWarnings.map((warning) => (
+                    {[...listWarnings, ...actionWarnings].map((warning) => (
                         <div key={warning}>{warning}</div>
                     ))}
                 </div>
@@ -776,18 +812,44 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 </div>
             )}
 
+            {/* The search runs over the loaded pages only, so an unqualified "not found" would report
+                absence for an execution that exists on a page nobody has fetched. The message says
+                what was actually searched, and the "Load more" control below stays reachable. */}
             {!isLoading && !loadError && visibleExecutions.length === 0 && (
-                <div className="text-text-secondary">No executions found.</div>
+                <div className="text-text-secondary">
+                    {!searchText.trim()
+                        ? "No executions found."
+                        : hasNextPage
+                        ? `No matches among the ${executions.length} execution${
+                              executions.length === 1 ? "" : "s"
+                          } loaded — load more to search further.`
+                        : `No executions match "${searchText.trim()}".`}
+                </div>
             )}
 
             {!isLoading && visibleExecutions.length > 0 && (
                 <DataTable
                     columns={columns}
                     rows={visibleExecutions}
+                    ariaLabel="Executions"
                     paginate={false}
                     // The board owns the search box (in the filter row); the table's own search
                     // is disabled so it doesn't render a second, redundant search bar.
                     filtering={false}
+                    // Stable identity per row. The list re-sorts non-terminal-first on every 5s poll,
+                    // so without it react-table keys rows by position and React hands a row's open
+                    // action menu — and the closures behind Abort / Permanent delete — to whichever
+                    // execution lands on that index next.
+                    getRowId={(row) => row.workflowExecutionId}
+                    // A sort only reaches the pages already fetched, against a server order fixed
+                    // newest-first, so it is qualified while more remain.
+                    sortScopeNote={
+                        hasNextPage
+                            ? `Sorted within the ${executions.length} execution${
+                                  executions.length === 1 ? "" : "s"
+                              } loaded so far. Load more to sort over the rest.`
+                            : undefined
+                    }
                     onRowClick={(row) => setQuickViewExecutionId(row.workflowExecutionId)}
                 />
             )}

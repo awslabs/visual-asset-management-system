@@ -393,6 +393,25 @@ VamsCLI uses standard exit codes:
 | `1`       | Command failed (business logic error, invalid input, API error)    |
 | `2`       | Invalid command usage (missing required options, unknown commands) |
 
+### Partial Transfers Exit Non-Zero
+
+The bulk transfer commands — `file upload`, `assets download`, `assets export --download-files`,
+`sync file push`, and `sync file pull` — exit `1` when any individual file failed, not only when the
+whole operation failed. A partial transfer would otherwise be indistinguishable from a complete one at
+the shell level, and a `set -e` script or a `&&` chain would continue against an asset that is missing
+files.
+
+The response payload is still written to stdout first, so a `--json-output` consumer keeps the detail:
+`overall_success`, `successful_files` / `failed_files`, and the per-file `failed_files` /
+`failed_downloads` lists.
+
+```bash
+if ! RESULT=$(vamscli sync file push ./models -d my-db -a my-asset --allow-modify --json-output); then
+    echo "$RESULT" | jq -r '.execution.uploads.failed_files'
+    exit 1
+fi
+```
+
 ### JSON Error Format
 
 When `--json-output` is enabled, errors are output as JSON to stderr:

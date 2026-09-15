@@ -27,10 +27,14 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+    generateUniqueNameHash,
+} from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import { assertRecordedPinPosture } from "./dockerfilePinAudit";
 import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
@@ -43,7 +47,7 @@ export interface SplatToolboxConstructProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
     importGlobalPipelineWorkflowV2FunctionName: string;
-    codeBuildRepository?: ecr.IRepository;
+    codeBuildImage?: { repository: ecr.IRepository; tag: string };
 }
 
 /**
@@ -162,11 +166,13 @@ export class SplatToolboxConstruct extends Construct {
             ],
         });
 
+        // This is the Batch JOB role, so its credentials are reachable from inside the container — and
+        // that container runs third-party 3D-reconstruction code, as root, privileged, over
+        // user-uploaded video and archives. It therefore carries only what the container uses.
+        //
+
         const containerJobRole = new iam.Role(this, "SplatToolboxContainerJobRole", {
-            assumedBy: new iam.CompositePrincipal(
-                Service("ECS_TASKS").Principal,
-                Service("SAGEMAKER").Principal
-            ),
+            assumedBy: Service("ECS_TASKS").Principal,
             inlinePolicies: {
                 InputBucketPolicy: inputBucketPolicy,
                 OutputBucketPolicy: outputBucketPolicy,
@@ -177,7 +183,6 @@ export class SplatToolboxConstruct extends Construct {
                     "service-role/AmazonECSTaskExecutionRolePolicy"
                 ),
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
-                iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSageMakerFullAccess"),
             ],
         });
 
@@ -189,6 +194,11 @@ export class SplatToolboxConstruct extends Construct {
         /**
          * AWS Batch Job Definition & Compute Env for Splat Toolbox Container
          */
+        // Also the prefix of the container log streams openPipeline registers
+        // (`<jobDefinitionName>/default/<ecs-task-id>` under /aws/batch/job).
+        const splatToolboxJobDefinitionName = `SplatToolboxGpuJob-${
+            props.config.name + "_" + props.config.app.baseStackName
+        }`;
         const splatToolboxBatchPipeline = new BatchGpuPipelineConstruct(
             this,
             "BatchPipeline_SplatToolbox",
@@ -210,11 +220,9 @@ export class SplatToolboxConstruct extends Construct {
                     "container"
                 ),
                 dockerfileName: "Dockerfile",
-                codeBuildRepository: props.codeBuildRepository,
+                codeBuildImage: props.codeBuildImage,
                 containerExecutionCommand: ["python", "__main__.py"],
-                batchJobDefinitionName: `SplatToolboxGpuJob-${
-                    props.config.name + "_" + props.config.app.baseStackName
-                }`,
+                batchJobDefinitionName: splatToolboxJobDefinitionName,
 
                 // Enable GPU-optimized settings for Splat Toolbox
                 enableGpuDeviceMappings: true,
@@ -292,6 +300,23 @@ export class SplatToolboxConstruct extends Construct {
             resultPath: "$",
         }).next(pipeLineEndTask);
 
+        // ConstructPipelineTask is the first state, so a failure there ends the execution before
+        // PipelineEndTask runs -- and PipelineEndTask is the only state that reports on the parent
+        // workflow's callback token, which then pends for its full taskTimeout. That is 73 hours here,
+        // the longest of any pipeline. The handler reports the token for the errors it raises itself;
+        // this covers the failures where it never runs at all: the function timeout, an out-of-memory
+        // kill, an import failure, or an invoke fault that exhausts the task's service-exception
+        // retries.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipeLineEndTask);
+
+        // resultPath keeps the state and appends the error, so pipelineEnd still finds
+        // externalSfnTaskToken alongside it.
+        constructPipelineTask.addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
+
         // batch job Splat Toolbox
         const splatToolboxBatchJob = new tasks.BatchSubmitJob(this, "SplatToolboxBatchJob", {
             jobName: sfn.JsonPath.stringAt("$.jobName"),
@@ -333,7 +358,8 @@ export class SplatToolboxConstruct extends Construct {
                         "SplatToolboxProcessing-StateMachineLogGroup",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                encryptionKey: props.storageResources.encryption.kmsKey,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
         );
@@ -388,6 +414,7 @@ export class SplatToolboxConstruct extends Construct {
             props.pipelineSubnets,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            { jobDefinitionName: splatToolboxJobDefinitionName },
             props.storageResources.encryption.kmsKey
         );
 
@@ -458,7 +485,7 @@ export class SplatToolboxConstruct extends Construct {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -475,7 +502,7 @@ export class SplatToolboxConstruct extends Construct {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*SplatToolboxProcessing-StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*SplatToolboxProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -492,7 +519,7 @@ export class SplatToolboxConstruct extends Construct {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -509,7 +536,7 @@ export class SplatToolboxConstruct extends Construct {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecuteSplatToolboxPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecuteSplatToolboxPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -522,7 +549,7 @@ export class SplatToolboxConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -537,7 +564,7 @@ export class SplatToolboxConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -715,6 +742,8 @@ export class SplatToolboxConstruct extends Construct {
         gitHubLink: string,
         gitHubCommitHash: string
     ): void {
+        // Declared outside the try so the finally below can remove it whichever way this exits.
+        let tempDir: string | undefined;
         try {
             const targetDir = path.resolve(
                 __dirname,
@@ -735,11 +764,14 @@ export class SplatToolboxConstruct extends Construct {
             console.log(
                 `Downloading/Syncing Splat Toolbox repository (commit: ${gitHubCommitHash})...`
             );
-            const tempDir = path.join(os.tmpdir(), "splat-toolbox-repo");
-
-            if (fs.existsSync(tempDir)) {
-                fs.rmSync(tempDir, { recursive: true, force: true });
-            }
+            // A UNIQUE directory per invocation, not a fixed "splat-toolbox-repo". A fixed path has to
+            // be deleted before cloning, and on Windows that rmSync fails with EBUSY whenever anything
+            // still holds a file under it -- an antivirus scan, a file watcher, or an interrupted
+            // earlier clone leaving a `tmp_pack_*`. That aborts the whole synth (and therefore any
+            // deploy) before AWS is touched, and the holder need not be a CDK or git process at all,
+            // so it cannot be waited out. A unique directory also removes the race between two
+            // concurrent CDK invocations, where one deletes the tree the other is cloning into.
+            tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "splat-toolbox-"));
 
             // execFileSync with an argument array: no shell, so the repo URL and commit hash are
             // passed to git verbatim rather than interpolated into a command string.
@@ -782,6 +814,10 @@ export class SplatToolboxConstruct extends Construct {
                         }
                         const files = fs.readdirSync(src);
                         for (const file of files) {
+                            // Synth-time copy of the repo's own pipeline sources: the joined
+                            // segment is a readdirSync entry of a repo directory, not external
+                            // input.
+                            // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
                             copyRecursive(path.join(src, file), path.join(dest, file));
                         }
                     } else {
@@ -824,12 +860,51 @@ export class SplatToolboxConstruct extends Construct {
                         fs.writeFileSync(dockerfilePath, dockerfileContent);
                         console.log("Added __main__.py and the vams_utils package to Dockerfile");
                     }
+
+                    // Bake the segmentation models into the image instead of downloading them at run
+                    // time. A background-removal run otherwise fetches the u2net weights on every
+                    // execution, which fails outright where the Batch subnets have no egress.
+                    //
+                    // The bake lives in vams_bake_models.py, NOT in the upstream build_models_tar.py.
+                    // The sync above overwrites every file that also exists upstream, so bake logic
+                    // added to that file survives only until the next synth — and the injected RUN then
+                    // fails the build against a script that no longer implements it. This filename does
+                    // not exist upstream, so the sync preserves it.
+                    //
+                    // Anchored on the U2NETP_PATH ENV rather than a later COPY: python and network are
+                    // both available by that point (the build clones several repositories above it), and
+                    // a late anchor would re-download ~1.2 GB whenever an unrelated VAMS file changed.
+                    if (!dockerfileContent.includes("vams_bake_models.py")) {
+                        const u2netpEnvLine = /^.*ENV\s+U2NETP_PATH=.*$/m;
+                        if (!u2netpEnvLine.test(dockerfileContent)) {
+                            throw new Error(
+                                "could not locate the 'ENV U2NETP_PATH=' line in the upstream Dockerfile " +
+                                    "to anchor the model bake. Background removal would fall back to " +
+                                    "downloading its weights at run time, which fails in a deployment " +
+                                    "whose Batch subnets have no egress."
+                            );
+                        }
+                        dockerfileContent = dockerfileContent.replace(
+                            u2netpEnvLine,
+                            (line) =>
+                                `COPY ./vams_bake_models.py                                          \${CODE_PATH}/vams_bake_models.py\n` +
+                                `${line}\n` +
+                                `RUN python \${CODE_PATH}/vams_bake_models.py`
+                        );
+                        fs.writeFileSync(dockerfilePath, dockerfileContent);
+                        console.log("Added the segmentation-model bake to Dockerfile");
+                    }
                 }
 
                 // The Batch job runs `python __main__.py`, which imports `from vams_utils import
                 // manifest_io`. Assert on the final file rather than trusting the edits above.
                 const finalDockerfile = fs.readFileSync(dockerfilePath, "utf8");
-                for (const required of ["COPY ./__main__.py", "COPY ./vams_utils"]) {
+                for (const required of [
+                    "COPY ./__main__.py",
+                    "COPY ./vams_utils",
+                    "COPY ./vams_bake_models.py",
+                    "RUN python ${CODE_PATH}/vams_bake_models.py",
+                ]) {
                     if (!finalDockerfile.includes(required)) {
                         throw new Error(
                             `the synced Dockerfile is missing '${required}'; the container entry ` +
@@ -837,14 +912,18 @@ export class SplatToolboxConstruct extends Construct {
                         );
                     }
                 }
-                for (const required of ["__main__.py", "vams_utils"]) {
+                for (const required of ["__main__.py", "vams_utils", "vams_bake_models.py"]) {
                     if (!fs.existsSync(path.join(targetDir, required))) {
                         throw new Error(`${required} is missing from ${targetDir}`);
                     }
                 }
-            }
 
-            fs.rmSync(tempDir, { recursive: true, force: true });
+                // The Dockerfile is gitignored and rewritten from upstream on every synth, so the
+                // third-party sources it resolves at image-build time are invisible to review. Compare
+                // them against the recorded set here, where the deployment that would build the image
+                // is the one that reports a change.
+                assertRecordedPinPosture(finalDockerfile);
+            }
 
             // Record the commit the local container directory now holds, so a later synth can tell
             // whether the sources match the pinned hash.
@@ -858,11 +937,28 @@ export class SplatToolboxConstruct extends Construct {
             // Fail the synth rather than silently building from whatever is on disk. A stale local
             // container directory would otherwise produce an image that does not match the pinned
             // commit, with no signal that the sync never ran.
+            //
+            // The clone directory is named in the message because the failure is usually about IT, not
+            // about the container directory: an earlier version of this text told the operator to
+            // delete backendPipelines/3dRecon/splatToolbox/container, which is both the wrong directory
+            // and destructive -- VAMS-owned files live there alongside the synced ones.
             throw new Error(
                 `Splat Toolbox container source sync failed for commit ${gitHubCommitHash}. ` +
-                    `The local container directory may be stale or partially written; delete ` +
-                    `backendPipelines/3dRecon/splatToolbox/container and re-run. Cause: ${error}`
+                    `Clone directory: ${tempDir ?? "(not created)"}. If that path or the local ` +
+                    `container directory is locked by another process, the clone cannot proceed. ` +
+                    `Cause: ${error}`
             );
+        } finally {
+            // In a finally so a failed sync does not leave a ~220 MB clone behind on every retry.
+            // force:true makes an already-absent directory a no-op, and a cleanup failure must not
+            // replace the real error, so it is swallowed deliberately rather than by oversight.
+            if (tempDir) {
+                try {
+                    fs.rmSync(tempDir, { recursive: true, force: true });
+                } catch {
+                    /* the clone is in the OS temp directory; leaving it is harmless */
+                }
+            }
         }
     }
 }

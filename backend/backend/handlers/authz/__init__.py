@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import boto3
+from botocore.config import Config
+import os
 import time
 import json
 from boto3.dynamodb.types import TypeDeserializer
@@ -40,6 +42,17 @@ CASBIN_GET_POLICY_RETRY_DELAY_SECONDS = 1
 #
 CASBIN_NO_DICTIONARY_LOCKING = False
 
+# Optional role granted to an authenticated user who has NO role assignments at all.
+# Gives baseline access (e.g. read-only) to identities that are not provisioned into the
+# user-roles table, such as federated IdP logins. Empty string (the default) disables the
+# behavior entirely, which is the pre-existing deny-by-default posture.
+#
+# Set from the CDK config value app.authProvider.authorizerOptions.defaultUserRoleName, which
+# every Lambda receives as the DEFAULT_ROLE_NAME environment variable
+# (infra/lib/helper/security.ts). The named role must exist in the roles table; if it does not,
+# it is dropped with a logged error rather than passed to Casbin as a role with no policy.
+DEFAULT_ROLE_NAME = os.environ.get("DEFAULT_ROLE_NAME", "").strip()
+
 # Defines a boilerplate Deny-all policy for casbin enforcer - for cases where policy_text can't be determined
 # (allowing existing enforcement call sites to continue to work without any additional changes)
 #
@@ -56,8 +69,8 @@ casbin_user_enforcer_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.L
 logger = safeLogger()
 
 deserializer = TypeDeserializer()
-_dynamodb_client = boto3.client("dynamodb")
-paginator = _dynamodb_client.get_paginator("scan")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+_dynamodb_client = boto3.client("dynamodb", config=retry_config)
 
 # Determine if MFA is enabled from claims
 def is_mfa_enabled(claims_and_roles):
@@ -301,91 +314,80 @@ class CasbinEnforcerService:
         return default
 
     def _read_current_user_roles_from_table(self):
+        """Every role assignment held by this user.
 
-        # See: UserRolesStorageTable in: infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts
-        #
-        page_iterator = paginator.paginate(
-            TableName=self._user_roles_table_name,
-            FilterExpression="userId = :userId",
-            ExpressionAttributeValues={":userId": {"S": self._user_id}},
-            PaginationConfig={
-                "MaxItems": 1000,
-                "PageSize": 1000,
-                'StartingToken': None
-            }
-        ).build_full_result()
+        userId is the partition key of the user-roles table (UserRolesStorageTable in
+        infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts), so the assignments are
+        read with a Query on that one partition. A Scan with a userId filter reads every row
+        in the table on each policy build, and that cost grows with the total user count of
+        the deployment rather than with the roles the caller holds.
 
-        pageIteratorItems = []
-        pageIteratorItems.extend(page_iterator['Items'])
-
-        while 'NextToken' in page_iterator:
-            nextToken = page_iterator['NextToken']
-            page_iterator = paginator.paginate(
-                TableName=self._user_roles_table_name,
-                FilterExpression="userId = :userId",
-                ExpressionAttributeValues={":userId": {"S": self._user_id}},
-                PaginationConfig={
-                    "MaxItems": 1000,
-                    "PageSize": 1000,
-                    "StartingToken": nextToken
-                }
-            ).build_full_result()
-            pageIteratorItems.extend(page_iterator['Items'])
-
-        items = []
-        for item in pageIteratorItems:
-            deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-            items.append(deserialized_document)
-
-        return items
-
-    def _read_mfaNotRequired_roles_from_table(self):
-        # Returns roles that align to the users self._mfaEnabled value
-        # roleName is required for the relevant user roles check
-        #
-
-        filter_expression = (
-            'attribute_exists(roleName) AND '
-            '(attribute_not_exists(mfaRequired) OR mfaRequired = :mfa_value)'
-        )
-
-        # Expression attribute values
-        expression_attr_values = {
-            ':mfa_value': {"BOOL": False}
+        Paged on the presence of LastEvaluatedKey, matching _read_policies_batch_optimized.
+        """
+        query_kwargs = {
+            "TableName": self._user_roles_table_name,
+            "KeyConditionExpression": "userId = :userId",
+            "ExpressionAttributeValues": {":userId": {"S": self._user_id}},
         }
 
-        page_iterator = paginator.paginate(
-            TableName=self._roles_table_name,
-            FilterExpression=filter_expression,
-            ExpressionAttributeValues=expression_attr_values,
-            PaginationConfig={
-                "MaxItems": 1000,
-                "PageSize": 1000,
-                'StartingToken': None
-            }
-        ).build_full_result()
-
-        pageIteratorItems = []
-        pageIteratorItems.extend(page_iterator['Items'])
-
-        while 'NextToken' in page_iterator:
-            nextToken = page_iterator['NextToken']
-            page_iterator = paginator.paginate(
-                TableName=self._roles_table_name,
-                FilterExpression=filter_expression,
-                ExpressionAttributeValues=expression_attr_values,
-                PaginationConfig={
-                    "MaxItems": 1000,
-                    "PageSize": 1000,
-                    'StartingToken': nextToken
-                }
-            ).build_full_result()
-            pageIteratorItems.extend(page_iterator['Items'])
-
         items = []
-        for item in pageIteratorItems:
-            deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-            items.append(deserialized_document)
+        while True:
+            response = _dynamodb_client.query(**query_kwargs)
+
+            for item in response.get("Items", []):
+                items.append({k: deserializer.deserialize(v) for k, v in item.items()})
+
+            if "LastEvaluatedKey" not in response:
+                return items
+            query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+    @staticmethod
+    def _role_is_mfa_not_required(role):
+        """Whether a session that did not present MFA may use this role record.
+
+        One answer for both places that ask: the assigned-role filter below and the
+        default-role check in _resolve_default_role. Asking it in two spellings lets them
+        disagree on a stored number, because `Decimal("0") == False` is true while
+        `Decimal("0") is False` is not.
+
+        The verdict is the one DynamoDB gives the filter
+        `attribute_not_exists(mfaRequired) OR mfaRequired = :false` with `:false` typed BOOL:
+        `=` compares the attribute TYPE as well as the value, so only an absent attribute or a
+        stored boolean false satisfies it; BOOL true, NULL, a number and a string all fail the
+        comparison and keep the role out of a non-MFA session.
+
+        Two details carry that verdict across deserialization:
+
+        * Presence is tested on the KEY. A stored JSON null (`{"NULL": true}`) deserializes to
+          Python None exactly as an absent attribute does, so reading only the value would read
+          a null as "not required" and activate the role.
+        * `is False` rather than `== False`, so a stored number is excluded.
+        """
+        if "mfaRequired" not in role:
+            return True
+        return role["mfaRequired"] is False
+
+    def _read_mfaNotRequired_roles_from_table(self, role_names):
+        """Those of the named roles that a session without MFA may use.
+
+        roleName is the partition key of the roles table, so each name is read by key, through
+        the same helper the default-role check uses. Deciding about the handful of roles one
+        caller holds by scanning the roles table with an mfaRequired filter reads every role in
+        the deployment on every non-MFA policy build.
+
+        A name with no role record is omitted: the caller holds an assignment to a role that
+        does not exist. A failed read is not an omission: it propagates, so
+        _create_policy_text retries and ultimately denies rather than building a policy that
+        quietly drops a role the caller holds.
+        """
+        items = []
+        for role_name in dict.fromkeys(role_names):
+            role = self._read_role_from_table(role_name)
+            if role is None or "roleName" not in role:
+                continue
+
+            if self._role_is_mfa_not_required(role):
+                items.append(role)
 
         return items
 
@@ -409,8 +411,29 @@ class CasbinEnforcerService:
         the value as a regular expression (e.g. ".*" is allowed), but it must remain
         contained within the quoted regexMatch argument and cannot break out into the
         surrounding expression.
+
+        Quoting alone does not make the value inert, because Casbin's policy reader is
+        structure-unaware: `StringAdapter` splits the policy text on newlines, and
+        `load_policy_line` splits each line on commas at bracket depth 0 while tracking '()' and
+        '[]' as depth, neither of them honouring quotes. A value carrying one of those characters
+        therefore alters the SHAPE of the emitted line rather than its content -- a comma adds a
+        field, a bracket shifts the depth so that a later comma splits the line (or pops an empty
+        stack), and a line terminator starts a new record. A line whose field count does not match
+        the policy definition makes the enforcer fail as a whole, so ONE such value denies every
+        check for every user holding the role, including constraints it has nothing to do with.
+
+        Those characters are rewritten as the equivalent '\\xNN' source escape. The matcher
+        expression is compiled from this text by simpleeval, and Python's parser turns each escape
+        back into exactly the character it stands for, so the string Casbin compares -- and the
+        pattern `regexMatch` compiles -- is unchanged; only the source representation differs. The
+        C0 control range is covered wholesale rather than picking out the individual offenders,
+        since a raw control character is either a line terminator or, for NUL, not parseable as
+        source at all.
         """
-        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+        escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
+        contained = {code: "\\x%02x" % code for code in range(32)}
+        contained.update({ord(character): "\\x%02x" % ord(character) for character in ",()[]"})
+        return escaped.translate(contained)
 
     def _generate_criteria_object_rules(self, policyCriteria, object_type=None):
         obj_rule = []
@@ -500,13 +523,20 @@ class CasbinEnforcerService:
             # pairing it with another. An empty value list contributes no alternative, and an
             # OR over no alternatives is False — never-match on the positive operators, and
             # vacuously true under the negation.
+            #
+            # The group is parenthesised unconditionally, a single clause included. Parentheses
+            # around one complete boolean sub-expression cannot change what the matcher decides,
+            # and they make every emitted clause a bracketed span for Casbin's policy reader,
+            # which counts '()' as depth -- so a separator character that reaches the clause text
+            # can no longer add a field to the policy line and take the whole policy down with it.
+            # That is the structural half of the containment; the per-value escaping in
+            # _escape_rule_value is the other half, and the one that covers what parentheses
+            # cannot (a line terminator, an unbalanced bracket).
             group = " || ".join(clauses) if clauses else "False"
             if negated:
                 obj_rule.append(f"!({group})")
-            elif len(clauses) > 1:
-                obj_rule.append(f"({group})")
             else:
-                obj_rule.append(group)
+                obj_rule.append(f"({group})")
         return obj_rule
 
     # Returns a guaranteed valid policy statement.
@@ -518,6 +548,11 @@ class CasbinEnforcerService:
         # when fetching policies from DynamoDB. Helps to prevent cascading failures
         # in case of authorization failure. Authorization is critical.
         #
+        # Only a failed read (None) is retryable. An empty string is the builder's answer for a
+        # caller with no effective role assignments: retrying re-runs the same reads and cannot
+        # change it, so treating it as a failure would cost an unprovisioned identity a full
+        # retry cycle - both table reads per attempt plus a sleep - on every cache miss.
+        #
         for i in range(0, CASBIN_GET_POLICY_RETRY_ATTEMPTS):
             try:
                 policy_text = self._create_policy_text_helper()
@@ -526,14 +561,17 @@ class CasbinEnforcerService:
                 # Avoid assuming that policy_text was valid on failure
                 #
                 policy_text = None
-            if not policy_text:
+            if policy_text is None:
                 logger.info(f"Failed to retrieve policy_text. Retry count {str(i)}.")
-                time.sleep(CASBIN_GET_POLICY_RETRY_DELAY_SECONDS) # nosemgrep: arbitrary-sleep
+                # No delay after the final attempt: nothing follows it to wait for.
+                #
+                if i < CASBIN_GET_POLICY_RETRY_ATTEMPTS - 1:
+                    time.sleep(CASBIN_GET_POLICY_RETRY_DELAY_SECONDS) # nosemgrep: arbitrary-sleep
             else:
                 # Successfully retrieved policy_text
                 #
                 break
-        if not policy_text:
+        if policy_text is None:
             # Do not authorize access when policy_text is not correctly obtained.
             # Avoid assuming that the last copy of policy_text is up-to-date on failure.
             # And refresh cached entry on next authorization request.
@@ -546,22 +584,100 @@ class CasbinEnforcerService:
             policy_text = POLICY_TEXT_DENY_ALL
             logger.info("Failed to determine policy_text after multiple attempts. Denying all access.")
         else:
+            if not policy_text:
+                # No role grants and no permissions: every check denies. Recorded as an
+                # explicit deny-all so it caches like any other result.
+                #
+                logger.info("No effective role assignments for this user. Denying all access.")
+                policy_text = POLICY_TEXT_DENY_ALL
             # Cache the user-specific policies for future calls (also done on enforce() calls)
             #
             casbin_user_policy_map[self._user_id] = policy_text
             self._dateTime_Cached = datetime.now()
         return policy_text
+    def _read_role_from_table(self, role_name):
+        """One role record by name, or None when no such role exists.
+
+        A read failure propagates rather than becoming None: both callers treat None as "no
+        such role" and drop the role, so swallowing the error here would let a throttled read
+        look like a role that does not exist and silently change the policy that gets built.
+        Propagating puts it on the _create_policy_text retry path, which denies if it persists.
+        """
+        response = _dynamodb_client.get_item(
+            TableName=self._roles_table_name,
+            Key={"roleName": {"S": role_name}},
+        )
+
+        item = response.get("Item")
+        if not item:
+            return None
+        return {k: deserializer.deserialize(v) for k, v in item.items()}
+
+    def _resolve_default_role(self, assigned_role_count):
+        """The baseline role to grant this session, or None.
+
+        Returns None — leaving the caller with a deny-by-default policy — in every case except a
+        configured, existing, session-appropriate role held by a user with no assignments:
+
+        * DEFAULT_ROLE_NAME unset: the feature is off.
+        * The user already has role assignments: their own roles decide, filtered as usual. A
+          default is never added alongside them, so this can only ever widen access for an
+          unprovisioned identity.
+        * The named role does not exist: dropped with a logged ERROR. Passing it through would put
+          a `g, user::X, 'role::Y'` grouping into the Casbin policy with no matching policy lines,
+          which is a silently misconfigured deployment rather than a working default.
+        * The named role requires MFA and this session has none: dropped, mirroring the filter
+          applied to assigned roles.
+        """
+        if not DEFAULT_ROLE_NAME:
+            return None
+        if assigned_role_count > 0:
+            return None
+
+        role = self._read_role_from_table(DEFAULT_ROLE_NAME)
+        if role is None:
+            logger.error(
+                f"Configured default user role '{DEFAULT_ROLE_NAME}' does not exist in the roles "
+                "table; no default role applied. Create the role (with constraints) or clear "
+                "app.authProvider.authorizerOptions.defaultUserRoleName."
+            )
+            return None
+
+        # The same verdict the assigned roles get, from the same predicate.
+        if not self._mfaEnabled and not self._role_is_mfa_not_required(role):
+            logger.warning(
+                f"Default user role '{DEFAULT_ROLE_NAME}' requires MFA and this session has none; "
+                "no default role applied."
+            )
+            return None
+
+        logger.info(
+            f"User has no assigned roles; applying default role '{DEFAULT_ROLE_NAME}'"
+        )
+        return {"userId": self._user_id, "roleName": DEFAULT_ROLE_NAME}
+
     def _create_policy_text_helper(self):
         # If the user is signed in with MFA, read all roles with actions and generate policy text
         # If not, get all related user roles with MFA attribute set to False and generate policy text
         #
         if self._mfaEnabled:
-            user_roles_from_table = self._read_current_user_roles_from_table()
-        else:
-            relevant_NonMFA_roles = self._read_mfaNotRequired_roles_from_table()
-            relevant_NonMFA_role_names = [role["roleName"] for role in relevant_NonMFA_roles]
             all_user_roles_from_table = self._read_current_user_roles_from_table()
+            user_roles_from_table = all_user_roles_from_table
+        else:
+            all_user_roles_from_table = self._read_current_user_roles_from_table()
+            relevant_NonMFA_roles = self._read_mfaNotRequired_roles_from_table(
+                [user_role["roleName"] for user_role in all_user_roles_from_table]
+            )
+            relevant_NonMFA_role_names = [role["roleName"] for role in relevant_NonMFA_roles]
             user_roles_from_table = [user_role for user_role in all_user_roles_from_table if user_role["roleName"] in relevant_NonMFA_role_names]
+
+        # The optional baseline role applies only to a user with NO role assignments at all.
+        # This is decided from the UNFILTERED assignment list on purpose: a user whose roles were
+        # all removed by the MFA filter above IS provisioned, and handing them baseline access in a
+        # non-MFA session would defeat the mfaRequired flag on the roles they actually hold.
+        default_role = self._resolve_default_role(len(all_user_roles_from_table))
+        if default_role is not None:
+            user_roles_from_table = user_roles_from_table + [default_role]
 
         policies_from_table_by_roles = []
 

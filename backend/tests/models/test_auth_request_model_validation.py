@@ -88,6 +88,43 @@ def _template(**overrides):
     return body
 
 
+def _templates_dir():
+    return os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "documentation", "permissionsTemplates")
+
+
+def _shipped_templates():
+    """The shipped permission templates, keyed by file name."""
+    paths = sorted(glob.glob(os.path.join(_templates_dir(), "*.json")))
+    assert paths, f"no permission templates found under {_templates_dir()}"
+    templates = {}
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            templates[os.path.basename(path)] = json.load(handle)
+    return templates
+
+
+def _api_route_grants(template, action):
+    """Route prefixes that ``action`` is allowed on by a template's ``api`` constraints.
+
+    Only ``criteriaOr`` values count as grants: ``criteriaAnd`` narrows a constraint rather
+    than widening it, so its values are read only for the single-criterion shape used by the
+    self-service API key constraint (an empty ``criteriaOr`` with one AND criterion).
+    """
+    prefixes = set()
+    for constraint in template["constraints"]:
+        if constraint.get("objectType") != "api":
+            continue
+        if not any(permission.get("action") == action and permission.get("type") == "allow"
+                   for permission in constraint.get("groupPermissions", [])):
+            continue
+        criteria = constraint.get("criteriaOr") or constraint.get("criteriaAnd") or []
+        for criterion in criteria:
+            if criterion.get("field") == "route__path":
+                prefixes.add(criterion["value"])
+    return prefixes
+
+
 @pytest.mark.unit
 class TestRealEmailAndUserIdValidators:
     """The shipped EMAIL/USERID rules must anchor at both ends.
@@ -286,8 +323,7 @@ class TestTemplateImportValidation:
     def test_shipped_permission_templates_still_import(self):
         """The templates in documentation/permissionsTemplates/ are the reference input."""
         from models.roleConstraints import ImportConstraintsTemplateRequestModel
-        templates_dir = os.path.join(
-            os.path.dirname(__file__), "..", "..", "..", "documentation", "permissionsTemplates")
+        templates_dir = _templates_dir()
         paths = sorted(glob.glob(os.path.join(templates_dir, "*.json")))
         assert paths, f"no permission templates found under {templates_dir}"
 
@@ -305,6 +341,51 @@ class TestTemplateImportValidation:
                 "constraints": template["constraints"],
             }, model=ImportConstraintsTemplateRequestModel)
             assert model.constraints, os.path.basename(path)
+
+
+@pytest.mark.unit
+class TestShippedTemplateApiGrants:
+    """Route grants the shipped templates must carry, beyond parsing cleanly.
+
+    ``/auth/loginProfile`` is enforced at Tier 1 like any other route, and its two methods are
+    called by different clients: the web app POSTs it during sign-in to record the user's
+    email, the CLI GETs it to validate a session. A template missing either one produces a
+    role that works in one client and 403s in the other.
+    """
+
+    def test_every_api_granting_template_allows_login_profile_on_get_and_post(self):
+        templates = _shipped_templates()
+        checked = []
+        for name, template in templates.items():
+            get_grants = _api_route_grants(template, "GET")
+            post_grants = _api_route_grants(template, "POST")
+            if not (get_grants or post_grants):
+                # A template that grants no api routes at all (an entity-deny template).
+                continue
+            checked.append(name)
+            assert "/auth/loginProfile" in get_grants, f"{name}: GET grant missing"
+            assert "/auth/loginProfile" in post_grants, f"{name}: POST grant missing"
+        assert len(checked) >= 5, f"only {checked} were read as granting api routes"
+
+    def test_the_grant_reader_separates_get_from_post(self):
+        """Positive control: a reader matching everything cannot pass the test above.
+
+        ``/assets`` is GET-allowed in the read-only template and deliberately not
+        POST-allowed, so the two sets are read per action rather than pooled.
+        """
+        template = _shipped_templates()["database-readonly.json"]
+        assert "/assets" in _api_route_grants(template, "GET")
+        assert "/assets" not in _api_route_grants(template, "POST")
+
+    def test_the_grant_reader_ignores_deny_constraints(self):
+        """Positive control: a deny constraint is not read as a grant.
+
+        The read-only template withholds the execution-logs route with a GET deny; its
+        criteria must not show up among the GET grants.
+        """
+        get_grants = _api_route_grants(_shipped_templates()["database-readonly.json"], "GET")
+        assert "/logs" not in get_grants
+        assert "/workflows/executions/" not in get_grants
 
 
 @pytest.mark.unit

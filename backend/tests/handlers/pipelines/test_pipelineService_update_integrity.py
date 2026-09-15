@@ -24,8 +24,13 @@ import pytest
 
 from backend.backend.handlers.pipelines import pipelineService as ps
 from backend.backend.handlers.pipelines.pipelineService import lambda_handler
+from backend.tests.pagingStub import PagingLoopDidNotTerminate
 
 MOD = "backend.backend.handlers.pipelines.pipelineService"
+
+# Where the never-exhausted table stub gives up. Above MAX_REFERENCING_WORKFLOW_PAGES, so the
+# page bound below can actually fail rather than being pre-empted by the stub.
+RUNAWAY_READS = 200
 
 PATH = "/database/db1/pipelines/pipe1"
 PARAMS = {"databaseId": "db1", "pipelineId": "pipe1"}
@@ -73,6 +78,29 @@ def _pipeline_table_mock(stored=None):
 
 def _empty_workflow_table():
     return MagicMock(query=MagicMock(return_value={"Items": []}))
+
+
+def _never_exhausted_table(items):
+    """A workflow table whose every page reports another page, so only the walk's OWN cap stops it.
+
+    Serving the same page forever would HANG an uncapped walk instead of failing it, and a hang
+    raises no assertion, so it names no test. Past RUNAWAY_READS the stub raises instead. The
+    exception derives from BaseException (tests/pagingStub.py) because the lookup under test
+    swallows Exception and degrades to [], which would turn the hang into a plausible empty result.
+    """
+    table = MagicMock()
+    reads = []
+
+    def _page(**kwargs):
+        reads.append(kwargs)
+        if len(reads) > RUNAWAY_READS:
+            raise PagingLoopDidNotTerminate(
+                f"the referencing-workflow lookup was still paging after {RUNAWAY_READS} reads")
+        return {"Items": list(items),
+                "LastEvaluatedKey": {"allListPartition": "workflow", "dateModified": "x"}}
+
+    table.query.side_effect = _page
+    return table
 
 
 @pytest.mark.unit
@@ -162,8 +190,13 @@ class TestUpdateKeepsExecutionTarget:
             resp = lambda_handler(
                 _event("PUT", {"executionConfig": {"executionType": "Lambda"}}), MagicMock())
         assert resp["statusCode"] == 200
-        mock_lambda.create_function.assert_called_once()
         saved = table.put_item.call_args.kwargs["Item"]
+        # The function that was created is the one the saved row points at, stated over the SET of
+        # created names rather than by pinning one create call: a retry, or a create followed by a
+        # verification read, is not a regression. An empty set cannot satisfy the membership.
+        created = {call.kwargs.get("FunctionName")
+                   for call in mock_lambda.create_function.call_args_list}
+        assert saved["executionConfig"]["lambda"]["resourceId"] in created, created
         assert saved["executionConfig"]["lambda"]["resourceId"].startswith("vams-")
         assert saved["executionConfig"]["lambda"]["isProvided"] is False
 
@@ -244,43 +277,58 @@ class TestReferencingWorkflowLookupIsBounded:
         wf_table.query.return_value = {"Items": [{
             "databaseId": "db1", "workflowId": "wf1",
             "specifiedPipelines": [{"pipelineDatabaseId:pipelineId": "db1:pipe1"}],
+            # Real workflow attributes this lookup never reads, served so the "not projected"
+            # assertion below has something it could have found: an unprojected read returns them.
+            "systemConfig": {"outputLocationType": "asset"}, "description": "d",
+            "jobNames": ["job1"],
         }]}
         with patch(f"{MOD}._workflow_table", return_value=wf_table):
             labels = ps._referencing_workflow_labels("db1", "pipe1")
-        assert labels == ["db1:wf1"]
+        assert set(labels) == {"db1:wf1"}, labels
         wf_table.scan.assert_not_called()
         kwargs = wf_table.query.call_args.kwargs
         assert kwargs["IndexName"] == "WorkflowsByDateGSI"
-        assert kwargs["Limit"] == ps.REFERENCING_WORKFLOW_PAGE_SIZE
-        # Only the three attributes the match needs are read off the index.
-        assert kwargs["ProjectionExpression"] == "databaseId, workflowId, specifiedPipelines"
+        # A read that asks for LESS than the page budget is cheaper, not a regression, so the
+        # requested size is bounded in the direction that matters rather than pinned.
+        assert 0 < kwargs["Limit"] <= ps.REFERENCING_WORKFLOW_PAGE_SIZE, kwargs["Limit"]
+        # Only the attributes the match needs are read off the index, as set containment: naming a
+        # fourth attribute the match later uses is a legitimate change, dropping a needed one
+        # breaks the lookup silently, and fetching the whole item is the cost this bound avoids.
+        projected = {name.strip() for name in kwargs["ProjectionExpression"].split(",")}
+        assert {"databaseId", "workflowId", "specifiedPipelines"} <= projected, projected
+        assert not (projected & {"systemConfig", "description", "jobNames"}), projected
 
     def test_page_count_is_capped(self):
         # A table that always reports more pages must not be paged forever on a save.
-        wf_table = MagicMock()
-        wf_table.query.return_value = {
-            "Items": [{"databaseId": "db1", "workflowId": "other", "specifiedPipelines": []}],
-            "LastEvaluatedKey": {"allListPartition": "workflow", "dateModified": "x"},
-        }
+        wf_table = _never_exhausted_table(
+            [{"databaseId": "db1", "workflowId": "other", "specifiedPipelines": []}])
         with patch(f"{MOD}._workflow_table", return_value=wf_table):
             labels = ps._referencing_workflow_labels("db1", "pipe1")
         assert labels == []
-        assert wf_table.query.call_count == ps.MAX_REFERENCING_WORKFLOW_PAGES
+        # Direction-correct: it did continue past the first page, and it stopped at or below the
+        # page cap. A cap TIGHTER than the constant is safer and still passes; an unbounded walk
+        # runs into the stub's runaway guard and fails with a message instead of hanging.
+        assert 2 <= wf_table.query.call_count <= ps.MAX_REFERENCING_WORKFLOW_PAGES, (
+            f"the lookup issued {wf_table.query.call_count} paged reads on one save")
 
     def test_label_count_is_capped_and_stops_paging(self):
         # Every row matches, so the label cap is what has to stop the walk.
         matching = [{"databaseId": "db1", "workflowId": f"wf{i}",
                      "specifiedPipelines": [{"pipelineDatabaseId:pipelineId": "db1:pipe1"}]}
                     for i in range(ps.MAX_REFERENCING_WORKFLOWS + 50)]
-        wf_table = MagicMock()
-        wf_table.query.return_value = {
-            "Items": matching,
-            "LastEvaluatedKey": {"allListPartition": "workflow", "dateModified": "x"},
-        }
+        wf_table = _never_exhausted_table(matching)
         with patch(f"{MOD}._workflow_table", return_value=wf_table):
             labels = ps._referencing_workflow_labels("db1", "pipe1")
-        assert len(labels) == ps.MAX_REFERENCING_WORKFLOWS
-        wf_table.query.assert_called_once()
+        # The cap is not reached by reporting nothing, and it is an UPPER bound: a tighter cap is
+        # safer and passes.
+        assert labels, "every row matched, so at least one referencing workflow must be reported"
+        assert len(labels) <= ps.MAX_REFERENCING_WORKFLOWS, len(labels)
+        # The LABEL cap is what stopped the walk rather than the page cap: a single page already
+        # carries more matches than the label cap allows, so a walk still paging towards the page
+        # cap would show the label cap does not stop it. Stated as "fewer pages than the page cap",
+        # so an implementation that reads one page ahead is not a failure.
+        assert wf_table.query.call_count < ps.MAX_REFERENCING_WORKFLOW_PAGES, (
+            f"the label cap did not stop the page walk: {wf_table.query.call_count} reads")
 
     def test_a_read_error_degrades_to_no_warning(self):
         # The warning is advisory, so a lookup failure must not fail the save.

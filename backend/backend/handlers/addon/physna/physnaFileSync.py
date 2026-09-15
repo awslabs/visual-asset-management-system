@@ -8,17 +8,23 @@ Consumes messages from the SQS queue subscribed to ``fileIndexerSnsTopic``.
 Handles three event shapes:
 
 1. S3 ObjectCreated / PUT / Copy events — uploads the file to Physna.
-2. S3 ObjectRemoved events (including archive delete-markers) — deletes the
-   file from Physna.
+2. S3 ObjectRemoved events — deletes the file from Physna only when every
+   version of the object is gone. Archive writes a delete marker and unarchive
+   removes it, and both emit ObjectRemoved, so the remaining version state is
+   what separates a reversible archive from a permanent delete.
 3. DynamoDB streams on asset file metadata / attribute tables — updates (or
    uploads) the file's metadata in Physna.
+
+Nothing is removed from Physna on the strength of an absence: a delete needs
+either a Physna listing entry that VAMS positively no longer holds, or an S3
+version state that positively shows every version purged.
 """
 
 import json
 import os
 import tempfile
 import urllib.parse
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -71,6 +77,11 @@ _EXCLUDED_PREFIXES = RESERVED_S3_PREFIX_FOLDERS
 _EXCLUDED_PATTERNS = EXCLUDED_FILE_PATH_PATTERNS
 
 _s3 = boto3.client("s3", config=physnaCommon._retry_config)
+
+# Page size for the version probe in _vams_file_still_in_s3. S3 orders version
+# listings by key, so one page of this size covers every entry belonging to the
+# exact key being probed.
+_S3_VERSION_PROBE_PAGE_SIZE = 1000
 
 
 def _should_skip_s3_key(s3_key: str) -> bool:
@@ -267,6 +278,96 @@ def _get_s3_version_id(bucket_name: str, s3_key: str) -> Optional[str]:
     return str(version_id) if version_id else None
 
 
+def _s3_key_spellings(s3_key: str) -> list:
+    """Every spelling of an S3 key that can name the same object.
+
+    A key reaches this module either straight from an S3 event notification or
+    composed from a VAMS record (``assetLocation`` prefix + the stored
+    ``filePath``), and that stored path was itself derived from an event key.
+    S3 event notifications carry keys form-encoded (spaces → '+', other
+    specials → %XX), some sources deliver them literally, and the decode the
+    ingestion path applies (``sqsBucketSync.decode_s3_event_key``,
+    ``fileIndexer``) cannot tell the two apart — a literal '+' and a literal
+    '%20' both decode to a space. A filename holding '+', a space, or a
+    percent escape (e.g. "BACC66K41F158AM+---.CATPart") can therefore be named
+    by any of:
+
+      * the key as given — what VAMS stored, or what the event delivered;
+      * ``unquote_plus`` — the decode of a form-encoded key;
+      * ``quote(safe="/+")`` — a space standing in for a stored '%20';
+      * ``quote_plus(safe="/+")`` — a space standing in for a literal '+'.
+
+    An entry under any spelling counts as the object being present. The set
+    covers one encode or decode step in either direction, which is what the
+    ingestion path can introduce in a single hop; a key that diverged by more
+    than one step falls outside it, so an absence measured across the set is
+    only as strong as the set is complete.
+    """
+    candidates = [
+        s3_key,
+        urllib.parse.unquote_plus(s3_key),
+        urllib.parse.quote(s3_key, safe="/+"),
+        urllib.parse.quote_plus(s3_key, safe="/+"),
+    ]
+    return list(dict.fromkeys(k for k in candidates if k))
+
+
+def _vams_file_still_in_s3(bucket_name: str, s3_keys) -> Optional[bool]:
+    """Whether S3 still holds anything for a file VAMS reports as removed.
+
+    True as soon as a version or delete marker is found under any spelling of
+    any key the caller holds. False only when EVERY spelling was read
+    successfully and none of them held an entry. None otherwise — there was no
+    key to read, or a spelling whose version state could not be read at all.
+    An unreadable spelling poisons the whole answer: "the spellings that
+    answered hold nothing, and one could not be asked" is not evidence that the
+    object is gone, and the object may be the one the unread spelling names.
+
+    An ``ObjectRemoved`` notification covers three different VAMS operations:
+    archive writes a delete marker over the live versions, unarchive removes
+    that marker, and a permanent delete purges every version one at a time.
+    Only the last leaves nothing behind. A Physna copy carries indexed geometry
+    that cannot be rebuilt while the object is delete-marked — the bytes are
+    unreadable and a default unarchive restores no files — so the copy is
+    removed only for the permanent case.
+
+    Every spelling of every key the caller holds is probed (see
+    ``_s3_key_spellings``) and an entry under any of them counts as still
+    present, so a key-encoding mismatch between the caller's spelling and the
+    one S3 holds reads as "present" rather than "gone".
+    ``list_object_versions`` orders entries by key and a key sorts ahead of
+    every longer key sharing it as a prefix, so one page holds every entry for
+    the exact key. Callers must read None as "leave the Physna copy in place".
+    """
+    probed = False
+    unreadable = False
+    candidate_keys = [
+        spelling for key in s3_keys if key for spelling in _s3_key_spellings(key)
+    ]
+    for key in dict.fromkeys(candidate_keys):
+        try:
+            response = _s3.list_object_versions(
+                Bucket=bucket_name,
+                Prefix=key,
+                MaxKeys=_S3_VERSION_PROBE_PAGE_SIZE,
+            )
+        except Exception as e:
+            logger.warning(
+                f"Could not read S3 version state for {bucket_name}/{key}: {e}"
+            )
+            unreadable = True
+            continue
+        probed = True
+        entries = list(response.get("Versions") or []) + list(
+            response.get("DeleteMarkers") or []
+        )
+        if any(entry.get("Key") == key for entry in entries):
+            return True
+    if unreadable or not probed:
+        return None
+    return False
+
+
 def _build_metadata_payload(
     database_id: str,
     asset_id: str,
@@ -379,10 +480,12 @@ def _upload_file_to_physna_impl(
          a. If yes and its ``__VAMS__FileVersion`` matches the current S3
             VersionId → Physna's copy is already up to date; skip the upload
             and only refresh metadata.
-         b. If yes and the version does NOT match → DELETE the stale Physna
-            asset and fall through to a fresh upload.
+         b. If yes and the version does NOT match → mark it stale.
          c. If no → just upload.
-      3. Upload (POST with no metadata to decouple from schema issues).
+      3. Download the object, then DELETE any stale Physna asset, then upload
+         (POST with no metadata to decouple from schema issues). Nothing is
+         removed from Physna until the replacement bytes are in hand, so a
+         failed or unreadable S3 read leaves the existing copy untouched.
       4. PATCH metadata including the VAMS-reserved tracking keys.
     """
     client = client or PhysnaClient()
@@ -396,6 +499,7 @@ def _upload_file_to_physna_impl(
     # Step 2: see what Physna already has at this path
     existing_uuid: Optional[str] = None
     existing_file_version: Optional[str] = None
+    existing_state_unknown = False
     try:
         existing_uuid = lookup_physna_asset_id(
             client, physnaCommon.PHYSNA_TENANT_ID, full_path
@@ -410,7 +514,11 @@ def _upload_file_to_physna_impl(
                 existing_file_version = str(ev) if ev else None
     except Exception as e:
         # If we can't determine the current state, fall through to upload —
-        # Physna will 409 if the path is taken, and we handle that below.
+        # Physna will 409 if the path is taken, and we handle that below. The flag
+        # distinguishes that outcome from a genuine absence: both leave existing_uuid None,
+        # but only this one leaves the bytes at the path unaccounted for, which the 409
+        # handler must not read as "our upload won".
+        existing_state_unknown = True
         logger.warning(
             f"Could not determine current Physna state for {full_path}; "
             f"proceeding with upload: {e}"
@@ -433,78 +541,162 @@ def _upload_file_to_physna_impl(
             f"{current_s3_version}; skipping re-upload, refreshing metadata "
             f"only."
         )
+        # `_update_physna_metadata` is a full replace, not a merge: it deletes every Physna key
+        # absent from the payload. So omitting the version key does not preserve it — it removes
+        # it. The value is carried forward explicitly, the way the metadata-stream path does.
+        # In this branch `existing_file_version == current_s3_version` by the condition above.
         metadata_payload = _build_metadata_payload(
             database_id,
             asset_id,
             relative_path,
-            file_version=None,  # preserve existing __VAMS__FileVersion
+            file_version=None,
         )
+        metadata_payload[VAMS_RESERVED_FILE_VERSION_KEY] = existing_file_version
         try:
             _update_physna_metadata(
                 client, full_path, existing_uuid, metadata_payload
             )
         except PhysnaError as e:
+            # Physna's copy of the bytes is current, but the metadata half of
+            # this sync did not land. The record is written as failed and
+            # returned as failed, so the SQS record is redriven instead of
+            # deleted behind an outcome that only half happened. Redrive is
+            # bounded by the queue's maxReceiveCount and then its dead-letter
+            # queue, and the re-attempt re-enters this same branch: the version
+            # tag still matches, so only the PATCH is retried.
             logger.warning(
-                f"Metadata refresh failed for {full_path}: {e}. File remains "
-                f"in Physna; will retry on next VAMS metadata change."
+                f"Metadata refresh failed for {full_path}: {e}. The file's "
+                f"bytes remain current in Physna; reporting the record as "
+                f"failed so the metadata refresh is redriven."
             )
+            _record_file_sync(
+                database_id, asset_id, relative_path, sync_action,
+                SYNC_STATUS_FAILED, s3_version_id=current_s3_version,
+                physna_asset_uuid=existing_uuid,
+                error_message=f"Metadata refresh failed: {e}",
+            )
+            return False
         return True
 
-    # Step 2b: stale version — delete before re-uploading so we don't collide
-    if existing_uuid and (
-        existing_file_version is None
-        or (current_s3_version and existing_file_version != current_s3_version)
-    ):
-        logger.info(
-            f"Physna copy of {full_path} is stale "
-            f"(__VAMS__FileVersion={existing_file_version!r}, "
-            f"current S3 VersionId={current_s3_version!r}); deleting "
-            f"ahead of re-upload"
+    # Step 2b: stale version — the copy is retired once the replacement bytes
+    # are in hand (below), never before, so a failed S3 read cannot leave the
+    # path with neither the old copy nor a new one.
+    stale_uuid = (
+        existing_uuid
+        if existing_uuid
+        and (
+            existing_file_version is None
+            or (current_s3_version and existing_file_version != current_s3_version)
         )
-        try:
-            _delete_physna_asset_by_uuid(client, existing_uuid, full_path)
-            # Clear the uuid so the post-upload code doesn't assume it still
-            # applies.
-            existing_uuid = None
-        except PhysnaError as e:
-            logger.warning(
-                f"Failed to delete stale Physna asset {full_path}; will still "
-                f"attempt upload (Physna may 409): {e}"
-            )
+        else None
+    )
 
     # Step 3: upload
     tmp_dir = tempfile.mkdtemp(prefix="physna-")
     local_path = os.path.join(tmp_dir, filename)
     physna_asset_uuid: Optional[str] = None
+    stale_delete_failed = False
     try:
         try:
             _s3.download_file(bucket_name, s3_key, local_path)
         except ClientError as e:
-            # The S3 object is gone (deleted / never uploaded / ObjectRemoved
-            # event lost). If Physna still has a copy, reconcile by deleting
-            # it so the two sides converge. Returning True here marks the
-            # batch record as handled; the SQS event won't be retried, which
-            # is what we want — retrying will hit the same NoSuchKey.
+            # The S3 object is not readable at this key. Only a permanent
+            # delete — every version purged — makes the Physna copy an orphan;
+            # a delete-marked (archived) object is restored by an unarchive and
+            # its indexed geometry must survive. A branch that has settled the
+            # copy's fate returns True, because a retry re-reads the same absent
+            # key and reaches the same conclusion. The exception is a
+            # reconcile-delete that failed: the delete is the one thing a retry
+            # can still land, so that branch reports the record instead.
             code = (e.response or {}).get("Error", {}).get("Code", "")
             if code in ("404", "NoSuchKey", "NotFound"):
-                logger.info(
-                    f"S3 object missing for Physna sync "
-                    f"(bucket={bucket_name}, key={s3_key}); reconciling by "
-                    f"deleting the Physna copy if present."
-                )
-                if existing_uuid:
+                if not existing_uuid:
+                    logger.info(
+                        f"S3 object missing for Physna sync "
+                        f"(bucket={bucket_name}, key={s3_key}) and Physna "
+                        f"holds no copy of {full_path}; nothing to reconcile."
+                    )
+                elif current_s3_version is not None:
+                    # Step 1 resolved a version for this file, so S3 holds the
+                    # object under some spelling of the key. An absence at the
+                    # spelling the download used is a key mismatch, not a
+                    # deletion, and the Physna copy is of a file that exists.
+                    logger.warning(
+                        f"S3 reports no object at {bucket_name}/{s3_key} for "
+                        f"the download, but a HeadObject resolved S3 VersionId "
+                        f"{current_s3_version!r} for the same file; keeping the "
+                        f"Physna copy of {full_path}."
+                    )
+                elif _vams_file_still_in_s3(bucket_name, [s3_key]) is False:
+                    logger.info(
+                        f"S3 object permanently deleted "
+                        f"(bucket={bucket_name}, key={s3_key}); reconciling by "
+                        f"deleting the Physna copy of {full_path}."
+                    )
                     try:
                         _delete_physna_asset_by_uuid(
                             client, existing_uuid, full_path
                         )
                     except PhysnaError as de:
+                        # The VAMS file is permanently gone and Physna still
+                        # holds a copy of it. No later event names this key
+                        # — every version of the object is purged — so acking
+                        # here
+                        # leaves the orphan in the tenant for good. The record is
+                        # written as failed and returned as failed instead. A
+                        # redrive re-attempts the same DELETE, which is
+                        # idempotent (a 404 counts as deleted), and is bounded by
+                        # the queue's maxReceiveCount and then its dead-letter
+                        # queue.
                         logger.warning(
-                            f"Reconcile-delete failed for {full_path}: {de}"
+                            f"Reconcile-delete failed for {full_path}: {de}. "
+                            f"Reporting the record as failed so the delete is "
+                            f"redriven."
                         )
+                        _record_file_sync(
+                            database_id, asset_id, relative_path,
+                            SYNC_ACTION_DELETE, SYNC_STATUS_FAILED,
+                            physna_asset_uuid=existing_uuid,
+                            error_message=f"Reconcile-delete failed: {de}",
+                        )
+                        return False
+                    _record_file_sync(
+                        database_id, asset_id, relative_path,
+                        SYNC_ACTION_DELETE, SYNC_STATUS_SUCCESS,
+                        physna_asset_uuid=existing_uuid,
+                    )
+                else:
+                    logger.info(
+                        f"S3 object at {bucket_name}/{s3_key} is not readable "
+                        f"but versions remain (archived, or the version state "
+                        f"could not be read); keeping the Physna copy of "
+                        f"{full_path}."
+                    )
                 return True
             raise
         with open(local_path, "rb") as f:
             file_bytes = f.read()
+
+        # The replacement bytes are in hand, so the stale copy can be retired
+        # without risking a path that holds neither version.
+        if stale_uuid:
+            logger.info(
+                f"Physna copy of {full_path} is stale "
+                f"(__VAMS__FileVersion={existing_file_version!r}, "
+                f"current S3 VersionId={current_s3_version!r}); deleting "
+                f"ahead of re-upload"
+            )
+            try:
+                _delete_physna_asset_by_uuid(client, stale_uuid, full_path)
+                # Clear the uuid so the post-upload code doesn't assume it still
+                # applies.
+                existing_uuid = None
+            except PhysnaError as e:
+                stale_delete_failed = True
+                logger.warning(
+                    f"Failed to delete stale Physna asset {full_path}; will "
+                    f"still attempt upload (Physna may 409): {e}"
+                )
 
         # Physna expects the `path` field to be the FULL asset path, including
         # the filename. Passing only the folder triggers:
@@ -528,6 +720,43 @@ def _upload_file_to_physna_impl(
             )
             physna_asset_uuid = _extract_physna_asset_id(response)
         elif response.status == 409:
+            if stale_delete_failed or existing_state_unknown:
+                # Physna reports the path taken and this upload did not replace the
+                # bytes there, so they are not known to be the current ones. Writing
+                # the current S3 VersionId onto them would label possibly-stale
+                # geometry as current, and every later staleness decision reads that
+                # key, so the divergence would never be revisited. The record is
+                # reported as failed with the old version tag left in place, so the
+                # next attempt still reads the copy as stale.
+                #
+                # Two routes reach here. `stale_delete_failed`: a copy was identified
+                # as stale and could not be deleted, so the old bytes are certainly
+                # still there. `existing_state_unknown`: the pre-upload lookup failed,
+                # so no copy was identified, no delete was attempted, and whether the
+                # bytes are current is simply unknown. Both must refuse the tag —
+                # treating the second as a plain already-exists is what lets a stale
+                # copy be labelled current on the strength of a transient lookup error.
+                reason = (
+                    "Stale Physna copy could not be deleted and the upload was "
+                    "rejected as already existing; the copy still holds the "
+                    "previous bytes"
+                    if stale_delete_failed
+                    else "The pre-upload Physna lookup failed and the upload was "
+                         "rejected as already existing, so the bytes Physna holds "
+                         "for this path are of an undetermined version"
+                )
+                logger.warning(
+                    f"Physna POST returned 409 for {full_path} without this upload "
+                    f"replacing the bytes ({reason}). Reporting the record as failed "
+                    f"rather than tagging them with the current S3 version."
+                )
+                _record_file_sync(
+                    database_id, asset_id, relative_path, sync_action,
+                    SYNC_STATUS_FAILED, s3_version_id=current_s3_version,
+                    physna_asset_uuid=existing_uuid,
+                    error_message=reason,
+                )
+                return False
             logger.info(
                 f"Physna POST returned 409 (already exists) for {full_path}; "
                 f"proceeding to metadata update"
@@ -545,9 +774,10 @@ def _upload_file_to_physna_impl(
         except OSError as cleanup_err:
             logger.warning(f"Cleanup failed for {tmp_dir}: {cleanup_err}")
 
-    # Step 4: set metadata including the reserved tracking keys. Failure to
-    # set metadata does NOT fail the upload — the file is in Physna and the
-    # next VAMS metadata change will retry the PATCH.
+    # Step 4: set metadata including the reserved tracking keys. The bytes and
+    # the metadata are two halves of one sync — a file in Physna carrying
+    # neither the VAMS metadata mirror nor __VAMS__FileVersion is not synced —
+    # so a failure here reports the record as failed rather than as a success.
     metadata_payload = _build_metadata_payload(
         database_id,
         asset_id,
@@ -569,25 +799,49 @@ def _upload_file_to_physna_impl(
             )
 
     if not physna_asset_uuid:
+        # Without the UUID the metadata half cannot even be attempted, so the
+        # file sits in Physna carrying no VAMS metadata and no version tag.
         logger.warning(
             f"File uploaded to Physna at {full_path} but no asset UUID was "
-            f"obtainable; skipping metadata set. Will retry on next VAMS "
-            f"metadata change."
+            f"obtainable, so the metadata set could not be attempted. "
+            f"Reporting the record as failed so it is redriven."
         )
-        _record_file_sync(database_id, asset_id, relative_path, sync_action,
-                          SYNC_STATUS_SUCCESS, s3_version_id=current_s3_version)
-        return True
+        _record_file_sync(
+            database_id, asset_id, relative_path, sync_action,
+            SYNC_STATUS_FAILED, s3_version_id=current_s3_version,
+            error_message=(
+                "Upload succeeded; Physna asset UUID was unobtainable so the "
+                "metadata set was not attempted"
+            ),
+        )
+        return False
 
     try:
         _update_physna_metadata(
             client, full_path, physna_asset_uuid, metadata_payload
         )
     except PhysnaError as e:
+        # Half the sync landed: the bytes are in Physna, the PATCH that mirrors
+        # VAMS metadata and writes __VAMS__FileVersion did not. Every later
+        # staleness decision reads that key, so its absence is the state this
+        # module already treats as stale. The record is written as failed and
+        # returned as failed, so the SQS record is redriven rather than deleted
+        # behind a success that did not happen; redrive is bounded by the
+        # queue's maxReceiveCount and then its dead-letter queue. The
+        # re-attempt converges on the same end state, because a copy with no
+        # version tag is re-uploaded and re-patched.
         logger.warning(
-            f"File uploaded but metadata set failed for {full_path}: {e}. "
-            f"The file is in Physna; metadata will be retried on the next "
-            f"VAMS metadata change."
+            f"File uploaded to Physna but the metadata set failed for "
+            f"{full_path}: {e}. Reporting the record as failed so it is "
+            f"redriven and both halves are re-established."
         )
+        _record_file_sync(
+            database_id, asset_id, relative_path, sync_action,
+            SYNC_STATUS_FAILED, s3_version_id=current_s3_version,
+            physna_asset_uuid=physna_asset_uuid,
+            error_message=f"Upload succeeded, metadata set failed: {e}",
+        )
+        return False
     _record_file_sync(database_id, asset_id, relative_path, sync_action,
                       SYNC_STATUS_SUCCESS, s3_version_id=current_s3_version,
                       physna_asset_uuid=physna_asset_uuid)
@@ -651,8 +905,13 @@ def _update_physna_metadata(
        remaining keys take their current VAMS values.
 
     Returns True on success, False when the asset doesn't exist (404).
-    Raises ``PhysnaError`` on other non-success responses from the PATCH.
-    Delete-stage failures are logged and do not fail the overall sync.
+    Raises ``PhysnaError`` on other non-success responses from the PATCH, and
+    also when the stale-key DELETE of step 3 failed — full-replace semantics
+    did not hold, so Physna keeps values VAMS no longer has. That failure does
+    not skip the PATCH: the values VAMS does have still land, and the shortfall
+    is raised afterwards so the caller records it and reports the record for
+    redrive. A 404 on the PATCH takes precedence over it, because the asset is
+    then gone from Physna and the keys that could not be pruned went with it.
     """
     # Step 1: ensure tenant schema has every key we are about to set
     desired_keys = (
@@ -691,6 +950,7 @@ def _update_physna_metadata(
 
     # Step 3: delete keys that no longer exist in VAMS
     to_delete = [k for k in current_metadata.keys() if k not in desired_keys]
+    prune_error: Optional[str] = None
     if to_delete:
         try:
             delete_physna_metadata_fields(
@@ -704,14 +964,29 @@ def _update_physna_metadata(
                 f"from {full_path}: {sorted(to_delete)}"
             )
         except Exception as e:
+            # Full-replace semantics did not hold: Physna keeps values VAMS no
+            # longer has, and nothing else revisits them. The PATCH below still
+            # runs so the values VAMS does have land, and the shortfall is
+            # raised after it — the same treatment the sibling prune in
+            # physnaAssetSync gives it. A redrive re-diffs the prune against the
+            # metadata Physna holds by then, so the re-attempt is idempotent,
+            # and it is bounded by the queue's maxReceiveCount and then its
+            # dead-letter queue.
+            prune_error = str(e)
             logger.warning(
                 f"Failed to prune stale Physna metadata fields "
-                f"{sorted(to_delete)} from {full_path}: {e}"
+                f"{sorted(to_delete)} from {full_path}: {e}. Reporting the "
+                f"metadata update as failed so the prune is re-attempted."
             )
 
     # Step 4: PATCH to set/update the remaining desired keys
     if not metadata_payload:
         # Nothing left to set. If we got here the prune already ran.
+        if prune_error:
+            raise PhysnaError(
+                f"Stale Physna metadata field(s) could not be pruned from "
+                f"{full_path}: {prune_error}"
+            )
         return True
 
     response = client.request(
@@ -722,8 +997,16 @@ def _update_physna_metadata(
     )
     if response.status in (200, 204):
         logger.info(f"Updated metadata on Physna for {full_path}")
+        if prune_error:
+            raise PhysnaError(
+                f"Metadata on Physna for {full_path} was updated but stale "
+                f"field(s) could not be pruned: {prune_error}"
+            )
         return True
     if response.status == 404:
+        # The asset is gone from Physna, so any key the prune could not remove
+        # went with it. Callers fall back to an upload, which re-establishes
+        # both halves.
         logger.info(f"Asset not present in Physna for metadata update: {full_path}")
         return False
     raise PhysnaError(
@@ -808,15 +1091,31 @@ def _delete_physna_asset(
 
     # Look up the Physna asset UUID — Physna's asset-scoped endpoints are keyed
     # by UUID, not by path.
+    # A lookup that RAISES and a lookup that answers "no such asset" are different
+    # outcomes and cannot share a branch. The VAMS file is permanently gone, so no later
+    # event names this key: acking here on a transient Physna error leaves the copy in the
+    # tenant for good. The record is written as failed and re-raised so the SQS record is
+    # redriven — the DELETE is idempotent (a 404 counts as deleted), and redelivery is
+    # bounded by the queue's maxReceiveCount and then its dead-letter queue.
     try:
         physna_asset_uuid = lookup_physna_asset_id(
             client, physnaCommon.PHYSNA_TENANT_ID, path
         )
     except Exception as e:
-        logger.warning(f"Physna asset UUID lookup failed for {path}: {e}")
-        physna_asset_uuid = None
+        logger.warning(
+            f"Physna asset UUID lookup failed for {path}: {e}. The VAMS file is "
+            f"permanently deleted, so reporting the record as failed rather than "
+            f"acknowledging a delete that was never issued."
+        )
+        _record_file_sync(
+            database_id, asset_id, relative_path, SYNC_ACTION_DELETE,
+            SYNC_STATUS_FAILED,
+            error_message=f"Physna asset UUID lookup failed: {e}",
+        )
+        raise PhysnaError(f"Physna asset UUID lookup failed for {path}: {e}")
 
     if not physna_asset_uuid:
+        # Physna answered, and it holds nothing at this path. Nothing to delete.
         logger.info(f"Physna asset not found for delete (already gone): {path}")
         return
 
@@ -856,16 +1155,19 @@ def _handle_s3_record(record: Dict[str, Any]) -> bool:
         )
         return True
 
-    # ObjectRemoved:* events arrive AFTER the object is already gone,
+    # ObjectRemoved:* events arrive AFTER the object has left its key,
     # so head_object 404s and the standard metadata-backed resolver bails
     # out. This includes BOTH:
-    #   * ``ObjectRemoved:Delete`` — permanent delete of a specific version.
-    #   * ``ObjectRemoved:DeleteMarkerCreated`` — soft delete / archive on
-    #     a versioned bucket (a new delete marker hides prior versions).
-    # For Physna, either shape means the user no longer has the file in
-    # VAMS, so both should trigger a Physna DELETE. We fall back to a
-    # metadata-free resolver that derives identifiers from the S3 key
-    # layout + bucket registry + assetIdGSI. For all other event types
+    #   * ``ObjectRemoved:Delete`` — a specific version was purged. VAMS emits
+    #     this both when permanently deleting a file (every version, one call
+    #     each) and when unarchiving one (the delete marker is the version
+    #     removed).
+    #   * ``ObjectRemoved:DeleteMarkerCreated`` — archive / soft delete on a
+    #     versioned bucket (a new delete marker hides prior versions).
+    # The shape alone therefore does not say whether VAMS still holds the
+    # file, so the version state decides (see the delete branch below). We
+    # fall back to a metadata-free resolver that derives identifiers from the
+    # S3 key layout + bucket registry + assetIdGSI. For all other event types
     # (ObjectCreated / ObjectRestore / ...), the head_object resolver
     # remains authoritative because the file is present.
     if event_name.startswith("ObjectRemoved"):
@@ -884,19 +1186,39 @@ def _handle_s3_record(record: Dict[str, Any]) -> bool:
         )
         return True
 
-    client = PhysnaClient()
-
     if event_name.startswith("ObjectRemoved"):
-        # S3 itself told us the object is gone — that's the authoritative
-        # signal. Skip the extra head_object round-trip.
+        # The Physna copy is an orphan only once every version of the object is
+        # gone. While a delete marker or an older version remains, VAMS can
+        # still surface the file — archive is reversed by unarchive, and an
+        # older version becomes current again — and the Physna copy carries
+        # indexed geometry that no re-upload can rebuild from bytes that are
+        # not readable. An unreadable version state preserves the copy: the
+        # asset-level sync prunes genuine orphans on the next pass.
+        still_in_s3 = _vams_file_still_in_s3(bucket, [s3_key, raw_key])
+        if still_in_s3 is not False:
+            reason = (
+                "S3 still holds versions of the object"
+                if still_in_s3
+                else "the S3 version state could not be read"
+            )
+            logger.info(
+                f"Keeping the Physna copy of {resolved['databaseId']}/"
+                f"{resolved['assetId']}{relative}: {reason}, so {event_name} "
+                f"is not a permanent delete."
+            )
+            return True
+        # The version state is the authoritative signal here, so the callee's
+        # head_object guard adds nothing.
         _delete_physna_asset(
-            client,
+            PhysnaClient(),
             resolved["databaseId"],
             resolved["assetId"],
             relative,
             skip_s3_existence_check=True,
         )
         return True
+
+    client = PhysnaClient()
 
     # Default: treat as upload/create/update
     return _upload_file_to_physna(
@@ -1034,14 +1356,24 @@ def _handle_file_metadata_stream(record: Dict[str, Any]) -> bool:
             client, full_path, physna_asset_uuid, metadata_payload
         )
     except PhysnaError as e:
+        # This route uploads nothing, so the metadata write is the whole sync:
+        # Physna keeps values VAMS no longer has, or never receives the ones it
+        # does. The record is written as failed and returned as failed, so the
+        # SQS record is redriven rather than deleted behind an outcome that did
+        # not happen; redrive is bounded by the queue's maxReceiveCount and then
+        # its dead-letter queue. The re-attempt cannot escalate: the payload is
+        # re-derived from VAMS state and the version tag is read back from
+        # whatever Physna still holds, which the failed PATCH left untouched, so
+        # the file stays on this metadata-only route rather than being re-uploaded.
         logger.warning(
-            f"Metadata update failed for {full_path}: {e}. File stays in "
-            f"Physna; will retry on next VAMS metadata change."
+            f"Metadata update failed for {full_path}: {e}. The file stays in "
+            f"Physna; reporting the record as failed so the metadata write is "
+            f"redriven."
         )
         _record_file_sync(database_id, asset_id, relative, SYNC_ACTION_MODIFY,
                           SYNC_STATUS_FAILED, physna_asset_uuid=physna_asset_uuid,
                           error_message=str(e))
-        return True
+        return False
 
     if updated:
         _record_file_sync(database_id, asset_id, relative, SYNC_ACTION_MODIFY,
@@ -1092,7 +1424,74 @@ def _safe_handle_file_metadata_stream(record: Dict[str, Any]) -> bool:
         return False
 
 
-def _walk_records(event: Dict[str, Any]) -> int:
+def _batch_item_identifier(record):
+    """The identifier the event source mapping uses to redrive one record.
+
+    For an SQS record that is ``messageId``. A record carrying none cannot be
+    reported at all — an empty ``itemIdentifier`` makes Lambda fail the WHOLE
+    batch — so callers skip it rather than reporting a blank.
+    """
+    if not isinstance(record, dict):
+        return None
+    message_id = record.get("messageId")
+    return str(message_id) if message_id else None
+
+
+def _add_batch_item_failure(failures, record) -> None:
+    """Mark one SQS record for redrive, at most once."""
+    identifier = _batch_item_identifier(record)
+    if not identifier:
+        logger.error(
+            "A Physna file sync record failed but carries no messageId, so it "
+            "cannot be reported for redrive and SQS will delete it."
+        )
+        return
+    if not any(f.get("itemIdentifier") == identifier for f in failures):
+        failures.append({"itemIdentifier": identifier})
+
+
+def _all_batch_item_failures(event: Any) -> List[Dict[str, str]]:
+    """Every record in the batch, for a failure attributable to no one record.
+
+    Re-processing a record that already synced costs round trips, never data:
+    the upload path resolves the exact Physna path first and settles for a
+    metadata refresh when Physna's copy already carries the current S3
+    VersionId, and a delete needs the object's version state to show every
+    version purged. Redriving the whole batch is therefore the safe direction
+    when the failure cannot be pinned to one record.
+    """
+    failures: List[Dict[str, str]] = []
+    if not isinstance(event, dict):
+        return failures
+    for record in event.get("Records") or []:
+        identifier = _batch_item_identifier(record)
+        if identifier:
+            failures.append({"itemIdentifier": identifier})
+    return failures
+
+
+def _with_batch_item_failures(
+    response: Dict[str, Any], event: Any, failures: List[Dict[str, str]]
+) -> Dict[str, Any]:
+    """Attach the partial-batch failure report to an event-source response.
+
+    A response carrying no ``batchItemFailures`` is a whole-batch SUCCESS to
+    the event source mapping, which then deletes every message in it — the
+    ones that failed included. Every exit path of an event-source invocation
+    therefore reports, the error paths as well. The field only takes effect
+    because the mapping sets ``reportBatchItemFailures``; without that Lambda
+    ignores it and deletes the batch on a 200.
+    """
+    if isinstance(event, dict) and "Records" in event:
+        if failures:
+            logger.warning(
+                f"Reporting {len(failures)} failed SQS record(s) for redrive"
+            )
+        response["batchItemFailures"] = failures
+    return response
+
+
+def _walk_records(event: Dict[str, Any]) -> Tuple[int, List[Dict[str, str]]]:
     """Walk every record in the SQS batch, isolating failures per record.
 
     Each individual handler invocation is wrapped in its own try/except so
@@ -1100,11 +1499,19 @@ def _walk_records(event: Dict[str, Any]) -> int:
     cause the rest of the batch to be silently dropped. SQS batches that
     contain multiple uploads (e.g., the user uploads three files at once)
     must ALL be attempted even when an earlier one fails.
+
+    Returns ``(successful_inner_records, batch_item_failures)``. An SQS record
+    is reported for redrive when ANY unit of work it carries failed — one SQS
+    message can wrap several S3 records, and SQS redrives the message, not the
+    record inside it. A record whose work all succeeded is not reported, so the
+    batch still drains.
     """
     successful = 0
+    failures: List[Dict[str, str]] = []
     for record in event.get("Records", []):
         if record.get("eventSource") != "aws:sqs":
             continue
+        record_failed = False
 
         # SQS body → SNS envelope parsing is per-record; wrap it so a
         # malformed body on one record doesn't abort the batch.
@@ -1119,6 +1526,7 @@ def _walk_records(event: Dict[str, Any]) -> int:
                 sns_message = json.loads(sns_message)
         except Exception as e:
             logger.exception(f"Failed to parse SQS→SNS envelope: {e}")
+            _add_batch_item_failure(failures, record)
             continue
 
         # Direct DynamoDB stream record
@@ -1127,6 +1535,8 @@ def _walk_records(event: Dict[str, Any]) -> int:
         ) in ("INSERT", "MODIFY", "REMOVE"):
             if _safe_handle_file_metadata_stream(sns_message):
                 successful += 1
+            else:
+                _add_batch_item_failure(failures, record)
             continue
 
         # Nested Records (S3 or nested SQS from sqsBucketSync)
@@ -1135,6 +1545,8 @@ def _walk_records(event: Dict[str, Any]) -> int:
             if src == "aws:s3":
                 if _safe_handle_s3_record(inner):
                     successful += 1
+                else:
+                    record_failed = True
             elif src == "aws:sqs":
                 try:
                     inner_body = inner.get("body", "")
@@ -1151,13 +1563,18 @@ def _walk_records(event: Dict[str, Any]) -> int:
                         continue
                 except Exception as e:
                     logger.exception(f"Failed to parse nested SQS→SNS envelope: {e}")
+                    record_failed = True
                     continue
 
                 for s3_rec in nested.get("Records", []):
                     if s3_rec.get("eventSource") == "aws:s3":
                         if _safe_handle_s3_record(s3_rec):
                             successful += 1
-    return successful
+                        else:
+                            record_failed = True
+        if record_failed:
+            _add_batch_item_failure(failures, record)
+    return successful, failures
 
 
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
@@ -1165,9 +1582,24 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     logger.info(
         f"Physna file sync invocation starting; {total} SQS record(s) in batch"
     )
-    successful = _walk_records(event)
+    try:
+        successful, failures = _walk_records(event)
+    except Exception as e:
+        # Per-record isolation lives inside _walk_records, so an exception
+        # escaping it is not attributable to one record. Reporting the whole
+        # batch redrives it instead of letting SQS delete messages that were
+        # never processed.
+        logger.exception(f"Physna file sync batch aborted: {e}")
+        return _with_batch_item_failures(
+            {"statusCode": 500, "body": {"successful": 0}},
+            event,
+            _all_batch_item_failures(event),
+        )
     logger.info(
         f"Physna file sync done: {successful} inner record(s) processed "
-        f"successfully across {total} SQS record(s) in batch"
+        f"successfully across {total} SQS record(s) in batch; "
+        f"{len(failures)} SQS record(s) reported for redrive"
     )
-    return {"statusCode": 200, "body": {"successful": successful}}
+    return _with_batch_item_failures(
+        {"statusCode": 200, "body": {"successful": successful}}, event, failures
+    )

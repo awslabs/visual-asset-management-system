@@ -61,15 +61,17 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Fetch metadata schemas for offline mode
     const entityTypeForSchema =
         entityType === "asset" ? "asset" : entityType === "assetLink" ? "assetLink" : undefined;
+    const schemaFetchEnabled = mode === "offline" && !!databaseId && !!entityTypeForSchema;
     const {
         schemas,
         loading: schemasLoading,
         error: schemasError,
-    } = useMetadataSchemas(
-        databaseId,
-        entityTypeForSchema,
-        mode === "offline" && !!databaseId && !!entityTypeForSchema
-    );
+    } = useMetadataSchemas(databaseId, entityTypeForSchema, schemaFetchEnabled);
+
+    // `schemasLoading` is false on the first render, before the hook's effect runs, so it cannot
+    // distinguish "no schema fields" from "not asked yet". A resolved fetch always leaves a
+    // non-null `schemas` (empty fields included) or an error, which can.
+    const schemasSettled = !schemaFetchEnabled || schemas !== null || !!schemasError;
 
     // Search and filter state
     const [searchTerm, setSearchTerm] = useState("");
@@ -119,7 +121,10 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
             filtered = filtered.filter(
                 (row) =>
                     row.metadataKey.toLowerCase().includes(lowerSearch) ||
-                    row.metadataValue.toLowerCase().includes(lowerSearch)
+                    // A row stored before the value was recorded reads back as null, so the search
+                    // treats it as empty text rather than throwing on it: filtering is not the place
+                    // an incomplete row should surface.
+                    (row.metadataValue ?? "").toLowerCase().includes(lowerSearch)
             );
         }
 
@@ -249,6 +254,12 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Check if all required fields are filled (memoized)
     // This matches the validation logic in validateMetadataRow
     const hasRequiredFieldsFilled = useMemo(() => {
+        // Which fields are required is a property of the schema, so until it has settled there is
+        // no set of rows that can be judged complete.
+        if (!schemasSettled) {
+            return false;
+        }
+
         // Get all non-deleted rows
         const activeRows = rows.filter((row) => !row.isDeleted);
 
@@ -268,7 +279,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                     : row.metadataValue;
             return value && value.trim() !== "";
         });
-    }, [rows]);
+    }, [rows, schemasSettled]);
 
     // Notify parent when hasChanges state changes (use ref to prevent loops)
     const prevHasChangesRef = useRef<boolean>();
@@ -351,7 +362,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                 // Reset to original values
                 updateRow(index, {
                     editKey: row.metadataKey,
-                    editValue: row.metadataValue,
+                    editValue: row.metadataValue ?? "",
                     editType: row.metadataValueType,
                     hasChanges: false,
                     validationError: undefined,
@@ -827,7 +838,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                 ) : (
                     <MetadataTable
                         rows={rows}
-                        loading={loading}
+                        loading={loading || !schemasSettled}
                         editMode={editMode}
                         entityType={entityType}
                         mode={mode}

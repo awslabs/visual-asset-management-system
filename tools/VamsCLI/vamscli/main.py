@@ -18,6 +18,8 @@ from .commands.tag import tag
 from .commands.tag_type import tag_type
 from .commands.metadata import metadata
 from .commands.metadata_schema import metadata_schema
+from .commands.comment import comment
+from .commands.subscription import subscription
 from .commands.features import features
 from .commands.search import search
 from .commands.sync import sync
@@ -178,6 +180,8 @@ cli.add_command(tag)
 cli.add_command(tag_type)
 cli.add_command(metadata)
 cli.add_command(metadata_schema)
+cli.add_command(comment)
+cli.add_command(subscription)
 cli.add_command(features)
 cli.add_command(search)
 cli.add_command(sync)
@@ -196,6 +200,36 @@ def version():
     click.echo(f"VamsCLI version {get_version()}")
 
 
+def _use_utf8_output():
+    """Emit UTF-8 on stdout/stderr regardless of the ambient locale.
+
+    Python picks the encoding for stdout from the locale whenever stdout is not a console, which on a
+    default Windows install is the ANSI code page (cp1252). The CLI's human-readable output uses box
+    glyphs, check marks and status dots throughout, none of which exist in cp1252, so redirecting or
+    piping a command raised UnicodeEncodeError and printed a codec error instead of the output —
+    `vamscli profile list > profiles.txt` produced a single line naming a charmap failure. Scripting,
+    logging and CI all redirect, so this affected exactly the non-interactive uses.
+
+    `errors="replace"` is the second layer: a stream that genuinely cannot represent a character
+    substitutes it rather than turning a working command into a failed one. Setting the encoding at the
+    entry point covers every command at once; the alternative, removing the characters, has to be
+    repeated for each of the several hundred occurrences and holds only until the next one is added.
+
+    A stream that has been replaced by something without `reconfigure` (a StringIO under Click's test
+    runner, for instance) is left alone.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            # A detached or already-closed stream cannot be reconfigured. Output encoding is not worth
+            # failing the invocation over.
+            pass
+
+
 @handle_global_exceptions()
 def main():
     """Main entry point for the CLI.
@@ -205,6 +239,7 @@ def main():
     caller that parses stdout. Catching UsageError here keeps the contract total: every invocation
     carrying the flag emits JSON and nothing else, whatever the failure.
     """
+    _use_utf8_output()
     try:
         cli(standalone_mode=False)
     except click.UsageError as e:
@@ -228,7 +263,15 @@ def main():
         e.show()
         sys.exit(e.exit_code)
     except click.exceptions.Abort:
-        # Ctrl-C / an aborted prompt: Click's own handler prints "Aborted!" to stderr.
+        # Ctrl-C, or a prompt the user declined. Click converts the interrupt into `Abort` and, under
+        # standalone_mode=False, re-raises it here having printed nothing but a blank line — so this
+        # is the only place the --json-output contract can be honoured. Without it the consumer's
+        # json.loads() fails on empty input instead of reading a structured cancellation.
+        if '--json-output' in sys.argv:
+            click.echo(json.dumps({'error': 'Operation cancelled by user',
+                                   'error_type': 'Aborted'}, indent=2))
+        else:
+            click.echo("Operation cancelled by user.", err=True)
         sys.exit(1)
 
 

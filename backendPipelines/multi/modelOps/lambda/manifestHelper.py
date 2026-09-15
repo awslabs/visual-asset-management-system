@@ -379,9 +379,9 @@ def resolve_inputs(data, manifest=None):
         # per-file auxPreviewPrefix + the per-pipeline auxPreviewPipelineSuffix). No legacy
         # fallback: aux preview locations are manifest-only.
         "auxPreviewS3Path": "",
-        # The per-pipeline viewer subfolder from the manifest (empty until sourced from the
-        # pipeline configuration). Exposed so a viewer pipeline can detect the empty case and
-        # apply its own hardcoded fallback subfolder so it does not break in the interim.
+        # The per-pipeline viewer subfolder from the manifest — the pipeline's own configured
+        # value, or empty when it declares none. Exposed so a viewer pipeline can detect the
+        # empty case and apply its own default subfolder.
         "auxPreviewPipelineSuffix": "",
         "orchestrationBusArn": "",
         "orchestrationEventPrefix": "",
@@ -439,8 +439,8 @@ def resolve_inputs(data, manifest=None):
     if aux_bucket and manifest.get("auxTempPrefix"):
         resolved["inputOutputS3AssetAuxiliaryFilesPath"] = _join_s3(aux_bucket, manifest["auxTempPrefix"])
 
-    # The per-pipeline viewer subfolder from the manifest (empty until sourced from the pipeline
-    # configuration); exposed so a viewer pipeline can apply its own fallback when empty.
+    # The per-pipeline viewer subfolder from the manifest — the pipeline's own configured value, or
+    # empty when it declares none; exposed so a viewer pipeline can apply its own default when empty.
     resolved["auxPreviewPipelineSuffix"] = manifest.get("auxPreviewPipelineSuffix", "") or ""
 
     # The aux PREVIEW path is per-input-file: aux bucket + the first input file's own

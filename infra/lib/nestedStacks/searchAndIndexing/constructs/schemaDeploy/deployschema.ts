@@ -340,6 +340,9 @@ export const handler: Handler = async function (event: any) {
             const exists_resp = await client.indices.exists({
                 index: indexInfo.name,
             });
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.log(`${indexInfo.name} exists_resp`, exists_resp);
 
             if (exists_resp.body) {
@@ -361,6 +364,9 @@ export const handler: Handler = async function (event: any) {
             );
 
             console.log(
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 `Creating ${indexInfo.type} index ${indexInfo.name} with schema:`,
                 JSON.stringify(indexSchema, null, 2)
             );
@@ -370,6 +376,9 @@ export const handler: Handler = async function (event: any) {
                 body: indexSchema as any,
             });
 
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.log(`${indexInfo.name} index_resp`, index_resp);
 
             results.push({
@@ -379,6 +388,9 @@ export const handler: Handler = async function (event: any) {
                 message: "Index created successfully",
             });
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Error creating index ${indexInfo.name}:`, error);
             results.push({
                 index: indexInfo.name,
@@ -387,6 +399,37 @@ export const handler: Handler = async function (event: any) {
                 message: `Error creating index: ${error}`,
             });
         }
+    }
+
+    // A failed index creation must fail the deployment. Reporting SUCCESS here left a green deploy on
+    // a cluster with no usable index: search returns nothing for every query, which is
+    // indistinguishable from a deployment that has no content yet, and recovery needs the indexes
+    // deleted and recreated plus a full reindex.
+    //
+    // "EXISTS" is not an error — the resource is idempotent by design and a redeploy hits that path for
+    // every index. The legitimate not-yet-reachable case is absorbed earlier by the readiness poll and
+    // by the deferIndexCreation branch, which returns before this loop, so an ERROR remaining here is a
+    // real fault.
+    const failed = results.filter((r) => r.status === "ERROR");
+    if (failed.length > 0) {
+        const detail = failed.map((r) => `${r.index}: ${r.message}`).join("; ");
+        console.error(`Index creation failed for ${failed.length} of ${results.length}: ${detail}`);
+        return {
+            StackId: event.StackId,
+            RequestId: event.RequestId,
+            LogicalResourceId: event.LogicalResourceId,
+            PhysicalResourceId: event.PhysicalResourceId,
+            Status: "FAILED",
+            Reason: `Index creation failed for ${failed.length} of ${results.length} index(es): ${detail}`.slice(
+                0,
+                // CloudFormation truncates a custom-resource Reason past 1 KB, and a truncated
+                // JSON-ish string is harder to read than a short one.
+                1000
+            ),
+            Data: {
+                Results: results,
+            },
+        };
     }
 
     return {

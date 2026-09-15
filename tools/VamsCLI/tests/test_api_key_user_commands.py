@@ -51,6 +51,71 @@ class TestUserApiKeyList:
             assert result.exit_code != 0
 
 
+class TestUserApiKeyListPaging:
+    """`api-key user list` carries the same paging contract as the admin listing."""
+
+    KEY_1 = {'apiKeyId': 'key-1', 'apiKeyName': 'One', 'userId': 'me@test.com',
+             'isActive': 'true'}
+    KEY_2 = {'apiKeyId': 'key-2', 'apiKeyName': 'Two', 'userId': 'me@test.com',
+             'isActive': 'true'}
+
+    def test_flags_are_passed_through_to_the_client(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('apiKey') as mocks:
+            mocks['api_client'].list_user_api_keys.return_value = {'Items': [self.KEY_1]}
+            result = cli_runner.invoke(cli, [
+                'api-key', 'user', 'list', '--page-size', '1', '--max-items', '2',
+                '--starting-token', 'tok', '--json-output'])
+
+            assert result.exit_code == 0
+            mocks['api_client'].list_user_api_keys.assert_called_once_with(
+                max_items=2, page_size=1, starting_token='tok')
+
+    def test_no_flags_leaves_the_deployment_defaults_in_force(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('apiKey') as mocks:
+            mocks['api_client'].list_user_api_keys.return_value = {'Items': [self.KEY_1]}
+            result = cli_runner.invoke(cli, ['api-key', 'user', 'list'])
+
+            assert result.exit_code == 0
+            assert 'Next token' not in result.output
+            mocks['api_client'].list_user_api_keys.assert_called_once_with(
+                max_items=None, page_size=None, starting_token=None)
+
+    def test_auto_paginate_follows_the_token_to_the_end(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('apiKey') as mocks:
+            mocks['api_client'].list_user_api_keys.side_effect = [
+                {'Items': [self.KEY_1], 'NextToken': 't1', 'truncated': True},
+                {'Items': [self.KEY_2]},
+            ]
+            result = cli_runner.invoke(cli, ['api-key', 'user', 'list', '--auto-paginate',
+                                             '--json-output'])
+
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert [item['apiKeyId'] for item in data['Items']] == ['key-1', 'key-2']
+            assert 'NextToken' not in data
+
+    def test_a_truncated_page_prints_its_token(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('apiKey') as mocks:
+            mocks['api_client'].list_user_api_keys.return_value = {
+                'Items': [self.KEY_1], 'NextToken': 'tok-abc', 'truncated': True}
+            result = cli_runner.invoke(cli, ['api-key', 'user', 'list', '--page-size', '1'])
+
+            assert result.exit_code == 0
+            assert 'tok-abc' in result.output
+            assert '--starting-token' in result.output
+
+    def test_auto_paginate_with_starting_token_is_rejected(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('apiKey') as mocks:
+            result = cli_runner.invoke(cli, ['api-key', 'user', 'list', '--auto-paginate',
+                                             '--starting-token', 'tok'])
+
+            assert result.exit_code != 0
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+            mocks['api_client'].list_user_api_keys.assert_not_called()
+
+
 class TestUserApiKeyCreate:
     """Tests for api-key user create command."""
 

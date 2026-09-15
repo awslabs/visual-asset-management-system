@@ -352,13 +352,20 @@ class TestApplyVamsReservedMetadata:
 
 @pytest.mark.unit
 class TestPhysnaClientTokenCaching:
-    """PhysnaClient caches OAuth tokens in module memory and refreshes on 401."""
+    """PhysnaClient caches OAuth tokens in module memory, refreshes on 401, and
+    rebuilds the per-attempt headers on every retry."""
 
     def _install_fakes(self, monkeypatch, *, token_values, api_responses):
         """Install a fake urllib3 PoolManager and fake SecretsManager.
 
         token_values: list of (status, body_dict) tuples for successive token POSTs.
         api_responses: list of (status, body_dict) tuples for successive API calls.
+            An entry may instead be an exception instance, which the fake raises
+            instead of returning a response.
+
+        The returned dict also carries ``headers`` and ``kwargs`` — what each
+        API call was actually sent, in order — so tests can assert on the bearer
+        token and the caller's own headers rather than only on call counts.
         """
         import backend.backend.handlers.addon.physna.physnaCommon as pc
 
@@ -382,7 +389,7 @@ class TestPhysnaClientTokenCaching:
         token_iter = iter(token_values)
         api_iter = iter(api_responses)
 
-        calls = {"token": 0, "api": 0}
+        calls = {"token": 0, "api": 0, "headers": [], "kwargs": []}
 
         def fake_token_post():
             calls["token"] += 1
@@ -391,13 +398,25 @@ class TestPhysnaClientTokenCaching:
 
         def fake_api_request(method, path, **kwargs):
             calls["api"] += 1
-            status, body = next(api_iter)
+            calls["headers"].append(dict(kwargs.get("headers") or {}))
+            calls["kwargs"].append({k: v for k, v in kwargs.items() if k != "headers"})
+            scripted = next(api_iter)
+            if isinstance(scripted, BaseException):
+                raise scripted
+            status, body = scripted
             return FakeResponse(status, body)
 
         monkeypatch.setattr(pc, "_http_post_token", lambda client_id, client_secret: fake_token_post())
         monkeypatch.setattr(pc, "_http_request", lambda method, url, **kwargs: fake_api_request(method, url, **kwargs))
+        # Retry backoff is not part of what these tests assert.
+        monkeypatch.setattr(pc.time, "sleep", lambda seconds: None)
 
         return calls
+
+    @staticmethod
+    def _sent(calls, header_name):
+        """The value of ``header_name`` on each API call, in order."""
+        return [headers.get(header_name) for headers in calls["headers"]]
 
     def test_first_request_fetches_token_then_calls_api(self, monkeypatch):
         from backend.backend.handlers.addon.physna.physnaCommon import PhysnaClient
@@ -412,6 +431,8 @@ class TestPhysnaClientTokenCaching:
         assert response.status == 200
         assert calls["token"] == 1
         assert calls["api"] == 1
+        assert self._sent(calls, "Authorization") == ["Bearer tok-1"]
+        assert self._sent(calls, "Accept") == ["application/json"]
 
     def test_second_request_reuses_cached_token(self, monkeypatch):
         from backend.backend.handlers.addon.physna.physnaCommon import PhysnaClient
@@ -426,6 +447,7 @@ class TestPhysnaClientTokenCaching:
         client.request("GET", "/b")
         assert calls["token"] == 1
         assert calls["api"] == 2
+        assert self._sent(calls, "Authorization") == ["Bearer tok-1", "Bearer tok-1"]
 
     def test_401_response_invalidates_token_and_retries_once(self, monkeypatch):
         from backend.backend.handlers.addon.physna.physnaCommon import PhysnaClient
@@ -443,6 +465,37 @@ class TestPhysnaClientTokenCaching:
         assert response.status == 200
         assert calls["token"] == 2  # initial + refresh
         assert calls["api"] == 2  # first 401 + retry
+        # The retry must carry the REFRESHED bearer. Replaying tok-1 turns every
+        # real 401 into a double-401, which raises PhysnaAuthError instead of
+        # recovering — and the call counts above hold either way.
+        assert self._sent(calls, "Authorization") == ["Bearer tok-1", "Bearer tok-2"]
+
+    def test_401_retry_keeps_the_callers_own_headers_and_body(self, monkeypatch):
+        """The refreshed retry replaces only the auth header — the caller's
+        Content-Type and body still go out."""
+        from backend.backend.handlers.addon.physna.physnaCommon import PhysnaClient
+
+        calls = self._install_fakes(
+            monkeypatch,
+            token_values=[
+                (200, {"access_token": "tok-1", "expires_in": 3600}),
+                (200, {"access_token": "tok-2", "expires_in": 3600}),
+            ],
+            api_responses=[(401, {"error": "unauthorized"}), (200, {"ok": True})],
+        )
+        client = PhysnaClient()
+        response = client.request(
+            "PATCH",
+            "/a",
+            headers={"Content-Type": "application/json"},
+            body='{"k": "v"}',
+        )
+        assert response.status == 200
+        assert self._sent(calls, "Content-Type") == [
+            "application/json",
+            "application/json",
+        ]
+        assert [k["body"] for k in calls["kwargs"]] == ['{"k": "v"}', '{"k": "v"}']
 
     def test_second_401_is_raised(self, monkeypatch):
         from backend.backend.handlers.addon.physna.physnaCommon import (
@@ -450,7 +503,7 @@ class TestPhysnaClientTokenCaching:
             PhysnaAuthError,
         )
 
-        self._install_fakes(
+        calls = self._install_fakes(
             monkeypatch,
             token_values=[
                 (200, {"access_token": "tok-1", "expires_in": 3600}),
@@ -461,6 +514,67 @@ class TestPhysnaClientTokenCaching:
         client = PhysnaClient()
         with pytest.raises(PhysnaAuthError):
             client.request("GET", "/a")
+        # PhysnaAuthError here must mean "Physna rejected the refreshed token",
+        # not "we replayed the stale one".
+        assert self._sent(calls, "Authorization") == ["Bearer tok-1", "Bearer tok-2"]
+
+    def test_caller_content_type_is_sent_when_no_retry_occurs(self, monkeypatch):
+        """Positive control for the two retry tests below: the caller's headers
+        reach _http_request on a first attempt that needs no retry."""
+        from backend.backend.handlers.addon.physna.physnaCommon import PhysnaClient
+
+        calls = self._install_fakes(
+            monkeypatch,
+            token_values=[(200, {"access_token": "tok-1", "expires_in": 3600})],
+            api_responses=[(200, {"ok": True})],
+        )
+        client = PhysnaClient()
+        client.request(
+            "POST", "/a", headers={"Content-Type": "application/json"}, body="{}"
+        )
+        assert self._sent(calls, "Content-Type") == ["application/json"]
+        assert self._sent(calls, "Authorization") == ["Bearer tok-1"]
+
+    def test_caller_content_type_survives_a_5xx_retry(self, monkeypatch):
+        from backend.backend.handlers.addon.physna.physnaCommon import PhysnaClient
+
+        calls = self._install_fakes(
+            monkeypatch,
+            token_values=[(200, {"access_token": "tok-1", "expires_in": 3600})],
+            api_responses=[(503, {"error": "unavailable"}), (200, {"ok": True})],
+        )
+        client = PhysnaClient()
+        response = client.request(
+            "POST", "/a", headers={"Content-Type": "application/json"}, body="{}"
+        )
+        assert response.status == 200
+        assert calls["api"] == 2
+        # The retry re-sends the caller's body, so it rebuilds the caller's
+        # headers rather than starting from an empty dict.
+        assert self._sent(calls, "Content-Type") == [
+            "application/json",
+            "application/json",
+        ]
+        assert self._sent(calls, "Authorization") == ["Bearer tok-1", "Bearer tok-1"]
+
+    def test_caller_content_type_survives_a_network_error_retry(self, monkeypatch):
+        from backend.backend.handlers.addon.physna.physnaCommon import PhysnaClient
+
+        calls = self._install_fakes(
+            monkeypatch,
+            token_values=[(200, {"access_token": "tok-1", "expires_in": 3600})],
+            api_responses=[OSError("connection reset"), (200, {"ok": True})],
+        )
+        client = PhysnaClient()
+        response = client.request(
+            "POST", "/a", headers={"Content-Type": "application/json"}, body="{}"
+        )
+        assert response.status == 200
+        assert calls["api"] == 2
+        assert self._sent(calls, "Content-Type") == [
+            "application/json",
+            "application/json",
+        ]
 
 
 @pytest.mark.unit
@@ -1019,62 +1133,65 @@ class TestEnsureMetadataFieldsRegistered:
 
 @pytest.mark.unit
 class TestDeleteFolderIfEmpty:
-    def test_no_delete_when_folder_has_assets(self, monkeypatch):
-        import backend.backend.handlers.addon.physna.physnaCommon as pc
+    """Physna folder cleanup is out of scope: no request, and no delete claimed.
 
-        calls = {"delete": 0}
+    The emptiness of the folder does not change the answer, so neither case reads
+    the tenant. Fuller coverage — the bare-databaseId prefix and the controls on
+    the shared listing helper — is in test_physnaCommon_folderDelete.py.
+    """
 
+    def _client_that_must_not_be_called(self):
         class FakeClient:
             def request(self, method, path, **kwargs):
-                import json
+                raise AssertionError(f"unexpected Physna request: {method} {path}")
 
-                class R:
-                    status = 200
-                    data = json.dumps(
-                        {
-                            "assets": [
-                                {"id": "a-1", "path": "db-1/asset-1/file1.step"}
-                            ],
-                            "pageData": {"currentPage": 1, "lastPage": 1},
-                        }
-                    ).encode("utf-8")
+        return FakeClient()
 
-                if method == "DELETE":
-                    calls["delete"] += 1
-                return R()
-
-        result = pc.delete_folder_if_empty(FakeClient(), "tenant-1", "db-1/asset-1")
-        assert result is False
-        assert calls["delete"] == 0
-
-    def test_delete_invoked_logic_runs_when_empty(self, monkeypatch):
+    def test_no_delete_reported_for_an_asset_folder(self):
         import backend.backend.handlers.addon.physna.physnaCommon as pc
 
-        # Capture the "delete attempted" side effect the stub exposes for tests
-        events = []
-
-        class FakeClient:
-            def request(self, method, path, **kwargs):
-                import json
-
-                class R:
-                    status = 200
-                    data = json.dumps(
-                        {
-                            "assets": [],
-                            "pageData": {"currentPage": 1, "lastPage": 1},
-                        }
-                    ).encode("utf-8")
-
-                return R()
-
-        # Patch the stub-callback hook
-        monkeypatch.setattr(
-            pc, "_folder_delete_stub_callback", lambda client, tenant_id, folder: events.append(folder)
+        result = pc.delete_folder_if_empty(
+            self._client_that_must_not_be_called(), "tenant-1", "db-1/asset-1"
         )
-        result = pc.delete_folder_if_empty(FakeClient(), "tenant-1", "db-1/asset-1/sub")
-        assert result is True
-        assert events == ["db-1/asset-1/sub"]
+        assert result is False
+
+    def test_no_delete_reported_for_a_nested_folder(self):
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        result = pc.delete_folder_if_empty(
+            self._client_that_must_not_be_called(), "tenant-1", "db-1/asset-1/sub"
+        )
+        assert result is False
+
+
+def _meta_row(key, value="v", value_type="string"):
+    return {"metadataKey": key, "metadataValue": value, "metadataValueType": value_type}
+
+
+def _attr_row(key, value="v", value_type="string"):
+    return {"attributeKey": key, "attributeValue": value, "attributeValueType": value_type}
+
+
+class _PagedFakeTable:
+    """Fake DynamoDB table serving a fixed sequence of query pages.
+
+    Every page but the last carries a ``LastEvaluatedKey``, and each call's kwargs
+    are recorded so a test can assert the cursor was threaded. A call past the last
+    page raises ``IndexError``, so a runaway loop fails instead of hanging.
+    """
+
+    def __init__(self, *pages):
+        self._responses = []
+        for index, items in enumerate(pages):
+            response = {"Items": list(items)}
+            if index < len(pages) - 1:
+                response["LastEvaluatedKey"] = {"cursor": f"page{index + 1}"}
+            self._responses.append(response)
+        self.calls = []
+
+    def query(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._responses[len(self.calls) - 1]
 
 
 @pytest.mark.unit
@@ -1122,6 +1239,62 @@ class TestGetFileMetadata:
         assert "material" in attrs
         assert attrs["material"]["value"] == "steel"
 
+    def test_metadata_and_attributes_paginate_independently(self, monkeypatch):
+        """Two metadata pages alongside one attribute page: both dicts complete.
+
+        A single cursor shared across the two tables fails here — it either carries
+        the metadata table's cursor into the attribute query or re-queries the wrong
+        table — while passing a test where both tables have the same page count.
+        """
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        meta_table = _PagedFakeTable([_meta_row("m1")], [_meta_row("m2")])
+        attr_table = _PagedFakeTable([_attr_row("a1")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", meta_table)
+        monkeypatch.setattr(pc, "file_attribute_table", attr_table)
+
+        metadata, attrs = pc.get_file_metadata("db-1", "asset-1", "/sub/part.step")
+
+        assert sorted(metadata.keys()) == ["m1", "m2"]
+        assert sorted(attrs.keys()) == ["a1"]
+        assert len(meta_table.calls) == 2
+        assert len(attr_table.calls) == 1
+        assert meta_table.calls[1]["ExclusiveStartKey"] == {"cursor": "page1"}
+        assert "ExclusiveStartKey" not in attr_table.calls[0]
+
+    def test_attributes_paginate_while_metadata_does_not(self, monkeypatch):
+        """The mirrored split, so the fix cannot page only the first table."""
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        meta_table = _PagedFakeTable([_meta_row("m1")])
+        attr_table = _PagedFakeTable([_attr_row("a1")], [_attr_row("a2")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", meta_table)
+        monkeypatch.setattr(pc, "file_attribute_table", attr_table)
+
+        metadata, attrs = pc.get_file_metadata("db-1", "asset-1", "/sub/part.step")
+
+        assert sorted(metadata.keys()) == ["m1"]
+        assert sorted(attrs.keys()) == ["a1", "a2"]
+        assert len(meta_table.calls) == 1
+        assert len(attr_table.calls) == 2
+        assert attr_table.calls[1]["ExclusiveStartKey"] == {"cursor": "page1"}
+
+    def test_single_page_each_issues_one_query_each(self, monkeypatch):
+        """Positive control: the terminating case for both tables."""
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        meta_table = _PagedFakeTable([_meta_row("m1")])
+        attr_table = _PagedFakeTable([_attr_row("a1")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", meta_table)
+        monkeypatch.setattr(pc, "file_attribute_table", attr_table)
+
+        metadata, attrs = pc.get_file_metadata("db-1", "asset-1", "/sub/part.step")
+
+        assert list(metadata.keys()) == ["m1"]
+        assert list(attrs.keys()) == ["a1"]
+        assert len(meta_table.calls) == 1
+        assert len(attr_table.calls) == 1
+
 
 @pytest.mark.unit
 class TestGetAssetMetadata:
@@ -1144,6 +1317,66 @@ class TestGetAssetMetadata:
         monkeypatch.setattr(pc, "asset_file_metadata_table", FakeTable())
         metadata = pc.get_asset_metadata("db-1", "asset-1")
         assert metadata["partFamily"]["value"] == "widgets"
+
+    def test_pages_to_exhaustion_and_threads_the_cursor(self, monkeypatch):
+        """Keys from both pages arrive, and page 2 is fetched with page 1's cursor.
+
+        Asserting only the merged result would also pass for a loop that re-reads
+        page 1 forever, so the ``ExclusiveStartKey`` assertion is the load-bearing one.
+        """
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        table = _PagedFakeTable([_meta_row("onPage1")], [_meta_row("onPage2")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", table)
+
+        metadata = pc.get_asset_metadata("db-1", "asset-1")
+
+        assert sorted(metadata.keys()) == ["onPage1", "onPage2"]
+        assert len(table.calls) == 2
+        assert "ExclusiveStartKey" not in table.calls[0]
+        assert table.calls[1]["ExclusiveStartKey"] == {"cursor": "page1"}
+
+    def test_single_page_issues_exactly_one_query(self, monkeypatch):
+        """Positive control: a single page is returned whole and read once.
+
+        A paging bug that drops the final page, or that re-reads page 1, fails here.
+        """
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        table = _PagedFakeTable([_meta_row("only")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", table)
+
+        metadata = pc.get_asset_metadata("db-1", "asset-1")
+
+        assert list(metadata.keys()) == ["only"]
+        assert len(table.calls) == 1
+
+    def test_paging_stops_at_the_page_cap(self, monkeypatch):
+        """A cursor that never clears terminates at ``_METADATA_QUERY_MAX_PAGES``."""
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        cap = pc._METADATA_QUERY_MAX_PAGES
+
+        class NeverEndingTable:
+            def __init__(self):
+                self.call_count = 0
+
+            def query(self, **kwargs):
+                self.call_count += 1
+                if self.call_count > cap + 5:
+                    raise AssertionError("paging loop is not bounded by a page cap")
+                return {
+                    "Items": [_meta_row(f"k{self.call_count}")],
+                    "LastEvaluatedKey": {"cursor": self.call_count},
+                }
+
+        table = NeverEndingTable()
+        monkeypatch.setattr(pc, "asset_file_metadata_table", table)
+
+        metadata = pc.get_asset_metadata("db-1", "asset-1")
+
+        assert table.call_count == cap
+        assert len(metadata) == cap
 
 
 @pytest.mark.unit
@@ -1265,15 +1498,53 @@ class TestGetDatabaseIdForAssetId:
             pc, "get_bucket_details", lambda bid: by_id.get(bid)
         )
 
-    def test_single_match_returns_database_id(self, monkeypatch):
+    def test_single_match_in_the_event_bucket_returns_database_id(self, monkeypatch):
         pc = self._mock_assets(
             monkeypatch,
             [{"assetId": "a-1", "databaseId": "db-X", "bucketId": "b-1"}],
         )
+        self._mock_bucket_details(
+            monkeypatch,
+            {"b-1": {"bucketId": "b-1", "bucketName": "bucket-X",
+                     "baseAssetsPrefix": "assets/"}},
+        )
         assert (
-            pc.get_database_id_for_asset_id("a-1", bucket_name="any", base_assets_prefix="any")
+            pc.get_database_id_for_asset_id(
+                "a-1", bucket_name="bucket-X", base_assets_prefix="assets/"
+            )
             == "db-X"
         )
+
+    def test_single_match_in_another_bucket_returns_none(self, monkeypatch):
+        """The negative control for the case above. An assetId is unique within a
+        database, so one GSI match is the deleted asset's own record only when its
+        registered bucket and prefix are the event's — otherwise it belongs to a live
+        asset in another database, and resolving it deletes that asset in the Physna
+        tenant."""
+        pc = self._mock_assets(
+            monkeypatch,
+            [{"assetId": "a-1", "databaseId": "db-B", "bucketId": "b-B"}],
+        )
+        self._mock_bucket_details(
+            monkeypatch,
+            {"b-B": {"bucketId": "b-B", "bucketName": "bucket-B",
+                     "baseAssetsPrefix": "assets/"}},
+        )
+        assert (
+            pc.get_database_id_for_asset_id(
+                "a-1", bucket_name="bucket-A", base_assets_prefix="assets/"
+            )
+            is None
+        )
+
+    def test_single_match_without_bucket_context_returns_none(self, monkeypatch):
+        """No bucket context means nothing to verify against, and the resolution
+        decides which tenant asset gets deleted."""
+        pc = self._mock_assets(
+            monkeypatch,
+            [{"assetId": "a-1", "databaseId": "db-X", "bucketId": "b-1"}],
+        )
+        assert pc.get_database_id_for_asset_id("a-1") is None
 
     def test_empty_result_returns_none(self, monkeypatch):
         pc = self._mock_assets(monkeypatch, [])
@@ -1282,7 +1553,8 @@ class TestGetDatabaseIdForAssetId:
     def test_multiple_matches_without_bucket_context_returns_none(
         self, monkeypatch
     ):
-        """Without bucket context we cannot safely pick — refuse."""
+        """Without bucket context we cannot safely pick — refuse, however many
+        candidates there are."""
         pc = self._mock_assets(
             monkeypatch,
             [

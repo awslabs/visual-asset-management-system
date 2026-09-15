@@ -3,6 +3,7 @@
 
 import copy
 import boto3
+from botocore.config import Config
 import json
 import datetime
 from common.resourceNames import get_table_name, ResourceKeys
@@ -12,14 +13,16 @@ from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id
 from common.constants import STANDARD_JSON_RESPONSE
+from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
 
 claims_and_roles = {}
 
 logger = safeLogger(service="AddComment")
 
-dynamodb = boto3.resource("dynamodb")
-s3c = boto3.client("s3")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource("dynamodb", config=retry_config)
+s3c = boto3.client("s3", config=retry_config)
 
 main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
@@ -124,6 +127,11 @@ def lambda_handler(event: dict, context: dict) -> dict:
         userId = None
 
         asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
+        if asset_object is None:
+            response["statusCode"] = 404
+            response["body"] = json.dumps({"message": "Asset not found"})
+            return response
+
         asset_object.update({"object__type": "asset"})
 
         # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
@@ -166,7 +174,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
             logger.info("Validating body")
             (valid, message) = validate(
                 {
-                    "commentBody": {"value": event["body"]["commentBody"], "validator": "STRING"},
+                    "commentBody": {"value": event["body"]["commentBody"], "validator": "STRING_16384"},
                 }
             )
             if not valid:
@@ -185,6 +193,14 @@ def lambda_handler(event: dict, context: dict) -> dict:
             response["statusCode"] = 403
             response["body"] = json.dumps({"message": "Action not allowed"})
             return response
+    except VAMSGeneralErrorResponse as v:
+        # Raised by the asset lookup when the assetId cannot be resolved to a single live
+        # asset (e.g. the same assetId exists in more than one database). The message names
+        # no caller-supplied value, so it is returned as the client-facing reason.
+        logger.exception(v)
+        response["statusCode"] = 400
+        response["body"] = json.dumps({"message": str(v)})
+        return response
     except Exception as e:
         logger.exception(f"caught exception")
         # Only botocore ClientError carries a `.response`; guard the access so a

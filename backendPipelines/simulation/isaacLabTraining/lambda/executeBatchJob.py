@@ -12,21 +12,42 @@ import os
 import boto3
 import manifestHelper
 from customLogging.logger import safeLogger
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="ExecuteBatchJobIsaacLab")
-batch = boto3.client("batch")
-events_client = boto3.client("events")
+batch = boto3.client("batch", config=retry_config)
+events_client = boto3.client("events", config=retry_config)
 
 BATCH_JOB_QUEUE = os.environ["BATCH_JOB_QUEUE"]
 BATCH_JOB_DEFINITION = os.environ["BATCH_JOB_DEFINITION"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
+# AWS Batch's default container log group; the job's log source is registered only when configured.
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 # Resource type reported for an AWS Batch job, so the abort path can terminate it by id.
 RESOURCE_TYPE_BATCH_JOB = "batchJob"
+# The state that invokes this lambda (its CDK construct id); the job and its container log are
+# attributed to it.
+BATCH_STATE_NAME = "ExecuteBatchJobState"
 
 
-def register_batch_job(orchestration_event_prefix, job_id):
+def run_mode(definition):
+    """'evaluation' when the job definition's trainingConfig asks for it, else 'training' — the label
+    the registered job carries, since one function submits both pipelines' jobs."""
+    cfg = definition if isinstance(definition, dict) else {}
+    mode = (cfg.get("trainingConfig") or {}).get("mode") if isinstance(cfg.get("trainingConfig"), dict) else cfg.get("mode")
+    return "evaluation" if str(mode or "").strip().lower().startswith("eval") else "training"
+
+
+def register_batch_job(orchestration_event_prefix, job_id, mode="training"):
     """Best-effort: report this Batch job to the orchestration bus so an abort can terminate it.
 
     Registration matters here specifically because this pipeline submits the job from a Lambda under
@@ -44,15 +65,31 @@ def register_batch_job(orchestration_event_prefix, job_id):
     if not pipeline_execution_id:
         logger.warning("Could not derive pipelineExecutionId from event prefix; skipping registration")
         return
+    detail = {
+        "pipelineExecutionId": pipeline_execution_id,
+        "subExecution": {
+            "resourceType": RESOURCE_TYPE_BATCH_JOB,
+            "jobId": job_id,
+            "stageName": BATCH_STATE_NAME,
+            "label": f"Isaac Lab {mode} job",
+        },
+    }
+    if BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN:
+        detail["logs"] = [{
+            "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+            "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+            "logStreamName": "",
+            "logStreamPrefix": f"{BATCH_JOB_DEFINITION}/default/",
+            "stageName": BATCH_STATE_NAME,
+            "sourceType": "batch",
+            "label": f"{BATCH_STATE_NAME} container",
+        }]
     try:
         events_client.put_events(Entries=[{
             "EventBusName": ORCHESTRATION_BUS_NAME,
             "Source": orchestration_event_prefix,
             "DetailType": REGISTER_DETAIL_TYPE,
-            "Detail": json.dumps({
-                "pipelineExecutionId": pipeline_execution_id,
-                "subExecution": {"resourceType": RESOURCE_TYPE_BATCH_JOB, "jobId": job_id},
-            }),
+            "Detail": json.dumps(detail),
         }])
         logger.info(f"Registered Batch job {job_id} for pipeline execution {pipeline_execution_id}")
     except Exception as e:  # nosec B110 - registration is best-effort; never fail the pipeline
@@ -60,7 +97,7 @@ def register_batch_job(orchestration_event_prefix, job_id):
 
 
 def lambda_handler(event, context):
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     job_name = event["jobName"]
     definition = json.loads(event["definition"])
@@ -72,6 +109,8 @@ def lambda_handler(event, context):
     definition["outputS3AssetFilesPath"] = output_s3_path
     definition["inputS3AssetFilePath"] = input_s3_path
 
+    # The job definition is a single-node container job (batch.EcsJobDefinition with one
+    # EcsEc2ContainerDefinition), so the submission carries containerOverrides only.
     submit_params = {
         "jobName": job_name,
         "jobQueue": BATCH_JOB_QUEUE,
@@ -86,26 +125,12 @@ def lambda_handler(event, context):
         },
     }
 
-    # Multi-node configuration
-    num_nodes = event.get("numNodes", 1)
-    if num_nodes > 1:
-        submit_params["nodeOverrides"] = {
-            "numNodes": num_nodes,
-            "nodePropertyOverrides": [
-                {
-                    "targetNodes": "0:",
-                    "containerOverrides": submit_params["containerOverrides"],
-                }
-            ],
-        }
-        del submit_params["containerOverrides"]
-
     logger.info(f"Submitting Batch job: {submit_params}")
     response = batch.submit_job(**submit_params)
 
     logger.info(f"Batch job submitted: {response['jobId']}")
 
-    register_batch_job(event.get("orchestrationEventPrefix", ""), response["jobId"])
+    register_batch_job(event.get("orchestrationEventPrefix", ""), response["jobId"], run_mode(definition))
 
     return {
         "jobId": response["jobId"],

@@ -91,7 +91,9 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                 const lowerSearch = searchTerm.toLowerCase();
                 const matchesSearch =
                     row.metadataKey.toLowerCase().includes(lowerSearch) ||
-                    row.metadataValue.toLowerCase().includes(lowerSearch);
+                    // A row stored before the value was recorded reads back as null, so the search
+                    // treats it as empty text rather than throwing on it.
+                    (row.metadataValue ?? "").toLowerCase().includes(lowerSearch);
                 if (!matchesSearch) return false;
             }
 

@@ -114,7 +114,7 @@
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,
-                "bedrockModelId": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+                "bedrockModelId": "",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
@@ -133,7 +133,7 @@
                     "enabled": false,
                     "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.eu/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
                     "autoRegisterWithVAMS": true,
-                    "eksClusterVersion": "1.31",
+                    "eksClusterVersion": "1.36",
                     "nodeInstanceType": "m5.2xlarge",
                     "minNodes": 1,
                     "maxNodes": 10,
@@ -232,7 +232,7 @@
                         "enabled": false,
                         "autoRegisterWithVAMS": true,
                         "autoTriggerOnFileExtensionsUpload": "",
-                        "instanceTypes": ["g6e.4xlarge", "g6e.12xlarge"],
+                        "instanceTypes": ["g6e.12xlarge", "g6e.24xlarge", "g6e.48xlarge"],
                         "maxVCpus": 192
                     },
                     "super64B": {
@@ -294,16 +294,19 @@
         "authProvider": {
             "presignedUrlTimeoutSeconds": 86400,
             "authorizerOptions": {
-                "allowedIpRanges": []
+                "allowedIpRanges": [],
+                "defaultUserRoleName": ""
             },
             "useCognito": {
                 "enabled": true,
                 "useSaml": false,
+                "useOidc": false,
                 "useUserPasswordAuthFlow": false,
                 "credTokenTimeoutSeconds": 3600
             },
             "useExternalOAuthIdp": {
                 "enabled": false,
+                "idpDisplayName": "",
                 "idpAuthProviderUrl": null,
                 "idpAuthClientId": null,
                 "idpAuthProviderScope": null,
@@ -318,7 +321,8 @@
         },
         "webUi": {
             "optionalBannerHtmlMessage": "",
-            "allowUnsafeEvalFeatures": false
+            "allowUnsafeEvalFeatures": false,
+            "allowLocalhostAuthCallbacks": false
         },
         "api": {
             "apiType": "APIGATEWAY_REST",

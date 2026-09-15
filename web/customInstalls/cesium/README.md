@@ -12,7 +12,7 @@ The viewer uses the widget-less `@cesium/engine` package rather than the full `c
 -   `@cesium/engine` is bundled with esbuild into a browser global (`window.Cesium`)
 -   Static runtime files (Workers, Assets, ThirdParty wasm, Widget CSS) are copied to the public folder
 -   Dependency manager loads the bundle via script tag
--   Component accesses Cesium from window object via wrapper module
+-   Component accesses Cesium from the `window.Cesium` global
 -   No runtime dependency on node_modules
 
 ## Files
@@ -35,14 +35,8 @@ The viewer uses the widget-less `@cesium/engine` package rather than the full `c
     -   Sets CESIUM_BASE_URL for assets
     -   Accesses Cesium from `window.Cesium`
 
--   **`cesium.ts`**: Wrapper module that re-exports Cesium from window
-
-    -   Provides typed access to Cesium classes
-    -   Allows importing: `import * as Cesium from "./cesium"`
-    -   Simplifies component code
-
 -   **`CesiumViewerComponent.tsx`**: Uses dynamic loading and custom UI
-    -   Imports from wrapper module instead of a cesium package
+    -   Declares `Cesium` and reads the `window.Cesium` global the bundle defines
     -   Loads Cesium via CesiumDependencyManager on mount
     -   Creates a `CesiumWidget` and renders VAMS custom scene controls
 
@@ -98,8 +92,8 @@ useEffect(() => {
 ### Using Cesium
 
 ```typescript
-// Import from wrapper
-import * as Cesium from "./cesium";
+// The bundle defines the global; declare it for TypeScript
+declare const Cesium: any;
 
 // Use Cesium classes
 const widget = new Cesium.CesiumWidget(container);

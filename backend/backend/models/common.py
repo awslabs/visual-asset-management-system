@@ -104,17 +104,26 @@ def commonHeaders() -> Dict[str, str]:
 
 
 def success(status_code: int = 200, body: Any = {'message': 'Success'}) -> APIGatewayProxyResponseV2:
-    logger.info(f"Success response: {body}")
+    # The response body carries caller data - the plaintext API key returned once on creation,
+    # presigned URLs, asset records - and safeLogger redaction is key-driven, so a body rendered into
+    # the log message cannot be masked. Masking a walked body would not close it either: a presigned
+    # URL and an asset name sit under keys no key list enumerates. What is logged is the status code
+    # and the serialized size, the signal for a response approaching the 6 MB Lambda limit.
+    serialized_body = json.dumps(body, default=_json_default)
+    logger.info("Success response",
+                extra={'statusCode': status_code, 'bodyBytes': len(serialized_body)})
     return APIGatewayProxyResponseV2(
         isBase64Encoded=False,
         statusCode=status_code,
         headers=commonHeaders(),
-        body=json.dumps(body, default=_json_default)
+        body=serialized_body
     )
 
 
 def validation_error(status_code: int = 400, body: dict = {'message': 'Validation Error'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
-    logger.error(f"Validation error: {body}")
+    # An error body is the returned message rather than a payload, so it stays in the log - passed as
+    # structured data, not interpolated, so safeLogger's key-driven redaction still walks it.
+    logger.error("Validation error", extra={'statusCode': status_code, 'errorBody': body})
     
     # AUDIT LOG: Log validation error if event provided
     if event:
@@ -134,7 +143,7 @@ def validation_error(status_code: int = 400, body: dict = {'message': 'Validatio
     )
 
 def general_error(status_code: int = 400, body: dict = {'message': 'VAMS General Error'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
-    logger.error(f"General error: {body}")
+    logger.error("General error", extra={'statusCode': status_code, 'errorBody': body})
     
     # AUDIT LOG: Log general error if event provided
     if event:
@@ -155,7 +164,7 @@ def general_error(status_code: int = 400, body: dict = {'message': 'VAMS General
 
 
 def authorization_error(status_code: int = 403, body: dict = {'message': 'Not Authorized'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
-    logger.error(f"Not Authorized Error: {body}")
+    logger.error("Not Authorized Error", extra={'statusCode': status_code, 'errorBody': body})
     
     #Logged as part of Casbin auth checks
     # # AUDIT LOG: Log authorization error if event provided
@@ -179,7 +188,7 @@ def authorization_error(status_code: int = 403, body: dict = {'message': 'Not Au
 
 
 def internal_error(status_code: int = 500, body: Any = {'message': 'Internal Server Error'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
-    logger.error(f"Internal Server Error: {body}")
+    logger.error("Internal Server Error", extra={'statusCode': status_code, 'errorBody': body})
     
     # AUDIT LOG: Log internal error if event provided
     if event:

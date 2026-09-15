@@ -6,6 +6,8 @@
 import { useState, useCallback, useReducer, useEffect } from "react";
 import { SearchFilters, SearchQuery, SearchResponse, SearchResult, MetadataFilter } from "../types";
 import Synonyms from "../../../synonyms";
+import { FileInfo } from "../../../visualizerPlugin/core/types";
+import { fileIdentity } from "../../../visualizerPlugin/core/fileIdentity";
 
 interface SearchState {
     query: string;
@@ -26,6 +28,8 @@ interface SearchState {
     selectedItems: SearchResult[];
     columnNames: string[];
     initialResult: boolean;
+    viewerSelectMode: boolean;
+    viewerSelection: FileInfo[];
 }
 
 type SearchAction =
@@ -40,7 +44,13 @@ type SearchAction =
     | { type: "SET_RESULT"; payload: SearchResponse }
     | { type: "SET_SELECTED_ITEMS"; payload: SearchResult[] }
     | { type: "CLEAR_SEARCH" }
-    | { type: "RESET_PAGINATION" };
+    | { type: "RESET_PAGINATION" }
+    | { type: "ENTER_VIEWER_SELECT_MODE" }
+    | { type: "EXIT_VIEWER_SELECT_MODE" }
+    | { type: "ADD_TO_VIEWER_SELECTION"; payload: FileInfo[] }
+    | { type: "SET_VIEWER_SELECTION"; payload: FileInfo[] }
+    | { type: "REMOVE_FROM_VIEWER_SELECTION"; payload: string }
+    | { type: "CLEAR_VIEWER_SELECTION" };
 
 const initialState: SearchState = {
     query: "",
@@ -63,6 +73,8 @@ const initialState: SearchState = {
     selectedItems: [],
     columnNames: [],
     initialResult: false,
+    viewerSelectMode: false,
+    viewerSelection: [],
 };
 
 function searchReducer(state: SearchState, action: SearchAction): SearchState {
@@ -168,6 +180,43 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
                 ...state,
                 pagination: { ...state.pagination, from: 0 },
             };
+
+        case "ENTER_VIEWER_SELECT_MODE":
+            return { ...state, viewerSelectMode: true };
+
+        case "EXIT_VIEWER_SELECT_MODE":
+            return { ...state, viewerSelectMode: false, viewerSelection: [] };
+
+        case "ADD_TO_VIEWER_SELECTION": {
+            const existing = new Set(state.viewerSelection.map(fileIdentity));
+            const additions = action.payload.filter((f) => !existing.has(fileIdentity(f)));
+            return { ...state, viewerSelection: [...state.viewerSelection, ...additions] };
+        }
+
+        // Replace the running selection so it mirrors exactly the currently checked rows
+        // (check = in, uncheck = out). Dedup by identity — database + asset + key — in case the same
+        // file appears twice; the key alone would discard a same-named file from another asset.
+        case "SET_VIEWER_SELECTION": {
+            const seen = new Set<string>();
+            const deduped = action.payload.filter((f) => {
+                const identity = fileIdentity(f);
+                if (seen.has(identity)) return false;
+                seen.add(identity);
+                return true;
+            });
+            return { ...state, viewerSelection: deduped };
+        }
+
+        case "REMOVE_FROM_VIEWER_SELECTION":
+            return {
+                ...state,
+                viewerSelection: state.viewerSelection.filter(
+                    (f) => fileIdentity(f) !== action.payload
+                ),
+            };
+
+        case "CLEAR_VIEWER_SELECTION":
+            return { ...state, viewerSelection: [] };
 
         default:
             return state;
@@ -280,6 +329,32 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         dispatch({ type: "RESET_PAGINATION" });
     }, []);
 
+    const enterViewerSelectMode = useCallback(() => {
+        dispatch({ type: "ENTER_VIEWER_SELECT_MODE" });
+    }, []);
+
+    const exitViewerSelectMode = useCallback(() => {
+        dispatch({ type: "EXIT_VIEWER_SELECT_MODE" });
+    }, []);
+
+    const addToViewerSelection = useCallback((files: FileInfo[]) => {
+        dispatch({ type: "ADD_TO_VIEWER_SELECTION", payload: files });
+    }, []);
+
+    const setViewerSelection = useCallback((files: FileInfo[]) => {
+        dispatch({ type: "SET_VIEWER_SELECTION", payload: files });
+    }, []);
+
+    // Takes a fileIdentity(), not a bare key, so a same-named file in another asset is not removed
+    // along with the intended one.
+    const removeFromViewerSelection = useCallback((identity: string) => {
+        dispatch({ type: "REMOVE_FROM_VIEWER_SELECTION", payload: identity });
+    }, []);
+
+    const clearViewerSelection = useCallback(() => {
+        dispatch({ type: "CLEAR_VIEWER_SELECTION" });
+    }, []);
+
     // Build search query object
     const buildSearchQuery = useCallback(
         (overridePagination?: { from: number; size: number }): SearchQuery => {
@@ -327,6 +402,12 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         setSelectedItems,
         clearSearch,
         resetPagination,
+        enterViewerSelectMode,
+        exitViewerSelectMode,
+        addToViewerSelection,
+        setViewerSelection,
+        removeFromViewerSelection,
+        clearViewerSelection,
 
         // Computed values
         buildSearchQuery,

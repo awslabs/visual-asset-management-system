@@ -31,11 +31,10 @@ import type {
 import type { DatabaseSummary } from "./databases";
 import type { DetailMetadataCollection, DetailMetadataPage } from "./executions";
 import type {
-    AssetSummary,
-    AssetFileSummary,
     AssetFileVersionSummary,
     AssetSearchPage,
     AssetFilePage,
+    AssetFileListPage,
 } from "./assets";
 
 // Query key factory for stable, structured keys
@@ -57,17 +56,20 @@ export const qk = {
     executions: (scope: ExecutionScope, filters?: any) =>
         ["executions", scope, filters ?? null] as const,
     execution: (executionId: string) => ["execution", executionId] as const,
+    // The details read keyed by its request shape, under the `execution` prefix so an invalidation
+    // of qk.execution(id) reaches both variants.
+    executionDetails: (executionId: string, includeSubExecutions: boolean) =>
+        ["execution", executionId, { includeSubExecutions }] as const,
     executionDetailMetadata: (executionId: string, collection: DetailMetadataCollection) =>
         ["executionDetailMetadata", executionId, collection] as const,
     allowedRoutes: () => ["allowedRoutes"] as const,
     databases: () => ["databases"] as const,
-    assets: (databaseId?: string) => ["assets", databaseId ?? null] as const,
     assetSearch: (databaseId: string | undefined, query: string) =>
         ["assetSearch", databaseId ?? null, query] as const,
-    assetFiles: (databaseId: string, assetId: string) =>
-        ["assetFiles", databaseId, assetId] as const,
     assetFileSearch: (databaseId: string, assetId: string, query: string) =>
         ["assetFileSearch", databaseId, assetId, query] as const,
+    assetFilePages: (databaseId: string, assetId: string, prefix: string) =>
+        ["assetFilePages", databaseId, assetId, prefix] as const,
     fileVersions: (databaseId: string, assetId: string, relativeFileKey: string) =>
         ["fileVersions", databaseId, assetId, relativeFileKey] as const,
 };
@@ -81,22 +83,12 @@ export function useDatabases(enabled = true) {
     });
 }
 
-/** Assets for the execute-wizard asset selector — scoped to a database, or all when none given. */
-export function useAssets(databaseId?: string, enabled = true) {
-    return useQuery({
-        queryKey: qk.assets(databaseId),
-        queryFn: () => callService<AssetSummary[]>(() => assetService.listAssets(databaseId)),
-        enabled,
-    });
-}
-
 /**
  * One SERVER-resolved page of assets matching `query`, for the execute wizard's asset pickers.
  *
- * Unlike `useAssets` (which loads a database's assets for client-side filtering) this re-queries per
- * search term, so a database holding thousands of assets does not have to be pulled into the browser.
- * `keepPreviousData` holds the previous page on screen while the next one loads, so the list does not
- * flash empty on every keystroke.
+ * The term is re-queried per search rather than filtered in the browser, so a database holding
+ * thousands of assets does not have to be pulled down to pick one from it. `keepPreviousData` holds the
+ * previous page on screen while the next one loads, so the list does not flash empty between searches.
  */
 export function useAssetSearch(query: string, databaseId?: string, enabled = true) {
     return useQuery({
@@ -105,18 +97,6 @@ export function useAssetSearch(query: string, databaseId?: string, enabled = tru
             callService<AssetSearchPage>(() => assetService.searchAssetsPaged(query, databaseId)),
         enabled,
         placeholderData: (previous: any) => previous,
-    });
-}
-
-/** Non-folder files for an asset — for the wizard file selector. Disabled until an asset is chosen. */
-export function useAssetFiles(databaseId?: string, assetId?: string) {
-    return useQuery({
-        queryKey: qk.assetFiles(databaseId || "", assetId || ""),
-        queryFn: () =>
-            callService<AssetFileSummary[]>(() =>
-                assetService.listAssetFiles(databaseId as string, assetId as string)
-            ),
-        enabled: !!databaseId && !!assetId,
     });
 }
 
@@ -135,6 +115,30 @@ export function useAssetFileSearch(query: string, databaseId?: string, assetId?:
             ),
         enabled: !!databaseId && !!assetId,
         placeholderData: (previous: any) => previous,
+    });
+}
+
+/**
+ * An asset's file LISTING, page by page, for the bulk input picker.
+ *
+ * An infinite query rather than a search: the picker offers "select every file under this folder",
+ * which needs the asset's complete, ordered file set walked to the execution cap — a search page is
+ * capped and unordered. `prefix` scopes the walk to one folder on the server, so a large asset's
+ * other folders are never fetched.
+ */
+export function useAssetFilePages(databaseId?: string, assetId?: string, prefix = "") {
+    return useInfiniteQuery({
+        queryKey: qk.assetFilePages(databaseId || "", assetId || "", prefix),
+        queryFn: ({ pageParam }: { pageParam?: string }) =>
+            callService<AssetFileListPage>(() =>
+                assetService.listAssetFilesPage(databaseId as string, assetId as string, {
+                    startingToken: pageParam,
+                    prefix,
+                })
+            ),
+        getNextPageParam: (lastPage: AssetFileListPage) => lastPage.nextToken,
+        initialPageParam: undefined as string | undefined,
+        enabled: !!databaseId && !!assetId,
     });
 }
 
@@ -617,8 +621,11 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
                 if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
                 return data as ExecutionListResponse;
             } else if (scope.kind === "workflow") {
-                // The global-list endpoint filters a workflow by its composite key: workflowId plus
-                // workflowDatabaseId (workflow ids are unique only within a database).
+                // The global-list endpoint matches workflowId and workflowDatabaseId independently.
+                // A workflow id is unique across every database including GLOBAL, so the id alone
+                // identifies the workflow; the scope's own databaseId goes along as an additional
+                // narrowing filter. A database that is not the workflow's own would silently empty
+                // the page rather than erroring, so it is taken from the scope, never guessed.
                 const workflowParams = {
                     ...params,
                     workflowId: scope.workflowId,
@@ -654,11 +661,25 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
     });
 }
 
-export function useExecutionDetails(executionId: string) {
+export interface ExecutionDetailsOptions {
+    /** Resolve each step's registered sub-processes and their stage statuses (a costlier read). */
+    includeSubExecutions?: boolean;
+}
+
+export function useExecutionDetails(executionId: string, options: ExecutionDetailsOptions = {}) {
+    const includeSubExecutions = !!options.includeSubExecutions;
     return useQuery({
-        queryKey: qk.execution(executionId),
+        // The flag is part of the key: the two payload shapes must not answer each other's read. The
+        // parameter is sent only when the flag is set; an unflagged caller issues the plain details
+        // request.
+        queryKey: qk.executionDetails(executionId, includeSubExecutions),
         queryFn: () =>
-            callService<ExecutionDetail>(() => executionService.getExecutionDetails(executionId)),
+            callService<ExecutionDetail>(() =>
+                executionService.getExecutionDetails(
+                    executionId,
+                    includeSubExecutions ? { includeSubExecutions: "true" } : undefined
+                )
+            ),
         enabled: !!executionId,
         // Poll while the run is still going, on the same 5s cadence as the lists. The list views
         // auto-advanced but this page did not, so opening a RUNNING execution to watch it finish

@@ -237,39 +237,57 @@ def handle_delete_request(event):
             'object__type': 'role'
         }
         
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(role_object, "DELETE"):
-                return authorization_error()
-        
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(role_object, "DELETE"):
+            return authorization_error()
+
         # Delete the role and associated user role entries
         try:
             # First, delete all user role entries for this role
             # Query all users that have this role (scan since roleName is sort key)
             logger.info(f"Deleting user role entries for role {role_name}")
-            
+
             try:
-                # Scan the user_roles_table to find all entries with this roleName
-                scan_response = user_roles_table.scan(
-                    FilterExpression='roleName = :roleName',
-                    ExpressionAttributeValues={':roleName': role_name}
-                )
-                
-                # Delete each user role entry
-                for item in scan_response.get('Items', []):
-                    user_id = item.get('userId')
-                    if user_id:
-                        logger.info(f"Deleting user role entry for user {user_id} and role {role_name}")
-                        user_roles_table.delete_item(
-                            Key={
+                # Scan the user_roles_table to find all entries with this roleName, paging to
+                # exhaustion. A single scan page covers at most 1 MB of scanned data, and the
+                # filter is applied after that cap, so a partial read leaves assignments behind.
+                assignment_keys = []
+                scan_kwargs = {
+                    'FilterExpression': 'roleName = :roleName',
+                    'ExpressionAttributeValues': {':roleName': role_name}
+                }
+
+                while True:
+                    scan_response = user_roles_table.scan(**scan_kwargs)
+
+                    for item in scan_response.get('Items', []):
+                        user_id = item.get('userId')
+                        if user_id:
+                            assignment_keys.append({
                                 'userId': user_id,
                                 'roleName': role_name
-                            }
-                        )
+                            })
+
+                    if 'LastEvaluatedKey' not in scan_response:
+                        break
+                    scan_kwargs['ExclusiveStartKey'] = scan_response['LastEvaluatedKey']
+
+                logger.info(f"Deleting {len(assignment_keys)} user role entries for role {role_name}")
+                with user_roles_table.batch_writer() as batch:
+                    for assignment_key in assignment_keys:
+                        batch.delete_item(Key=assignment_key)
             except Exception as e:
-                logger.warning(f"Error deleting user role entries: {e}")
-                # Continue with role deletion even if user role cleanup fails
-            
+                # An assignment is keyed (userId, roleName), so one that outlives its role
+                # re-attaches silently to a role later recreated under the same name. Abort
+                # instead: the role stays and the operation can be retried.
+                logger.exception(f"Error deleting user role entries for role {role_name}: {e}")
+                raise VAMSGeneralErrorResponse(
+                    "Role assignments could not be removed. The role was not deleted."
+                )
+
             # Delete the role from roles table
             roles_table.delete_item(
                 Key={'roleName': role_name},

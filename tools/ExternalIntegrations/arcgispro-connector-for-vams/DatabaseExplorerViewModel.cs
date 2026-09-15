@@ -344,7 +344,13 @@ namespace VamsConnector
                     details.AppendLine("═══════════════════════════════════════");
                     details.AppendLine($"Path:           {file.Path}");
                     details.AppendLine($"Size:           {FormatBytes(file.Size)}");
-                    details.AppendLine($"Type:           {file.Type.ToUpper()}");
+                    // The tree is populated from a basic file listing, which skips the per-object
+                    // metadata and preview-resolution passes. Both fields come back unset for every
+                    // entry, so stating "UNKNOWN" and "No" would assert something the response never
+                    // said — a .jpg with a preview would read as having none.
+                    details.AppendLine(file.HasPrimaryType
+                        ? $"Type:           {file.Type.ToUpper()}"
+                        : "Type:           Not reported by the file listing");
                     details.AppendLine($"State:          {file.State}");
                     details.AppendLine();
                     details.AppendLine("PREVIEW");
@@ -356,7 +362,8 @@ namespace VamsConnector
                     }
                     else
                     {
-                        details.AppendLine($"Has Preview:    No");
+                        details.AppendLine("Has Preview:    Not reported by the file listing");
+                        details.AppendLine("                (resolved when the file is opened)");
                     }
                     details.AppendLine();
                     details.AppendLine();

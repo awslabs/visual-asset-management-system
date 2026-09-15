@@ -25,7 +25,8 @@ Creating a user in Amazon Cognito establishes authentication credentials only. T
 
 1. Create the user (this page)
 2. Assign roles to the user (see [Permissions](permissions.md))
-   :::
+
+:::
 
 ---
 
@@ -125,7 +126,8 @@ Resetting a password has the following effects:
 -   The user's current password immediately stops working.
 -   The user must sign in with the temporary password and set a new permanent password.
 -   The user's VAMS role assignments are preserved (roles are stored separately from the Amazon Cognito user record).
-    :::
+
+:::
 
 <!-- No separate screenshot available for the Reset Password dialog -->
 

@@ -95,6 +95,8 @@ Records per-version file change provenance (who created a version and how). Popu
 
 The `WorkflowExecutionIdIndex` is sparse: only versions produced by a workflow execution carry `changeWorkflowExecutionId`, so direct uploads and other change sources are absent from the index. It resolves which asset file versions a given workflow execution produced.
 
+Provenance reaches this table through Amazon S3 object metadata. An action that creates a new file version stamps the provenance onto the Amazon S3 object as `vams-change*` object metadata, and the `sqsBucketSync` function reads that metadata on ingest and writes the record. Archive operations create a delete marker, which carries no object metadata, so the archive handler writes that provenance directly.
+
 ### Asset History Storage Table
 
 Records asset lifecycle operations (create, edit, archive, unarchive, permanent delete), one record per operation, queried newest first. Records are permanent: they survive asset permanent deletion, and an asset recreated with the same asset ID continues the same history partition.
@@ -381,15 +383,15 @@ them.
 **Workflow configuration row** (`WorkflowExecutionConfigurationStorageTable`, `recordType` =
 `configuration`) — the run's workflow-level inputs:
 
-| Attribute                                                                     | What it records                                                                                                                                                                                                        |
-| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `specifiedPipelinesSnapshot`                                                  | The ordered pipeline references the workflow held at launch, so a later edit to the workflow does not rewrite history                                                                                                  |
-| `inputMetadata` / `inputMetadataTruncated`                                    | The grouped input-metadata envelope handed to the pipelines (truncated inline when oversized)                                                                                                                          |
-| `outputLocationType`, `outputAssetId`, `outputDatabaseId`                     | Where the run wrote: `asset` with a destination, or `none` for a results-only run                                                                                                                                      |
-| `outputFileBaseExecutionPathExtension`                                        | The **resolved** output path prefix (template tags already substituted), so a re-run reproduces the same layout rather than re-resolving per-run tags                                                                  |
-| `inputMetadataDatabaseId` / `inputMetadataFileS3Key` | Provenance of the metadata source. `inputMetadataDatabaseId` is the single database the caller **named**, populated only for a run with no input files                                                                 |
-| `metadataSourceDatabases` / `metadataSourceAssets`                            | Every database the run actually captured metadata from, and the assets named purely as metadata sources — the read paths gate access on the databases listed here, and a re-run reconstructs the same source selection |
-| `outputDatabaseId:outputAssetId`                                              | Composite index key backing the by-output-asset GSI below. Written only when the run targets an asset                                                                                                                  |
+| Attribute                                                 | What it records                                                                                                                                                                                                        |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `specifiedPipelinesSnapshot`                              | The ordered pipeline references the workflow held at launch, so a later edit to the workflow does not rewrite history                                                                                                  |
+| `inputMetadata` / `inputMetadataTruncated`                | The grouped input-metadata envelope handed to the pipelines (truncated inline when oversized)                                                                                                                          |
+| `outputLocationType`, `outputAssetId`, `outputDatabaseId` | Where the run wrote: `asset` with a destination, or `none` for a results-only run                                                                                                                                      |
+| `outputFileBaseExecutionPathExtension`                    | The **resolved** output path prefix (template tags already substituted), so a re-run reproduces the same layout rather than re-resolving per-run tags                                                                  |
+| `inputMetadataDatabaseId` / `inputMetadataFileS3Key`      | Provenance of the metadata source. `inputMetadataDatabaseId` is the single database the caller **named**, populated only for a run with no input files                                                                 |
+| `metadataSourceDatabases` / `metadataSourceAssets`        | Every database the run actually captured metadata from, and the assets named purely as metadata sources — the read paths gate access on the databases listed here, and a re-run reconstructs the same source selection |
+| `outputDatabaseId:outputAssetId`                          | Composite index key backing the by-output-asset GSI below. Written only when the run targets an asset                                                                                                                  |
 
 This row also carries the index that answers "which executions wrote to this asset?":
 
@@ -481,10 +483,12 @@ run. `PipelineExecutionLogsStorageTable` holds the per-step result and error log
 
 | Table                     | Partition Key | Sort Key                   |
 | ------------------------- | ------------- | -------------------------- |
-| TagStorageTable           | `tagName`     | --                         |
-| TagTypeStorageTable       | `tagTypeName` | --                         |
+| TagStorageTableV2         | `databaseId`  | `tagName`                  |
+| TagTypeStorageTableV2     | `databaseId`  | `tagTypeName`              |
 | SubscriptionsStorageTable | `eventName`   | `entityName_entityId`      |
 | CommentStorageTable       | `assetId`     | `assetVersionId:commentId` |
+
+Tags and tag types are database-namespaced. The partition key is the `databaseId` — the literal `GLOBAL` for global entries — and the sort key is the name, so `(databaseId, name)` is the uniqueness boundary and the same name can exist in different databases. Each table carries a name GSI (`tagNameIndex` on `TagStorageTableV2`, `tagTypeNameIndex` on `TagTypeStorageTableV2`) for cross-database name lookups. The former single-key `TagStorageTable`/`TagTypeStorageTable` are retained as legacy migration sources.
 
 ### Configuration Tables
 
@@ -554,8 +558,8 @@ Common uses:
 
 :::note
 Because the preview layout is keyed per input file, every file of an asset gets its own viewer-data
-location, and the auxiliary objects for an asset are found by listing the `\{databaseId\}/\{assetRootKey\}/`
-prefix rather than a bare `\{assetId\}/` prefix.
+location, and the auxiliary objects for an asset are found by listing the `{databaseId}/{assetRootKey}/`
+prefix rather than a bare `{assetId}/` prefix.
 :::
 
 ### Web App Bucket
@@ -621,7 +625,7 @@ The asset index stores one document per asset.
 | `bool_has_assets_related`       | boolean        | Has related assets                 |
 | `bool_archived`                 | boolean        | Archive status (`#deleted` marker) |
 | `MD_`                           | flat_object    | Dynamic metadata fields            |
-| `_rectype`                      | keyword        | Always `"asset"`                   |
+| `str_rectype`                   | text + keyword | Always `"asset"`                   |
 
 ### File Index Schema
 
@@ -648,7 +652,7 @@ The file index stores one document per file within an asset.
 | `list_tags`          | text + keyword | Tags inherited from parent asset       |
 | `MD_`                | flat_object    | Dynamic metadata fields                |
 | `AB_`                | flat_object    | Dynamic attribute fields               |
-| `_rectype`           | keyword        | Always `"file"`                        |
+| `str_rectype`        | text + keyword | Always `"file"`                        |
 
 ### Dynamic Templates
 
@@ -682,7 +686,7 @@ The `MD_` and `AB_` fields use the OpenSearch `flat_object` type. This stores al
 
 ### Excluded Fields
 
-Fields prefixed with `VAMS_` or `_` (except `_rectype`) are excluded from indexing. These are internal system fields not intended for search.
+Fields prefixed with `VAMS_` or `_` are excluded from indexing. These are internal system fields not intended for search.
 
 ## Archived Data Pattern
 

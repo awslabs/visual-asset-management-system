@@ -29,7 +29,9 @@ def run(params: dict) -> PipelineExecutionParams:
     """
     # convert input to data type
     definition = PipelineDefinition(**params)
-    logger.info(f"Pipeline Definition: {definition}")
+    # Log the job name only: the definition carries externalSfnTaskToken, and this container's
+    # plain-logging output is not redacted on its way to CloudWatch.
+    logger.info(f"Pipeline Definition: {definition.jobName}")
 
     # Read metadata + input configuration from S3 (only the locations travel in the definition)
     input_metadata_obj = manifest_io.fetch_metadata(definition.inputMetadataS3Location)
@@ -42,6 +44,17 @@ def run(params: dict) -> PipelineExecutionParams:
         current_stage = PipelineStage(**definition.stages.pop(0))
         definition.currentStage = current_stage
         logger.info(f"Pipeline Current Stage: {current_stage}")
+    else:
+        # A resumed definition already carries its stage. It arrives deserialized from JSON, where
+        # the stage is a plain dict, so it is coerced back; an in-process definition already holds
+        # the object. Without this branch current_stage is unbound and the reference below raises
+        # UnboundLocalError -- and nothing above run() catches it, so the container ends without
+        # reporting against the workflow's task token and the step waits out its full taskTimeout.
+        current_stage = (
+            PipelineStage(**definition.currentStage)
+            if isinstance(definition.currentStage, dict)
+            else definition.currentStage
+        )
 
     # import pipeline based on pipeline type
     if current_stage.type == PipelineType.BLENDERRENDERER:

@@ -10,17 +10,24 @@ import boto3
 import json
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 logger = safeLogger(service="VamsExecuteModelOps")
-lambda_client = boto3.client('lambda')
-s3_client = boto3.client('s3')
-sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+lambda_client = boto3.client('lambda', config=retry_config)
+s3_client = boto3.client('s3', config=retry_config)
+sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
-                                        , executing_userName, executing_requestContext, orchestration_event_prefix=""):
+                                        , executing_userName, executing_requestContext, orchestration_event_prefix="", asset_id=""):
 
     # Create the object message to be sent
     messagePayload = {
@@ -34,7 +41,11 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
-        "orchestrationEventPrefix": orchestration_event_prefix
+        "orchestrationEventPrefix": orchestration_event_prefix,
+        # The asset the run's input file belongs to. constructPipeline locates the file's
+        # subdirectory within the asset with it, so the converted file is described - and written -
+        # beside its source rather than at the asset root.
+        "assetId": asset_id
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -130,7 +141,7 @@ def lambda_handler(event, context):
         execute_pipeline(resolved['inputS3AssetFilePath'], resolved['outputS3AssetFilesPath'], resolved['outputS3AssetPreviewPath']
                                             , resolved['outputS3AssetMetadataPath'], resolved['inputOutputS3AssetAuxiliaryFilesPath']
                                             , resolved['inputMetadataS3Location'], resolved['inputConfigurationS3Location'], external_task_token, executing_userName,
-                                            executing_requestContext, resolved['orchestrationEventPrefix'])
+                                            executing_requestContext, resolved['orchestrationEventPrefix'], resolved['assetId'])
 
         return {
             'statusCode': 200,

@@ -25,6 +25,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../../helper/security";
 import { grantReadPermissionsToAllAssetBuckets } from "../../../../../../helper/security";
+import { batchJobLogGroupEnvironment } from "../../../../../../helper/batchJobLogGroup";
 
 export function buildVamsExecuteGr00tFinetunePipelineFunction(
     scope: Construct,
@@ -67,7 +68,11 @@ export function buildVamsExecuteGr00tFinetunePipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -76,6 +81,11 @@ export function buildVamsExecuteGr00tFinetunePipelineFunction(
 
     suppressCdkNagLambda(fun);
     return fun;
+}
+
+/** The Batch job definition whose container log stream prefix openPipeline registers. */
+export interface OpenPipelineBatchLogProps {
+    jobDefinitionName: string;
 }
 
 export function buildGr00tFinetuneOpenPipelineFunction(
@@ -89,6 +99,7 @@ export function buildGr00tFinetuneOpenPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
+    batchLogs: OpenPipelineBatchLogProps,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "gr00tFinetuneOpenPipeline";
@@ -118,6 +129,10 @@ export function buildGr00tFinetuneOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // Batch default container log group + this pipeline's job definition name, registered as
+            // the Batch state's log source (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...batchJobLogGroupEnvironment(),
+            BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
         },
     });
 
@@ -129,7 +144,11 @@ export function buildGr00tFinetuneOpenPipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);

@@ -27,7 +27,10 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+    generateUniqueNameHash,
+} from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
@@ -246,6 +249,22 @@ export class ModelOpsConstruct extends NestedStack {
             resultPath: "$",
         }).next(pipeLineEndTask);
 
+        // ConstructPipelineTask is the first state, so a failure there ends the execution before
+        // PipelineEndTask runs -- and PipelineEndTask is the only state that reports on the parent
+        // workflow's callback token, which then pends for its full taskTimeout. The handler reports the
+        // token for the errors it raises itself; this covers the failures where it never runs at all:
+        // the function timeout, an out-of-memory kill, an import failure, or an invoke fault that
+        // exhausts the task's service-exception retries.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipeLineEndTask);
+
+        // resultPath keeps the state and appends the error, so pipelineEnd still finds
+        // externalSfnTaskToken alongside it.
+        constructPipelineTask.addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
+
         /**
          * ModelOps Container Setup
          */
@@ -278,6 +297,9 @@ export class ModelOpsConstruct extends NestedStack {
         });
 
         const logGroup = new cdk.aws_logs.LogGroup(this, "ModelOpsLogGroup", {
+            // Encrypted with the shared VAMS CMK when the deployment enables one; undefined
+            // leaves the CloudWatch Logs AWS-managed key.
+            encryptionKey: props.storageResources.encryption.kmsKey,
             logGroupName: "/aws/vendedlogs/Pipelines/" + containerName,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             retention: logs.RetentionDays.ONE_MONTH,
@@ -345,6 +367,7 @@ export class ModelOpsConstruct extends NestedStack {
             this,
             "ModelOpsProcessing-StateMachineLogGroup",
             {
+                encryptionKey: props.storageResources.encryption.kmsKey,
                 logGroupName:
                     "/aws/vendedlogs/VAMSStateMachine-ModelOps" +
                     generateUniqueNameHash(
@@ -353,7 +376,7 @@ export class ModelOpsConstruct extends NestedStack {
                         "ModelOpsProcessing-StateMachineLogGroup",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
         );
@@ -390,6 +413,7 @@ export class ModelOpsConstruct extends NestedStack {
             props.pipelineSubnetsIsolated,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            logGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -482,7 +506,7 @@ export class ModelOpsConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -499,7 +523,7 @@ export class ModelOpsConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*ModelOpsProcessing-StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*ModelOpsProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -516,7 +540,7 @@ export class ModelOpsConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -533,7 +557,7 @@ export class ModelOpsConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecuteModelOps/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecuteModelOps/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -546,7 +570,7 @@ export class ModelOpsConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -561,7 +585,7 @@ export class ModelOpsConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

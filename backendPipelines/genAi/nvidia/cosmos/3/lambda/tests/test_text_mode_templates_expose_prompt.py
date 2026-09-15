@@ -28,6 +28,18 @@ _INPUT_FILE_VARIANTS = ("super-image2video",)
 
 _PROMPT_TAGS = ("PROMPT", "NEGATIVE_PROMPT")
 
+# The JSON literal each non-text tag type renders as, mirroring templateRender.USER_TAG_TYPE_SHAPES. A
+# tag of one of these types IS the whole JSON value and so carries no quotes, which is what the template
+# service enforces on save — its placeholder has to be neutralized for the body to parse here. A string
+# or enum placeholder sits inside the quotes of the value it fills, so it survives the parse as the
+# literal text "{{TAG}}": exactly what the hardcoded-prompt check below reads.
+_TYPED_TAG_LITERALS = {
+    "integer": "0",
+    "number": "0.0",
+    "boolean": "true",
+    "string-list": "[]",
+}
+
 
 def _templates():
     found = []
@@ -37,10 +49,25 @@ def _templates():
     return found
 
 
+def _parsed_body(path, template):
+    text = template.get("configBody") or "{}"
+    for field in template.get("tagSchema") or []:
+        key = field.get("tagKey")
+        literal = _TYPED_TAG_LITERALS.get(str(field.get("type") or "").strip().lower())
+        if key and literal:
+            text = text.replace("{{" + key + "}}", literal)
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        raise AssertionError(
+            f"{os.path.basename(path)}: configBody does not parse with its typed tag placeholders "
+            f"neutralized, so the template service would reject it on save: {exc}") from exc
+
+
 def _text_mode_templates():
     result = []
     for path, template in _templates():
-        body = json.loads(template.get("configBody") or "{}")
+        body = _parsed_body(path, template)
         if body.get("TASK_MODE") in _INPUT_FILE_MODES:
             continue
         if body.get("MODEL_VARIANT") in _INPUT_FILE_VARIANTS:

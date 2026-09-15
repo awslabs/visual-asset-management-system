@@ -67,10 +67,9 @@ def resolve_default_bucket(buckets_table) -> dict:
     while True:
         response = buckets_table.scan(**scan_kwargs)
         items.extend(response.get("Items", []))
-        last_key = response.get("LastEvaluatedKey")
-        if not last_key:
+        if "LastEvaluatedKey" not in response:
             break
-        scan_kwargs["ExclusiveStartKey"] = last_key
+        scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
     if not items:
         raise DefaultBucketNotFoundError(

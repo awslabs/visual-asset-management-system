@@ -1,6 +1,6 @@
 # CLAUDE.md -- VAMS Pipeline Nested Stacks
 
-Auto-loaded when Claude Code operates within `infra/lib/nestedStacks/pipelines/`. Covers pipeline stack layout, required Lambda package layout in `backendPipelines/`, VPC builder wiring, and S3 output path conventions. See `infra/CLAUDE.md` for cross-stack patterns (lambda builder, service helper, security helpers).
+Auto-loaded when Claude Code operates within `infra/lib/nestedStacks/pipelines/`. Covers pipeline stack layout, required Lambda package layout in `backendPipelines/`, VPC builder wiring, sub-process and log registration wiring, and S3 output path conventions. See `infra/CLAUDE.md` for cross-stack patterns (lambda builder, service helper, security helpers).
 
 ---
 
@@ -35,11 +35,30 @@ Without `__init__.py` and `customLogging/logger.py`, Lambda will fail at import 
 
 Pipelines are conditionally created in `pipelineBuilder-nestedStack.ts` based on config flags.
 
-**CRITICAL — VPC Builder Updates:** New pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** condition blocks in `lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Missing any one of these causes deployment failures. Search for `useSplatToolbox` in the file to find all locations:
+**CRITICAL — VPC Builder Updates:** A new pipeline using AWS Batch, ECS, or Fargate must be added to condition blocks in `lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Decide that first, by looking at what `pipelineBuilder-nestedStack.ts` passes as the pipeline's `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
 
-1. **Subnet creation condition** (~line 341): The `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig`. Without this, the VPC has only isolated subnets and Batch compute environments fail with `"Resource subnets are required"`.
-2. **VPC endpoint condition** (~line 540): The `if` block that creates Batch, ECR API, ECR Docker, and optionally EFS interface VPC endpoints. Without this, Batch jobs cannot pull container images or access AWS services.
-3. **ECS endpoint condition** (~line 619): The `needsEcsPrivate` variable. Without this, the ECS agent on Batch instances cannot register with the ECS service.
+| Block                                                                       | Isolated-subnet pipeline | Private-subnet pipeline |
+| --------------------------------------------------------------------------- | ------------------------ | ----------------------- |
+| 1. **Subnet creation** — pushes `subnetPublicConfig`/`subnetPrivateConfig`  | **No**                   | **Yes**                 |
+| 2. **Pipeline-only endpoints** — Batch, ECR API, ECR Docker, optionally EFS | **Yes**                  | **Yes**                 |
+| 3. **ECS endpoint** — the `needsEcsPrivate` variable                        | **No**                   | **Yes**                 |
+
+-   **Block 2 is required either way.** Without it, Batch jobs cannot pull their container image, and the pipeline fails at task start with no obvious cause.
+-   **Block 1 for a private-subnet pipeline only.** `subnetPrivateConfig` is `PRIVATE_WITH_EGRESS` and the `ec2.Vpc` sets no `natGateways`, so CDK creates **one NAT gateway per Availability Zone** (~$66/month at the default two AZs, plus data processing). Add an isolated-subnet pipeline here and that cost is incurred for subnets its ENIs never occupy. Omit it for a private-subnet pipeline and its compute environment fails with `"Resource subnets are required"`.
+-   **Block 3 for a private-subnet pipeline only.** This is the ECS **control-plane** endpoint, which the ECS agent on an EC2-launch-type container instance needs. **Fargate tasks do not use it** — they need ECR, Amazon S3 and CloudWatch Logs, which block 2 supplies. Each endpoint adds one ENI per AZ (~$15/month).
+
+Six pipelines run in isolated subnets today (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in block 2 only. Four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`, which asserts both directions — no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one.
+
+### Sub-Process and Log Registration Wiring
+
+The lambda that starts the pipeline's state machine (or submits a Batch job itself) registers its sub-process and log sources on the orchestration bus (`backendPipelines/CLAUDE.md` "Registering Sub-Processes and Logs"). Its builder supplies:
+
+-   `ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName` and `orchestrationBus.grantPutEventsTo(fun)`.
+-   The container log group env, from `lib/helper/batchJobLogGroup.ts`. A **Fargate** pipeline spreads `...vendedBatchJobLogGroupEnvironment(containerLogGroup)` — the VAMS-owned `/aws/vendedlogs/Pipelines/<Name><hash>` group it passed to `BatchFargatePipelineConstruct` as `logGroup`, whose `awslogs-stream-prefix` the construct sets to the physical job definition name (the Potree builder sets `PDAL_` / `POTREE_JOB_LOG_GROUP_NAME` / `_ARN` inline, one group per job). A **GPU** pipeline whose `CfnJobDefinition` sets no log configuration spreads `...batchJobLogGroupEnvironment()` — `BATCH_JOB_LOG_GROUP_NAME = "/aws/batch/job"` (AWS Batch's default) and `BATCH_JOB_LOG_GROUP_ARN` in the colon-separated `log-group:` form the backend's `CLOUDWATCH_LOG_GROUP_ARN` validator accepts. Never `formatArn(..., ArnFormat.SLASH_RESOURCE_NAME)`, which renders `log-group//aws/batch/job`. Registering a group the job definition does not write to is not caught at synth: `infra/test/pipelines/batchLogRegistrationEnvFargate.test.ts` asserts the registered group IS the job definition's `awslogs-group` and that its `awslogs-stream-prefix` equals `JobDefinitionName`.
+-   `BATCH_JOB_DEFINITION_NAME` — the job definition **name**, passed from the construct as `{ jobDefinitionName }` (`OpenPipelineBatchLogProps`): Fargate `EcsJobDefinition` → `.jobDefinitionName`; a GPU `CfnJobDefinition` with a `jobDefinitionName` prop → the same string the prop was given; an unnamed `CfnJobDefinition` → `jobDefinitionNameFromRef(jobDef.ref)` (the Ref is the ARN with revision; the helper keeps `<name>` from `job-definition/<name>:<rev>`). A `:` in the value fails `LOG_STREAM_NAME` and leaves the container log source permanently `unscoped`.
+-   A `lambda` log entry uses `` `/aws/lambda/${fn.functionName}` `` with `IAMArn(name).loggroup`; never `fn.logGroup` (synthesizes `Custom::LogRetention`).
+
+The producer's `stageName` must equal the ASL state name, which is the CDK construct id of the Batch task (no construct sets `stateName`). Add the pipeline to `infra/test/pipelines/batchLogRegistrationEnvFargate.test.ts`, `batchLogRegistrationEnvGpu.test.ts` or `containerLogRegistrationEnvEcs.test.ts`: they synthesize one construct through `infra/test/support/pipelineConstructHarness.ts`, parse its ASL with `infra/test/support/asl.ts`, and assert the env is present and every module-level `*_STATE_NAME = "…"` literal in the producer (`declaredStageNames`; for cosmos the `COSMOS_BATCH_STATE_NAME` env value) is a key of `States`. Renaming a Batch construct without the producer fails those tests instead of silently breaking the stage ⇄ history join. The executionService role's read on `/aws/vendedlogs/Pipelines/*` (the Fargate container groups), on `/aws/batch/job` (the GPU containers) and `batch:DescribeJobs` is granted once in `lib/lambdaBuilder/workflowFunctions.ts`; a pipeline logging to another group needs a `/aws/vendedlogs/*` name that the existing allow-list covers (see `infra/CLAUDE.md` rule 8).
 
 ### Pipeline S3 Output Path Conventions
 

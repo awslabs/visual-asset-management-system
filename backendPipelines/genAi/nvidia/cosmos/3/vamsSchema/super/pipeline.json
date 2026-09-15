@@ -1,6 +1,6 @@
 {
     "pipelineName": "NVIDIA Cosmos 3 Super (64B)",
-    "category": "GenAI",
+    "category": "WFM",
     "description": "NVIDIA Cosmos 3 Super (64B) omni world model",
     "executionConfig": {
         "executionType": "Lambda",

@@ -12,11 +12,12 @@ import * as Config from "../../config/config";
 import { Construct } from "constructs";
 import { Service, IAMArn } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
-import { Stack } from "aws-cdk-lib";
+import { Stack, Token } from "aws-cdk-lib";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as s3AssetBuckets from "./s3AssetBuckets";
-import { readFileSync } from "fs";
+import { readFileSync, rmSync } from "fs";
 import { join } from "path";
+import { INDEX_HTML_INLINE_SCRIPT_HASHES } from "./cspInlineScriptHashes";
 
 /**
  * Interface for additional CSP configuration
@@ -30,6 +31,28 @@ interface CSPAdditionalConfig {
     fontSrc?: string[];
     styleSrc?: string[];
     frameSrc?: string[];
+}
+
+/**
+ * `'unsafe-inline'` spellings refused in a `script-src` addition. Inline scripts are allowed
+ * by SHA-256 hash, and a source list carrying a hash source never allows all inline script —
+ * browsers ignore the keyword in that list — so the keyword grants nothing while making the
+ * emitted policy read as though it did. Sources that widen `script-src` without touching the
+ * hash sources are merged as given, including script origins and `'unsafe-eval'`, which
+ * `app.webUi.allowUnsafeEvalFeatures` also controls.
+ */
+const SCRIPT_SRC_UNSAFE_INLINE_TOKENS = ["'unsafe-inline'", "unsafe-inline"];
+
+/**
+ * Returns the `'unsafe-inline'` token in a `script-src` addition, or undefined when it carries
+ * none. An entry may hold a whole space-separated source list, each token of which the browser
+ * parses on its own, so every token is checked; CSP keyword sources are ASCII case-insensitive.
+ */
+function findUnsafeInlineToken(entry: string): string | undefined {
+    return entry
+        .trim()
+        .split(/\s+/)
+        .find((token) => SCRIPT_SRC_UNSAFE_INLINE_TOKENS.includes(token.toLowerCase()));
 }
 
 /**
@@ -65,6 +88,18 @@ function loadCSPAdditionalConfig(): CSPAdditionalConfig | undefined {
             if (Array.isArray(value)) {
                 const validEntries = value.filter((entry) => {
                     if (typeof entry === "string" && entry.trim().length > 0) {
+                        const unsafeInline =
+                            key === "scriptSrc" ? findUnsafeInlineToken(entry) : undefined;
+                        if (unsafeInline) {
+                            console.warn(
+                                `CSP additional config: ${unsafeInline} in scriptSrc is not accepted, ` +
+                                    `skipping entry "${entry}". Inline scripts are allowed by SHA-256 hash, ` +
+                                    `and browsers ignore ${unsafeInline} in a source list that carries a hash, ` +
+                                    `so the keyword permits nothing. Hash the script instead ` +
+                                    `(web/scripts/cspInlineScriptHashes.js).`
+                            );
+                            return false;
+                        }
                         return true;
                     } else {
                         console.warn(
@@ -105,7 +140,8 @@ function loadCSPAdditionalConfig(): CSPAdditionalConfig | undefined {
 }
 
 /**
- * Merges additional CSP sources with existing sources, avoiding duplicates
+ * Merges additional CSP sources with existing sources, avoiding duplicates.
+ * Additional sources arrive already screened by loadCSPAdditionalConfig().
  * @param existingSources Current CSP sources array
  * @param additionalSources Additional sources to merge
  * @returns Merged array without duplicates
@@ -198,6 +234,13 @@ export function globalLambdaEnvironmentsAndPermissions(
             },
         ]);
     }
+
+    // Optional default role granted to authenticated users with no assigned role
+    // (used by the Casbin enforcer). Empty string disables the behavior.
+    lambdaFunction.addEnvironment(
+        "DEFAULT_ROLE_NAME",
+        config.app.authProvider.authorizerOptions?.defaultUserRoleName || ""
+    );
 }
 
 /**
@@ -420,13 +463,38 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
     return policyStatement;
 }
 
+/**
+ * A deployment-unique, deterministic name fragment: the SHA-1 of the stack name, account and a
+ * resource identifier, truncated.
+ *
+ * Every input must be a resolved string. An unresolved CDK Token (a `functionArn`, a `roleArn`, a
+ * nested stack's `stackName`) stringifies to `${Token[TOKEN.n]}`, where `n` is a process-wide allocation
+ * counter -- so the hash encodes construct-creation ORDER, not the resource, and moves whenever anything
+ * earlier in the tree allocates a different number of tokens. Emitted as a logical id that makes
+ * CloudFormation replace the resource on every deploy; emitted as a `name`, it renames (and so replaces)
+ * the live resource. Two real synths of one unchanged configuration produced different values at every
+ * site that did this, which is why a Token is refused here rather than hashed: a synth-time error names
+ * the call site, a deploy-time replacement names nothing.
+ */
 export function generateUniqueNameHash(
     stackName: string,
     accountId: string,
     resourceIdentifier: string,
     maxLength = 32
 ) {
-    const hash = crypto.getHashes();
+    for (const [label, value] of [
+        ["stackName", stackName],
+        ["accountId", accountId],
+        ["resourceIdentifier", resourceIdentifier],
+    ] as const) {
+        if (Token.isUnresolved(value)) {
+            throw new Error(
+                `generateUniqueNameHash: ${label} is an unresolved CDK Token (${value}). Its string form ` +
+                    `is an allocation counter, not the resource, so the hash would change between synths. ` +
+                    `Pass a resolved string -- the construct's node.path, or a literal that names the resource.`
+            );
+        }
+    }
     const hashPwd = crypto
         .createHash("sha1")
         .update(stackName + accountId + resourceIdentifier)
@@ -454,16 +522,36 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3", false).Endpoint}/`,
     ];
 
-    // `'unsafe-inline'` is used intentionally here instead of per-script SHA
-    // hashes or a nonce. External viewer plugins (Physna's hosted viewer,
-    // etc.) embed inline `<script>` blocks whose contents we do not control
-    // and which rev frequently. Maintaining a rolling SHA allowlist for
-    // those blocks is unsustainable, and a CSP nonce requires propagating a
-    // new value on every page render (which the viewers cannot cooperate
-    // with). Note that modern browsers ignore `'unsafe-inline'` whenever a
-    // hash or nonce source is present, so this directive only takes effect
-    // when neither is used.
-    let scriptSrc = ["'self'", "'unsafe-hashes'", "'unsafe-inline'"];
+    // Inline scripts in index.html are allowed by SHA-256 hash rather than by
+    // `'unsafe-inline'`, so an injected inline script is still blocked. The
+    // hashes cover the exact bytes of each block's text content, including
+    // indentation, so they are generated rather than hand-written:
+    //
+    //     cd web && npm run build && node scripts/cspInlineScriptHashes.js --ts
+    //
+    // Regenerate whenever an inline block in web/index.html changes — a
+    // Prettier run over that file is enough to invalidate them. The value is
+    // asserted against the built HTML by web/scripts/cspInlineScriptHashes.js
+    // and by the CSP hash test, so drift fails a test rather than the browser.
+    //
+    // The list covers web/index.html only. This policy is a response header on
+    // the whole distribution, so it governs every HTML document served from
+    // web/public as well; an inline block in one of those (the SuperSplat
+    // viewer's upstream service-worker registration) has no hash here and does
+    // not run. A served document that needs its own inline script needs its own
+    // hashes, taken from that document.
+    //
+    // `'wasm-unsafe-eval'` permits WebAssembly compilation for the WASM-based
+    // viewer plugins. It is not an inline-script keyword, so it neither relies
+    // on nor competes with the hash sources; the broader `'unsafe-eval'`, which
+    // those viewers' JavaScript loaders still require, stays gated on
+    // `allowUnsafeEvalFeatures` below.
+    let scriptSrc = [
+        "'self'",
+        "'unsafe-hashes'",
+        "'wasm-unsafe-eval'",
+        ...INDEX_HTML_INLINE_SCRIPT_HASHES,
+    ];
 
     let workerSrc = ["'self'", "blob:", "data:"];
 
@@ -475,11 +563,15 @@ export function generateContentSecurityPolicy(
     let styleSrc = ["'self'", "'unsafe-inline'"];
 
     // frame-src controls what URLs can be loaded into <iframe>s. Without an
-    // explicit directive the browser falls back to default-src ('none'),
-    // which blocks blob:-URL iframes used by add-on viewers (e.g., the
-    // Physna Viewer wraps the Physna-hosted HTML in a sandboxed Blob URL).
-    // 'self' plus blob: covers both same-origin iframes and blob-URL iframes.
-    let frameSrc = ["'self'", "blob:"];
+    // explicit directive the browser falls back to default-src ('none'), which
+    // blocks every iframe. 'self' covers the VAMS-hosted iframe viewers (e.g.
+    // the SuperSplat editor under /viewers/supersplat/) and blob: covers
+    // blob-URL iframes. The Amazon S3 endpoint is here for the same reason it is
+    // on img-src and media-src above: the HTML viewer frames an asset file by its
+    // presigned S3 URL, and without the origin the frame is blocked and the panel
+    // renders empty. A viewer that frames a third-party document needs that
+    // document's origin added, as the Physna add-on branch below does.
+    let frameSrc = ["'self'", "blob:", `https://${Service("S3", false).Endpoint}/`];
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
@@ -522,6 +614,14 @@ export function generateContentSecurityPolicy(
             // Config validation in getConfig() already rejects invalid URLs,
             // so this is defensive — never raise during CSP generation.
         }
+
+        // The add-on relaxes no script-src source. The viewer's `<iframe src>`
+        // is Physna's own HTTPS origin, so that document loads under Physna's
+        // CSP and its inline scripts are outside this policy's reach — the
+        // frame-src and connect-src origins above are all it needs from here.
+        // `'unsafe-inline'` would have no effect on it, and none on a VAMS page
+        // either: a source list that carries a hash source never allows all
+        // inline script, so browsers ignore the keyword wherever it appears.
     }
 
     // Merge additional CSP sources if configuration is loaded
@@ -558,6 +658,52 @@ export function generateContentSecurityPolicy(
     return csp;
 }
 
+/*
+ * Shared CDK Nag suppression reasons.
+ *
+ * Rule 4 requires a reason to justify WHY a finding is acceptable in VAMS, not to restate the rule.
+ * These replace a set of placeholders that did the latter — "Intend to use AWSLambdaBasicExecutionRole
+ * as is at this stage of this project", "The IAM role for ECS Container execution uses AWS Managed
+ * Policies" — which tell a reviewer nothing they could not read off the finding itself.
+ *
+ * They are CONSTANTS, and each value is deliberately ONE SHORT SENTENCE, because a reason is not free:
+ * cdk-nag stamps it onto the metadata of every resource the suppression covers, and the shared grant
+ * suppressions are applied with `applyToChildren` over whole stacks, so the text is multiplied by the
+ * resource count. Replacing one catch-all entry with six verbose ones once moved the apiBuilder template
+ * from ~0.40 MB to ~0.57 MB against a 1 MB per-template ceiling. The reasoning therefore lives in these
+ * doc comments, which cost no template bytes, and only the one-sentence conclusion is emitted.
+ */
+
+/**
+ * `AWSLambdaBasicExecutionRole` — acceptable because its entire content is CloudWatch Logs write.
+ *
+ * The policy grants exactly `logs:CreateLogGroup`, `logs:CreateLogStream` and `logs:PutLogEvents`. Every
+ * VAMS handler writes logs, and the alternative is a hand-rolled per-function policy granting the same
+ * three actions, which is strictly more code for the same access.
+ */
+export const NAG_REASON_LAMBDA_BASIC_EXECUTION =
+    "Grants only CloudWatch Logs create/put, which every VAMS handler needs.";
+
+/**
+ * `AWSLambdaVPCAccessExecutionRole` — acceptable because its content is ENI management only.
+ *
+ * Adds `ec2:CreateNetworkInterface`, `DescribeNetworkInterfaces` and `DeleteNetworkInterface`. A Lambda
+ * attached to the VAMS VPC cannot start without them, and they act on the function's own ENIs.
+ */
+export const NAG_REASON_LAMBDA_VPC_ACCESS =
+    "Grants only the ENI create/describe/delete a VPC-attached Lambda needs.";
+
+/**
+ * `AmazonECSTaskExecutionRolePolicy` + `AWSXrayWriteOnlyAccess` on a container role.
+ *
+ * The first grants the ECR image pull and the CloudWatch Logs write that the ECS agent performs before
+ * the container runs — a task cannot start without it. The second grants X-Ray segment write only. This
+ * is the ECS agent's own access, not the container's: a container's AWS calls are signed with the task
+ * role, which carries the deployment's scoped bucket and Step Functions policies instead.
+ */
+export const NAG_REASON_ECS_TASK_EXECUTION_MANAGED =
+    "Grants the ECR pull and Logs write the ECS agent needs to start a task; X-Ray is segment-write only.";
+
 /**
  * Applies the standard CDK Nag suppressions required by every VAMS Lambda function,
  * scoped to the individual function (and its execution role) rather than the whole stack.
@@ -591,7 +737,7 @@ export function suppressCdkNagLambda(lambdaFunction: lambda.IFunction) {
             },
             {
                 id: "AwsSolutions-IAM4",
-                reason: "Intend to use AWSLambdaVPCAccessExecutionRole as is at this stage of this project.",
+                reason: NAG_REASON_LAMBDA_VPC_ACCESS,
                 appliesTo: [
                     {
                         regex: "/.*AWSLambdaVPCAccessExecutionRole$/g",
@@ -600,7 +746,7 @@ export function suppressCdkNagLambda(lambdaFunction: lambda.IFunction) {
             },
             {
                 id: "AwsSolutions-IAM4",
-                reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
+                reason: NAG_REASON_LAMBDA_BASIC_EXECUTION,
                 appliesTo: [
                     {
                         regex: "/.*AWSLambdaBasicExecutionRole$/g",
@@ -685,7 +831,7 @@ export function suppressCdkNagLambdaFrameworkResources(scope: Construct) {
                 },
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "Intend to use AWSLambdaVPCAccessExecutionRole as is at this stage of this project.",
+                    reason: NAG_REASON_LAMBDA_VPC_ACCESS,
                     appliesTo: [
                         {
                             regex: "/.*AWSLambdaVPCAccessExecutionRole$/g",
@@ -694,7 +840,7 @@ export function suppressCdkNagLambdaFrameworkResources(scope: Construct) {
                 },
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
+                    reason: NAG_REASON_LAMBDA_BASIC_EXECUTION,
                     appliesTo: [
                         {
                             regex: "/.*AWSLambdaBasicExecutionRole$/g",
@@ -707,15 +853,84 @@ export function suppressCdkNagLambdaFrameworkResources(scope: Construct) {
     });
 }
 
-export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
-    const reason =
-        "This lambda needs access to the data in this bucket and should have full access to control its assets.";
+/**
+ * Suppresses the `Resource::*` finding that `Table.grantStreamRead()` necessarily produces.
+ *
+ * CDK renders that grant as two statements: the stream ARN actions, scoped to the table's stream, and
+ * `dynamodb:ListStreams` on `*`. ListStreams enumerates the streams in the account and publishes no
+ * resource to scope to, so the wildcard is the only form Amazon DynamoDB accepts for it.
+ *
+ * Opt-in per function rather than folded into the shared grant suppression, because a bare
+ * `Resource::*` covers every action on every resource — a handler that acquires an unrelated wildcard
+ * later should surface at synth, not inherit this one.
+ */
+export function suppressCdkNagDynamoStreamListWildcard(lambdaFunction: lambda.IFunction) {
+    NagSuppressions.addResourceSuppressions(
+        lambdaFunction,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Table.grantStreamRead() adds dynamodb:ListStreams, which enumerates the account's " +
+                    "streams and supports no resource-level permissions, so Resource must be '*'. The " +
+                    "stream read actions in the same grant are scoped to the table's own stream ARN.",
+                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+        ],
+        true
+    );
+}
+
+/**
+ * Suppresses the `Resource::*` finding for `ecr:GetAuthorizationToken`.
+ *
+ * The action exchanges the caller's IAM identity for a registry credential. It acts on the account's
+ * registry rather than on a repository, publishes no resource, and is documented as requiring `*`;
+ * every task or build that pulls from Amazon ECR needs it. The repository-scoped pull actions that
+ * accompany it are granted on the repository ARN.
+ */
+export function suppressCdkNagEcrAuthTokenWildcard(scope: Construct) {
     NagSuppressions.addResourceSuppressions(
         scope,
         [
             {
                 id: "AwsSolutions-IAM5",
-                reason: reason,
+                reason:
+                    "ecr:GetAuthorizationToken acts on the account's registry, not on a repository, and " +
+                    "supports no resource-level permissions, so Resource must be '*'. The pull actions " +
+                    "granted alongside it are scoped to the repository ARN.",
+                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+        ],
+        true
+    );
+}
+
+/**
+ * Suppresses the resource wildcards that CDK's own `grant*` helpers produce, each shape justified on
+ * its own terms.
+ *
+ * This used to carry a single catch-all entry — a regex matching every `Resource::` finding — which
+ * suppressed every IAM5 resource-wildcard finding under the scope it was given. 58 of its 76 call
+ * sites passed the nested stack, so the
+ * repository's primary IAM guardrail was off for most of the Lambda roles in the deployment. Measured
+ * against a real `cdk synth` of the commercial configuration, that one entry was hiding 148 findings.
+ *
+ * The four shapes below are the ones a CDK grant emits and cannot avoid emitting: the caller asks for
+ * access to a bucket, a table, a function or a callback and CDK renders the wildcard the API requires.
+ * Listing them separately is what makes the suppression a statement rather than a blanket — a wildcard
+ * of any OTHER shape now surfaces at synth, which is the property the blanket removed.
+ *
+ * Measured counts, commercial configuration: 65 S3 object ARNs, 34 Lambda version ARNs, 17 Step
+ * Functions execution ARNs, 14 DynamoDB index ARNs.
+ */
+export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
+    NagSuppressions.addResourceSuppressions(
+        scope,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "This lambda needs access to the data in this bucket and should have full access to control its assets.",
                 appliesTo: [
                     {
                         regex: "/Action::s3:.*/g",
@@ -724,11 +939,53 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
             },
             {
                 id: "AwsSolutions-IAM5",
-                reason: reason,
+                reason:
+                    "Object ARN of one named bucket: a bucket grant covers its objects, and Amazon S3 " +
+                    "expresses that only as the bucket ARN plus a key wildcard.",
                 appliesTo: [
                     {
                         // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                        regex: "/^Resource::.*/g",
+                        regex: "/^Resource::<.*Bucket.*\\.Arn>/\\*$/g",
+                    },
+                ],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Index ARNs of one named table: a table grant covers its global secondary indexes, " +
+                    "and a GSI query is denied without them.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::<.*Table.*\\.Arn>/index/\\*$/g",
+                    },
+                ],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Qualifier ARNs of one named function: grantInvoke covers its versions and aliases, " +
+                    "which reaches no other function.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::<.*\\.Arn>:\\*$/g",
+                    },
+                ],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Per-asset topic AssetTopic<assetId>, created at runtime. Account and Region are " +
+                    "pinned; the wildcard is over the asset id only.",
+                appliesTo: [{ regex: "/^Resource::arn:.*:sns:.*:AssetTopic\\*$/g" }],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Task-token callback: the execution holding the token is created per run, so its " +
+                    "ARN is unknown at synthesis. Scoped to this account and Region.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::arn:.*:states:.*:\\*$/g",
                     },
                 ],
             },
@@ -819,4 +1076,55 @@ export function grantReadWritePermissionsToAllAssetBuckets(lambdaFunction: lambd
 
     // Add CDK Nag suppressions
     //suppressCdkNagErrorsByGrantReadWrite(lambdaFunction);
+}
+
+/**
+ * Remove a temporary directory that carried a secret into a CDK code asset.
+ *
+ * `lambda.Code.fromAsset()` stages its source into the cloud assembly while the construct is being
+ * created, so by the time the Function exists the staged copy is what will be uploaded and the source
+ * directory has no further purpose. Left behind it is a cleartext credential on the build host, one
+ * per synth: over a thousand such directories accumulated on a single developer machine, and a CI
+ * runner keeps them for the life of its workspace.
+ *
+ * Failure to remove it is deliberately NOT fatal. This runs during synth of a stack that is otherwise
+ * complete and correct, and on Windows a directory can be transiently locked by an indexer or a virus
+ * scanner; aborting the deployment over a temp-file cleanup would trade a small exposure for a total
+ * outage. The warning names the path so it can be removed by hand.
+ */
+export function discardStagedSecretAsset(assetDir: string) {
+    try {
+        rmSync(assetDir, { recursive: true, force: true });
+    } catch (err) {
+        console.warn(
+            `Warning: could not remove the temporary secret asset directory ${assetDir}. It holds ` +
+                `the credential in cleartext — delete it by hand. (${err})`
+        );
+    }
+}
+
+/**
+ * The SSM parameter ARNs the OpenSearch schema-deploy custom resource is allowed to write.
+ *
+ * Exactly the three parameters `schemaDeploy/deployschema.ts` issues `PutParameterCommand` for — the
+ * domain endpoint and the two index names. It reads nothing, so no Get action is granted.
+ *
+ * Two details this encodes so neither construct has to:
+ *
+ *  - The configured names carry a LEADING SLASH and `IAMArn(...).ssm` already supplies the separator
+ *    after `parameter`, so the slash is stripped. `parameter//name` matches nothing, which would leave
+ *    a grant that authorizes no parameter at all and a schema deploy that fails at the first write.
+ *  - A name that is unset is SKIPPED rather than dereferenced. `getConfig()` always sets all three, but
+ *    a construct that throws a TypeError on a partial config breaks every test harness that builds one
+ *    by hand — and a grant for a parameter the handler was not given is not needed anyway, because the
+ *    handler only writes the names passed into its resource properties.
+ */
+export function schemaDeploySsmParameterArns(config: Config.Config): string[] {
+    return [
+        config.openSearchDomainEndpointSSMParam,
+        config.openSearchAssetIndexNameSSMParam,
+        config.openSearchFileIndexNameSSMParam,
+    ]
+        .filter((param): param is string => typeof param === "string" && param.length > 0)
+        .map((param) => IAMArn(param.replace(/^\/+/, "")).ssm);
 }

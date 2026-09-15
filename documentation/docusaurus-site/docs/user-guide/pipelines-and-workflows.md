@@ -43,9 +43,14 @@ execution settings and the admin settings that govern how it may be run are show
 configuration templates as a separate list; **Archive** withdraws it from use. Only the actions your
 permissions allow appear in the menu, so a read-only user sees **Templates** alone.
 
+Deleting a template from that list is permanent and is never blocked. When an auto-triggered workflow's
+trigger had chosen the template as this pipeline's default, the delete succeeds and reports a warning naming
+those workflows, which stays on the template list after the notification clears. Triggered executions of the
+named workflows fail until each trigger picks a different default template for the pipeline.
+
 ## Creating a custom pipeline
 
-Navigate to **Pipelines** and click **Create Pipeline**. The form is a three-step wizard — **Basic**, **Execution**, then **Settings** — and the pipeline is created when you finish the last step.
+Navigate to **Pipelines** and choose **Create Pipeline**. The form is a three-step wizard — **Basic**, **Execution**, then **Settings** — and the pipeline is created when you finish the last step.
 
 ![Pipeline wizard showing the Basic step and the three-step progress indicator](/img/pipeline_wizard_20260803_v2.6.png)
 
@@ -103,8 +108,8 @@ When one pipeline supports several modes that consume different inputs, set the 
 
 **Archive** in a pipeline's actions menu withdraws it from use: it is disabled, it stops appearing in the
 lists unless **Include Archived** is selected, and it cannot be chosen for a new workflow step. The pipeline
-record is kept, so archiving is reversible — an archived pipeline is restored with
-[`vamscli pipeline unarchive`](../cli/commands/pipelines.md).
+record is kept, so archiving is reversible. Restoring one is a command-line operation — the web interface
+has no restore action — using [`vamscli pipeline unarchive`](../cli/commands/pipelines.md).
 
 :::warning[Check which workflows use a pipeline before archiving it]
 Archiving succeeds even while workflows still reference the pipeline, and those workflows keep their
@@ -120,6 +125,61 @@ execution type, its target function, queue, event bus or farm, or its callback a
 each workflow that uses it and save it again to bring it up to date. Saving such a change reports a warning
 naming the workflows that reference the pipeline, so you know which ones to revisit.
 
+### Configuration templates
+
+**Templates** in a pipeline's actions menu lists its configuration templates; **Create Template**, or
+**Edit** on a template, opens the template form. The form is a four-step wizard — **Basic**, **Pipeline
+overrides**, **Tags and Config Body**, then **Review** — and a step you have completed can be reopened
+from the progress strip.
+
+#### Basic
+
+| Field                                               | Required | Description                                                                                                                                                                                                                                |
+| --------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Template Name**                                   | Yes      | Display name shown in template pickers.                                                                                                                                                                                                    |
+| **Description**                                     | No       | What the template configures.                                                                                                                                                                                                              |
+| **Input Instructions**                              | No       | Guidance shown to whoever runs an execution with this template. Line breaks and indentation are preserved, and a preview shows how the execute screen renders the text — long instructions fold behind a control there rather than inline. |
+| **Set as the pipeline's default template**          | No       | Pre-selects this template on the execute form and lets a require-template pipeline run without one being chosen. A pipeline has one default, so saving this clears the flag on any other template.                                         |
+| **Allow editing the config body at execution time** | No       | Lets the person running an execution edit the configuration body inline before launch, as a one-off change for that run.                                                                                                                   |
+
+#### Pipeline overrides
+
+Optional. Each of the pipeline's input-handling settings — input file count, asset selection rules,
+metadata inputs, and input file filters — can be overridden for executions that use this template. A
+setting left un-toggled inherits the pipeline's value. This step does not touch the configuration body.
+
+#### Tags and Config Body
+
+The tag schema and the configuration body are authored side by side, so the body can be written against
+the tags it references.
+
+-   **Tag Schema** (left): one entry per tag — its key, type (`String`, `Number`, `Decimal`, `Boolean`,
+    `String Multi-line`, or `List` with its allowed values), label, description, default value, and whether
+    it is required. Each tag becomes a field on the execute form. Keys are letters, digits and
+    underscores only, so the `{{tagKey}}` placeholder can be substituted.
+-   **Config Format** and **Config Body** (right): the format (`json`, `yaml`, `openjd`, `xml`, or `raw`)
+    and the body editor, which stays in view while the tags are edited.
+-   **This template's tags**: a chip per declared tag under the editor. Clicking a chip inserts the tag's
+    `{{tagKey}}` placeholder at the cursor. In a `json` body a `String` or `List` tag is inserted in
+    quotes, because its value renders as text inside the string it fills, and a `Number`, `Decimal`,
+    `Boolean`, or `String Multi-line` tag is inserted bare, because its value renders as a JSON value of
+    that type; every other format inserts the bare placeholder.
+-   A declared tag that the body never references is flagged — its value would be collected on the execute
+    form and then ignored — and a `json` body is checked as you type against the same rule the save
+    applies, so a quoted typed tag or a text tag outside its quotes is reported before **Save**.
+-   **System template tags**: the collapsed catalog beneath the editor lists this template's own tags and
+    then every system placeholder the body may use.
+-   **Execute-form preview**: how the tag fields appear on the execute form when this template is chosen.
+
+#### Review
+
+The name, format, options, and overrides, a table of the declared tags, and a read-only preview of the
+body. The body check and the unreferenced-tag notice are advisory — saving is what decides. A body the
+save refuses reports the reason next to **Save**, and **Tags and Config Body** reopens from the progress
+strip to correct it. See
+[Configuration templates and per-run options](../pipelines/custom-pipelines.md#configuration-templates-and-per-run-options)
+for the tag schema fields and the quoting rule in detail.
+
 ## Viewing available workflows
 
 1. Navigate to **Workflows** from the left navigation menu.
@@ -132,9 +192,9 @@ Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions
 
 ## Creating a workflow
 
-Navigate to **Workflows** and click **Create Workflow**. If you are not already viewing a specific database, select the database for this workflow, or **GLOBAL** for a cross-database workflow.
+Navigate to **Workflows** and choose **Create Workflow**. If you are not already viewing a specific database, select the database for this workflow, or **GLOBAL** for a cross-database workflow.
 
-The editor is a step-by-step wizard: **Basic information**, **Execution settings**, **Pipelines**, then **Review**. Editing an existing workflow adds a **Triggers (optional)** step — triggers are attached to a saved workflow, so they cannot be set while creating one.
+The editor is a step-by-step wizard: **Basic information**, **Execution settings**, **Pipelines**, **Triggers (optional)**, then **Review**. Triggers can be drafted while creating a workflow and are written once the workflow itself has been created; when editing, each change to a trigger is saved on its own.
 
 ### Basic information
 
@@ -148,22 +208,22 @@ The editor is a step-by-step wizard: **Basic information**, **Execution settings
 
 The workflow's own gate. Every execution is checked against these before any pipeline is considered:
 
-| Setting                                | Description                                                                                                                                                                |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Input file count**                   | `None`, `One file`, or `Multiple files`.                                                                                                                                   |
-| **Asset selection rules**              | The asset span, and whether a whole asset or a folder may be selected.                                                                                                     |
-| **Input file filters — allow/exclude** | The file patterns the workflow admits. Hidden when the workflow takes no input files.                                                                                      |
-| **Metadata provided to pipelines**     | Database metadata, asset metadata, file metadata, and file attributes.                                                                                                     |
-| **Output destination**                 | **Write to an asset**, or **Results only** for a workflow that records results text and logs and writes no asset output.                                                   |
-| **Allow choosing the output asset**    | Whether whoever runs the workflow may send output to a different asset and set an output path prefix. Offered for an asset destination.                                    |
-| **Default output path prefix**         | The prefix an execution is pre-filled with. It supports tags resolved per run, so `/\{\{executionId\}\}/` gives every run its own folder. Leave it blank to add no prefix. |
-| **Allow workflow trigger chaining**    | Whether a file written by another workflow may fire this workflow's triggers. A workflow never fires on output it wrote itself, so it cannot loop on its own files.        |
-| **Concurrency restriction**            | `None`, `One per asset`, or `One per input file` — whether a new execution waits while a conflicting one is still running.                                                 |
+| Setting                                | Description                                                                                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Input file count**                   | `None`, `One file`, or `Multiple files`.                                                                                                                               |
+| **Asset selection rules**              | The asset span, and whether a whole asset or a folder may be selected.                                                                                                 |
+| **Input file filters — allow/exclude** | The file patterns the workflow admits. Hidden when the workflow takes no input files.                                                                                  |
+| **Metadata provided to pipelines**     | Database metadata, asset metadata, file metadata, and file attributes.                                                                                                 |
+| **Output destination**                 | **Write to an asset**, or **Results only** for a workflow that records results text and logs and writes no asset output.                                               |
+| **Allow choosing the output asset**    | Whether whoever runs the workflow may send output to a different asset and set an output path prefix. Offered for an asset destination.                                |
+| **Default output path prefix**         | The prefix an execution is pre-filled with. It supports tags resolved per run, so `/{{executionId}}/` gives every run its own folder. Leave it blank to add no prefix. |
+| **Allow workflow trigger chaining**    | Whether a file written by another workflow may fire this workflow's triggers. A file recorded as written by this workflow does not re-fire it — see the warning below. |
+| **Concurrency restriction**            | `None`, `One per asset`, or `One per input file` — whether a new execution waits while a conflicting one is still running.                                             |
 
 These are **authored, not inherited** from the workflow's pipelines. Set the input file count to the **highest** value any pipeline and template combination in the workflow can require — a lower value rejects a selection a template would have accepted. The input file filters are applied **before** the pipelines' own, so a filter here that excludes a type one of its pipelines needs makes that pipeline unsatisfiable; the [Validation](#saving-the-workflow) panel warns when that happens.
 
 :::warning[Chained triggering can run in a loop]
-Two workflows that each write a file the other accepts trigger each other indefinitely. Check the input file filters of every workflow in the chain before turning chaining on.
+Two workflows that each write a file the other accepts trigger each other indefinitely. VAMS applies no depth limit and looks for no cycles: a file is compared only against the workflow recorded as writing it, never against the chain of runs that led to it. That check also depends on what the file records — a workflow-written file that does not name the workflow that produced it counts as another workflow's output, so a workflow with chaining on can fire on a file it wrote itself. Check the input file filters of every workflow in the chain before turning chaining on.
 :::
 
 ### Triggers (optional)
@@ -181,15 +241,17 @@ The **Trigger name** field is what separates them. Leave it empty for the workfl
 -   A workflow whose **concurrency restriction** is per-asset supports only one trigger of a kind, since several would compete for the same asset.
 -   Two triggers of a kind cannot use the **same default templates**. The templates are what distinguish them, so the same set twice describes the same trigger — including two that both choose no template.
 
+When a workflow is created with triggers, the workflow is written first and each trigger after it, in the order they were drafted. A trigger the server refuses does not undo the workflow: the editor reopens on the new workflow's **Triggers (optional)** step with that trigger in the form and the reason beside it, and any other trigger that was not written is listed as **Not saved** with a **Retry** action. Setting a trigger needs permission for the trigger endpoint as well as permission to create the workflow; when your role has only the latter, the step says so and the workflow can still be created — a workflow administrator can add triggers later.
+
 :::tip
 Triggers are how processing chains together. A workflow that generates preview thumbnails or extracts metadata can be set to fire on `.e57` point cloud uploads, so the work happens on ingest with no one starting it.
 
-For a trigger to fire on files that **another workflow produced**, that workflow must also permit trigger chaining. A workflow never fires on output it wrote itself, so it cannot loop on its own files.
+For a trigger to fire on files that **another workflow produced**, that workflow must also permit trigger chaining. A file recorded as written by this workflow does not re-fire it, which is narrower than a loop guard — see [Chained triggering can run in a loop](#execution-settings).
 :::
 
 ### Pipelines
 
-Click **Add Pipeline** to add a step, then choose its pipeline. The available pipelines are those in the workflow's own database plus all GLOBAL pipelines.
+Choose **Add Pipeline** to add a step, then choose its pipeline. The available pipelines are those in the workflow's own database plus all GLOBAL pipelines.
 
 The steps form an ordered list and execute top to bottom. Drag a step by its handle to reorder it, or use **Remove** to drop it. Each step may also set:
 
@@ -235,13 +297,26 @@ Workflows can be executed in two ways:
 
 ### Manual execution
 
-Start an execution from an asset's **Automation** menu (in the file manager toolbar, beside **Export**),
-or from the **Execute** action on a workflow. Either opens the same wizard, which has one stage per
-decision to make: **Input**, then one stage for each pipeline in the workflow, then **Review**.
+Start an execution from **Execute workflow** on the Executions board, from an asset's **Automation**
+menu (in the file manager toolbar, beside **Export**), or from the **Execute** action on a workflow.
+Each opens the same dialog. A step rail on its left lists every step: **Workflow** (when the
+workflow still has to be chosen — the workflow card's action skips it), **Inputs**, one step for
+each pipeline in the workflow, then **Review**. A completed step in the rail can be clicked to go back.
 
-#### Input
+#### Workflow
 
-Choose the files to process, and the output target when the workflow allows it to be overridden.
+A searchable list of the workflows you can run. Each row shows the categories of the workflow's pipelines
+(Conversion, Preview, GenAI, …) as chips — three at most, the rest folded into a **+N** chip — and states
+what the workflow accepts — how many files, which file types, and whether it writes to an asset. The search
+box matches those categories as well as names and descriptions. When you started from a file selection,
+each row also says whether it is **Compatible** with that selection; choosing one that is not lists
+the reasons, and **Continue** stays disabled.
+
+#### Inputs
+
+Choose the files to process, and the output target when the workflow allows it to be overridden. The step
+is a stack of full-width sections: the input files first, then **Output Target** — output database, output
+asset and path prefix on one row — and, for a workflow that takes no files, **Metadata Sources** below it.
 
 Files are chosen through a cascading picker — **Database → Asset → File** — that searches as you type, so
 an asset holding thousands of files does not have to be listed to find one. Launching from an asset
@@ -249,16 +324,54 @@ pre-fills that asset, and you can still switch to a different one.
 
 Only files the workflow accepts are offered. When its filters hide some of an asset's files, the picker
 says how many were hidden, so a file that is missing from the list reads as "this workflow does not take
-that type" rather than "it is not there". The stage also shows the file types the workflow and its
-pipelines require, so you can see what is being asked for before selecting anything.
+that type" rather than "it is not there".
+A requirements strip under the dialog title shows how many files the workflow takes, the file
+types it accepts and where output goes, so what is being asked for is visible while you select.
+Anything still needed is listed under **To continue** once you start selecting or try to move on.
 
 What you can select depends on the workflow's configuration:
 
-| Workflow accepts | The Input stage offers                                                                                                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| One file         | A single picker. **Whole asset (all files)** appears as an option only when the workflow permits a whole-asset input.                                                                  |
-| Multiple files   | A list you add rows to and remove rows from. Each row has its own database and asset picker, so one execution can combine files from several assets — or several files from one asset. |
-| No files         | No file picker. The run takes its identity from the output target instead, and a **Metadata Sources** section appears when its pipelines read asset or database metadata.              |
+| Workflow accepts | The Inputs step offers                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One file         | A single picker. **Whole asset (all files)** appears as an option only when the workflow permits a whole-asset input.                                                                                                                                                                                                                                                                 |
+| Multiple files   | A list of the selected files — grouped by asset, each with a compatibility badge, **Edit** and **Remove** — fed by **Add files…** (many files of one asset at once) and **Add Input File** (one file through a Database → Asset → File picker). Entries carry their own database and asset, so one execution can combine files from several assets — or several files from one asset. |
+| No files         | No file picker. The run takes its identity from the output target instead, and a **Metadata Sources** section appears when its pipelines read asset or database metadata.                                                                                                                                                                                                             |
+
+#### Selecting many files
+
+A multi-file workflow can take up to **1,000** input files in one execution, and the Inputs step is built
+for selections of that size. The selected files appear as one compact list headed by its count — **N files
+across M assets · max 1000** — grouped by asset, with each row naming the asset, the asset-relative key,
+whether the workflow accepts that file (**Compatible** / **Not compatible**, with the reason on hover), and
+any pinned version. Only the rows on screen are drawn, so a selection of hundreds of files scrolls like a
+short one. A filter box narrows the list by key or asset, **Clear all** empties it after a confirmation, and
+**Remove** drops one entry.
+
+**Add files…** opens the bulk picker. Choose the database and asset, and the asset's files are listed with
+a checkbox each, in listing order, page by page — **Load more** continues the listing. A **Folder prefix**
+(for example `/scans/`) restricts the listing to that folder on the server, and the filter box narrows the
+loaded files by name. **Select all shown** checks every listed file that matches; **Select all matching**
+walks the remaining pages first, stopping when the run would reach its 1,000-file limit. Files the workflow
+does not accept are shown with their badge but cannot be checked, and a file already in the selection is
+marked **Already selected** rather than offered twice. **Add N files** appends the checked files to the
+list. When the workflow permits them, the picker also offers **Add whole asset** and **Add folder** for the
+prefix you typed.
+
+For a set of keys you already hold, switch the picker to **Paste keys**: one asset-relative key per line
+(`/scans/001.e57`), for the asset chosen above. A key ending in `/` is a folder and a bare `/` is the whole
+asset. The count under the box says how many keys are compatible, already selected, or rejected, and
+**Add N keys** appends the compatible ones. A key that names no existing file is caught when the run is
+launched.
+
+**Add Input File** opens one picker row — **Database → Asset → File**, with **Whole asset (all files)** and
+the asset's folders offered when the workflow permits them. The row stays open after the file is picked so
+its version can be pinned, then **Done** folds it into the list; **Edit** on a listed row opens it the same
+way. The picker never adds a file twice: an entry is identified by its database, asset and key, and one
+already in the list is marked rather than offered again.
+
+The selection is counted against the 1,000-file limit as you build it. Over the limit, the list header says
+so, the Inputs step reads **Incomplete** in the rail, **Review** lists the excess under **Blockers**, and
+**Launch** stays disabled until enough entries are removed.
 
 Each selected file may optionally pin a **file version**. The list holds that file's own stored versions,
 newest first; the default, **Latest**, reads whichever version is current when the execution starts rather
@@ -270,7 +383,7 @@ version to pin and the option does not appear.
 
 A workflow that takes **no files** — one whose pipelines generate their output rather than transform an
 input, for example a text-to-3D or text-to-video pipeline — has nothing to choose in a file picker. What it
-can still be given is metadata, and that is what the **Metadata Sources** section of the Input stage is for.
+can still be given is metadata, and that is what the **Metadata Sources** card of the Inputs step is for.
 It appears only when the workflow and its pipelines actually read asset or database metadata, and offers:
 
 -   **Metadata source database (optional)** — the one database whose own metadata is read and handed to the
@@ -285,7 +398,7 @@ metadata source is **not** an input file: nothing is read from the asset's files
 involved, and the selection does not decide where output is written.
 
 Because there is no input file to infer a destination from, a workflow of this kind that writes to an asset
-needs its **Output Target** named explicitly — choose the output database and asset in the same stage. Such a
+needs its **Output Target** named explicitly — choose the output database and asset in the same step. Such a
 workflow therefore has to permit choosing the output asset. A results-only workflow writes no asset output,
 so it asks for neither.
 
@@ -295,16 +408,23 @@ prompt, a model setting, or a description held there. When nothing is named, the
 for each pipeline that reads metadata it was given no source for, and that pipeline runs without it.
 :::
 
-#### Pipeline stages
+#### Pipeline steps
 
-One stage per pipeline in the workflow. Choose the configuration template for that step, and fill in any
-values the template asks for. The rendered configuration is collapsed by default — expand it to review or,
-where the pipeline allows it, override the exact configuration that will be sent.
+One step per pipeline in the workflow. The step's header says what it reads — how many files and which
+types — so the Inputs step does not have to be revisited to remember. Choose the configuration template
+for the step and fill in the values it asks for; long template instructions are folded under **Show
+all**. The rendered configuration is collapsed by default — expand it to review or, where the pipeline
+Each template input shows the `{{tag}}` placeholder it fills in the configuration body, and the small tag icon beside the configuration lists, on hover or click, every placeholder the body can use: the template's own tags first, then the system tags. Where the pipeline or template
+allows it, tick **Customize configuration before running** to edit the exact configuration that will be
+sent.
 
 #### Review
 
-A summary of everything the run will use: the input files and pinned versions, the output target and path
-prefix, and each step's template and values. Launching from here starts the execution.
+A card for each part of the run — the input files and pinned versions (as a count per asset with the
+first rows listed and **Show all** for the rest), any metadata sources, the output target and path prefix,
+and each step's template, values and whether its configuration was overridden — each with an **Edit** link
+back to its step. Anything that still prevents launching is listed once under
+**Blockers**, also linked to the step that clears it. **Launch** starts the execution.
 
 The workflow then runs asynchronously, processing the selected files through each pipeline step in
 sequence.
@@ -345,9 +465,9 @@ matching its allow filters — and not removed by its exclude filters — is upl
 workflow's database, and the uploaded file becomes the workflow's input. A workflow may carry several
 triggers, and an upload runs the workflow once for every trigger it matches.
 
-Triggers are set on a saved workflow, in the **Triggers (optional)** step that appears when editing it. Each
-trigger carries its own filters and its own default template per pipeline step, since no one is present to
-choose a template on an automatic run. See [Triggers (optional)](#triggers-optional).
+Triggers are set in the workflow editor's **Triggers (optional)** step, when creating the workflow or when
+editing it later. Each trigger carries its own filters and its own default template per pipeline step, since
+no one is present to choose a template on an automatic run. See [Triggers (optional)](#triggers-optional).
 
 ### Monitoring execution
 
@@ -358,9 +478,15 @@ Execution progress can be monitored from the **Executions** page or from the ass
 -   Start and end timestamps
 -   Error details for failed executions
 
-The **Executions** page lists every execution you may see, across all workflows and databases. A run is listed when you can view its workflow and every asset it read — each selected file's asset plus each asset named as a metadata source — or, for a run that read nothing, the asset it wrote to. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
+The **Executions** page lists every execution you may see, across all workflows and databases. A run is listed when you can view its workflow, every asset it read — each selected file's asset plus each asset named as a metadata source — and the asset it wrote to. A run that wrote its output into an asset you cannot open is therefore not listed, even when you can open every asset it read; ask an administrator for read access to the destination asset if you expect to see such a run. A run that produced results only, writing no files, has no destination asset, so being able to view its workflow is enough. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
+
+Aborting a run from an execution's **⋮** actions menu signals it to stop and records it as **Aborted**. Some
+steps submit work that VAMS stops separately from the workflow itself — a container job, or a Deadline Cloud
+farm job. When one of those could not be stopped, the abort still succeeds and reports a warning naming the
+job, which stays on the page after the notification clears; that work may still be running and billing until
+it is stopped where it runs.
 
 :::note
 Workflow execution is asynchronous. Results (output files, previews, metadata) appear on the asset after all pipeline steps complete. Changes may take a few minutes to propagate through the system, including search results.
@@ -376,13 +502,13 @@ output in the asset when several runs have written to the same place.
 
 The tabs below it break the run down:
 
-| Tab           | What it shows                                                                                                                                                                                                     |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Inputs**    | Each selected input file with the exact file version the run read, then the metadata gathered and passed to the pipelines in two blocks — each involved database's own metadata, then the asset and file metadata |
-| **Pipelines** | One entry per pipeline step: its status and timings, the template it used, the tag values supplied, and the final configuration actually delivered to it                                                          |
-| **Outputs**   | Where the run wrote, then everything it produced: output **files** with their version and size, **preview** files, **metadata** written back to the asset, and any **results** text returned                      |
-| **Settings**  | The settings the run was governed by — the workflow's own settings, and per step the settings that step ran under                                                                                                 |
-| **Logs**      | The execution log, selectable per step. Available to users whose permissions allow reading logs                                                                                                                   |
+| Tab           | What it shows                                                                                                                                                                                                                                                                                                                   |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Inputs**    | Each selected input file with the exact file version the run read, then the metadata gathered and passed to the pipelines in two blocks — each involved database's own metadata, then the asset and file metadata                                                                                                               |
+| **Pipelines** | One entry per pipeline step: its status and timings, the template it used, the tag values supplied, the final configuration actually delivered to it, and — for a step that runs its own nested state machine or container job — a **Sub-processes** section listing each stage of that work with its status, timing, and error |
+| **Outputs**   | Where the run wrote, then everything it produced: output **files** with their version and size, **preview** files, **metadata** written back to the asset, and any **results** text returned                                                                                                                                    |
+| **Settings**  | The settings the run was governed by — the workflow's own settings, and per step the settings that step ran under                                                                                                                                                                                                               |
+| **Logs**      | The execution log, selectable per step and, within a step, per log source. Available to users whose permissions allow reading logs                                                                                                                                                                                              |
 
 :::note[Outputs lists asset files only]
 A pipeline may also write working files and certain viewer data — point-cloud viewer tiles, some preview
@@ -394,8 +520,24 @@ here despite having succeeded.
 The **Logs** tab can be scoped to the whole execution or to a single pipeline step. Beyond the log the
 step's own process wrote, a step's logs include the log of the resource VAMS invoked for it. That is usually
 where the reason for a launch that failed before the pipeline started is recorded. Steps invoked through a
-queue, an event bus, or Deadline Cloud have no such log, so nothing extra is shown for them. If a log could
-not be read, the tab says which one rather than silently returning less.
+queue or an event bus have no such log, so nothing extra is shown for them. A Deadline Cloud step has no
+invocation log either, but it shows its farm job's status under **Sub-processes** and offers the job's
+session log as a log source. If a log could not be read, the tab says which one rather than silently
+returning less.
+
+When the tab is scoped to a step, a **Log source** selector lists every log known for that step — the log
+of the resource VAMS invoked, each location the pipeline registered for itself (a container job's log, for
+example), and the log of a nested state machine — labelled with the stage it belongs to. **All sources**
+merges them; choosing one reads only that log. After a live read, a **Sources** row reports what each
+source returned: how many lines were read, or that it was denied, not found, failed for another reason
+(`error` — a throttle or a location that could not be read; the tab names the cause), empty, skipped, or
+read without the run-specific filter because the exact container log stream could not be resolved yet.
+
+A step's **Sub-processes** section on the Pipelines tab shows the same work from the status side: each
+stage of the step's nested state machine or container job with its status and timing, a failure the step
+caught and reported marked as such, and a note when the list was cut short. Stage status is worked out
+from the sub-process's own execution history when the page is displayed, so it appears as soon as the step
+has registered its sub-process and stays accurate for a run that is still in progress.
 
 **Stored** logs are captured as a run finishes, which can be before the logging service has finished
 ingesting the run's events, so a stored log is often empty even for a run that succeeded. Switching
@@ -431,7 +573,7 @@ GLOBAL pipelines are typically built-in processing pipelines deployed with VAMS 
 
 VAMS may include built-in pipelines depending on your deployment configuration. These are created during deployment and registered as GLOBAL pipelines. Common built-in pipelines include:
 
--   **3D Conversion** -- Converts 3D file formats (for example, IFC to glTF).
+-   **3D Conversion** -- Converts 3D mesh file formats (for example, OBJ to glTF).
 -   **Preview Generation** -- Creates thumbnail preview images for assets and files.
 -   **Point Cloud Processing** -- Processes point cloud data (for example, E57, LAS) for web visualization.
 -   **Metadata Extraction** -- Extracts metadata from file headers and content.

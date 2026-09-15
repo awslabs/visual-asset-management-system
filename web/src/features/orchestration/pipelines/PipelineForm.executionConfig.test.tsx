@@ -269,9 +269,16 @@ describe("PipelineForm assetScope", () => {
         appCache.getItem.mockReturnValue({ featuresEnabled: [] });
     });
 
-    // The backend's pipeline-level check only evaluates the keys a scope declares
-    // (executionValidation._scope_errors, declared_only=True), so an empty map grants everything the
-    // control shows as denied.
+    // assetScope is a PARTIAL declaration, and an omitted key is a THIRD state rather than a grant.
+    // The pipeline-level check evaluates only the keys the scope declares — executionValidation
+    // ._scope_errors with declared_only=True, whose docstring reads "an omitted key defers to the
+    // workflow rather than denying" — while the WORKFLOW's own scope is checked with every key
+    // (_validate_workflow_level, no declared_only). So a pipeline that says nothing about a rule does
+    // not thereby allow it: the workflow gate still decides.
+    //
+    // Hence the split below. A create declares all four, because the author is choosing every rule
+    // from nothing and the record should say so. An edit must persist exactly what the record already
+    // declared and invent nothing.
     it("sends all four canonical keys for the create defaults the control displays", async () => {
         const user = userEvent.setup();
         const mutateAsync = mockCreate();
@@ -293,7 +300,14 @@ describe("PipelineForm assetScope", () => {
         });
     });
 
-    it("sends the explicit keys for a stored pipeline that declared none", async () => {
+    // This expectation was previously the OPPOSITE — it required all four keys to be written for a
+    // stored pipeline that declared none, and that was wrong. Materializing them converts "defer to
+    // the workflow" into an explicit pipeline-level deny the admin never chose, so editing an
+    // unrelated field (a typo in the description) silently narrowed the record and broke every
+    // multi-asset workflow using it. Reachable for real: the registration bundles ship partial maps,
+    // e.g. backendPipelines/simulation/isaacLabTraining/vamsSchema/training/pipeline.json declares
+    // only {"wholeAsset": true}.
+    it("leaves a stored pipeline that declared no scope declaring none", async () => {
         const mutateAsync = mockUpdate();
 
         render(
@@ -309,12 +323,9 @@ describe("PipelineForm assetScope", () => {
         submit();
 
         await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
-        expect(mutateAsync.mock.calls[0][0].body.systemConfig.assetScope).toEqual({
-            crossAssetAllowed: false,
-            singleAssetOnly: true,
-            wholeAssetAllowed: false,
-            folderAllowed: false,
-        });
+        // Empty, not absent: the key is still sent so the backend stores the scope the admin saw, and
+        // every rule inside it stays undeclared.
+        expect(mutateAsync.mock.calls[0][0].body.systemConfig.assetScope).toEqual({});
     });
 
     it("persists the span and whole-asset selections the user made", async () => {

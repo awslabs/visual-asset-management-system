@@ -141,7 +141,7 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 
 ### 1. EKS Cluster
 
--   **Version:** Kubernetes 1.31
+-   **Version:** Kubernetes 1.36
 -   **Endpoint:** PUBLIC (Lambda access via NAT)
 -   **Authentication:** IAM + IRSA (IAM Roles for Service Accounts)
 -   **Observability:** Control plane logging + CloudWatch Container Insights
@@ -353,7 +353,7 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
         "enabled": true,
         "ecrContainerImageURI": "your-ecr-uri-here",
         "autoRegisterWithVAMS": true,
-        "eksClusterVersion": "1.31",
+        "eksClusterVersion": "1.36",
         "nodeInstanceType": "m5.2xlarge",
         "minNodes": 1,
         "maxNodes": 10,
@@ -378,4 +378,4 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 -   **Job Failures**: Check pod logs via `kubectl logs` or CloudWatch Container Insights
 -   **Workflow Hangs**: Verify Step Functions execution history and Lambda callback permissions
 -   **Network Issues**: Check VPC Flow Logs and security group rules
--   **Common Issues**: See [PR Remediation Summary](./PR-Remediation-Summary.md) for resolved issues
+-   **Common Issues**: See the [troubleshooting documentation](https://awslabs.github.io/visual-asset-management-system/troubleshooting/common-issues)

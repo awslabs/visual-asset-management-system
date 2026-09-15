@@ -1,6 +1,6 @@
 # VAMS Web Frontend Steering (Kiro)
 
-This is the Kiro front-end steering document for the VAMS (Visual Asset Management System) web application (`web/`). It mirrors the canonical `web/CLAUDE.md` content for the Kiro coding agent. When front-end standards change, update both this file and `web/CLAUDE.md`.
+This is the Kiro front-end steering document for the VAMS (Visual Asset Management System) web application (`web/`). It mirrors the canonical `web/CLAUDE.md` content for the Kiro coding agent, and its viewer plugin sections are also the Kiro counterpart for `web/src/visualizerPlugin/CLAUDE.md`. When front-end standards change, update both this file and the matching `CLAUDE.md`.
 
 ---
 
@@ -56,23 +56,32 @@ web/
     features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
-                            #   client.ts queries.ts
+                            #   client.ts queries.ts triggerCache.ts
       permissions/useAllowedRoutes.ts  # Tier-1 permission gating
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, ...)
+                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
+                            #   Callout, VirtualList (fixed-row-height windowed list), ...)
                             #   ToastProvider.tsx — notifications for the whole module
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
                             #   TemplateEditor.tsx TemplateForm.tsx TagSchemaBuilder.tsx
                             #   TemplateOverridesEditor.tsx pipelineValidation.ts
+                            #   templateBodyValidation.ts (tag placeholder quoting + the json
+                            #   body shape check mirrored from the backend)
       workflows/            # WorkflowsPage.tsx WorkflowBuilder.tsx PipelineOrderList.tsx
-                            #   TriggersEditor.tsx WorkflowSystemConfigFields.tsx DagPreview.tsx
+                            #   TriggersEditor.tsx (live) TriggerDraftsEditor.tsx (create) over
+                            #   TriggerList.tsx TriggerForm.tsx triggerDraft.ts triggerStyles.ts
+                            #   WorkflowSystemConfigFields.tsx DagPreview.tsx
                             #   WorkflowValidationPanel.tsx workflowValidation.ts
       executions/           # ExecutionsBoard.tsx ExecutionDetailPage.tsx ExecutionLogViewer.tsx
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
-      wizard/               # ExecuteWizard.tsx + WizardPipelineStage/WizardInputStage/
-                            #   WizardReviewStage, InputFileSelector, MetadataSourceSelector,
+                            #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+      wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
+                            #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
+                            #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
+                            #   SelectedInputFilesList + BulkFilePicker + selectedInputFiles.ts (the
+                            #   multi-file selection: windowed list, bulk/paste picker, dedupe, 1000 cap),
                             #   RestrictionSummary, resolveRestrictions.ts resolveTemplate.ts
       types.ts reservedTagKeys.ts
 
@@ -110,10 +119,13 @@ web/
           hooks/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
       createupdate/         # CreateDatabase.tsx, UpdateAsset.tsx + form definitions
-      filemanager/          # File tree and file operations
+      filemanager/          # File tree and file operations; EnhancedFileManager lazy-loads the
+                            #   orchestration execution quick view for a file's "View execution" link
         components/         # FileDetailsPanel, AutomationActions (lazy-loads the execute modal),
                             #   tree views, preview thumbnails, splitters
-        utils/              # automationSelection.ts maps a selection to workflow input files
+        utils/              # automationSelection.ts maps a selection to workflow input files;
+                            #   executionLinks.ts maps workflow-execution provenance to the execution
+                            #   detail route and the Tier-1 route the link is gated on
       form/
       list/
       loading/              # Loading screens and spinners
@@ -208,6 +220,7 @@ web/
       sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
       fileHandleCompat.ts
+      maplibreWorker.ts     # setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts
 
     styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
@@ -252,7 +265,7 @@ The existing app uses AWS Cloudscape Design System. The orchestration module (`s
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind is scoped to the `src/features/orchestration/**` content glob).
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**` plus the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**`). A new orchestration shell must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page, so a Cloudscape page using a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (examples verified in the built CSS; the emitted set depends on what the orchestration module uses). Outside the orchestration module, use a VAMS-defined class or no class at all.
 
 Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library outside this boundary.
@@ -344,6 +357,84 @@ import MyNewPage from "./pages/MyNewPage";
 -   All source files are TypeScript (`.ts`/`.tsx`) -- new files MUST also be TypeScript
 -   Only `src/__mocks__/*.js` files remain as `.js` (Jest CommonJS requirement)
 -   Use `any` sparingly but pragmatically (the codebase uses it extensively)
+
+### Rule 9: Regenerate the CSP Hashes After Touching an Inline Script in `index.html`
+
+`index.html` contains inline `<script>` blocks (the `__publicField` polyfill, the `SharedArrayBuffer`
+probe, and the pre-render theme application). The CDK Content-Security-Policy allows them by
+**SHA-256 hash**, not by `'unsafe-inline'`, so an injected inline script is still blocked.
+
+A CSP hash covers the **exact text content** of the element -- every byte between the opening and
+closing tag, indentation included. Adding a line, renaming a variable, or letting Prettier reindent
+the block invalidates its hash. The browser then silently refuses to run that script and the app
+breaks at runtime, with nothing failing at build time.
+
+**Any edit to an inline `<script>` block in `web/index.html` -- including a reformat -- requires
+regenerating the hashes and updating the CDK constant in the same change:**
+
+```bash
+# 1. Build, so the hashes are taken from the HTML that is actually served
+cd web && npm run build
+
+# 2. Emit the TypeScript constant
+node scripts/cspInlineScriptHashes.js --ts
+
+# 3. Paste the output over INDEX_HTML_INLINE_SCRIPT_HASHES in
+#    infra/lib/helper/cspInlineScriptHashes.ts
+
+# 4. Confirm the drift guard passes
+cd ../infra && npx jest test/web/cspInlineScriptHashes.test.ts
+```
+
+Run the generator with no `--ts` for a human-readable listing of each block and its hash.
+
+| File                                           | Role                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `web/index.html`                               | The inline scripts being hashed                                          |
+| `web/scripts/cspInlineScriptHashes.js`         | Generator -- hashes every inline block (skips any with `src`)            |
+| `infra/lib/helper/cspInlineScriptHashes.ts`    | The generated constant. **Generated -- do not hand-edit**                |
+| `infra/lib/helper/security.ts`                 | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
+| `infra/test/web/cspInlineScriptHashes.test.ts` | Recomputes from `index.html` and fails on drift                          |
+
+**A hash and `'unsafe-inline'` are mutually exclusive.** A CSP may allow inline script by hash **or**
+by the `'unsafe-inline'` keyword, never both -- when a hash source is present browsers ignore
+`'unsafe-inline'` entirely. The two are not additive, so `'unsafe-inline'` cannot be left in as a
+safety net.
+
+Because of that, `generateContentSecurityPolicy()` adds `'unsafe-inline'` in **no** configuration,
+the Physna add-on included. The add-on's viewer frames Physna's own HTTPS origin rather than a
+`blob:` document, so that page loads under Physna's own CSP and its inline scripts are outside this
+policy's reach; the keyword would also be ignored on a VAMS page, because the hash sources are
+present. The add-on contributes `frame-src` and `connect-src` origins and no `script-src` source.
+
+If a **new** viewer plugin needs inline script, hash that document's own inline blocks rather than
+moving `'unsafe-inline'` into `script-src` -- a hash source makes the keyword inert, so adding it
+would relax nothing while removing the protection the hashes give every other page.
+
+Adding a `<script src="...">` (external) needs no hash; it is matched by host-source instead. It may
+still need its origin added to `script-src`/`connect-src`.
+
+### Rule 10: A maplibre Map Needs the Worker Setup Module and react-map-gl >= 8.1.2
+
+`maplibre-gl` 6 is ESM-only and ships its web worker as a separate module (`dist/maplibre-gl-worker.mjs`,
+which imports `maplibre-gl-shared.mjs`). By default it resolves that worker as a sibling of the main
+module's `import.meta.url`, a file the Vite bundle never emits, so the worker request fails and no map
+renders. `src/common/utils/maplibreWorker.ts` registers a bundled copy through `setWorkerUrl()` using
+Vite's `?worker&url` import (plain `?url` copies the worker without its shared chunk and breaks on its
+first import). **Every module that imports `react-map-gl/maplibre` or a runtime value from `maplibre-gl`
+imports that setup module for its side effect** before the map mounts.
+
+maplibre-gl 6 also removed the public `map.transform` property; `react-map-gl` versions before 8.1.2 read
+`transform.center` on every camera update and crash each map into the page error boundary. Keep
+`react-map-gl` at 8.1.2 or later while `maplibre-gl` is on 6.x.
+
+Both rules are held in place by `src/common/utils/maplibreWorker.test.ts`, which scans the source tree
+for map consumers and checks the installed versions.
+
+Under Jest neither import resolves: `maplibre-gl` has no `require` export condition and `?worker&url` is
+Vite-only, so `jest.config.js` maps both to `src/__mocks__/emptyModule.js`, as it already does for the
+Monaco worker imports. A suite that reaches a map component through a page import therefore loads a
+no-op setup module rather than failing to resolve.
 
 ---
 
@@ -499,9 +590,12 @@ const header = await getDualAuthorizationHeader();
 ```typescript
 // User is stored in localStorage as JSON
 const user = JSON.parse(localStorage.getItem("user"));
-// Email is stored separately
-const email = localStorage.getItem("email");
 ```
+
+There is no separate `email` key. Nothing writes one and nothing reads one — the signed-in user's
+identity comes from the `user` entry above. Storing it a second time under its own key put a user
+identifier in `localStorage` for no consumer, and wrote the literal string `"undefined"` when there
+was no signed-in user.
 
 ---
 
@@ -722,7 +816,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
-> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter.
+> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter. The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
 
 ### 8.3 Adding a New Viewer Plugin
 
@@ -818,6 +912,81 @@ export const VIEWER_COMPONENTS = {
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+| `compareMode`                | object?           | Compare-mode opt-in (see 8.5)                        |
+
+### 8.5 Compare Mode (cross-asset / multi-version)
+
+`PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` accepts
+`mode: "compare"`, which surfaces only viewers declaring `compareMode.enabled` whose
+`[minFiles, maxFiles]` window and shape flags admit the selection. The per-viewer admission predicates
+for both paths are pure and unit-tested in `src/visualizerPlugin/core/viewerSelection.ts`
+(`admitsVisualizeSelection`, `admitsCompareSelection`); the classification is pure and
+unit-tested in `src/visualizerPlugin/core/compareShape.ts` (`deriveCompareContext(files)` →
+`{ fileCount, shape, crossAsset }`); the registry re-exports both. **File identity is database + asset +
+key, never the key alone** — the same key under two assets is `"different-files"` + `crossAsset: true`.
+
+`compareMode` fields: `enabled`, `compareOnly?`, `minFiles`, `maxFiles`,
+`allowSameFileDifferentVersions`, `allowDifferentFiles`, and `allowCrossAsset?` (default: not allowed).
+
+**Compare-only viewers** (`compareMode.compareOnly: true`, e.g. `text-diff-viewer`) render nothing but
+`compareFiles`, so the visualize path never offers them — one file or many, regardless of
+`supportsMultiFile` or extension match — because visualize never passes `compareFiles`. Keep such a
+viewer's `supportsMultiFile: false` (that flag is the visualize `multiFileKeys` capability; compare
+file count is `minFiles`/`maxFiles`). Without `compareOnly`, compare capability is orthogonal to
+visualize.
+
+Contract for `compareFiles` entries (`ViewerPluginProps.compareFiles`, index 0 = left/base):
+
+-   Each entry is a resolved `{ databaseId, assetId, key, versionId? }`. `DynamicViewer` fills a missing
+    per-entry db/asset from its **top-level** props (never from `files[0]`) before classifying and before
+    handing the list to the viewer.
+-   Missing `versionId` = **latest** (search selections arrive this way via `searchRowToFileInfo`).
+-   The viewer fetches every entry under **its own** db/asset via `downloadAsset` — each asset is
+    Casbin-authorized independently — and renders a per-entry 401/403/410/404 as **that entry's** state
+    while the other entry still renders. `downloadAsset` returns `[false, message, status]` on failure.
+-   A viewer opting into `allowCrossAsset` offers a per-entry version picker (`fetchFileVersions`, one
+    list per db+asset+key) and re-fetches only the entry whose version changed.
+
+Reference implementation: `viewers/TextDiffViewerPlugin/TextDiffViewerComponent.tsx` (per-side
+state, per-side error panel, per-side `Select` version picker; diff library dynamically imported;
+compact controls for layout, Line/Word/Character granularity, line numbers, and collapse-unchanged
+with context lines; single-line ellipsis-truncated side labels and library titles).
+Surfaces: search results "Compare Selected" (rows may span assets), the file manager's "Compare
+Selected Files" icon (`FileDetailsPanel.tsx`), and the version-compare actions in
+`AssetVersionComparison.tsx` / `FileVersionsList.tsx`, all hosted by `FileViewerModal`.
+
+**Mode availability — one rule for every entry point.** A viewer is EITHER a compare-differ
+(`compareMode.compareOnly`) OR a regular viewer; never a hybrid (guarded over the shipped
+`viewerConfig.json` by `viewerSelection.test.ts`). A surface offers **Visualize** only when
+`hasVisualizeViewer` / `areFilenamesViewableTogether` says a non-compare viewer admits the selection,
+and **Compare** only when `hasCompareViewer` / `areFilesComparableTogether` says a compare viewer admits
+its file count, shape and types (`isExtensionComparableAsVersions(ext)` for a per-row version Compare).
+`FileViewerModal` consults `availableModesForFiles(files)`: both modes → toggle (top-right); one →
+that mode, no toggle; none → "No viewer for this selection". `ViewerSelector` additionally filters
+compare-only viewers out of the Visualize dropdown (`listableViewers`) regardless of the list it is
+handed. Never gate a Visualize/Compare control with a hand-written extension list; use these
+predicates behind `useViewerRegistryReady()`.
+
+**Single-file compare.** A LONE file is judged for compare as two versions of itself:
+`availableViewerModes` (pure, `viewerSelection.ts`) maps a one-file selection onto
+`LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`), the same question
+`isExtensionComparableAsVersions` asks, so a single `.txt` admits BOTH modes while a single `.png`/`.glb`
+stays Visualize-only — admission, never an extension list. The host seeds the pair with
+`seedCompareFromSingleFile(file)` (`compareShape.ts`): `[the viewed entry (its pinned `versionId`, or
+latest), the same file at latest]`; when the viewed side is latest both start at latest and the differ
+shows its identical-versions notice while the user picks the other version in the per-side picker.
+Toggling back to Visualize shows the one file again. Hosts: `FileViewerModal` (single-file view from
+`FileDetailsPanel`) and the `ViewFile` page (where "View File" from `FileVersionsList` /
+`AssetVersionComparison` lands; its toggle sits beside the File/Preview control and only on the File
+tab). The version lists' per-row Compare keeps seeding `[snapshot@version, latest]`.
+
+**Differ inside `DynamicViewer`.** Every plugin mounts inside `.visualizer-container-canvases`, which
+`src/styles/index.scss` gives `text-align: center` and `line-height: 100%` for the 3D canvases. A
+text-rendering viewer must reset both (`TextViewerPlugin` on its highlighter, `TextDiffViewerComponent`
+at its root) or its lines render centered and stop wrapping. The differ also passes
+`styles={{ titleBlock: { pre: { margin: 0 } } }}` to `react-diff-viewer-continued`: the library's
+`pre` margin reset covers only the table, and the UA `1em` margin on the title `<pre>` pushed the
+labels down and clipped them inside the fixed-height title block.
 
 ---
 
@@ -1195,7 +1364,7 @@ Match the comment density and style already present in the file. Describe **what
 | `react-router-dom`              | ^6.0.0               | Client-side routing         |
 | `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)    |
 | `three`                         | (via customInstalls) | 3D rendering engine         |
-| `maplibre-gl`                   | ^5.8.0               | Map rendering               |
+| `maplibre-gl`                   | ^6.9.0               | Map rendering               |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                 |
 | `papaparse`                     | ^5.4.1               | CSV parsing                 |
 | `dompurify`                     | ^3.4.11              | HTML sanitization           |
@@ -1340,12 +1509,6 @@ Development targets: Latest Chrome, Firefox, Safari.
 
 ### 18.6 React Version
 
-This project uses **React 17**, not React 18. Do NOT use:
+This project uses **React 18.3**. The entry point (`index.tsx`) mounts with `createRoot` from `react-dom/client`.
 
--   `createRoot` (React 18)
--   `useId` (React 18)
--   `useSyncExternalStore` (React 18)
--   `useTransition` / `useDeferredValue` (React 18)
--   Automatic batching assumptions (React 18)
-
-The app uses `ReactDOM.render` (React 17 style).
+React 18 APIs (`useId`, `useSyncExternalStore`, `useTransition`, `useDeferredValue`, automatic batching) are allowed in the orchestration module (`features/orchestration/`) but should be used sparingly elsewhere to stay consistent with the existing codebase conventions.

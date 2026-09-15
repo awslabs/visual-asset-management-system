@@ -8,7 +8,7 @@ ALLOWED_ASSET_LINKS = {
 #
 # Allowed-value lists are the validation source of truth; the *_LABELS / *_FIELDS
 # structures add the human-facing display values served by
-# GET /auth/constraints/objectTypes and consumed by the web editor and CLI.
+# GET /auth/constraints/permissionObjects and consumed by the web editor and CLI.
 # The labels/fields stay in sync with the allowed-value lists (enforced by tests).
 # ---------------------------------------------------------------------------
 
@@ -60,6 +60,7 @@ PERMISSION_CONSTRAINT_FIELDS = {
 
             "pipelineId": "",
             "pipelineExecutionType": "",
+            "isSystem": False,
 
             "workflowId": "",
 
@@ -69,6 +70,10 @@ PERMISSION_CONSTRAINT_FIELDS = {
             "metadataSchemaName": "",
             "metadataSchemaEntityType": "",
             #"field": "", //deprecated, old metadata schema
+
+            "complianceSchemaName": "",
+            "complianceState": "",
+            "cascadeId": "",
 
             "object__type": "",
             "route__path": "",
@@ -109,9 +114,11 @@ CONSTRAINT_OBJECT_TYPE_FIELDS = {
     "web": {"label": "Web", "fields": [
         {"label": "Route Path", "value": "route__path"}]},
     "tag": {"label": "Tag", "fields": [
-        {"label": "Tag Name", "value": "tagName"}]},
+        {"label": "Tag Name", "value": "tagName"},
+        {"label": "Database ID", "value": "databaseId"}]},
     "tagType": {"label": "Tag Type", "fields": [
-        {"label": "Tag Type Name", "value": "tagTypeName"}]},
+        {"label": "Tag Type Name", "value": "tagTypeName"},
+        {"label": "Database ID", "value": "databaseId"}]},
     "role": {"label": "Role", "fields": [
         {"label": "Role Name", "value": "roleName"}]},
     "userRole": {"label": "User Role", "fields": [
@@ -229,125 +236,6 @@ UNALLOWED_MIME_LIST = [
     "application/powershell"
 ]
 
-
-PERMISSION_CONSTRAINT_FIELDS = {
-            "databaseId": "",
-
-            "assetName": "",
-            "assetType": "",
-            "tags": [],
-
-            "tagName": "",
-
-            "tagTypeName": "",
-
-            "roleName": "",
-            "userId": "",
-
-            "pipelineId": "",
-            "pipelineExecutionType": "",
-            "isSystem": False,
-
-            "workflowId": "",
-
-            "category": "",
-            "name": "",
-
-            "metadataSchemaName": "",
-            "metadataSchemaEntityType": "",
-            #"field": "", //deprecated, old metadata schema
-
-            "complianceSchemaName": "",
-            "complianceState": "",
-            "cascadeId": "",
-
-            "object__type": "",
-            "route__path": "",
-        }
-
-
-PERMISSION_CONSTRAINT_POLICY = """
-        [request_definition]
-        r = sub, obj, act
-
-        [policy_definition]
-        p = sub, obj_rule, act, eft
-
-        [role_definition]
-        g = _, _
-
-        [policy_effect]
-        e = some(where (p.eft == allow)) && !some(where (p.eft == deny))
-
-        [matchers]
-        m = g(r.sub, p.sub) && eval(p.obj_rule) && r.act == p.act
-        """
-
-# Display labels for each constraint object type and the fields valid on it.
-# Human-facing / constraint-editor view and the authoritative per-type field matrix.
-# Keys stay in sync with ALLOWED_CONSTRAINT_OBJECT_TYPES; every field value exists in
-# PERMISSION_CONSTRAINT_FIELDS (enforced by tests).
-CONSTRAINT_OBJECT_TYPE_FIELDS = {
-    "database": {"label": "Database", "fields": [
-        {"label": "Database ID", "value": "databaseId"}]},
-    "asset": {"label": "Asset", "fields": [
-        {"label": "Database ID", "value": "databaseId"},
-        {"label": "Asset Name", "value": "assetName"},
-        {"label": "Asset Type", "value": "assetType"},
-        {"label": "Tags", "value": "tags"}]},
-    "api": {"label": "API", "fields": [
-        {"label": "Route Path", "value": "route__path"}]},
-    "web": {"label": "Web", "fields": [
-        {"label": "Route Path", "value": "route__path"}]},
-    "tag": {"label": "Tag", "fields": [
-        {"label": "Tag Name", "value": "tagName"}]},
-    "tagType": {"label": "Tag Type", "fields": [
-        {"label": "Tag Type Name", "value": "tagTypeName"}]},
-    "role": {"label": "Role", "fields": [
-        {"label": "Role Name", "value": "roleName"}]},
-    "userRole": {"label": "User Role", "fields": [
-        {"label": "Role Name", "value": "roleName"},
-        {"label": "User ID", "value": "userId"}]},
-    "pipeline": {"label": "Pipeline", "fields": [
-        {"label": "Database ID", "value": "databaseId"},
-        {"label": "Pipeline ID", "value": "pipelineId"},
-        {"label": "Pipeline Execution Type", "value": "pipelineExecutionType"},
-        {"label": "Category", "value": "category"},
-        {"label": "Name", "value": "name"}]},
-    "workflow": {"label": "Workflow", "fields": [
-        {"label": "Database ID", "value": "databaseId"},
-        {"label": "Workflow ID", "value": "workflowId"},
-        {"label": "Category", "value": "category"},
-        {"label": "Name", "value": "name"}]},
-    "metadataSchema": {"label": "Metadata Schema", "fields": [
-        {"label": "Database ID", "value": "databaseId"},
-        {"label": "Metadata Schema Name", "value": "metadataSchemaName"},
-        {"label": "Metadata Schema Entity Type", "value": "metadataSchemaEntityType"}]},
-    "complianceSchema": {"label": "Compliance Schema", "fields": [
-        {"label": "Schema Name", "value": "complianceSchemaName"}]},
-    "complianceEvaluation": {"label": "Compliance Evaluation", "fields": [
-        {"label": "Database ID", "value": "databaseId"},
-        {"label": "Compliance State", "value": "complianceState"}]},
-    "complianceCascade": {"label": "Compliance Cascade", "fields": [
-        {"label": "Cascade ID", "value": "cascadeId"}]},
-}
-
-# Display labels for the constraint criteria operators (editor view).
-CONSTRAINT_OPERATOR_LABELS = [
-    {"label": "Equals", "value": "equals"},
-    {"label": "Contains", "value": "contains"},
-    {"label": "Does Not Contain", "value": "does_not_contain"},
-    {"label": "Starts With", "value": "starts_with"},
-    {"label": "Ends With", "value": "ends_with"},
-    {"label": "Is One Of", "value": "is_one_of"},
-    {"label": "Is Not One Of", "value": "is_not_one_of"},
-]
-
-
-def get_constraint_fields_for_object_type(object_type):
-    """Return the list of valid field-value strings for a constraint object type ([] if unknown)."""
-    entry = CONSTRAINT_OBJECT_TYPE_FIELDS.get(object_type)
-    return [f["value"] for f in entry["fields"]] if entry else []
 
 # Normal JSON REST response for use in most lambda handlers
 #

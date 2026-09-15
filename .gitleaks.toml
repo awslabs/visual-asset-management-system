@@ -1,0 +1,166 @@
+# gitleaks configuration for VAMS.
+#
+# Purpose: allowlist the fake credentials VAMS deliberately contains — redaction-test fixtures and
+# truncated API-documentation samples — without weakening secret detection anywhere else.
+#
+# `.gitleaksignore` (repo root) does the same job with per-finding fingerprints, but a fingerprint is
+# `commit:path:rule:line`, so the same fixture returns as a new finding under every commit that touches
+# the file and after any line-number shift — which is why that file already carries the same finding
+# under several SHAs. The entries here are keyed on the VALUE, so they hold across commits, line moves,
+# and file renames. Both mechanisms are honored; keep both.
+#
+# ---------------------------------------------------------------------------------------------------
+# EDITING RULES
+#
+# 1. `[extend] useDefault = true` is load-bearing. Without it gitleaks REPLACES its built-in ruleset
+#    with this file, and a config holding only an allowlist detects nothing at all — a total loss of
+#    secret scanning that reports as a clean scan. Never remove it.
+#
+# 2. Allowlist on the VALUE (`regexes`), never on the path. A `paths` entry disables every rule for
+#    those files, so a real credential later committed into a test fixture would go unreported. Each
+#    regex below names one specific literal, which cannot over-match.
+#
+# 3. Only add a value that cannot possibly be live: a vendor's published example, a hand-built stub, or
+#    a sample truncated with an ellipsis. "It should not be a real one" does not qualify — rotate it
+#    and move it to AWS Secrets Manager instead.
+#
+# 4. The singular `[allowlist]` table is deliberate. `[[allowlists]]` (plural) requires gitleaks 8.19+,
+#    and the scanner that reports these findings runs an older build; the singular form is accepted by
+#    both (verified against v8.30.1, which still honors it).
+# ---------------------------------------------------------------------------------------------------
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = """
+Fake credentials VAMS contains on purpose: redaction-test fixtures and documentation placeholders.
+The redaction tests are the notable case — they assert that a credential-shaped string is scrubbed
+from log output, so the literal must be present for `assert secret not in output` to prove anything.
+"""
+# `regexTarget = "match"` tests each regex against the rule's whole match rather than the captured
+# secret alone. That is needed by the entries which include an adjacent character to stay narrow (the
+# quote after the 12-character session-token fixture, and the "Bearer " prefix). Verified not to leak:
+# a fixture value placed on the SAME LINE as a live-looking Slack token still leaves that token
+# reported, because a rule's match is the token itself and not the surrounding line.
+regexTarget = "match"
+regexes = [
+    # AWS's own published example access key id. Used by backend/tests/common/test_logMasking.py and
+    # test_logRedaction.py to prove key ids are redacted from logs.
+    '''AKIAIOSFODNN7EXAMPLE''',
+
+    # JWT-shaped stubs from the same redaction tests. The third segment is not an HMAC of the first
+    # two, so neither string was ever a valid token.
+    '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NSJ9\.s5H5ZoQ5abc-DEF_123''',
+    '''Bearer abc\.def\.ghi''',
+
+    # Base64 pagination cursor in web/src/features/orchestration/api/executions.test.ts. Decodes to
+    # {"stepIndex": 1}; matched only because base64-encoded JSON opens like a JWT header.
+    '''eyJzdGVwSW5kZXgiOiAxfQ==''',
+
+    # AWS's published example SECRET access key, plus the session-token stubs, from the same tests.
+    # Found by running gitleaks against these files rather than from the scan report — a different
+    # gitleaks build flags them under generic-api-key, so covering them now avoids the next round.
+    # Each session-token entry carries the fake tail that identifies it: a bare 'FQoGZXIvYXdz' prefix
+    # would also match REAL AWS session tokens, most of which begin with those bytes. The 12-character
+    # fixture is anchored on its closing quote so it cannot match a longer, live value.
+    '''wJalrXUtnFEMI/K7MDENG''',
+    '''FQoGZXIvYXdzEED////''',
+    '''FQoGZXIvYXdzEEDsecret''',
+    '''FQoGZXIvYXdz"''',
+
+    # API-reference placeholders, cut short with a literal ellipsis and so structurally incapable of
+    # being working credentials.
+    '''eyJraWQiOiJ\.\.\.''',
+    '''vams_ak_abc123\.\.\.''',
+
+    # HuggingFace token stubs in infra/test/security/secretAssetStagingCleanup.test.ts. The value
+    # spells UNITTEST in the token body, and the test's whole subject is asserting that a supplied HF
+    # token does NOT reach the synthesized template — so the test that prevents the leak is what gets
+    # reported. Anchored on the literal `hf_UNITTEST`, which cannot match a real token.
+    '''hf_UNITTEST''',
+
+    # JWT stub stored by tools/VamsCLI/tests/test_secret_file_permissions.py as a saved auth profile,
+    # to prove the profile file is written owner-only. Its signature is the three characters `sig`, so
+    # it never verified against anything.
+    '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxIn0\.sig''',
+
+    # jwt.io's published example token, used by tools/VamsCLI/tests/test_log_redaction.py to prove a
+    # JWT-shaped value is scrubbed from the log file. The signature segment is truncated, so the
+    # string is not a valid token even as a specimen.
+    '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.dBjftJeZ4CVPmB92K27uhbUJU1p1r''',
+
+    # Fixtures in tools/ExternalIntegrations/isaacsim_vams_integration/tests/
+    # test_vams_cli_service_secrets.py, whose subject is that a password and an override token reach
+    # the CLI's stdin and never appear on argv (tools/VamsCLI/CLAUDE.md Rule 11). Both values say in
+    # plain words that they are placeholders.
+    '''n0t-in-argv-please''',
+    '''vams_n0t_in_argv_either''',
+
+    # AWS Step Functions task-token stubs in the pipeline lambda test suites (rapidPipeline, modelOps,
+    # 3dThumbnail, pcPotreeViewer, gr00t). Each suite asserts that a failing pipeline still returns its
+    # token through SendTaskFailure, so a token-shaped literal has to be present for the assertion to
+    # prove anything. A real task token is several hundred characters of mixed-case base64 including
+    # `+`, `/` and `=`, so a short dash-separated lowercase word cannot be one.
+    #
+    # All three are listed although the scan reported only `tok-rapid-123`: the other two are the same
+    # fixture under a different name and a build with a lower entropy threshold flags them too — the
+    # session-token entries above were added for exactly that reason after one build reported them and
+    # another did not.
+    '''tok-rapid-123''',
+    '''tok-fix053''',
+    '''tok-123''',
+
+    # ---- release/2.6.1 scan (gitleaks 8.30.1, dir + git-history on origin/release/2.6.1 @ e5c43449) ----
+
+    # Documentation placeholders for VAMS API keys, in the docusaurus CLI/user-guide pages
+    # (docs/cli/commands/users-and-keys.md, docs/cli/troubleshooting/permissions.md,
+    # docs/user-guide/api-keys.md) and the retired tools/VamsCLI/docs/ pages still present in history.
+    # A real key is `"vams_" + secrets.token_urlsafe(48)` (backend/handlers/auth/apiKeyService.py), i.e.
+    # 69 characters of random url-safe base64. These are `vams_` followed by either the alphabet in
+    # order and a literal ellipsis, or the words "your-api-key-here" — neither can be a minted key.
+    # The alphabet form is anchored on `vams_AbCdEf` + `...`: the shortest sample is `vams_AbCdEf...`,
+    # so the class covers every longer truncation of the same sequence.
+    '''vams_AbCdEf[A-Za-z]*\.\.\.''',
+    '''vams_your-api-key-here''',
+
+    # Fixture keys returned by mocked create-key responses in tools/VamsCLI/tests/test_api_key.py and
+    # test_api_key_user_commands.py. 15 characters that spell "testkey"/"selfkey" — a minted key is 69
+    # characters of random base64 (see above), so neither literal can be one. Anchored on the closing
+    # quote so a longer value with the same prefix would still be reported.
+    '''vams_testkey123[']''',
+    '''vams_selfkey123[']''',
+
+    # Base64 pagination-cursor and JWT samples in the API docs (docs/api/overview.md, assets.md,
+    # addon.md, documentation/VAMS_API.yaml, and the retired tools/VamsCLI/docs/ pages). Each is either
+    # a bare `{"alg":"HS256","typ":"JWT"}` / `{"typ":"JWT","alg":"HS256"}` header cut off with a literal
+    # ellipsis and no payload or signature, or base64 of a self-describing JSON cursor cut off the same
+    # way. Anchored on the trailing `...` so a complete token never matches.
+    '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.\.\.''',
+    '''eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9\.\.\.''',
+    '''eyJkYXRhYmFzZUlkOmFzc2V0SWQiOiAi\.\.\.''',
+    '''eyJsYXN0QXNzZXRJbmRleCI6NDk5\.\.\.''',
+    '''eyJtZXRhZGF0YVNjaGVtYUlkIjoi\.\.\.''',
+
+    # The one complete cursor sample, docs/api/overview.md. Decodes to
+    # {"databaseId":"my-db", "assetId":"my-asset"} — a pagination cursor built from placeholder ids, not
+    # a credential. Listed in full so nothing else can match.
+    '''eyJkYXRhYmFzZUlkIjoibXktZGIiLCAiYXNzZXRJZCI6Im15LWFzc2V0In0=''',
+
+    # Example key ID in the retired tools/VamsCLI/docs/commands/api-key-management.md (history only).
+    # The hex runs a1b2c3d4-e5f6-7890-abcd-ef1234567890 in sequence: a hand-typed UUID, not a generated
+    # one, and a key *id* rather than a key in any case.
+    '''a1b2c3d4-e5f6-7890-abcd-ef1234567890''',
+
+    # Not credentials at all — generic-api-key matched identifiers because the word "key" or "prefix"
+    # sits next to an assignment. `s3_bucket_prefix` is a Python variable in
+    # backend/handlers/assets/createAsset.py; `COSMOS3_*` are metadata tag KEY NAMES (not values) in a
+    # retired analysis JSON; the `_sortKey*`/`_indices0`/`gpuSorter` hits are minified identifiers in
+    # the vendored PlayCanvas bundle (history only). Each is anchored on the surrounding code so it
+    # matches the identifier, not a value assigned to it.
+    '''s3_key = s3_bucket_prefix ''',
+    '''tagKey:'COSMOS3_(GUIDANCE|NEGATIVE_PROMPT)[']''',
+    '''(t|e)\._sortKey(Forward|Shadow),i=e\._sortKey(Forward|Shadow);''',
+    '''this\._keys0,r=this\._indices0;''',
+    '''this\.keyGenerator,s=this\.gpuSorter;''',
+]

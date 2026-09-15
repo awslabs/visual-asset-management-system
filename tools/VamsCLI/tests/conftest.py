@@ -14,24 +14,14 @@ from contextlib import contextmanager
 
 from vamscli.utils import logging as vamscli_logging
 
-# Take pytest's own `--verbose` out of argv before any test runs.
+# `sys` is imported for the fixtures below; the suite no longer mutates argv.
 #
-# `vamscli.utils.logging._is_verbose_mode()` treats the literal `--verbose` ANYWHERE in sys.argv as a
-# request for verbose output, so pytest's own flag switches VAMS verbose logging on for the whole
-# session. Every log_* call then also writes to stderr, click's CliRunner merges stderr into
-# `result.output`, and the ~113 tests that `json.loads(result.output)` fail on text wrapped around
-# their JSON. No fixture can prevent it: the reader is consulted per call, not per test, so the flag
-# has to be gone before collection.
-#
-# Stripping it here rather than changing the reader is deliberate. click already owns this flag
-# (`main.py` registers `--verbose` and hands it to `initialize_logging`, which sets the module
-# global), so the argv fallback is redundant for the real CLI and no production behavior needs to
-# change to make the suite honest.
-#
-# The cost, stated plainly: pytest reads the same flag for its own per-test progress display, so
-# `pytest --verbose` now renders as dots rather than one line per test. `-v` is unaffected — it is a
-# different string, so it never triggered the sniff and never needed stripping.
-sys.argv[:] = [_arg for _arg in sys.argv if _arg != "--verbose"]
+# It used to strip pytest's own `--verbose` from sys.argv here, because
+# `vamscli.utils.logging._is_verbose_mode()` treated the literal ANYWHERE in argv as a request for
+# verbose output — which switched VAMS verbose logging on for the whole session, merged stderr into
+# every `CliRunner` result, and broke the ~113 tests that parse `result.output` as JSON. That reader
+# now consults only the module global that Click's parsed `--verbose` sets, so the suite's outcome no
+# longer depends on how pytest was invoked and `pytest --verbose` renders normally again.
 
 
 class CoroutineClosingMock(MagicMock):
@@ -76,6 +66,30 @@ def isolate_logging_globals():
     finally:
         vamscli_logging._verbose_mode = verbose_before
         vamscli_logging._logger = logger_before
+
+
+@pytest.fixture(autouse=True)
+def isolate_aws_credentials(monkeypatch):
+    """Neutralize the ambient AWS credential chain for every test.
+
+    Nothing in this CLI needs AWS credentials, but botocore resolves the chain while a client is
+    constructed, so a machine whose default profile has a configured-but-failing
+    `credential_process` (an expired corporate SSO session is the routine case) fails the test at
+    setup with `CredentialRetrievalError` before any assertion runs. The suite's result then
+    depends on ambient machine state rather than on the code under test — red on that developer's
+    box, green on one with no AWS configuration at all, from an identical working tree.
+
+    Static dummy values take precedence over every other provider, so no shared-config profile or
+    subprocess credential helper is consulted. `AWS_PROFILE` is cleared for the same reason: a name
+    that does not resolve raises `ProfileNotFound` during config lookup even when credentials come
+    from the environment. Mirrors the guard `backend/tests/conftest.py` already applies.
+    """
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
 
 
 @pytest.fixture(autouse=True)

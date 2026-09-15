@@ -5,10 +5,11 @@
 
 EventBridge-triggered (not API). AWS Deadline Cloud publishes job status events to the
 account's DEFAULT event bus (source ``aws.deadline``). Two standing rules route events
-here: "Job Run Status Change" filtered to terminal combined ``taskRunStatus`` values, and
-"Job Lifecycle Status Change" filtered to lifecycle failure states (a job that fails at
-CREATE/UPLOAD never reaches a terminal task-run status, so without the lifecycle rule its
-task token would only resolve by timing out). For each event this lambda:
+here: "Job Run Status Change" for EVERY combined ``taskRunStatus`` change (not only terminal
+ones — see the registration note in step 3), and "Job Lifecycle Status Change" filtered to
+lifecycle failure states (a job that fails at CREATE/UPLOAD never reaches a terminal
+task-run status, so without the lifecycle rule its task token would only resolve by timing
+out). For each event this lambda:
 
 1. Calls ``deadline:GetJob`` for the farm/queue/job in the event detail.
 2. Reads the reserved ``VamsTaskToken`` job parameter the workflow ASL injected at
@@ -16,13 +17,17 @@ task token would only resolve by timing out). For each event this lambda:
    see every Deadline job in the account) and is ignored.
 3. Best-effort registers the Deadline job as the pipeline execution's sub-process by
    putting a ``pipeline.execution.register`` event on the orchestration bus (using the
-   reserved ``VamsPipelineExecutionId`` job parameter), so log retrieval can later locate
-   the job. Registration runs before token resolution and never raises, so a failing
-   ``SendTask*`` call cannot lose the registration (and vice versa).
-4. Resolves the Step Functions task token: task-run ``SUCCEEDED`` -> ``SendTaskSuccess``;
-   task-run ``FAILED``/``CANCELED``/``NOT_COMPATIBLE`` or lifecycle
-   ``CREATE_FAILED``/``UPLOAD_FAILED`` -> ``SendTaskFailure`` with the status and job
-   identity as the cause.
+   reserved ``VamsPipelineExecutionId`` job parameter), so abort can cancel it and log
+   retrieval can locate it. Registration happens for EVERY status the lambda is handed,
+   in-flight or terminal: a job registered only at its terminal status is registered
+   exactly when there is nothing left to cancel. It runs before token resolution and never
+   raises, so a failing ``SendTask*`` call cannot lose the registration (and vice versa).
+   Whether an in-flight status reaches this lambda at all is decided by the EventBridge
+   rules in ``infra/lib/lambdaBuilder/workflowFunctions.ts``.
+4. Resolves the Step Functions task token, for a terminal status only: task-run
+   ``SUCCEEDED`` -> ``SendTaskSuccess``; task-run ``FAILED``/``CANCELED``/``NOT_COMPATIBLE``
+   or lifecycle ``CREATE_FAILED``/``UPLOAD_FAILED`` -> ``SendTaskFailure`` with the status
+   and job identity as the cause. A non-terminal status leaves the token outstanding.
 
 Duplicate or late events are expected (EventBridge is at-least-once; a token may already
 be resolved or timed out): ``TaskDoesNotExist``/``TaskTimedOut``/``InvalidToken`` from
@@ -69,8 +74,8 @@ PIPELINE_EXECUTION_ID_PARAMETER = DEADLINE_PIPELINE_EXECUTION_ID_PARAMETER
 WORKFLOW_EXECUTION_ID_PARAMETER = DEADLINE_WORKFLOW_EXECUTION_ID_PARAMETER
 
 # Terminal combined task-run statuses for a Deadline job. SUCCEEDED resolves the token
-# successfully; the rest fail it. Non-terminal statuses (RUNNING, SUSPENDED, ...) are
-# filtered out by the EventBridge rule and additionally ignored here.
+# successfully; the rest fail it. A non-terminal status (RUNNING, SUSPENDED, ...) resolves
+# nothing and only registers the job.
 SUCCESS_STATUSES = {"SUCCEEDED"}
 FAILURE_STATUSES = {"FAILED", "CANCELED", "NOT_COMPATIBLE"}
 
@@ -170,8 +175,8 @@ def _terminal_status(detail):
 
 
 def handle_job_event(detail):
-    """Process one Deadline job status detail: no-op for non-VAMS jobs and non-terminal
-    statuses; otherwise register the job and resolve the task token."""
+    """Process one Deadline job status detail: no-op for non-VAMS jobs; register the job for EVERY
+    status it reports, and resolve the task token once that status is terminal."""
     detail = detail or {}
     farm_id = detail.get("farmId", "")
     queue_id = detail.get("queueId", "")
@@ -182,9 +187,6 @@ def handle_job_event(detail):
         return
 
     status = _terminal_status(detail)
-    if not status:
-        logger.info(f"Non-terminal Deadline job status for {job_id}; ignoring")
-        return
 
     job = deadline_client.get_job(farmId=farm_id, queueId=queue_id, jobId=job_id)
 
@@ -194,11 +196,21 @@ def handle_job_event(detail):
                     f"(not a VAMS workflow job); ignoring")
         return
 
-    # Register first (never raises) so a SendTask* failure cannot lose the registration.
+    # Registered on EVERY status, not only a terminal one. Registration is what makes the farm job
+    # visible to the abort path, and abort can only cancel a job that is still running — so registering
+    # first at a terminal status registers it exactly when there is nothing left to stop. The write is
+    # idempotent (registerPipelineExecution skips a locator the row already carries), so a job that
+    # reports several statuses is still recorded once.
     _register_job(
         pipeline_execution_id=_get_string_parameter(job, PIPELINE_EXECUTION_ID_PARAMETER),
         workflow_execution_id=_get_string_parameter(job, WORKFLOW_EXECUTION_ID_PARAMETER),
         farm_id=farm_id, queue_id=queue_id, job_id=job_id)
+
+    if not status:
+        # The job is still in flight: it is now registered, and its token stays outstanding until a
+        # terminal status arrives (or the state machine's own heartbeat/timeout resolves it).
+        logger.info(f"Non-terminal Deadline job status for {job_id}; registered, token left open")
+        return
 
     _resolve_task_token(task_token, status, farm_id, queue_id, job_id)
 

@@ -334,7 +334,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                         "VAMSCloudWatchVPCLogs",
                         10
                     ),
-                retention: RetentionDays.TEN_YEARS,
+                retention: RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             });
 
@@ -346,12 +346,15 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
-                props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
+                // Only pipelines whose compute is placed in PRIVATE subnets belong here. A pipeline
+                // running in isolated subnets reaches AWS through the interface endpoints created
+                // below, so listing it would add public subnets and one NAT gateway per Availability
+                // Zone that nothing routes through.
                 subnetConfigurations.push(subnetPublicConfig);
                 subnetConfigurations.push(subnetPrivateConfig);
             }
@@ -536,10 +539,24 @@ export class VPCBuilderNestedStack extends NestedStack {
                 securityGroups: [vpceSecurityGroup],
             });
 
+            // Create VPC endpoint for Secrets Manager. Part of the core endpoint set rather than
+            // gated on any one feature, since secrets are read by add-on lambdas and by the
+            // pipeline container execution roles that inject tokens into batch jobs. Only the
+            // standard endpoint is created — VAMS lambdas and batch task execution roles resolve
+            // the default regional endpoint, not the secretsmanager-fips variant.
+            new ec2.InterfaceVpcEndpoint(this, "SecretsManagerEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
             // Create VPC endpoint for AWS Deadline Cloud (management API) when the DeadlineCloud
-            // execution type is enabled. The job-callback lambda is the only in-VPC caller
-            // (deadline:GetJob), so the endpoint is created only when lambdas run in the VPC —
-            // job submission itself is a Step Functions service integration and never traverses
+            // execution type is enabled. The in-VPC callers are the job-callback lambda
+            // (deadline:GetJob) and the abort and error-handler lambdas that cancel a registered
+            // farm job, so the endpoint is created only when lambdas run in the VPC — job
+            // submission itself is a Step Functions service integration and never traverses
             // the VPC. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so config
             // validation blocks enabling the type there and this endpoint is never created in
             // those partitions.
@@ -720,12 +737,17 @@ export class VPCBuilderNestedStack extends NestedStack {
             // and IsaacLab (isolated subnets). Only one ECS endpoint per VPC is allowed
             // when privateDnsEnabled is true, so we consolidate into a single endpoint
             // and combine the subnets from both pipeline types as needed.
+            // Private only for pipelines whose compute actually runs in the private subnets.
+            // coordinateTransform runs in isolated ones and needs no ECS endpoint at all: this is the
+            // ECS control-plane endpoint, which an EC2-launch-type container instance's agent uses, and
+            // its AWS Batch jobs are Fargate — they reach ECR, Amazon S3 and CloudWatch Logs through the
+            // isolated-subnet endpoints created above. Its five isolated-subnet peers are likewise
+            // absent from this list and run without it.
             const needsEcsPrivate =
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
-                props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled;

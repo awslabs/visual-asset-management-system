@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { loadExternalScript } from "../../core/loadExternalScript";
+
 /**
  * That Open Engine (web-ifc) Dependency Manager
  * Handles dynamic loading of the self-contained IFC/BIM viewer UMD bundle
@@ -15,74 +17,33 @@
  */
 export class ThatOpenWebIfcDependencyManager {
     private static isLoaded = false;
-    private static loadPromise: Promise<void> | null = null;
 
     private static readonly SCRIPT_SRC = "/viewers/thatopenwebifc/thatopenwebifc.min.js";
 
     /**
      * Load the That Open Engine IFC/BIM viewer bundle dynamically.
+     * Safe to call concurrently and repeatedly — overlapping callers share a single load.
      */
     static async loadThatOpenWebIfc(): Promise<void> {
-        // Check if already loaded and the global is present.
-        if (this.isLoaded && (window as any).ThatOpenWebIfcBundle) {
-            console.log("ThatOpenWebIfc: Already loaded, reusing existing instance");
-            return Promise.resolve();
+        // Already usable.
+        if ((window as any).ThatOpenWebIfcBundle) {
+            this.isLoaded = true;
+            return;
         }
 
         console.log("Loading That Open Engine IFC/BIM viewer library...");
-
-        // Check if the script already exists in the DOM.
-        let script = document.querySelector(
-            `script[src="${this.SCRIPT_SRC}"]`
-        ) as HTMLScriptElement;
-
-        if (script && (window as any).ThatOpenWebIfcBundle) {
-            // Script loaded and bundle available.
-            this.isLoaded = true;
-            console.log("ThatOpenWebIfc: Restored from existing bundle");
-            return Promise.resolve();
-        }
-
-        if (script && !(window as any).ThatOpenWebIfcBundle) {
-            // Script exists but bundle not loaded - remove and reload.
-            console.log(
-                "ThatOpenWebIfc: Script exists but bundle not loaded, removing to force reload..."
-            );
-            script.remove();
-            script = null as any;
-        }
-
-        // Create a new load promise.
-        this.loadPromise = new Promise<void>((resolve, reject) => {
-            const newScript = document.createElement("script");
-            newScript.src = this.SCRIPT_SRC;
-            newScript.async = true;
-
-            newScript.onload = () => {
-                console.log("That Open Engine IFC/BIM viewer library loaded successfully");
-
-                if ((window as any).ThatOpenWebIfcBundle) {
-                    this.isLoaded = true;
-                    resolve();
-                } else {
-                    const error = new Error(
-                        "That Open Engine bundle loaded but not found in window object"
-                    );
-                    console.error(error);
-                    reject(error);
-                }
-            };
-
-            newScript.onerror = (error) => {
-                const errorMsg = "Failed to load That Open Engine IFC/BIM viewer library";
-                console.error(errorMsg, error);
-                reject(new Error(errorMsg));
-            };
-
-            document.head.appendChild(newScript);
+        // isReady keeps a tag that already executed from short-circuiting if the global has since been
+        // dropped; the bundle has to actually re-execute to redefine it.
+        await loadExternalScript(this.SCRIPT_SRC, {
+            isReady: () => !!(window as any).ThatOpenWebIfcBundle,
         });
 
-        return this.loadPromise;
+        if (!(window as any).ThatOpenWebIfcBundle) {
+            throw new Error("That Open Engine bundle loaded but not found in window object");
+        }
+
+        this.isLoaded = true;
+        console.log("That Open Engine IFC/BIM viewer library loaded successfully");
     }
 
     /**

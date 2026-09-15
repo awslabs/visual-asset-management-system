@@ -76,7 +76,7 @@ class TestResolveInputsFromManifest:
     def test_single_input_resolves_path_and_subdir(self):
         mod = _load()
         manifest = _manifest("/parts/housing/model.obj", "xid/parts/housing/model.obj")
-        with patch.object(mod, "_fetch_json_from_s3", MagicMock(return_value=manifest)):
+        with patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)):
             input_path, output_path, relative_subdir = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": "s3://abkt/m.json"})
         assert input_path == "s3://abkt/xid/parts/housing/model.obj"
@@ -87,9 +87,26 @@ class TestResolveInputsFromManifest:
         # inputFileArity 'one': a template override widening arity must not silently drop files.
         mod = _load()
         manifest = _manifest("/model.obj", "xid/model.obj", extra_files=2)
-        with patch.object(mod, "_fetch_json_from_s3", MagicMock(return_value=manifest)):
+        with patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)):
             with pytest.raises(ValueError, match="single input file"):
                 mod.resolve_inputs_from_manifest({"inputManifestS3Location": "s3://abkt/m.json"})
+
+
+def _exporting_trimesh(*companion_names):
+    """A trimesh stub whose export actually writes its output file, plus any companion files the
+    real exporter would have written beside it. The upload reads the export directory back from
+    disk, so a stub that writes nothing would leave every key assertion vacuous."""
+    stub = MagicMock()
+
+    def _export(path, file_type=None, **kwargs):
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("exported")
+        for name in companion_names:
+            with open(os.path.join(os.path.dirname(path), name), "w", encoding="utf-8") as handle:
+                handle.write("companion")
+
+    stub.load.return_value.export = MagicMock(side_effect=_export)
+    return stub
 
 
 @pytest.mark.unit
@@ -104,7 +121,7 @@ class TestConvertInputOutput:
 
         with patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p: p)), \
                 patch.object(mod, "uploadV2", MagicMock(side_effect=_upload)), \
-                patch.object(mod, "trimesh", MagicMock()):
+                patch.object(mod, "trimesh", _exporting_trimesh()):
             mod.convert_input_output(
                 input_path, "s3://obkt/pipelines/p1/JOB/output/E1/files/",
                 output_filetype, relative_subdir)

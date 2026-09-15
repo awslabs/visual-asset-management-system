@@ -44,8 +44,12 @@ def is_object_version_archived(bucket, key, version_id=None, client=None):
             except Exception as e:
                 code = getattr(e, "response", {}).get("Error", {}).get("Code") if hasattr(e, "response") else None
                 if code in ("NoSuchKey", "404", "NotFound"):
-                    versions_response = client.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
-                    return len(versions_response.get("DeleteMarkers", [])) > 0
+                    # Single-entry, exact-key, IsLatest match, per common.s3's docstring: the
+                    # key leads its own prefix page and its versions come newest first.
+                    versions_response = client.list_object_versions(
+                        Bucket=bucket, Prefix=key, MaxKeys=1)
+                    return any(marker.get("Key") == key and marker.get("IsLatest")
+                               for marker in versions_response.get("DeleteMarkers", []))
                 raise
     except Exception:
         return False

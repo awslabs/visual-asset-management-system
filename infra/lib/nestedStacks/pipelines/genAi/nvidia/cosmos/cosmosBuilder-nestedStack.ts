@@ -44,7 +44,7 @@ const defaultProps: Partial<CosmosBuilderNestedStackProps> = {};
  * Current model types:
  * - Predict (Text2World, Video2World)
  * - Transfer (style/content transfer with control signals)
- * - Reason (Vision Language Model for video/image analysis)
+ * - Reason (Vision Language Model for video analysis)
  *
  * Future model types (will be added here):
  * - Tokenize

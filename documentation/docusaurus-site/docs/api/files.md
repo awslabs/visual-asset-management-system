@@ -26,13 +26,13 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                  |
-| --------------- | -------- | ------- | -------- | -------------------------------------------- |
-| `databaseId`    | path     | string  | Yes      | Database identifier.                         |
-| `assetId`       | path     | string  | Yes      | Asset identifier.                            |
-| `maxItems`      | query    | integer | No       | Maximum number of files to return.           |
-| `pageSize`      | query    | integer | No       | Page size for pagination.                    |
-| `startingToken` | query    | string  | No       | Continuation token from a previous response. |
+| Parameter       | Location | Type    | Required | Description                                                                             |
+| --------------- | -------- | ------- | -------- | --------------------------------------------------------------------------------------- |
+| `databaseId`    | path     | string  | Yes      | Database identifier.                                                                    |
+| `assetId`       | path     | string  | Yes      | Asset identifier.                                                                       |
+| `maxItems`      | query    | integer | No       | Maximum number of files to return. Default: `10000`. No maximum.                        |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. No maximum. |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response.                                            |
 
 **Response:**
 
@@ -53,7 +53,9 @@ Returns a list of all files in the specified asset, including file metadata, siz
             "primaryType": "primary",
             "previewFile": "/models/building.ifc.previewFile.png",
             "changeSource": "upload",
-            "changeUserId": "user@example.com"
+            "changeUserId": "user@example.com",
+            "changeWorkflowId": null,
+            "changeWorkflowExecutionId": null
         },
         {
             "fileName": "textures",
@@ -68,6 +70,8 @@ Returns a list of all files in the specified asset, including file metadata, siz
     "NextToken": "eyJ..."
 }
 ```
+
+`changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
 **Error Responses:**
 
@@ -113,6 +117,8 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
     "previewFile": "/models/building.ifc.previewFile.png",
     "changeSource": "upload",
     "changeUserId": "user@example.com",
+    "changeWorkflowId": null,
+    "changeWorkflowExecutionId": null,
     "versions": [
         {
             "versionId": "abc123",
@@ -124,7 +130,7 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
 }
 ```
 
-The `versions` list is present only when `includeVersions` is `true`.
+The `versions` list is present only when `includeVersions` is `true`. `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote the current version when `changeSource` is `workflowExecution`, and are `null` otherwise; each entry in `versions` carries the same pair for that version.
 
 **Error Responses:**
 
@@ -600,6 +606,10 @@ Each entry in `files` is an object:
 For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked.
 :::
 
+:::info[Preview File Extensions]
+An `assetPreview` file, and any file-level preview companion (a `relativeKey` containing `.previewFile.`) inside an `assetFile` upload, must carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. For a companion the extension is everything after the `.previewFile.` marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. One offending file rejects the entire request with `400`; no multipart upload is created for any file in it.
+:::
+
 ---
 
 ### Complete Upload
@@ -703,13 +713,17 @@ Returns file metadata (size, content type) without the file body.
 
 **Request Parameters:**
 
-| Parameter    | Location | Type   | Required | Description                                |
-| ------------ | -------- | ------ | -------- | ------------------------------------------ |
-| `databaseId` | path     | string | Yes      | Database identifier.                       |
-| `assetId`    | path     | string | Yes      | Asset identifier.                          |
-| `{proxy+}`   | path     | string | Yes      | The relative file path within the asset.   |
-| `v`          | query    | string | No       | S3 version ID for a specific file version. |
-| `avid`       | query    | string | No       | VAMS asset version ID.                     |
+| Parameter             | Location | Type   | Required | Description                                                         |
+| --------------------- | -------- | ------ | -------- | ------------------------------------------------------------------- |
+| `databaseId`          | path     | string | Yes      | Database identifier.                                                |
+| `assetId`             | path     | string | Yes      | Asset identifier.                                                   |
+| `{proxy+}`            | path     | string | Yes      | The relative file path within the asset.                            |
+| `versionId`           | query    | string | No       | Amazon S3 version ID of a specific file version.                    |
+| `assetVersionId`      | query    | string | No       | VAMS asset version ID; the file version recorded in it is resolved. |
+| `assetVersionIdAlias` | query    | string | No       | Alias of a VAMS asset version, resolved the same way.               |
+
+Supply at most one of `versionId`, `assetVersionId` and `assetVersionIdAlias`. Supplying more than one
+returns `400` with a message naming the three. Supplying none streams the current version.
 
 **Response:**
 
@@ -717,11 +731,11 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                    |
-| ------ | ------------------------------------------------------------------------------ |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable.  |
-| `404`  | File not found.                                                                |
-| `500`  | Internal server error.                                                         |
+| Status | Description                                                                   |
+| ------ | ----------------------------------------------------------------------------- |
+| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
+| `404`  | File not found.                                                               |
+| `500`  | Internal server error.                                                        |
 
 ---
 
@@ -749,11 +763,11 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                    |
-| ------ | ------------------------------------------------------------------------------ |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable.  |
-| `404`  | File not found.                                                                |
-| `500`  | Internal server error.                                                         |
+| Status | Description                                                                   |
+| ------ | ----------------------------------------------------------------------------- |
+| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
+| `404`  | File not found.                                                               |
+| `500`  | Internal server error.                                                        |
 
 ---
 

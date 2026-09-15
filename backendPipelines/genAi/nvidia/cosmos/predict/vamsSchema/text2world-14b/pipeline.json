@@ -1,6 +1,6 @@
 {
     "pipelineName": "NVIDIA Cosmos Text-to-World 14B v2",
-    "category": "GenAI",
+    "category": "WFM",
     "description": "NVIDIA Cosmos Text-to-World 14B v2 - Generate high-quality videos from text prompts (Predict2.5)",
     "executionConfig": {
         "executionType": "Lambda",

@@ -14,18 +14,32 @@ import os
 import boto3
 import manifestHelper
 from customLogging.logger import safeLogger
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="ExecuteBatchJobCoordTransform")
-batch = boto3.client("batch")
-events_client = boto3.client("events")
+batch = boto3.client("batch", config=retry_config)
+events_client = boto3.client("events", config=retry_config)
 
 BATCH_JOB_QUEUE = os.environ["BATCH_JOB_QUEUE"]
 BATCH_JOB_DEFINITION = os.environ["BATCH_JOB_DEFINITION"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
+# This pipeline's vended container log group (the group its Fargate job definition writes to through
+# the awslogs driver); the job's log source is registered only when configured.
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 # Resource type reported for an AWS Batch job, so the abort path can terminate it by id.
 RESOURCE_TYPE_BATCH_JOB = "batchJob"
+# The state that invokes this lambda (its CDK construct id); the job and its container log are
+# attributed to it.
+BATCH_STATE_NAME = "CoordTransformBatchJob"
 
 
 def register_batch_job(orchestration_event_prefix, job_id):
@@ -47,15 +61,31 @@ def register_batch_job(orchestration_event_prefix, job_id):
     if not pipeline_execution_id:
         logger.warning("Could not derive pipelineExecutionId from event prefix; skipping registration")
         return
+    detail = {
+        "pipelineExecutionId": pipeline_execution_id,
+        "subExecution": {
+            "resourceType": RESOURCE_TYPE_BATCH_JOB,
+            "jobId": job_id,
+            "stageName": BATCH_STATE_NAME,
+            "label": "Coordinate transform job",
+        },
+    }
+    if BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN:
+        detail["logs"] = [{
+            "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+            "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+            "logStreamName": "",
+            "logStreamPrefix": f"{BATCH_JOB_DEFINITION}/default/",
+            "stageName": BATCH_STATE_NAME,
+            "sourceType": "batch",
+            "label": f"{BATCH_STATE_NAME} container",
+        }]
     try:
         events_client.put_events(Entries=[{
             "EventBusName": ORCHESTRATION_BUS_NAME,
             "Source": orchestration_event_prefix,
             "DetailType": REGISTER_DETAIL_TYPE,
-            "Detail": json.dumps({
-                "pipelineExecutionId": pipeline_execution_id,
-                "subExecution": {"resourceType": RESOURCE_TYPE_BATCH_JOB, "jobId": job_id},
-            }),
+            "Detail": json.dumps(detail),
         }])
         logger.info(f"Registered Batch job {job_id} for pipeline execution {pipeline_execution_id}")
     except Exception as e:  # nosec B110 - registration is best-effort; never fail the pipeline
@@ -63,7 +93,7 @@ def register_batch_job(orchestration_event_prefix, job_id):
 
 
 def lambda_handler(event, context):
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     job_name = event["jobName"]
     definition = event["definition"]

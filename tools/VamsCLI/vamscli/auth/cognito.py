@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 import boto3
+import botocore
 import click
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 try:
@@ -24,14 +26,25 @@ from ..utils.exceptions import AuthenticationError
 
 class CognitoAuthenticator(BaseAuthenticator):
     """AWS Cognito authentication provider."""
-    
+
     def __init__(self, region: str, user_pool_id: str, client_id: str, client_secret: Optional[str] = None):
         self.region = region
         self.user_pool_id = user_pool_id
         self.client_id = client_id
         self.client_secret = client_secret
-        self.client = boto3.client('cognito-idp', region_name=region)
-        
+        # Every operation this class calls — initiate_auth, respond_to_auth_challenge,
+        # forgot_password, confirm_forgot_password, change_password — is an unauthenticated Cognito
+        # user-pool API that takes no SigV4 signature. UNSIGNED says so explicitly, and botocore
+        # then skips credential resolution entirely: a signed client walks the AWS credential chain
+        # inside create_client, so a configured-but-failing profile (an expired SSO or
+        # credential_process helper) aborts VAMS login with a botocore CredentialRetrievalError
+        # before a single Cognito call is attempted.
+        self.client = boto3.client(
+            'cognito-idp',
+            region_name=region,
+            config=Config(signature_version=botocore.UNSIGNED),
+        )
+
     def _calculate_secret_hash(self, username: str) -> str:
         """Calculate secret hash for Cognito SRP."""
         if not self.client_secret:

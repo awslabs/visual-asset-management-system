@@ -1,12 +1,12 @@
 {
     "pipelineName": "Isaac Lab RL Evaluation",
-    "category": "Simulation",
+    "category": "VLA Training",
     "description": "Isaac Lab RL Evaluation Pipeline - Evaluate trained RL policies using NVIDIA Isaac Lab simulation.",
     "executionConfig": {
         "executionType": "Lambda",
         "waitForCallback": "Enabled",
         "taskTimeout": "7200",
-        "taskHeartbeatTimeout": "1800",
+        "taskHeartbeatTimeout": "3600",
         "lambda": {}
     },
     "systemConfig": {

@@ -25,8 +25,16 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     suppressCdkNagLambda,
+    suppressCdkNagDynamoStreamListWildcard,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
+
+// The single orchestration-bus event sqsBucketSync publishes (publish_to_orchestration_bus in
+// backend/backend/handlers/indexing/sqsBucketSync.py): Source is the deployment's event-source prefix
+// followed by this suffix, and DetailType is fixed. The handler builds the same two literals from its
+// ORCHESTRATION_EVENT_SOURCE_PREFIX env var, and nothing else couples the two languages.
+const FILE_UPLOAD_EVENT_SOURCE_SUFFIX = ".trigger.fileUpload";
+const FILE_UPLOAD_EVENT_DETAIL_TYPE = "asset.file.uploaded";
 
 export function buildSearchFunction(
     scope: Construct,
@@ -224,6 +232,7 @@ export function buildAssetIndexingFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
     suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
@@ -243,7 +252,12 @@ export function buildSqsBucketSyncFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
+    // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
+    // made this a publish grant against any account's topics of that name.
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const fun = new lambda.Function(scope, "sqsBucketSync-" + handlerType + "-" + index, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.indexing.sqsBucketSync.lambda_handler_` + handlerType,
@@ -284,12 +298,27 @@ export function buildSqsBucketSyncFunction(
     // Grant SNS publish permissions
     storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
 
-    // Grant EventBridge publish to the orchestration bus (fileUpload trigger delivery).
-    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
+    // Grant EventBridge publish to the orchestration bus (fileUpload trigger delivery), scoped to the
+    // one event the handler emits. A PutEvents request carries a set of entries, so its source and
+    // detail-type condition keys are multi-valued and take the ForAllValues operator: a batch is
+    // allowed only when every entry carries this source and detail type.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["events:PutEvents"],
+            resources: [storageResources.eventBridge.orchestrationBus.eventBusArn],
+            conditions: {
+                "ForAllValues:StringEquals": {
+                    "events:source": `${storageResources.eventBridge.eventSourcePrefix}${FILE_UPLOAD_EVENT_SOURCE_SUFFIX}`,
+                    "events:detail-type": FILE_UPLOAD_EVENT_DETAIL_TYPE,
+                },
+            },
+        })
+    );
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ["sns:CreateTopic", "sns:ListTopics", "sns:DeleteTopic"],
+            actions: ["sns:CreateTopic", "sns:DeleteTopic"],
             resources: [assetTopicWildcardArn],
         })
     );
@@ -409,6 +438,7 @@ export function buildFileIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
     suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
@@ -456,6 +486,7 @@ export function buildAssetIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
     suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
@@ -501,6 +532,7 @@ export function buildDatabaseIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
     suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 

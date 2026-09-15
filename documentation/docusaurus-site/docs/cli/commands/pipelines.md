@@ -19,15 +19,25 @@ List pipelines in a database, or all pipelines you can access.
 ```bash
 vamscli pipeline list
 vamscli pipeline list -d my-database
+vamscli pipeline list -d my-database --include-archived --auto-paginate
 vamscli pipeline list -d my-database --include-archived --json-output
 ```
 
-| Option                             | Description                                         |
-| ---------------------------------- | --------------------------------------------------- |
-| `-d, --database-id`                | Database ID (omit to list all accessible pipelines) |
-| `--include-archived`               | Include archived pipelines                          |
-| `--page-size` / `--starting-token` | Pagination                                          |
-| `--json-output`                    | Emit the raw JSON response                          |
+A page may come back empty and still carry a continuation token: archived and unauthorized pipelines
+are filtered after the page limit is applied, so later pages can still hold matches. `--auto-paginate`
+follows the token through those pages. It stops early once `--max-items` items have been collected or
+after 200 pages, and reports the outstanding token so the walk can be resumed with
+`--starting-token`.
+
+| Option               | Description                                                        |
+| -------------------- | ------------------------------------------------------------------ |
+| `-d, --database-id`  | Database ID (omit to list all accessible pipelines)                |
+| `--include-archived` | Include archived pipelines                                         |
+| `--page-size`        | Items per page                                                     |
+| `--auto-paginate`    | Fetch all pages automatically (up to `--max-items`, default 10000) |
+| `--max-items`        | Maximum total items to fetch (only with `--auto-paginate`)         |
+| `--starting-token`   | Continuation token for manual pagination                           |
+| `--json-output`      | Emit the raw JSON response                                         |
 
 ---
 
@@ -168,6 +178,9 @@ vamscli pipeline template delete -d my-db -p my-pipeline -t to-obj
 | `--overrides[-file]`                  | Per-template overrides (arity, metadata inputs, asset scope, filters) |
 | `--tag-schema[-file]`                 | Inline tag schema (list of field definitions)                         |
 
+The `--overrides` block is at most 64 KB serialized, the same budget as the pipeline's own
+`systemConfig`, whose keys it replaces a subset of.
+
 :::note[Create vs update flags]
 `create` takes the bare enabling flags `--allow-custom-edit` and `--default`. `update` takes the paired toggle forms `--allow-custom-edit/--no-custom-edit` and `--default/--no-default`, so an update can also clear either setting.
 :::
@@ -177,6 +190,11 @@ vamscli pipeline template delete -d my-db -p my-pipeline -t to-obj
 tag schema are all removed, and there is no archived copy to restore. This differs from
 `pipeline delete` and `workflow delete`, which archive. The command prompts for confirmation, and
 `--yes` is required in `--json-output` mode where no prompt is possible.
+
+Deleting a template that a file-upload trigger still names as a default template succeeds and prints
+a warning naming those workflows and triggers; in `--json-output` mode the same list is returned as a
+`warnings` array. Triggered executions of the named workflows fail until each trigger picks a
+different default template for this pipeline (`vamscli workflow trigger set`).
 :::
 
 ---
@@ -195,6 +213,14 @@ vamscli pipeline tag-schema set -d my-db -p my-pipeline -t to-glb \
 
 vamscli pipeline tag-schema set -d my-db -p my-pipeline -t to-glb --fields-file tags.json
 ```
+
+:::note[A field definition takes only these keys]
+`tagKey`, `type`, `required`, `default`, `label`, `description`, and `enumValues`. Any other key is
+rejected with a `400` naming the offending index and key, rather than ignored — a hand-written
+`tags.json` with a misspelled `requried` or a capitalised `Type` fails the command instead of storing
+a tag that is silently optional or untyped. The same rule applies to `--tag-schema` on
+`pipeline template create` and `pipeline template update`.
+:::
 
 ---
 

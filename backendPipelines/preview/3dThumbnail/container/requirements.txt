@@ -8,12 +8,12 @@ vtk>=9.4.0
 
 # Mesh loading (MIT license)
 trimesh>=4.5.0
-numpy>=1.26.4
+numpy>=1.26.4,<3
 scipy>=1.14.0
 
 # Point cloud formats
-laspy[lazrs]>=2.5.4          # BSD - LAS/LAZ support with lazrs decompression
-pye57>=0.4.17                # MIT - E57 point cloud format
+laspy[lazrs]>=2.5.4,<3       # BSD - LAS/LAZ support with lazrs decompression
+pye57>=0.4.17,<0.5           # MIT - E57 point cloud format
 
 # CAD format support (LGPL - needed for STEP files)
 # cadquery pulls cadquery-ocp automatically from PyPI
@@ -27,7 +27,7 @@ Pillow>=11.0.0               # MIT-like (PIL) - image optimization
 DracoPy>=1.4.0               # Apache 2.0 - .drc file support
 
 # Open3D for additional point cloud formats (MIT license)
-open3d>=0.19.0
+open3d>=0.19.0,<0.20
 
 # USD format support (Modified Apache 2.0 license)
 usd-core>=24.8

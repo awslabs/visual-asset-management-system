@@ -521,27 +521,91 @@ def trigger():
 @trigger.command('list')
 @click.option('-d', '--database-id', required=True, help='Database ID containing the workflow')
 @click.option('-w', '--workflow-id', required=True, help='Workflow ID whose triggers to list')
+@click.option('--page-size', type=int, help='Number of items per page (default 100)')
+@click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default 10000)')
+@click.option('--starting-token', help='Token for pagination (manual pagination)')
+@click.option('--auto-paginate', is_flag=True, help='Automatically fetch all triggers')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list_triggers(ctx: click.Context, database_id: str, workflow_id: str, json_output: bool):
-    """List a workflow's triggers."""
+def list_triggers(ctx: click.Context, database_id: str, workflow_id: str,
+                  page_size: Optional[int], max_items: Optional[int],
+                  starting_token: Optional[str], auto_paginate: bool, json_output: bool):
+    """List a workflow's triggers.
+
+    The listing serves one bounded page (100 triggers by default) and reports a NextToken while
+    more remain. Follow it with --starting-token, or use --auto-paginate to fetch the whole set.
+
+    Examples:
+        vamscli workflow trigger list -d my-database -w my-workflow
+        vamscli workflow trigger list -d my-database -w my-workflow --auto-paginate
+        vamscli workflow trigger list -d my-database -w my-workflow --page-size 10
+    """
     api_client = _api(ctx)
-    output_status(f"Listing triggers for workflow '{workflow_id}'...", json_output)
+    if auto_paginate and starting_token:
+        raise click.ClickException("Cannot use --auto-paginate with --starting-token.")
+    if max_items and not auto_paginate:
+        output_warning("--max-items only applies with --auto-paginate. Ignoring.", json_output)
+        max_items = None
+
+    def _fmt(data: Dict[str, Any]) -> str:
+        items = data.get('Items', [])
+        if not items:
+            # A bounded page can be empty and still carry a token: DynamoDB reports a
+            # continuation key whenever a read stops at its limit.
+            if not data.get('autoPaginated') and data.get('NextToken'):
+                return ("No triggers on this page; more pages available."
+                        f"\n\nNext token: {data['NextToken']}")
+            return "No triggers found."
+        out = []
+        if data.get('autoPaginated'):
+            out.append(f"Auto-paginated: {data.get('totalItems', 0)} trigger(s) in "
+                       f"{data.get('pageCount', 0)} page(s)")
+        out.append(f"Found {len(items)} trigger(s)"
+                   f"{' on this page' if data.get('NextToken') else ''}:")
+        for t in items:
+            out.append(f"  {t.get('triggerType', '?')}"
+                       f" (enabled={t.get('enabled', '?')})")
+        if not data.get('autoPaginated') and data.get('NextToken'):
+            out.append(f"\nNext token: {data['NextToken']}")
+        return '\n'.join(out)
+
     try:
-        result = api_client.list_workflow_triggers(database_id, workflow_id)
-        message = _message(result)
+        if auto_paginate:
+            max_total = max_items or 10000
+            output_status(f"Listing triggers for workflow '{workflow_id}' "
+                          f"(auto-paginating up to {max_total})...", json_output)
+            all_items = []
+            next_token = None
+            page_count = 0
+            while True:
+                page_count += 1
+                params = {}
+                if page_size:
+                    params['pageSize'] = page_size
+                if next_token:
+                    params['startingToken'] = next_token
+                page = _message(api_client.list_workflow_triggers(
+                    database_id, workflow_id, params=params))
+                items = page.get('Items', [])
+                all_items.extend(items)
+                if not json_output:
+                    output_status(f"Fetched {len(all_items)} triggers (page {page_count})...", False)
+                next_token = page.get('NextToken')
+                if not next_token or not items or len(all_items) >= max_total:
+                    break
+            result = {'Items': all_items, 'totalItems': len(all_items),
+                      'autoPaginated': True, 'pageCount': page_count}
+            output_result(result, json_output, cli_formatter=_fmt)
+            return result
 
-        def _fmt(_r):
-            items = message.get('Items', [])
-            if not items:
-                return "No triggers found."
-            out = [f"Found {len(items)} trigger(s):"]
-            for t in items:
-                out.append(f"  {t.get('triggerType', '?')}"
-                           f" (enabled={t.get('enabled', '?')})")
-            return '\n'.join(out)
-
+        output_status(f"Listing triggers for workflow '{workflow_id}'...", json_output)
+        params = {}
+        if page_size:
+            params['pageSize'] = page_size
+        if starting_token:
+            params['startingToken'] = starting_token
+        result = api_client.list_workflow_triggers(database_id, workflow_id, params=params)
         output_result(_message(result), json_output, cli_formatter=_fmt)
         return result
     except WorkflowNotFoundError as e:
@@ -857,6 +921,9 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
     --filter-start-date / --filter-end-date to query an explicit date range. The window actually
     applied is reported alongside the results.
 
+    A run is listed only when you can read every asset it read and the asset it wrote to, so a run
+    that touched this asset can still be withheld on account of another asset it touched.
+
     For the global, cross-asset execution list with rich filters, use 'vamscli execution list'.
 
     Examples:
@@ -895,16 +962,28 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
         return f"Window: {applied} to {end}" if end else f"Window: from {applied}"
 
     def _fmt(data: Dict[str, Any]) -> str:
+        def _rendered(lines) -> str:
+            # The cap on distinct assets the page resolves for permission checks. Rendered on the
+            # empty page too, because that is where a bare "No workflow executions found." misreports
+            # a stated bound as an asset with no history.
+            warnings = data.get('warnings')
+            if warnings:
+                lines.append(f"\nWarnings ({len(warnings)}):")
+                lines.extend(f"  - {w}" for w in warnings)
+            return '\n'.join(lines)
+
         items = data.get('Items', [])
         window = _window(data)
         if not items:
             # The backend applies authorization and filters after the candidate cap, so an empty
             # page may still carry a NextToken for later pages that do contain matches.
             if not data.get('autoPaginated') and data.get('NextToken'):
-                return ("No workflow executions on this page; more pages available."
-                        f"\n\nNext token: {data['NextToken']}")
-            empty = "No workflow executions found."
-            return f"{empty}\n{window}" if window else empty
+                return _rendered(["No workflow executions on this page; more pages available.",
+                                  f"\nNext token: {data['NextToken']}"])
+            empty = ["No workflow executions found."]
+            if window:
+                empty.append(window)
+            return _rendered(empty)
         out = []
         if window:
             out.append(window)
@@ -925,7 +1004,7 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             out.append(f"\nNext token: {data['NextToken']}")
         if data.get('note'):
             out.append(f"\n{data['note']}")
-        return '\n'.join(out)
+        return _rendered(out)
 
     try:
         if auto_paginate:
@@ -933,6 +1012,10 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             output_status(f"Listing executions for asset '{asset_id}' "
                           f"(auto-paginating up to {max_total})...", json_output)
             all_items = []
+            # Collected across pages (deduplicated, in order): the aggregate is rebuilt from the
+            # accumulated items alone, and the external connectors read this command's --json-output,
+            # so a bound dropped here is a bound they can never see.
+            all_warnings = []
             next_token = None
             page_count = 0
             applied_window: Dict[str, Any] = {}
@@ -946,6 +1029,9 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
                     workflow_database_id=workflow_database_id, workflow_id=workflow_id, params=params))
                 items = page.get('Items', [])
                 all_items.extend(items)
+                for warning in page.get('warnings') or []:
+                    if warning not in all_warnings:
+                        all_warnings.append(warning)
                 for key in ('filterStartDate', 'filterEndDate'):
                     if page.get(key):
                         applied_window[key] = page[key]
@@ -956,6 +1042,8 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
                     break
             result = {'Items': all_items, 'totalItems': len(all_items),
                       'autoPaginated': True, 'pageCount': page_count, **applied_window}
+            if all_warnings:
+                result['warnings'] = all_warnings
             if next_token and len(all_items) >= max_total:
                 # The outstanding token is the only way to resume; a bare "more may be available"
                 # would force the caller to re-walk every page already paid for.

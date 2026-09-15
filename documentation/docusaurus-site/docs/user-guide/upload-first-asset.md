@@ -53,15 +53,17 @@ Fill in the required fields on the **Asset Details** step:
 
 3. **Is Distributable?** -- Select **Yes** or **No**.
 
-    !!! info
+    :::info
     The **Is Distributable** setting controls whether file downloads are enabled for this asset. Select **Yes** if users should be able to download files from this asset. Select **No** to restrict the asset to viewing only.
+    :::
 
 4. **Description** -- Enter a description of at least 4 characters. This helps other users understand what the asset contains.
 
 5. **Tags** (optional) -- Select one or more tags from the dropdown to categorize your asset. Tags are defined by your administrator in the **Tags Management** page.
 
-    !!! warning
+    :::warning
     If your administrator has configured required tag types, you must select at least one tag from each required type before proceeding. Required tag types are listed in the constraint text below the Tags field.
+    :::
 
 6. Select **Next** to proceed to the metadata step.
 
@@ -135,7 +137,7 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
 If the selected database has file upload extension restrictions, an alert banner displays the allowed extensions. Files with disallowed extensions are flagged with validation errors and cannot be uploaded.
 
 :::note
-Preview files (filenames containing `.previewFile.`) are exempt from extension restrictions.
+Preview files (filenames containing `.previewFile.`) are exempt from the database's extension restrictions, but must still be one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. A preview file with any other extension is flagged before the upload starts, and rejects the whole upload request if it reaches the API.
 :::
 
 ### Preview Files

@@ -45,7 +45,7 @@ export function buildAddCommentLambdaFunction(
         environment: {},
     });
     storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -81,7 +81,7 @@ export function buildEditCommentLambdaFunction(
         environment: {},
     });
     storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -116,7 +116,7 @@ export function buildCommentService(
                 : undefined,
         environment: {},
     });
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);

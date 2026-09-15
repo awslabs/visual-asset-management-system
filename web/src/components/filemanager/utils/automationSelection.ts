@@ -30,9 +30,11 @@ export interface AutomationSelectionInput {
     /** Whether the single selected item is a folder (or the asset root). */
     isFolder: boolean;
     /**
-     * The asset version being browsed, when not viewing the live state. While a specific asset version
-     * is open, that version already decides which file version applies, so an individual file's S3
-     * `versionId` must NOT also be pinned — the same rule the download and view paths use.
+     * The asset version being browsed, when not viewing the live state. A file entry in that mode
+     * already carries the version-resolved S3 `versionId` rather than the live one, so pinning it is
+     * what makes the launch read the bytes on screen. A folder or whole-asset selection carries no
+     * version and is expanded at launch against the live state, so it cannot stand for the version
+     * being browsed at all.
      */
     assetVersionId?: string;
 }
@@ -53,15 +55,12 @@ export function deriveAutomationInputFiles(input: AutomationSelectionInput): Exe
     const { databaseId, assetId, isMultiSelect, selectedItems, selectedItem, isFolder } = input;
     if (!databaseId || !assetId) return [];
 
-    const pinVersion = (item?: SelectionItem) =>
-        input.assetVersionId ? undefined : item?.versionId || undefined;
-
     if (isMultiSelect) {
         return (selectedItems || []).filter(isUsable).map((item) => ({
             databaseId,
             assetId,
             relativeFileKey: toKey(item.relativePath),
-            versionId: pinVersion(item),
+            versionId: item.versionId || undefined,
         }));
     }
 
@@ -69,7 +68,9 @@ export function deriveAutomationInputFiles(input: AutomationSelectionInput): Exe
 
     if (isFolder) {
         // A folder carries no version: the workflow expands it at launch, and the files inside have
-        // their own versions.
+        // their own versions. Nothing in the launch names the asset version, so a folder browsed under
+        // an earlier version would silently run on the live files.
+        if (input.assetVersionId) return [];
         return [{ databaseId, assetId, relativeFileKey: toFolderKey(selectedItem.relativePath) }];
     }
 
@@ -78,7 +79,7 @@ export function deriveAutomationInputFiles(input: AutomationSelectionInput): Exe
             databaseId,
             assetId,
             relativeFileKey: toKey(selectedItem.relativePath),
-            versionId: pinVersion(selectedItem),
+            versionId: selectedItem.versionId || undefined,
         },
     ];
 }
@@ -91,7 +92,7 @@ export function automationDisabledReason(
     input: AutomationSelectionInput,
     derived: ExecuteInputFile[]
 ): string | undefined {
-    const { isMultiSelect, selectedItems, selectedItem } = input;
+    const { isMultiSelect, selectedItems, selectedItem, isFolder } = input;
 
     if (isMultiSelect) {
         const dropped = (selectedItems || []).length - derived.length;
@@ -108,6 +109,9 @@ export function automationDisabledReason(
     if (!selectedItem) return "Select a file, folder, or asset first.";
     if (selectedItem.isPermanentlyDeleted) return "A deleted selection cannot be processed.";
     if (selectedItem.isArchived) return "An archived selection cannot be processed.";
+    if (isFolder && input.assetVersionId) {
+        return "Select individual files to run against this version, or switch back to the current version.";
+    }
     if (derived.length === 0) return "Select a file, folder, or asset first.";
     return undefined;
 }

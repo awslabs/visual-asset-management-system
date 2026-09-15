@@ -261,24 +261,33 @@ These interface endpoints are always created when VPC endpoints are enabled:
 | Amazon EventBridge        | `EVENTBRIDGE`     | Orchestration bus access (`events`). In-VPC Lambdas publish and consume events on the workflow orchestration bus — file-upload trigger dispatch and pipeline sub-process registration.         |
 | Amazon SNS                | `SNS`             | Event notifications                                                                                                                                                                            |
 | Amazon SQS                | `SQS`             | Queue operations                                                                                                                                                                               |
+| AWS Secrets Manager       | `SECRETS_MANAGER` | Secret retrieval. Used by add-on Lambda functions that hold third-party credentials and by the pipeline container execution roles that inject access tokens into AWS Batch jobs.               |
 
 :::info[Execute-API VPC endpoint]
 The execute-api interface VPC endpoint (`com.amazonaws.{region}.execute-api`) is created only for a `PRIVATE` REST API — that is, when `endpointType="PRIVATE"` and `useGlobalVpc.addVpcEndpoints` is `true`. A `PRIVATE` endpoint is reachable **only** through it (or through an operator-supplied endpoint via `optionalExternalPrivateApigVPCEId`). A `REGIONAL` endpoint is publicly addressable and does **not** route through any execute-api VPC endpoint, even when a VPC and its endpoints are enabled.
+:::
+
+:::info[AWS Secrets Manager VPC endpoint]
+The AWS Secrets Manager interface VPC endpoint (`com.amazonaws.{region}.secretsmanager`) is part of the common endpoint set: it is created for every deployment with `useGlobalVpc.addVpcEndpoints = true`, independently of which add-ons and pipelines are enabled. Because it is created with `privateDnsEnabled: true`, it carries **every** in-VPC AWS Secrets Manager call, including the AWS Batch pipeline task execution roles that read a third-party access token from a secret. Only the standard endpoint is created; VAMS Lambda functions and task execution roles resolve the default regional AWS Secrets Manager endpoint rather than the `secretsmanager-fips` variant, so no FIPS endpoint is created when `useFips = true`.
+:::
+
+:::warning[The Physna Sync add-on requires VPC egress]
+The Physna Sync add-on (`app.addons.usePhysnaSync.enabled`) calls the Physna software as a service API and its authorization token endpoint over the public internet. The AWS Secrets Manager endpoint covers the add-on's credential retrieval, but there is no VPC endpoint for a third-party service, so the add-on's Lambda functions need an outbound internet path. With `useGlobalVpc.useForAllLambdas = true` those functions run in the isolated subnets, which have no egress, and every Physna API call fails. Enable the add-on only in a VPC that provides egress to the Physna endpoints — for example, an imported VPC (`optionalExternalVpcId`) whose `optionalExternalIsolatedSubnetIds` name subnets with a NAT gateway route, or a deployment left at `useForAllLambdas = false` so the add-on's Lambda functions run outside the VPC. Configuration validation does not reject the combination, so it is a deployment-planning consideration rather than a synth-time error.
 :::
 
 ### Conditional Interface Endpoints
 
 These non-pipeline endpoints are created based on the deployment configuration:
 
-| Endpoint                      | Condition                                                       | Purpose                                                                                                                                                                                                   |
-| ----------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Amazon Cognito user pools     | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-idp` — browser SRP sign-in and the Lambda MFA check                                                                                                                                              |
-| Amazon Cognito identity pools | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-identity` — token/credential exchange                                                                                                                                                            |
-| Amazon Cognito (FIPS)         | `useCognito.enabled` + `useFips` (not GovCloud / EU Sovereign)  | FIPS-compliant `cognito-idp` and `cognito-identity`                                                                                                                                                       |
-| AWS KMS                       | `useKmsCmkEncryption.enabled`                                   | KMS key operations                                                                                                                                                                                        |
-| AWS KMS (FIPS)                | `useKmsCmkEncryption.enabled` + `useFips`                       | FIPS-compliant KMS                                                                                                                                                                                        |
-| Amazon S3 (ALB web)           | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                  | ALB-to-S3 static web file serving                                                                                                                                                                         |
-| AWS Deadline Cloud            | `pipelines.deadlineCloudExecutionTypeEnabled`                   | `deadline.management` — the job-callback Lambda calls `deadline:GetJob`. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
+| Endpoint                      | Condition                                                       | Purpose                                                                                                                                                                                             |
+| ----------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Amazon Cognito user pools     | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-idp` — browser SRP sign-in and the Lambda MFA check                                                                                                                                        |
+| Amazon Cognito identity pools | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-identity` — token/credential exchange                                                                                                                                                      |
+| Amazon Cognito (FIPS)         | `useCognito.enabled` + `useFips` (not GovCloud / EU Sovereign)  | FIPS-compliant `cognito-idp` and `cognito-identity`                                                                                                                                                 |
+| AWS KMS                       | `useKmsCmkEncryption.enabled`                                   | KMS key operations                                                                                                                                                                                  |
+| AWS KMS (FIPS)                | `useKmsCmkEncryption.enabled` + `useFips`                       | FIPS-compliant KMS                                                                                                                                                                                  |
+| Amazon S3 (ALB web)           | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                  | ALB-to-S3 static web file serving                                                                                                                                                                   |
+| AWS Deadline Cloud            | `pipelines.deadlineCloudExecutionTypeEnabled`                   | `deadline.management` — read a job's status and cancel a farm job. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
 
 :::info[ALB Amazon S3 interface endpoint]
 In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3 **interface** VPC endpoint (separate from the S3 **gateway** endpoint above) so the ALB can forward requests for the React web application to the Amazon S3 web-app bucket. This endpoint is created by the static web construct (not the VPC builder) and differs from the common interface endpoints in several ways:
@@ -349,7 +358,9 @@ When VAMS creates a managed VPC, VPC flow logs are automatically enabled:
 | Destination  | Amazon CloudWatch Logs                         |
 | Traffic Type | ALL                                            |
 | Log Group    | `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` |
-| Retention    | 10 years                                       |
+| Retention    | 1 year                                         |
+
+The retention period comes from the `LogRetentionAspect` CDK aspect, which sets it on every CloudWatch log group in the stack and overwrites any value declared on an individual construct. Change it for the whole deployment at the single `new LogRetentionAspect(...)` call site in `infra/lib/core-stack.ts` — see [Configuring Log Retention](../developer/audit-logging.md#configuring-log-retention).
 
 ## DNS Configuration
 

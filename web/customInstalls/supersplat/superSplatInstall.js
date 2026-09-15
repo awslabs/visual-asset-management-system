@@ -11,7 +11,7 @@ const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 // Configuration
 const viewerId = "supersplat-viewer";
 const SUPERSPLAT_REPO = "https://github.com/playcanvas/supersplat.git";
-const SUPERSPLAT_TAG = "v2.27.4"; // pinned stable release; bump deliberately to upgrade
+const SUPERSPLAT_TAG = "v3.1.1"; // pinned stable release; bump deliberately to upgrade
 const BASE_HREF = "/viewers/supersplat/"; // MUST match the public hosting sub-path
 
 const cloneDir = path.resolve(__dirname, "src-clone");
@@ -40,25 +40,6 @@ const npmInstall = () => {
     console.log("SuperSplat: Installing dependencies (this can take a few minutes)...");
     execSync("npm install", { cwd: cloneDir, stdio: "inherit" });
     console.log("SuperSplat: NPM install complete");
-};
-
-// Best-effort: apply any safe (non-breaking) dependency fixes that `npm audit fix`
-// can resolve automatically before the bundle is built and packaged. This patches
-// quickly-fixable vulnerabilities in SuperSplat's dependency tree (e.g. PlayCanvas
-// transitive deps). Intentionally non-fatal: `npm audit fix` exits non-zero when
-// unfixable vulnerabilities remain (those require `--force`/manual review, which we
-// do NOT apply), and a registry hiccup must not break the viewer build.
-const auditFix = () => {
-    console.log("SuperSplat: Running npm audit fix (safe fixes only)...");
-    try {
-        execSync("npm audit fix", { cwd: cloneDir, stdio: "inherit" });
-        console.log("SuperSplat: npm audit fix complete");
-    } catch (err) {
-        console.warn(
-            "SuperSplat: npm audit fix reported unresolved/unfixable vulnerabilities " +
-                "(continuing with build; no breaking --force fixes applied)."
-        );
-    }
 };
 
 const buildBundle = () => {
@@ -112,7 +93,6 @@ const main = async () => {
 
         cloneRepo();
         npmInstall();
-        auditFix();
         buildBundle();
         await copyBundledFiles();
         await cleanupClone();

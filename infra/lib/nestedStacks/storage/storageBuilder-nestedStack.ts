@@ -18,6 +18,7 @@ import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import {
+    suppressCdkNagErrorsByGrantReadWrite,
     requireTLSAndAdditionalPolicyAddToResourcePolicy,
     addPresignedUrlNetworkRestrictionsToBucketPolicy,
     generateUniqueNameHash,
@@ -101,6 +102,8 @@ export interface storageResources {
         subscriptionsStorageTable: dynamodb.Table;
         tagStorageTable: dynamodb.Table;
         tagTypeStorageTable: dynamodb.Table;
+        tagStorageTableLegacy: dynamodb.Table;
+        tagTypeStorageTableLegacy: dynamodb.Table;
         userRolesStorageTable: dynamodb.Table;
         userStorageTable: dynamodb.Table;
         workflowExecutionsStorageTable: dynamodb.Table;
@@ -155,34 +158,16 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
             resourceNameRegistry
         );
 
-        //Nag supressions
-        const reason =
-            "The custom resource CDK bucket deployment needs full access to the bucket to deploy files";
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            regex: "/Action::s3:.*/g",
-                        },
-                    ],
-                },
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "/^Resource::.*/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
+        // Nag suppressions. Delegated to the shared helper, which carries one individually justified
+        // entry per wildcard SHAPE that a CDK grant produces — an S3 object ARN, a DynamoDB index ARN, a
+        // Lambda qualifier ARN, a Step Functions execution ARN.
+        //
+        // This used to be an inline `/^Resource::.*/g` entry applied to the whole stack with a reason
+        // that described only the CDK bucket deployment. The scope is everything this stack owns: the
+        // KMS key, every DynamoDB table, the asset and auxiliary buckets, the SNS topics and the
+        // bucket-sync queues — so the repository's primary IAM guardrail was off for all of them under a
+        // justification that covered one construct.
+        suppressCdkNagErrorsByGrantReadWrite(this);
 
         if (!this.storageResources.encryption.kmsKey) {
             NagSuppressions.addResourceSuppressions(
@@ -255,10 +240,14 @@ export function storageResourcesBuilder(
             );
         } else {
             vamsGeneratedKmsKey = true;
+            // RETAIN so the key outlives a stack teardown and the RETAINed tables and buckets it
+            // encrypts stay decryptable. The key carries no kms.Alias and is addressed only by its
+            // generated key id/ARN, so a retained key never collides with the one a redeploy creates.
+            // Deleting it is a deliberate operator step once the retained data is no longer needed.
             kmsEncryptionKey = new kms.Key(scope, "VAMSEncryptionKMSKey", {
                 description: "VAMS Generated KMS Encryption key",
                 enableKeyRotation: true,
-                removalPolicy: cdk.RemovalPolicy.DESTROY,
+                removalPolicy: cdk.RemovalPolicy.RETAIN,
             });
 
             //Add policy
@@ -649,7 +638,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthentication",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -662,7 +651,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthorization",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -675,7 +664,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditFileUpload",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -688,7 +677,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditFileDownload",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -701,7 +690,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditFileDownloadStreamed",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -714,7 +703,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthOther",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -727,7 +716,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthChanges",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -740,7 +729,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditActions",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -753,7 +742,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditErrors",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -793,7 +782,7 @@ export function storageResourcesBuilder(
                     "VAMSOrchestrationBusAudit",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }
@@ -1733,6 +1722,51 @@ export function storageResourcesBuilder(
         },
     });
 
+    // Per-database namespaced tag tables (PK=databaseId, "GLOBAL" for global tags).
+    const tagStorageTableV2 = new dynamodb.Table(scope, "TagStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "tagName",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // GSI for cross-database lookups by tag name
+    tagStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "tagNameIndex",
+        partitionKey: {
+            name: "tagName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const tagTypeStorageTableV2 = new dynamodb.Table(scope, "TagTypeStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "tagTypeName",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // GSI for cross-database lookups by tag type name
+    tagTypeStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "tagTypeNameIndex",
+        partitionKey: {
+            name: "tagTypeName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const subscriptionsStorageTable = new dynamodb.Table(scope, "SubscriptionsStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -2296,8 +2330,10 @@ export function storageResourcesBuilder(
             syncTrackingOutboundStorageTable: syncTrackingOutboundStorageTable,
             fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
-            tagStorageTable: tagStorageTable,
-            tagTypeStorageTable: tagTypeStorageTable,
+            tagStorageTable: tagStorageTableV2,
+            tagTypeStorageTable: tagTypeStorageTableV2,
+            tagStorageTableLegacy: tagStorageTable,
+            tagTypeStorageTableLegacy: tagTypeStorageTable,
             s3AssetBucketsStorageTable: s3AssetBucketsStorageTable,
             subscriptionsStorageTable: subscriptionsStorageTable,
             rolesStorageTable: rolesStorageTable,
@@ -2588,6 +2624,10 @@ export function storageResourcesBuilder(
 
     // Loop through each asset bucket and setup S3 event notifications sync
     let bucketSyncIndex = 0;
+    // Receives before a bucket-sync record is dead-lettered. Matches the indexer queues'
+    // `indexerQueueMaxReceiveCount` in searchBuilder, so a record that cannot be processed reaches a
+    // DLQ after the same number of attempts wherever it entered VAMS.
+    const bucketSyncQueueMaxReceiveCount = 3;
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     // A bucket instance can appear in multiple records (same bucket, different
     // prefixes). The sync-queue construct IDs are derived from the bucket instance,
@@ -2601,6 +2641,30 @@ export function storageResourcesBuilder(
         bucketSyncOccurrence.set(record.bucket, bucketOccurrence + 1);
         const bucketSyncIdSuffix = bucketOccurrence === 0 ? "" : `-${bucketOccurrence}`;
 
+        // Dead-letter queue for the created-events queue.
+        //
+        // Without one, a message the event source cannot land is retried until the 4-day retention
+        // expires, and nothing surfaces it: MEASURED on a live deployment, 15 messages cycled every
+        // 960 seconds for 14 hours with Errors and Throttles both zero and NOT ONE log line, because
+        // AWS Lambda's recursive-loop detection was dropping the invocations before the handler ran.
+        // A dropped invocation never deletes its message. The only signals were the
+        // RecursiveInvocationsDropped metric and the in-flight depth.
+        //
+        // One DLQ per source queue, and one pair per registered bucket, so a poison record stays
+        // attributable to the bucket and the direction (created vs deleted) it arrived on.
+        const onS3ObjectCreatedDlq = new sqs.Queue(
+            scope,
+            "bucketSyncCreatedDLQ--" + record.bucket + bucketSyncIdSuffix,
+            {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
+
         // Create SQS queue for S3 object created events
         const onS3ObjectCreatedQueue = new sqs.Queue(
             scope,
@@ -2613,9 +2677,12 @@ export function storageResourcesBuilder(
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: kmsEncryptionKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: onS3ObjectCreatedDlq,
+                    maxReceiveCount: bucketSyncQueueMaxReceiveCount,
+                },
             }
         );
-        onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (created events)
         const sqsBucketSyncFunctionCreated = buildSqsBucketSyncFunction(
@@ -2670,6 +2737,20 @@ export function storageResourcesBuilder(
 
         bucketSyncIndex = bucketSyncIndex + 1;
 
+        // Dead-letter queue for the deleted-events queue. Same reasoning as the created side above.
+        const onS3ObjectDeletedDlq = new sqs.Queue(
+            scope,
+            "bucketSyncDeletedDLQ--" + record.bucket + bucketSyncIdSuffix,
+            {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
+
         // Create SQS queue for S3 object deleted events
         const onS3ObjectDeletedQueue = new sqs.Queue(
             scope,
@@ -2682,9 +2763,12 @@ export function storageResourcesBuilder(
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: kmsEncryptionKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: onS3ObjectDeletedDlq,
+                    maxReceiveCount: bucketSyncQueueMaxReceiveCount,
+                },
             }
         );
-        onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (deleted events)
         const sqsBucketSyncFunctionRemoved = buildSqsBucketSyncFunction(
@@ -2869,6 +2953,10 @@ export function storageResourcesBuilder(
             metadataStorageTableLegacy.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.metadataSchemaStorage]:
             metadataSchemaStorageTableLegacy.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.tagStorage]:
+            storageResources.dynamo.tagStorageTableLegacy.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.tagTypeStorage]:
+            storageResources.dynamo.tagTypeStorageTableLegacy.tableName,
     };
     Object.entries(resourceNameParamValues).forEach(([paramKey, value]) => {
         resourceNameRegistry.register({ paramKey, value });

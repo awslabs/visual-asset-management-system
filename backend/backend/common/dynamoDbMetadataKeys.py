@@ -46,6 +46,11 @@ REINDEX_METADATA_RECORD_KEY = "REINDEX_METADATA_RECORD"
 # individual key constants, so future system keys can be added in one place
 # without touching every call site. Writers of a specific marker record
 # (e.g. the crReindexer) still reference the individual key constant.
+#
+# A caller may not write these keys: ``MetadataItemModel`` refuses them, since
+# a user record sharing a marker's primary key is deleted by the next reindex
+# touch. The check is on write only, so a record stored by an earlier release
+# stays readable and deletable.
 # ---------------------------------------------------------------------------
 EXCLUDED_METADATA_RECORD_KEYS: FrozenSet[str] = frozenset(
     {
@@ -65,6 +70,12 @@ EXCLUDED_METADATA_RECORD_KEYS: FrozenSet[str] = frozenset(
 # HIDDEN_FIELD_PREFIX: leading underscore. Excluded from both OpenSearch
 #   field extraction and asset export output. OpenSearch additionally
 #   reserves leading-underscore field names for system fields.
+#
+# Unlike the record keys above, a caller may write a metadata key carrying
+# either prefix: the record is stored and every metadata GET returns it. What
+# the prefix costs is the exclusions listed above -- the field is not indexed
+# for search (and a leading-underscore field is also absent from asset export
+# output), so it is not discoverable through those paths.
 # ---------------------------------------------------------------------------
 VAMS_INTERNAL_FIELD_PREFIX = "VAMS_"
 HIDDEN_FIELD_PREFIX = "_"

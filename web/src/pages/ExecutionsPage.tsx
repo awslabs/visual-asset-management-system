@@ -6,11 +6,14 @@
 import React from "react";
 import { useSearchParams } from "react-router-dom";
 import ExecutionsBoard from "../features/orchestration/executions/ExecutionsBoard";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const ExecutionsPage: React.FC = () => {
     const [searchParams] = useSearchParams();
     const workflowId = searchParams.get("workflowId");
     const workflowDatabaseId = searchParams.get("workflowDatabaseId");
+
+    usePageTitle("Executions", workflowId || undefined);
 
     const scope =
         workflowId && workflowDatabaseId

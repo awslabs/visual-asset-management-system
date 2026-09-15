@@ -10,6 +10,7 @@ import {
     facet,
     gotoOrchestration,
     tableRows,
+    wizardRail,
 } from "./support/fixtures";
 
 /**
@@ -44,10 +45,11 @@ test.describe("Executions board", () => {
     });
 
     test("offers the workflow and workflow-database filters in global scope", async ({ page }) => {
-        // The global board pins nothing, so both halves of the workflow identity are separately
-        // selectable here. The asset tab replaces them with ONE composite-valued control (a workflow
-        // id is unique only within its database, and that board has no database dropdown to pair
-        // with); the workflow-scoped board offers neither, being already pinned to one workflow.
+        // The global board pins nothing, so both filters are separately selectable here. The asset
+        // tab replaces them with ONE composite-valued control, because that board has no
+        // workflow-database dropdown to pair with; the workflow-scoped board offers neither, being
+        // already pinned to one workflow. A workflow id is unique across every database, so the
+        // workflow-database filter narrows rather than disambiguates.
         // Asserted on the controls' presence only, so it holds on an empty environment.
         await expect(facet(page, "Filter by workflow")).toBeVisible();
         await expect(facet(page, "Filter by workflow database")).toBeVisible();
@@ -105,6 +107,44 @@ test.describe("Executions board", () => {
         await expect(
             page.getByRole("dialog").or(page.getByRole("complementary")).first()
         ).toBeVisible({ timeout: 20_000 });
+    });
+
+    test("Execute workflow opens one dialog whose first step is the workflow picker", async ({
+        page,
+    }) => {
+        // Gated by can(POST …/execute): a session without it renders no button at all.
+        const button = page.getByRole("button", { name: "Execute workflow" });
+        test.skip((await button.count()) === 0, "This session cannot execute workflows");
+        await button.click();
+
+        const dialog = page.getByRole("dialog");
+        await expect(dialog).toBeVisible({ timeout: 20_000 });
+        await expect(wizardRail(page)).toBeVisible();
+
+        // Rows are role=option inside the dialog's listbox; an empty sandbox is a valid state.
+        const rows = dialog.getByRole("option");
+        await expect
+            .poll(
+                async () =>
+                    (await rows.count()) > 0 ||
+                    (await dialog.getByText(/No workflows available/i).count()) > 0,
+                { timeout: 30_000 }
+            )
+            .toBe(true);
+        test.skip((await rows.count()) === 0, "No workflows in this environment");
+
+        await rows.first().click();
+        await dialog.getByRole("button", { name: "Continue" }).click();
+
+        // Still ONE dialog — the wizard replaced the picker step rather than stacking a second one —
+        // with the rail and the Inputs step's Next button (Launch exists only on the last step).
+        await expect(page.getByRole("dialog")).toHaveCount(1);
+        await expect(wizardRail(page)).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "Next" })).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "Launch" })).toHaveCount(0);
+
+        await page.keyboard.press("Escape"); // never Launch
+        await expect(page.getByRole("dialog")).toHaveCount(0);
     });
 });
 
@@ -194,5 +234,101 @@ test.describe("Executions board — partial detail responses", () => {
         await expect(page.getByText(/read separately, a page at a time/i)).toBeVisible({
             timeout: 20_000,
         });
+    });
+
+    /**
+     * Open the first execution's full detail page without altering the response. Returns false when
+     * the environment has no executions.
+     */
+    async function openFirstExecutionDetail(
+        page: import("@playwright/test").Page
+    ): Promise<boolean> {
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const total = await expectTableRendered(page);
+        if (total === 0) return false;
+        await tableRows(page).first().getByRole("button").last().click();
+        const items = page.getByRole("menuitem");
+        await expect(items.first()).toBeVisible({ timeout: 15_000 });
+        await items
+            .filter({ hasText: /Open full details/ })
+            .first()
+            .click();
+        await expect(page.getByRole("heading", { name: "Execution Detail", level: 1 })).toBeVisible(
+            {
+                timeout: 30_000,
+            }
+        );
+        return true;
+    }
+
+    /** A resolved sub-execution in the details contract, used when the live execution has none. */
+    const SYNTHETIC_SUB_EXECUTION = {
+        resourceType: "stepFunctionsExecution",
+        label: "Synthetic processing",
+        stageName: "",
+        resourceName: "SyntheticStateMachine",
+        status: "SUCCEEDED",
+        startDate: "2026-09-12T10:00:00Z",
+        stopDate: "2026-09-12T10:04:00Z",
+        error: "",
+        cause: "",
+        stageSource: "definition",
+        stagesTruncated: false,
+        historyTruncated: false,
+        stages: [
+            {
+                stageName: "SyntheticBatchJob",
+                stateType: "Task",
+                status: "SUCCEEDED",
+                startDate: "2026-09-12T10:00:01Z",
+                stopDate: "2026-09-12T10:03:00Z",
+                error: "",
+                cause: "",
+                attempts: 1,
+            },
+        ],
+    };
+
+    test("a sub-execution with stages renders a stage timeline on the Pipelines tab", async ({
+        page,
+    }) => {
+        // Real stage data exists only for executions whose pipeline registered a sub-state-machine; a
+        // sandbox cannot be assumed to hold one on page 1, so the entry is injected into the live
+        // response when absent. The UI's rendering of the contract is what is under test. An
+        // execution with no pipeline steps at all has nowhere to hang a timeline, so that case skips
+        // (Rule 1: core specs must pass against any environment) instead of failing on absence.
+        let injected = false;
+        let hasSteps = false;
+        let detailsSeen = false;
+        await page.route(DETAILS_ROUTE, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json();
+            const target = body && typeof body.message === "object" ? body.message : body;
+            const steps = Array.isArray(target.pipelines) ? target.pipelines : [];
+            hasSteps = steps.length > 0;
+            detailsSeen = true;
+            const hasStages = steps.some((s: any) =>
+                (s.subExecutions || []).some((sub: any) => (sub.stages || []).length > 0)
+            );
+            if (hasSteps && !hasStages) {
+                steps[0].subExecutions = [SYNTHETIC_SUB_EXECUTION];
+                steps[0].subExecutionsTruncated = false;
+                steps[0].subExecutionWarnings = [];
+                injected = true;
+            }
+            await route.fulfill({ response, json: body });
+        });
+
+        const opened = await openFirstExecutionDetail(page);
+        test.skip(!opened, "No executions in this environment");
+        await page.getByRole("tab", { name: "Pipelines" }).click();
+        // Wait for the intercepted details response before reading the flags it sets.
+        await expect.poll(() => detailsSeen, { timeout: 20_000 }).toBe(true);
+        test.skip(!hasSteps, "The first execution has no pipeline steps");
+        const timeline = page.getByTestId("stage-timeline").first();
+        await expect(timeline).toBeVisible({ timeout: 20_000 });
+        if (injected) {
+            await expect(timeline.getByText("SyntheticBatchJob")).toBeVisible();
+        }
     });
 });

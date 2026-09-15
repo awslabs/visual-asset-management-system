@@ -7,6 +7,9 @@ import React, { useState, useEffect } from "react";
 import type { TagSchemaField, TagType } from "../types";
 import { isReservedTagKey } from "../reservedTagKeys";
 import StringListInput from "../components/StringListInput";
+import { TAG_KEY_PATTERN } from "./templateBodyValidation";
+
+export { TAG_KEY_PATTERN };
 
 interface TagSchemaBuilderProps {
     value: TagSchemaField[];
@@ -81,11 +84,6 @@ const TAG_TYPE_LABELS: Record<TagType, { label: string; hint: string }> = {
     "string-list": { label: "String Multi-line", hint: "several line values" },
     enum: { label: "List", hint: "pick one of the values from a list" },
 };
-
-
-// Mirrors _TAG_KEY_PATTERN in common/workflows/templateTagSchema.py: only these characters are
-// captured by a {{tag}} placeholder, so a key outside the set can be declared but never rendered.
-export const TAG_KEY_PATTERN = /^[A-Za-z0-9_]+$/;
 
 /**
  * Coerce a default-value editor input to the tag's declared type. A blank input carries no default,
