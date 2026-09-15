@@ -75,8 +75,8 @@ COPY finetune_gr00t.py /workspace/scripts/finetune_gr00t.py
 
 WORKDIR /opt/ml/code
 
-# Run as non-root user (issue #327). The EFS model cache is owned by this uid/gid via an EFS
-# access point, so the container can read/write cached model weights without root.
+# Run as non-root user (issue #327). The EFS model cache mount point is owned by this uid/gid
+# via a chown command in the launch-template userdata after the EFS is mounted.
 USER 10000:10000
 
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

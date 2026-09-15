@@ -306,6 +306,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/gr00t-models
 mount -t efs -o tls ${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models
 echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /etc/fstab
+chown 10000:10000 /mnt/efs/gr00t-models
 
 --==MYBOUNDARY==--
 `;

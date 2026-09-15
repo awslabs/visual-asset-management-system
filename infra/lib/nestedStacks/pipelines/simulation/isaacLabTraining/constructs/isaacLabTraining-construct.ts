@@ -113,10 +113,11 @@ export class IsaacLabTrainingConstruct extends Construct {
         // EFS Access Point for Isaac Lab checkpoints (issue #327)
         // Enforces POSIX uid/gid 10000:10000 so non-root GPU containers can read/write checkpoints
         // without permission errors. The createAcl creates the root directory owned by this uid/gid
-        // when the access point is first used.
+        // when the access point is first used. Path is "/" because the access point itself is the
+        // checkpoint root; mounting it at /mnt/efs/checkpoints in the container gives the expected path.
         const trainingEfsAccessPoint = new efs.AccessPoint(this, "TrainingEfsAccessPoint", {
             fileSystem: trainingEfs,
-            path: "/checkpoints",
+            path: "/",
             posixUser: {
                 uid: String(GPU_CONTAINER_UID),
                 gid: String(GPU_CONTAINER_GID),
@@ -317,7 +318,12 @@ export class IsaacLabTrainingConstruct extends Construct {
                     batch.EcsVolume.efs({
                         name: "training-efs",
                         fileSystem: trainingEfs,
-                        containerPath: "/mnt/efs",
+                        containerPath: "/mnt/efs/checkpoints",
+                        accessPointId: trainingEfsAccessPoint.accessPointId,
+                        transitEncryption: "ENABLED",
+                        authorizationConfig: {
+                            iam: "ENABLED",
+                        },
                     }),
                 ],
             }),
