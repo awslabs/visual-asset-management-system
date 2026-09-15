@@ -17,6 +17,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_streamed
 from common.s3 import validateUnallowedFileExtensionAndContentType
+from common.compliance.quarantineGuard import check_quarantine_block
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 
 # Set environment variable for S3 client configuration
@@ -167,6 +168,10 @@ def handle_head_request(event, claims_and_roles):
 
     if not operation_allowed_on_asset:
         return authorization_error()
+
+    # The quarantine block is evaluated only for an authorized caller, so a denied caller
+    # cannot learn the asset's compliance state from the response.
+    check_quarantine_block(databaseId, assetId)
 
     # Get the location of the base asset key
     assetLocationKey = asset_object.get('assetLocation', {}).get("Key")
@@ -344,6 +349,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     operation_allowed_on_asset = True
 
         if operation_allowed_on_asset:
+            # The quarantine block is evaluated only for an authorized caller, so a denied
+            # caller cannot learn the asset's compliance state from the response.
+            check_quarantine_block(databaseId, assetId)
+
             try:
                 # Get the location of the base asset key and normalize the object_key we are passing in
                 # (also ensures security of not fetching asset key files outside of provided asset ID)
