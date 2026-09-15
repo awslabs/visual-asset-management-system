@@ -339,10 +339,6 @@
             "autoLoadDefaultDatabaseSchema": true,
             "autoLoadDefaultAssetSchema": true,
             "autoLoadDefaultAssetFileSchema": true
-        },
-            "federatedModelManagement": {
-            "enabled": false,
-            "autoLoadDefaultSchema": true
         }
     }
 }
