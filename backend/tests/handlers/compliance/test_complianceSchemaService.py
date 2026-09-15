@@ -305,6 +305,15 @@ class TestRegisterAndUpdate:
 @pytest.mark.unit
 class TestDeleteSchema:
 
+    def test_deleting_a_system_schema_as_a_user_is_refused(self):
+        response, tables = _run(
+            rest_event("DELETE", f"/compliance/schemas/{SCHEMA}", {"schemaName": SCHEMA}),
+            schema_rows=[schema_row(is_system=True)])
+        assert response["statusCode"] == 400
+        assert "System schemas" in body_of(response)["message"]
+        tables["schema"].batch_writer.assert_not_called()
+        tables["audit"].put_item.assert_not_called()
+
     def test_a_bound_schema_is_refused_and_nothing_is_deleted(self):
         response, tables = _run(
             rest_event("DELETE", f"/compliance/schemas/{SCHEMA}", {"schemaName": SCHEMA}),

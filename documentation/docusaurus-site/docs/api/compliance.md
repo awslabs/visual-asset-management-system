@@ -168,7 +168,7 @@ PUT /compliance/schemas/{schemaName}
 | `description` | string | No       | Replacement description                 |
 | `databaseId`  | string | No       | Replacement database scope, or `GLOBAL` |
 
-A system schema (`isSystem: true`) is updated only by the system user; any other caller receives `400`.
+A system schema (`isSystem: true`) is updated or deleted only by the system user; any other caller receives `400`.
 
 ### Response
 
@@ -584,7 +584,7 @@ GET /compliance/state/{databaseId}/{assetId}
 }
 ```
 
-An asset with no compliance record is reported with `complianceState` `unknown` and `null` for `schemaName` and `schemaSource`. An asset released by exception carries `exceptionGranted`, `exceptionReason`, `exceptionGrantedBy` and `exceptionGrantedAt`; the rule failures behind a quarantine are on the last evaluation's `violations` (see [List the evaluations of an asset](#list-the-evaluations-of-an-asset)).
+An asset with no compliance record is reported with `complianceState` `unknown` and `null` for `schemaName` and `schemaSource`. An asset released by exception carries `exceptionGranted`, `exceptionReason`, `exceptionGrantedBy` and `exceptionGrantedAt`; the rule failures behind a quarantine are summarised in `quarantineReason` while the asset is quarantined and listed in full on the last evaluation's `violations` (see [List the evaluations of an asset](#list-the-evaluations-of-an-asset)).
 
 ### Error responses
 
@@ -663,6 +663,7 @@ GET /compliance/quarantine
             "complianceState": "quarantined",
             "schemaName": "survey-compliance",
             "schemaSource": "database",
+            "quarantineReason": "Required field 'owner' is missing",
             "lastEvaluationId": "8a1d2c3b-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
             "lastEvaluatedAt": "2026-03-15T10:30:00+00:00"
         }

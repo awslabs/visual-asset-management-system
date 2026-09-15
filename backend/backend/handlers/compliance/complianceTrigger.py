@@ -137,7 +137,8 @@ def _extract_asset_id_from_key(object_key, prefix):
 
 
 def _resolve_database_for_asset(asset_id):
-    """The databaseId of an asset via the assetIdGSI (the first match; an asset id is unique)."""
+    """The databaseId of an asset via the assetIdGSI (the first match; an asset id is unique).
+    An asset whose row sits under an archived partition resolves to None so it is not evaluated."""
     try:
         response = asset_table.query(
             IndexName="assetIdGSI",
@@ -149,7 +150,8 @@ def _resolve_database_for_asset(asset_id):
             return None
         database_id = items[0].get("databaseId", "")
         if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
-            database_id = database_id[: -len(ARCHIVED_DATABASE_SUFFIX)]
+            logger.info(f"Asset {asset_id} is archived; skipping compliance evaluation")
+            return None
         return database_id or None
     except Exception as e:
         logger.exception(f"Error resolving the database for asset {asset_id}: {e}")

@@ -26,7 +26,7 @@ See the [Configuration Reference](../deployment/configuration-reference.md) for 
 
 A compliance schema is a named, versioned set of rules. Every registration or update writes the next version of the schema and evaluation always reads the highest version, so the version history is retained. A schema is scoped to a database or to `GLOBAL`; a database-scoped schema can only be bound within its own database, while a `GLOBAL` schema can be bound anywhere.
 
-A schema whose `isSystem` flag is set is a system schema. Only the system user can register one or write a new version of it.
+A schema whose `isSystem` flag is set is a system schema. Only the system user can register one, write a new version of it, or delete it. The default schema seeded at deployment is a system schema.
 
 ### Schema formats
 

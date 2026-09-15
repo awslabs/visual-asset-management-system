@@ -88,7 +88,8 @@ export class DynamoDbComplianceSchemaDefaultsConstruct extends Construct {
                     },
                     schemaBody: { S: JSON.stringify(DEFAULT_COMPLIANCE_SCHEMA) },
                     registeredAt: { S: now },
-                    registeredBy: { S: "SYSTEM" },
+                    registeredBy: { S: "SYSTEM_USER" },
+                    isSystem: { BOOL: true },
                 },
                 ConditionExpression:
                     "attribute_not_exists(schemaName) AND attribute_not_exists(internalVersion)",

@@ -16252,6 +16252,10 @@ components:
                 updatedAt:
                     type: string
                     format: date-time
+                quarantineReason:
+                    type: string
+                    nullable: true
+                    description: "Messages of the rules that failed, present while the asset is quarantined."
                 exceptionGranted:
                     type: boolean
                 exceptionReason:

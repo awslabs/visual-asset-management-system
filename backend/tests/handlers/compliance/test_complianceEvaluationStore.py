@@ -140,6 +140,7 @@ class TestSynchronousEvaluation:
         assert parents[0]["violations"] == ["parent: found 0 links, minimum is 1"]
         assert parents[0]["actor"] == store.SYSTEM_ACTOR
         assert update_values(tables.state)[0]["complianceState"] == "quarantined"
+        assert update_values(tables.state)[0]["quarantineReason"] == "parent: found 0 links, minimum is 1"
         published = notifications_aws.sns_client.publish.call_args.kwargs
         assert published["TopicArn"] == "arn:aws:sns:us-east-1:1:topic"
         assert "QUARANTINED" in published["Subject"]
@@ -156,6 +157,7 @@ class TestSynchronousEvaluation:
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, previous_state="quarantined")
         tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert tables.audit_events() == ["compliance_check", "quarantine_released"]
+        assert update_values(tables.state)[0]["quarantineReason"] is None
         audit = put_items(tables.audit)[0]
         assert audit["previousState"] == "quarantined"
         assert audit["newState"] == "compliant"

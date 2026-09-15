@@ -100,6 +100,14 @@ class TestMessageShapes:
                      asset_rows=[{"databaseId": DB, "assetId": ASSET}])
         mocks["run_evaluation"].assert_called_once()
 
+    def test_a_file_event_for_an_archived_asset_is_skipped(self):
+        message = {"s3": {"object": {"key": f"{ASSET}/file.glb"}}}
+        mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB,
+                     compliance_record={"schemaName": SCHEMA},
+                     asset_rows=[{"databaseId": f"{DB}#deleted", "assetId": ASSET}])
+        mocks["run_evaluation"].assert_not_called()
+        mocks["database"].get_item.assert_not_called()
+
     def test_a_file_event_for_an_unknown_asset_is_skipped(self):
         message = {"s3": {"object": {"key": f"{ASSET}/file.glb"}}}
         mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB)

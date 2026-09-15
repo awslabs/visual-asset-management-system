@@ -527,6 +527,7 @@ def run_evaluation(
         "lastEvaluationId": evaluation_id,
         "lastEvaluatedAt": evaluated_at,
         "updatedAt": evaluated_at,
+        **_quarantine_state_fields(compliance_state, rule_results),
     })
 
     write_audit(
@@ -553,6 +554,15 @@ def run_evaluation(
         "ruleResults": [r.dict() for r in rule_results],
         "pipelineRulesPending": len(started),
     }
+
+
+def _quarantine_state_fields(compliance_state, rule_results) -> Dict[str, Any]:
+    """The asset-state attributes that describe a quarantine: the failed-rule messages are kept as
+    the quarantine reason while the asset is quarantined and cleared on any other state."""
+    if compliance_state == engine.STATE_QUARANTINED:
+        reason = "; ".join(engine.violations(rule_results)) or "Compliance evaluation failed"
+        return {"quarantineReason": reason[:1024]}
+    return {"quarantineReason": None}
 
 
 def _record_error(evaluation_id, database_id, asset_id, schema_name, error_message,
@@ -712,6 +722,7 @@ def complete_pipeline_rule(
         "lastEvaluationId": evaluation_id,
         "lastEvaluatedAt": finished_at,
         "updatedAt": finished_at,
+        **_quarantine_state_fields(compliance_state, all_results),
     })
     write_audit(
         database_id, asset_id,

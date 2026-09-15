@@ -483,6 +483,10 @@ def delete_schema(event, schema_name):
     if not rows:
         return general_error(body={"message": "Schema not found"}, event=event)
 
+    current = _latest_schema_item(schema_name) or {}
+    if current.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER:
+        return general_error(body={"message": "System schemas cannot be deleted"}, event=event)
+
     if _schema_is_bound(schema_name):
         logger.info(f"Schema '{schema_name}' is still bound; delete refused")
         return general_error(

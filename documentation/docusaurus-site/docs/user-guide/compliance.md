@@ -165,7 +165,7 @@ PUT /compliance/schemas/{schemaName}
 ```
 
 :::warning[System schemas]
-A schema registered by the system (`isSystem: true`) is updated only by the system user.
+A schema registered by the system (`isSystem: true`) is updated or deleted only by the system user.
 :::
 
 ### Deleting a schema
