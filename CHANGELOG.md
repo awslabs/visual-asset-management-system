@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file. See [standa
 ### Chores
 
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin.
+-   **CI**: Set `min-release-age = 7` (days) in all `.npmrc` files and require npm >= 11.10.0 via `engines.npm` constraints in `package.json`. Node 22 ships with npm 10.9.x, which does not support `min-release-age` (introduced in npm 11.10.0); CI workflows and build sites (GitHub Actions, GitLab CI pages job, Amplify) now pin npm 11.19.1 after Node setup to enforce the 7-day minimum release age for all npm dependencies (#329).
 
 ### Known Outstanding Issues
 
