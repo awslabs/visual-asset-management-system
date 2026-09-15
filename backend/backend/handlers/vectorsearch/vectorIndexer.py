@@ -17,7 +17,10 @@ vector item:
   read again: when a newer version landed in between, the file's latest marks are realigned to it.
 * Bucket-sync S3 records republished on the file indexer SNS topic (the SQS -> SNS -> SQS -> SNS -> S3
   envelope `fileIndexer.py` unwraps): a new version flips the file's other items to `isLatest="false"`, a
-  delete marker archives them, a marker removal un-archives them, a permanent delete removes them.
+  delete marker archives them, a marker removal un-archives them, a permanent delete removes them. A new
+  version whose `vams-changesource` is a restore (`fileUnarchive`, `assetUnarchive`) is the file's newest
+  content copied forward, so it only un-archives the file's items and demotes nothing: the items of the
+  copied content stay the file's latest and the file is searchable at once.
 * Asset table stream records republished on the asset indexer SNS topic: an archive marks every item of
   the asset, a permanent delete removes them; metadata, attribute and link stream records are ignored.
 * The indexer's own `vector.indexer.continue` messages: an asset- or file-wide rule pages through its
@@ -58,7 +61,12 @@ from common.indexing.documentIds import (
 )
 from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
 from common.s3 import list_all_object_versions
-from common.s3MetadataKeys import ASSET_ID_METADATA_KEY, DATABASE_ID_METADATA_KEY
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_RESTORE_VALUES,
+)
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, key_has_reserved_segment
 from common.vectorsearch.embeddings import round_vector
 from common.vectorsearch.vectorStore import DynamoDbVectorStore, VectorItem
@@ -507,14 +515,18 @@ def _lookup_database_id(asset_id: str, bucket_name: str, base_prefix: str) -> Op
 
 
 def _resolve_file_identity(bucket_name: str, key: str,
-                           prefix: Optional[str]) -> Optional[Tuple[str, str, str]]:
-    """(databaseId, assetId, filePath) for an object key: from the object's own metadata while the object
-    is readable, else from the key and assetIdGSI (the object is gone on a permanent delete)."""
+                           prefix: Optional[str]) -> Optional[Tuple[str, str, str, str]]:
+    """(databaseId, assetId, filePath, changeSource) for an object key: from the object's own metadata
+    while the object is readable, else from the key and assetIdGSI (the object is gone on a permanent
+    delete). ``changeSource`` is the object's ``vams-changesource`` provenance, '' when the object is
+    unreadable or carries none; it comes from the same HEAD, so no second read is made."""
     database_id = asset_id = None
+    change_source = ''
     try:
         metadata = s3_client.head_object(Bucket=bucket_name, Key=key).get('Metadata', {}) or {}
         database_id = metadata.get(DATABASE_ID_METADATA_KEY)
         asset_id = metadata.get(ASSET_ID_METADATA_KEY)
+        change_source = str(metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) or '')
     except ClientError as e:
         if not _is_not_found(e):
             raise
@@ -535,7 +547,7 @@ def _resolve_file_identity(bucket_name: str, key: str,
         file_path = key_relative or ''
     if file_path in ('', '/'):
         return None
-    return database_id, asset_id, file_path
+    return database_id, asset_id, file_path, change_source
 
 
 def run_object_created(pk: str, key_path: str, version_id: str, start_key: Optional[Dict[str, Any]],
@@ -598,11 +610,19 @@ def handle_s3_record(record: Dict[str, Any], bucket_name_hint: Optional[str],
     if identity is None:
         logger.warning(f"S3 record for {bucket_name}/{key} resolves to no asset; nothing to update")
         return Outcome(True, 'ignore', 'file identity unresolved')
-    database_id, asset_id, file_path = identity
+    database_id, asset_id, file_path, change_source = identity
     pk = f"{database_id}:{asset_id}"
     key_path = vector_file_key_path(file_path)
 
     if event_name.startswith('ObjectCreated'):
+        if change_source in VAMS_CHANGE_SOURCE_RESTORE_VALUES:
+            # An unarchive copies the file's newest content version forward under a new version id. The
+            # items of that content are the file's latest ones already, and no run will embed the copy,
+            # so they keep their latest marks and only their archived marks are cleared: the file is
+            # searchable the moment the flip lands, with exactly one latest item per segment as before.
+            logger.info(f"{pk}{key_path}: ObjectCreated by '{change_source}' restores stored content; "
+                        "un-archiving the file's items without demoting them")
+            return run_set_archived_for_file(pk, key_path, False, None, time_left)
         version_id = s3_info.get('object', {}).get('versionId') or 'null'
         return run_object_created(pk, key_path, version_id, None, time_left)
     if event_name == 'ObjectRemoved:DeleteMarkerCreated':

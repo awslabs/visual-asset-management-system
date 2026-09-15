@@ -45,6 +45,8 @@ All notable changes to this project will be documented in this file. See [standa
 ### Bug Fixes
 
 -   **Pipelines** The Potree point cloud viewer container job role holds `states:SendTaskHeartbeat` alongside `SendTaskSuccess`/`SendTaskFailure` (scoped to the deployment account and region), so the PDAL/Potree container's workflow task-token heartbeat is delivered instead of logging an `AccessDeniedException` on every job.
+-   **Pipelines** The shared 3D render container downcasts each explored B-rep face to `TopoDS_Face` before triangulating it, so STEP, IGES, and BREP files render and receive their `sys_geometry`, `sys_statistics`, `sys_cad`, and `ext_*` attributes in the SYSTEM GenAI metadata and 3D Preview Thumbnail pipelines instead of degrading to attributes-only with a `TypeError`.
+-   **Workflows / Vector search** A file or asset unarchive no longer fires file-upload triggers (no re-analysis, no rewritten `genai_*` metadata, no duplicate vectors) and the vector indexer marks the file's existing items live without demoting them, so a restored file is searchable immediately rather than after a re-run.
 
 ### Chores
 

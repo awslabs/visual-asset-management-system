@@ -56,6 +56,8 @@ flowchart TD
 7. When the media branch produced a window plan (a video with `VIDEO_SEGMENT_SECONDS` above 0) and the embedding succeeded, `VideoSegmentMap` runs one child execution per [video window](#video-windows) — `SegmentAnalyzeTask`, the media image's second function — eight at a time, and writes its own result manifest under the execution's auxiliary prefix.
 8. `PipelineEndTask` reports success or failure to the workflow through the task token. The workflow's process-output step then applies the metadata and attribute files to the asset.
 
+The file-upload trigger fires on a **new** version of a file: an upload, a direct Amazon S3 write, a copy, move, or rename into the asset, a revert to an earlier version, and — when the workflow allows trigger chaining — another workflow's output. It does not fire when a file or an asset is **unarchived**: the restore copies the file's newest content version forward under a new version id, the pipeline has already analyzed that content, and its metadata, attributes, and vectors stay as they were (the vector indexer marks them live again without re-embedding; see [Vector search](../concepts/vector-search.md#only-the-latest-live-version-is-searchable)). To analyze a restored file again, re-execute the workflow on it or run the vector reindexer.
+
 <!-- TODO(owner): diagram: pipeline_usecase_systemGenAiMetadata.png — pipeline use-case diagram (branches, images, Bedrock calls, event to the vector indexer), exported to documentation/diagrams/ and static/img/ -->
 
 ## Supported files and how each is analyzed

@@ -59,6 +59,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Fixed:**
 
 -   **Potree point cloud viewer pipeline** — The container job role can send the workflow task-token heartbeat (`states:SendTaskHeartbeat`, scoped to the deployment account and region), so a long PDAL/Potree conversion keeps its parent task alive instead of logging an `AccessDeniedException` on every heartbeat.
+-   **CAD rendering in the shared 3D render container** — Each explored B-rep face is downcast to `TopoDS_Face` before triangulation, so STEP, IGES, and BREP files render and receive their `sys_geometry`, `sys_statistics`, `sys_cad`, and `ext_*` attributes in the [SYSTEM GenAI metadata](../pipelines/system-genai-metadata.md) and 3D Preview Thumbnail pipelines instead of degrading to attributes-only.
+-   **Unarchive no longer re-runs the pipeline or hides the file from search** — A file or asset unarchive never fires file-upload triggers, and the vector indexer marks the file's existing vector items live without demoting them, so a restored file is searchable immediately and its `genai_*` metadata and vectors are not rewritten; see [Vector search](../concepts/vector-search.md#only-the-latest-live-version-is-searchable).
 
 **Documentation:**
 
