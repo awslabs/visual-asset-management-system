@@ -167,7 +167,7 @@ interface storageResources {
 
         // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
-        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSI SchemaNameIndex
+        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list)
         complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback)
         complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId; GSI StateIndex
         complianceAuditStorageTable: dynamodb.Table; // PK entryId; GSIs AssetIndex, EventTypeIndex
@@ -400,6 +400,8 @@ const featureEnabled = true; // BAD - should be configurable
 ```
 
 #### **Rule 2: Feature Switches Must Be Defined**
+
+New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — nothing executes and nothing beyond idle storage is billed until a record is written through its own API, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas and `/compliance/*` routes always deploy, but no evaluation runs until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
 
 ```typescript
 // ✅ CORRECT - Add to vamsAppFeatures.ts

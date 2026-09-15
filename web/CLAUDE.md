@@ -100,7 +100,9 @@ web/
       common/ createupdate/ form/
       compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
                               #   pipeline/metadata/relationship rules) + complianceSchemaRules.ts
-                              #   (pure pipelineRef fields/validation + rule-draft round-trip)
+                              #   (pure pipelineRef fields/validation + rule-draft round-trip);
+                              #   ReasonModal.tsx (Cloudscape modal collecting a mandatory reason:
+                              #   reject cascade, grant quarantine exception)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.
@@ -241,6 +243,7 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `ComplianceService.ts` — compliance schemas, bindings, evaluations, quarantine, cascades, audit trail (paged listings return `nextToken`)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
 
 When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper).

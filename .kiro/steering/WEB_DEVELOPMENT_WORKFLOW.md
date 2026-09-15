@@ -70,6 +70,7 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -77,9 +78,11 @@ web/
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions, Compliance tabs
         versions/           # Asset version management
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
+      compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1 rules)
+                            #   + complianceSchemaRules.ts; ReasonModal.tsx (Cloudscape reason dialog)
       createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
       form/
@@ -104,6 +107,10 @@ web/
       ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/
       Subscription/ Tag/
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
+      ComplianceAuditLog.tsx DatabaseCompliance.tsx
       # Orchestration route shells rendering the matching features/orchestration component
       PipelinesPage2.tsx PipelineBuilderPage.tsx
       TemplateListPage.tsx TemplateBuilderPage.tsx

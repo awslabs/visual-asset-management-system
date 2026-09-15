@@ -92,15 +92,15 @@ Executions are workflow-keyed; asset and database linkage lives in the workflow/
 
 ### Compliance Tables
 
-The compliance feature deploys unconditionally. `ComplianceEvaluationStorageTable`'s `ExecutionIdIndex` lets the workflow-completion callback find the evaluation a pipeline-rule execution belongs to.
+The compliance feature deploys unconditionally. `ComplianceEvaluationStorageTable`'s `ExecutionIdIndex` lets the workflow-completion callback find the evaluation a pipeline-rule execution belongs to. `ComplianceAssetStateStorageTable`'s `ComplianceStateIndex` serves the cross-database quarantine list as a single paged query on the `quarantined` state.
 
-| Table                            | Partition Key (PK) | Sort Key (SK)     | GSIs                                                                                                  | Purpose                                            |
-| -------------------------------- | ------------------ | ----------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| ComplianceSchemaStorageTable     | `schemaName`       | `internalVersion` | `DatabaseIdIndex` (PK: databaseId, SK: schemaName)                                                    | Compliance schema definitions (versioned)          |
-| ComplianceAssetStateStorageTable | `databaseId`       | `assetId`         | `SchemaNameIndex` (PK: schemaName, SK: complianceState)                                               | Per-asset compliance state and bindings            |
-| ComplianceEvaluationStorageTable | `evaluationId`     | --                | `AssetIndex` (PK: databaseId:assetId, SK: evaluatedAt), `ExecutionIdIndex` (PK: executionId)          | Evaluation result records                          |
-| ComplianceCascadeStorageTable    | `cascadeId`        | --                | `StateIndex` (PK: state, SK: createdAt)                                                               | Downstream re-evaluation cascades (approval-gated) |
-| ComplianceAuditStorageTable      | `entryId`          | --                | `AssetIndex` (PK: databaseId:assetId, SK: timestamp), `EventTypeIndex` (PK: eventType, SK: timestamp) | Compliance audit trail                             |
+| Table                            | Partition Key (PK) | Sort Key (SK)     | GSIs                                                                                                                  | Purpose                                            |
+| -------------------------------- | ------------------ | ----------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| ComplianceSchemaStorageTable     | `schemaName`       | `internalVersion` | `DatabaseIdIndex` (PK: databaseId, SK: schemaName)                                                                    | Compliance schema definitions (versioned)          |
+| ComplianceAssetStateStorageTable | `databaseId`       | `assetId`         | `SchemaNameIndex` (PK: schemaName, SK: complianceState), `ComplianceStateIndex` (PK: complianceState, SK: databaseId) | Per-asset compliance state and bindings            |
+| ComplianceEvaluationStorageTable | `evaluationId`     | --                | `AssetIndex` (PK: databaseId:assetId, SK: evaluatedAt), `ExecutionIdIndex` (PK: executionId)                          | Evaluation result records                          |
+| ComplianceCascadeStorageTable    | `cascadeId`        | --                | `StateIndex` (PK: state, SK: createdAt)                                                                               | Downstream re-evaluation cascades (approval-gated) |
+| ComplianceAuditStorageTable      | `entryId`          | --                | `AssetIndex` (PK: databaseId:assetId, SK: timestamp), `EventTypeIndex` (PK: eventType, SK: timestamp)                 | Compliance audit trail                             |
 
 ### Migration Source Tables
 

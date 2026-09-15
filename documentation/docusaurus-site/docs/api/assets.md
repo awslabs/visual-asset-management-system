@@ -662,13 +662,13 @@ Bulk requests return one entry per requested key. File paths that do not exist o
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                            |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, or asset is not distributable. |
-| `403`  | Not authorized to download this asset.                                                                                                                                                                 |
-| `404`  | Database, asset, version, or file not found.                                                                                                                                                           |
-| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                 |
-| `500`  | Internal server error.                                                                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                                                                                                             |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, asset is not distributable, or the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`. |
+| `403`  | Not authorized to download this asset.                                                                                                                                                                                                                                                                                  |
+| `404`  | Database, asset, version, or file not found.                                                                                                                                                                                                                                                                            |
+| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                  |
 
 ---
 
@@ -779,12 +779,12 @@ Two constraints apply to the redirect target:
 
 **Error Responses:**
 
-| Status | Description                          |
-| ------ | ------------------------------------ |
-| `400`  | Invalid parameters.                  |
-| `403`  | Not authorized to export this asset. |
-| `404`  | Asset not found.                     |
-| `500`  | Internal server error.               |
+| Status | Description                                                                                                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or `generatePresignedUrls` was requested for an asset on the page that is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`. |
+| `403`  | Not authorized to export this asset.                                                                                                                                                              |
+| `404`  | Asset not found.                                                                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                            |
 
 ---
 

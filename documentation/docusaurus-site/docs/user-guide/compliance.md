@@ -82,7 +82,7 @@ PUT /compliance/bind/{databaseId}/{assetId}
 { "schemaName": "strict-survey-compliance" }
 ```
 
-Removing the override (`DELETE /compliance/bind/{databaseId}/{assetId}`) returns the asset to the database schema as `pending_evaluation`. `GET /compliance/bind/{databaseId}` lists the database binding and every override in the database.
+Removing the override (`DELETE /compliance/bind/{databaseId}/{assetId}`) returns the asset to the database schema as `pending_evaluation`. `GET /compliance/bind/{databaseId}` lists the database binding and the asset overrides in the database, one page per call (`maxItems`, `startingToken`, `NextToken`).
 
 ---
 

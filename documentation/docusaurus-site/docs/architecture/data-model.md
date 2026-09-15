@@ -463,15 +463,16 @@ audit table is the compliance event trail.
 
 **Global Secondary Indexes:**
 
-| Table                            | GSI Name           | Partition Key        | Sort Key          | Purpose                                                                                       |
-| -------------------------------- | ------------------ | -------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
-| ComplianceSchemaStorageTable     | `DatabaseIdIndex`  | `databaseId`         | `schemaName`      | List a database's schemas                                                                     |
-| ComplianceAssetStateStorageTable | `SchemaNameIndex`  | `schemaName`         | `complianceState` | List a schema's assets by state (quarantine list, sweep)                                      |
-| ComplianceEvaluationStorageTable | `AssetIndex`       | `databaseId:assetId` | `evaluatedAt`     | An asset's evaluations, newest first                                                          |
-| ComplianceEvaluationStorageTable | `ExecutionIdIndex` | `executionId`        | --                | Resolve the evaluation a pipeline-rule workflow run belongs to (workflow-completion callback) |
-| ComplianceCascadeStorageTable    | `StateIndex`       | `state`              | `createdAt`       | Pending / completed cascades by state                                                         |
-| ComplianceAuditStorageTable      | `AssetIndex`       | `databaseId:assetId` | `timestamp`       | An asset's audit trail                                                                        |
-| ComplianceAuditStorageTable      | `EventTypeIndex`   | `eventType`          | `timestamp`       | Audit entries by event type                                                                   |
+| Table                            | GSI Name               | Partition Key        | Sort Key          | Purpose                                                                                       |
+| -------------------------------- | ---------------------- | -------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
+| ComplianceSchemaStorageTable     | `DatabaseIdIndex`      | `databaseId`         | `schemaName`      | List a database's schemas                                                                     |
+| ComplianceAssetStateStorageTable | `SchemaNameIndex`      | `schemaName`         | `complianceState` | List a schema's assets by state (sweep, schema-deletion check)                                |
+| ComplianceAssetStateStorageTable | `ComplianceStateIndex` | `complianceState`    | `databaseId`      | Cross-database list of assets in one state, paged (quarantine list)                           |
+| ComplianceEvaluationStorageTable | `AssetIndex`           | `databaseId:assetId` | `evaluatedAt`     | An asset's evaluations, newest first                                                          |
+| ComplianceEvaluationStorageTable | `ExecutionIdIndex`     | `executionId`        | --                | Resolve the evaluation a pipeline-rule workflow run belongs to (workflow-completion callback) |
+| ComplianceCascadeStorageTable    | `StateIndex`           | `state`              | `createdAt`       | Pending / completed cascades by state                                                         |
+| ComplianceAuditStorageTable      | `AssetIndex`           | `databaseId:assetId` | `timestamp`       | An asset's audit trail                                                                        |
+| ComplianceAuditStorageTable      | `EventTypeIndex`       | `eventType`          | `timestamp`       | Audit entries by event type                                                                   |
 
 ### Authorization Tables
 

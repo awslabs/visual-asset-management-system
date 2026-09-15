@@ -15,10 +15,10 @@ Compliance is part of every VAMS deployment: five Amazon DynamoDB tables, eight 
 }
 ```
 
-| Setting                                   | Default | Effect                                                                                                                                                                                |
-| ----------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.compliance.autoLoadDefaultSchema`    | `true`  | Seeds the `GLOBAL` schema `default-compliance-schema` at deployment: one `warn`-level metadata rule that validates a bound asset against the `GLOBAL` `defaultAsset` metadata schema. |
-| `app.compliance.quarantineBlocksDownload` | `false` | When `true`, the asset download and stream endpoints refuse a quarantined asset. When `false`, quarantine is visible in the interface and the API but does not block access.          |
+| Setting                                   | Default | Effect                                                                                                                                                                                                                               |
+| ----------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `app.compliance.autoLoadDefaultSchema`    | `true`  | Seeds the `GLOBAL` schema `default-compliance-schema` at deployment: one `warn`-level metadata rule that validates a bound asset against the `GLOBAL` `defaultAsset` metadata schema.                                                |
+| `app.compliance.quarantineBlocksDownload` | `false` | When `true`, the asset download, stream, export (presigned file URLs) and auxiliary-preview stream endpoints refuse a quarantined asset. When `false`, quarantine is visible in the interface and the API but does not block access. |
 
 See the [Configuration Reference](../deployment/configuration-reference.md) for the settings and [Compliance (User Guide)](../user-guide/compliance.md) for the interface walkthrough.
 
@@ -110,7 +110,7 @@ A pipeline rule names a workflow and the pipeline within that workflow whose out
 | `checks[].outputField`           | Key of the `measurements` object in the pipeline's output file                                                                         |
 | `checks[].tolerance`             | The comparison — see [Tolerance operators](#tolerance-operators)                                                                       |
 
-The evaluation launches one workflow execution per pipeline rule through the standard execute-workflow request: the asset is the single input, `pipelineExecutionParameters` carries the template and tag values under the `pipelineId`, and the trigger type is `manual`. The execution runs as the system user and is listed with the workflow's other executions. The evaluation records the `executionId` of each execution and stays `pending_pipeline` (asset state `pending_evaluation`) until every execution has completed. A rule whose workflow or pipeline does not exist, or whose execution cannot be launched, fails at once.
+The evaluation launches one workflow execution per pipeline rule through the standard execute-workflow request: the asset is the single input, `pipelineExecutionParameters` carries the template and tag values under the `pipelineId`, and the trigger type is `manual`. The execution runs as the system user and is listed with the workflow's other executions. The evaluation records the `executionId` of each execution and stays `pending_pipeline` (asset state `pending_evaluation`) until every execution has completed. A rule whose workflow or pipeline does not exist, or whose execution cannot be launched, fails at once. Each execution is launched with the evaluation's id as its `executionGroupId`, so the executions of one evaluation form one group and their audit entries and completion events name the evaluation.
 
 #### Pipeline output contract
 
@@ -148,7 +148,7 @@ A rule can therefore require that an existing workflow succeeds and finishes wit
 
 #### Workflow completion
 
-When a workflow execution reaches a terminal status — including an abort — the workflow end-state puts a `workflow.execution.completed` event on the orchestration bus. The compliance callback subscribes to that event, looks the `executionId` up in the evaluation table's `ExecutionIdIndex`, and completes the pipeline rule it belongs to: on a `SUCCEEDED` execution it reads the pipeline's `compliance-output.json` from the execution's recorded output results and runs the rule's checks against the measurements; any other terminal status (`FAILED`, `ABORTED`, `TIMED_OUT`) fails every check of the rule. Once every pipeline rule of the evaluation has reported, the verdict is determined, the asset state is written and the audit entry is recorded. The event contract is documented in the [workflow execution data model](../developer/workflow-execution-data-model-handoff.md#workflow-completion-event).
+When a workflow execution reaches a terminal status — including an abort — the workflow end-state puts a `workflow.execution.completed` event on the orchestration bus. The compliance callback subscribes to that event, looks the `executionId` up in the evaluation table's `ExecutionIdIndex`, and completes the pipeline rule it belongs to: on a `SUCCEEDED` execution it reads the pipeline's `compliance-output.json` from the execution's recorded output results and runs the rule's checks against the measurements; any other terminal status (`FAILED`, `ABORTED`, `TIMED_OUT`) fails every check of the rule. Once every pipeline rule of the evaluation has reported, the verdict is determined, the asset state is written and the audit entry is recorded. The callback processes only events whose `detail-type` is `workflow.execution.completed` and whose detail matches the completion contract; a rule's completion is recorded at most once, so a redelivered event is a no-op, and the evaluation is finalized exactly once when every pipeline rule has reported, however the completion events are ordered. The event contract is documented in the [workflow execution data model](../developer/workflow-execution-data-model-handoff.md#workflow-completion-event).
 
 #### Tolerance operators
 
@@ -194,7 +194,7 @@ Every asset with a compliance record has a compliance state:
 
 An evaluation checks one asset against one schema and produces a verdict. Evaluations start in four ways:
 
-1. **Automatically** — the compliance trigger subscribes to the asset indexer's Amazon SNS topic and evaluates an asset of a database with `complianceAutoEval` on when the asset is created or updated. An asset without a record is registered under the database binding first.
+1. **Automatically** — the compliance trigger subscribes to the asset indexer's Amazon SNS topic and evaluates an asset of a database with `complianceAutoEval` on when the asset is created or updated. An asset without a record is registered under the database binding first. A file written by a workflow execution (object metadata `vams-changesource` of `workflowExecution`) does not trigger an evaluation, and a change to an asset whose evaluation is still awaiting its pipeline rules is coalesced into that evaluation when the evaluation began after the change.
 2. **On demand** — the **Evaluate Now** action on the asset's Compliance tab, or `POST /compliance/evaluate/{databaseId}/{assetId}`.
 3. **Sweep** — the **Sweep** action on the Compliance Schemas page, or `POST /compliance/sweep/{schemaName}`, evaluates every asset bound to the schema (200 per call).
 4. **Cascade** — an approved cascade evaluates the downstream assets of a parent in dependency order.
@@ -205,7 +205,7 @@ The verdict follows the highest-severity failure: any `quarantine`-level failure
 
 ## Quarantine
 
-An asset that fails a `quarantine`-level rule enters the `quarantined` state and appears on the Quarantine page with its asset name. Subscribers of the asset are notified through its Amazon SNS topic. Whether quarantine blocks the asset's download and stream endpoints is set by `app.compliance.quarantineBlocksDownload`.
+An asset that fails a `quarantine`-level rule enters the `quarantined` state and appears on the Quarantine page with its asset name. Subscribers of the asset are notified through its Amazon SNS topic. Whether quarantine blocks the asset's download, stream, export and auxiliary-preview endpoints is set by `app.compliance.quarantineBlocksDownload`.
 
 A quarantined asset leaves quarantine in three ways:
 
@@ -217,16 +217,16 @@ A quarantined asset leaves quarantine in three ways:
 
 A cascade re-evaluates the downstream assets of a parent: every descendant reachable through `parentChild` asset links, ordered so that parents are evaluated before their children (up to 500 assets). A descendant without a bound schema is skipped.
 
-A cascade opens in two ways. After an evaluation of an asset that has children — from the trigger, an on-demand evaluation or a sweep — a cascade is opened in the `pending_approval` state and the parent's subscribers are notified. A cascade created through the API or CLI waits for approval by default, or executes at once when created with `requireApproval: false`.
+A cascade opens in two ways. After an evaluation of an asset that has children — from the trigger, an on-demand evaluation or a sweep — a cascade is opened in the `pending_approval` state and the parent's subscribers are notified. A cascade created through the API or CLI waits for approval by default, or starts executing at once when created with `requireApproval: false`.
 
-| State              | Meaning                                         |
-| ------------------ | ----------------------------------------------- |
-| `pending_approval` | Waiting for an approval or rejection            |
-| `executing`        | Evaluating the downstream assets                |
-| `completed`        | Every downstream asset was evaluated or skipped |
-| `aborted`          | Rejected                                        |
+| State              | Meaning                                                |
+| ------------------ | ------------------------------------------------------ |
+| `pending_approval` | Waiting for an approval or rejection                   |
+| `executing`        | Evaluating the downstream assets in the background     |
+| `completed`        | Every downstream asset was evaluated or skipped        |
+| `aborted`          | Rejected, or the run failed — `abortReason` says which |
 
-A pending cascade records an `approvalTimeoutAt` timestamp 24 hours after its creation, shown in the approval queue. Approving a cascade executes it within the request and records the per-asset verdicts on the cascade; rejecting it aborts it.
+A pending cascade records an `approvalTimeoutAt` timestamp 24 hours after its creation, shown in the approval queue. Approving a cascade moves it to `executing` and hands the run to a background executor; the approve request returns at once, and the per-asset verdicts are recorded on the cascade as the run progresses, so its state is followed by reading the cascade until it is `completed` or `aborted`. Rejecting a cascade aborts it.
 
 ## Audit trail
 
@@ -284,12 +284,12 @@ Two permission templates in `documentation/permissionsTemplates/` set up non-adm
 
 ## Amazon DynamoDB tables
 
-| Table                              | Primary key                               | Global secondary indexes                                                                      | Holds                                                                   |
-| ---------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `ComplianceSchemaStorageTable`     | `schemaName` (PK), `internalVersion` (SK) | `DatabaseIdIndex` (`databaseId`, `schemaName`)                                                | Every version of every schema                                           |
-| `ComplianceAssetStateStorageTable` | `databaseId` (PK), `assetId` (SK)         | `SchemaNameIndex` (`schemaName`, `complianceState`)                                           | The compliance record of each bound asset                               |
-| `ComplianceEvaluationStorageTable` | `evaluationId` (PK)                       | `AssetIndex` (`databaseId:assetId`, `evaluatedAt`); `ExecutionIdIndex` (`executionId`)        | Evaluation records and the tracking row of each pipeline-rule execution |
-| `ComplianceCascadeStorageTable`    | `cascadeId` (PK)                          | `StateIndex` (`state`, `createdAt`)                                                           | Cascades with their per-node progress                                   |
-| `ComplianceAuditStorageTable`      | `entryId` (PK)                            | `AssetIndex` (`databaseId:assetId`, `timestamp`); `EventTypeIndex` (`eventType`, `timestamp`) | The audit trail                                                         |
+| Table                              | Primary key                               | Global secondary indexes                                                                                      | Holds                                                                   |
+| ---------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `ComplianceSchemaStorageTable`     | `schemaName` (PK), `internalVersion` (SK) | `DatabaseIdIndex` (`databaseId`, `schemaName`)                                                                | Every version of every schema                                           |
+| `ComplianceAssetStateStorageTable` | `databaseId` (PK), `assetId` (SK)         | `SchemaNameIndex` (`schemaName`, `complianceState`); `ComplianceStateIndex` (`complianceState`, `databaseId`) | The compliance record of each bound asset                               |
+| `ComplianceEvaluationStorageTable` | `evaluationId` (PK)                       | `AssetIndex` (`databaseId:assetId`, `evaluatedAt`); `ExecutionIdIndex` (`executionId`)                        | Evaluation records and the tracking row of each pipeline-rule execution |
+| `ComplianceCascadeStorageTable`    | `cascadeId` (PK)                          | `StateIndex` (`state`, `createdAt`)                                                                           | Cascades with their per-node progress                                   |
+| `ComplianceAuditStorageTable`      | `entryId` (PK)                            | `AssetIndex` (`databaseId:assetId`, `timestamp`); `EventTypeIndex` (`eventType`, `timestamp`)                 | The audit trail                                                         |
 
 The table names are resolved through AWS Systems Manager Parameter Store like every other VAMS table; see [AWS Resources](../architecture/aws-resources.md) and the [Data Model](../architecture/data-model.md).

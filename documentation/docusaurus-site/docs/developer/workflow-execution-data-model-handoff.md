@@ -185,7 +185,11 @@ Once the main execution row holds a terminal status, the lambda that wrote it pu
 orchestration event bus (`ORCHESTRATION_BUS_ARN`, with the source prefix from
 `ORCHESTRATION_EVENT_SOURCE_PREFIX`): `processWorkflowExecutionOutput` for a run that succeeds,
 `handleExecutionError` for a run that fails or times out, and `executionService` when an abort request
-stops the run. The entry is built by `workflow_execution_completed_event` in
+stops the run or when one of its Step Functions status reconciles records a completion no other writer
+did. All of them publish through `emit_workflow_execution_completed` in
+`common/workflows/executionOutputs.py`, and only the writer whose terminal-status write landed
+publishes; the event is skipped when the bus ARN or the event source prefix is unset. The entry is
+built by `workflow_execution_completed_event` in
 `common/workflows/executionRecords.py`, the only place its shape lives:
 
 | Field          | Value                                                                                                                                                                                                                                            |
