@@ -391,10 +391,16 @@ def analyze_window(user_blocks: List[dict], image_blocks: List[dict]) -> Tuple[d
         message = ((response.get("output") or {}).get("message") or {})
         text = "".join(block.get("text", "") for block in (message.get("content") or []))
         try:
-            return parse_segment_json(text), response.get("usage") or {}, masked_types
+            result = parse_segment_json(text)
         except ModelResponseError as exc:
             last_parse_error = exc
             logger.warning(f"Attempt {attempt}: {exc}")
+            continue
+        if GUARDRAIL_CONFIG:
+            # The one line that makes the screening auditable: which filters acted on the prompt and on the reply,
+            # by policy, type and action — never the text.
+            logger.info({"message": "Guardrail assessment", "assessment": bedrockGuardrail.assessment_line(response)})
+        return result, response.get("usage") or {}, masked_types
     raise SegmentAnalysisFailure(f"model returned no parsable JSON after {MAX_ATTEMPTS} attempts: {last_parse_error}")
 
 

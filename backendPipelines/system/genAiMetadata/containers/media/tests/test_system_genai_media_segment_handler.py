@@ -431,6 +431,31 @@ class TestGuardrail:
         assert os.path.dirname(os.path.abspath(module.bedrockGuardrail.__file__)) == _CONTAINER_DIR
         assert module.ERROR_BEDROCK_GUARDRAIL_INTERVENED == "BedrockGuardrailIntervened"
 
+    def test_a_success_logs_the_per_side_assessment_once_by_type_and_action(self, monkeypatch):
+        """The one INFO line that makes input-side masking auditable from the log: the trace's filters by side, each
+        as policy, type and action, never the matched text; logged with a guardrail configured, never without one."""
+        s3 = _seed(FakeS3())
+        masked = _reply(description="{NAME} inspects a red hat.")
+        masked["stopReason"] = "guardrail_intervened"
+        masked["trace"] = {"guardrail": {
+            "inputAssessment": {"gr-abc123": {"sensitiveInformationPolicy": {"piiEntities": [
+                {"match": "jane@example.com", "type": "EMAIL", "action": "ANONYMIZED", "detected": True}]}}},
+            "outputAssessments": {"gr-abc123": [{"sensitiveInformationPolicy": {"piiEntities": [
+                {"match": "Jane Q. Public", "type": "NAME", "action": "ANONYMIZED", "detected": True}]}}]}}}
+        module = _load(monkeypatch, s3, FakeBedrockRuntime([masked]), FakeEvents(), env=GUARDRAIL_ENV)
+        assert _run(module)["status"] == "SUCCEEDED"
+        lines = [call.args[0] for call in module.logger.info.call_args_list
+                 if isinstance(call.args[0], dict) and call.args[0].get("message") == "Guardrail assessment"]
+        assert len(lines) == 1
+        assert json.loads(lines[0]["assessment"]) == {
+            "input": [{"policy": "sensitiveInformationPolicy", "type": "EMAIL", "action": "ANONYMIZED"}],
+            "output": [{"policy": "sensitiveInformationPolicy", "type": "NAME", "action": "ANONYMIZED"}]}
+        assert "jane@example.com" not in json.dumps(lines) and "Jane" not in json.dumps(lines)
+        unguarded = _load(monkeypatch, _seed(FakeS3()), FakeBedrockRuntime([_reply()]), FakeEvents())
+        _run(unguarded)
+        assert not any(isinstance(call.args[0], dict) and call.args[0].get("message") == "Guardrail assessment"
+                       for call in unguarded.logger.info.call_args_list)
+
 
 @pytest.mark.unit
 class TestEmbeddedTextScreening:

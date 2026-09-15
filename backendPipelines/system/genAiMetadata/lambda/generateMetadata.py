@@ -425,10 +425,16 @@ def analyze(user_blocks, image_blocks):
         text = "".join(block.get("text", "") for block in (message.get("content") or []))
         usage = response.get("usage") or {}
         try:
-            return parse_model_json(text), usage, masked_types
+            result = parse_model_json(text)
         except ModelResponseError as e:
             last_parse_error = e
             logger.warning(f"Attempt {attempt}: {e}")
+            continue
+        if GUARDRAIL_CONFIG:
+            # The one line that makes the screening auditable: which filters acted on the prompt and on the reply,
+            # by policy, type and action — never the text.
+            logger.info(f"Guardrail assessment: {bedrockGuardrail.assessment_line(response)}")
+        return result, usage, masked_types
     raise BedrockAnalysisFailure(
         common.ERROR_BEDROCK_MODEL,
         f"model returned no parsable JSON after {MAX_ATTEMPTS} attempts: {last_parse_error}")

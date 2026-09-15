@@ -732,6 +732,37 @@ class TestGuardrail:
         mod = h.load_handler("generateMetadata", {"BEDROCK_GUARDRAIL_IDENTIFIER": " ", "BEDROCK_GUARDRAIL_VERSION": ""})
         assert mod.GUARDRAIL_CONFIG is None
 
+    def test_a_success_logs_the_per_side_assessment_once_by_type_and_action(self):
+        """The one INFO line that makes input-side masking auditable from the log: the trace's filters by side,
+        each as policy, type and action, never the matched text. Logged on a success with a guardrail configured
+        (an intervention logs its cause instead), and never without one."""
+        s3 = _seed(h.FakeS3())
+        masked = _reply(description="Inspector {NAME} reviewed the pump.")
+        masked["stopReason"] = "guardrail_intervened"
+        masked["trace"] = {"guardrail": {
+            "inputAssessment": {"gr-abc123": {"sensitiveInformationPolicy": {"piiEntities": [
+                {"match": "jane@example.com", "type": "EMAIL", "action": "ANONYMIZED", "detected": True},
+                {"match": "Jane Q. Public", "type": "NAME", "action": "ANONYMIZED", "detected": True}]}}},
+            "outputAssessments": {"gr-abc123": [{"sensitiveInformationPolicy": {"piiEntities": [
+                {"match": "Jane Q. Public", "type": "NAME", "action": "ANONYMIZED", "detected": True}]}}]}}}
+        mod, state = _run(_state(), s3, h.FakeBedrock([masked]), env=GUARDRAIL_ENV)
+        assert state["analysisStatus"] == "SUCCEEDED"
+        lines = [call.args[0] for call in mod.logger.info.call_args_list
+                 if str(call.args[0]).startswith("Guardrail assessment: ")]
+        assert len(lines) == 1
+        assert json.loads(lines[0][len("Guardrail assessment: "):]) == {
+            "input": [{"policy": "sensitiveInformationPolicy", "type": "EMAIL", "action": "ANONYMIZED"},
+                      {"policy": "sensitiveInformationPolicy", "type": "NAME", "action": "ANONYMIZED"}],
+            "output": [{"policy": "sensitiveInformationPolicy", "type": "NAME", "action": "ANONYMIZED"}]}
+        for leaked in ("jane@example.com", "Jane", "match"):
+            assert leaked not in lines[0], leaked
+        # A clean run still logs the line (empty), so the guardrail's presence is readable; without a guardrail no line.
+        mod, _state_out = _run(_state(), _seed(h.FakeS3()), h.FakeBedrock([_reply()]), env=GUARDRAIL_ENV)
+        assert [call.args[0] for call in mod.logger.info.call_args_list
+                if str(call.args[0]).startswith("Guardrail assessment: ")] == ["Guardrail assessment: {}"]
+        mod, _state_out = _run(_state(), _seed(h.FakeS3()), h.FakeBedrock([_reply()]))
+        assert not any(str(call.args[0]).startswith("Guardrail assessment") for call in mod.logger.info.call_args_list)
+
 
 @pytest.mark.unit
 class TestMetadataOutput:
