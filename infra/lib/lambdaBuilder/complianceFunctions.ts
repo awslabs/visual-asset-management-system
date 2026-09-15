@@ -243,7 +243,8 @@ export function buildComplianceCascadeServiceFunction(
     storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    executeWorkflowFunction: lambda.Function
 ): lambda.Function {
     const name = "complianceCascadeService";
     const fun = new lambda.Function(scope, name, {
@@ -262,9 +263,13 @@ export function buildComplianceCascadeServiceFunction(
                 ? { subnets: subnets }
                 : undefined,
         // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX).
-        environment: {},
+        environment: {
+            EXECUTE_WORKFLOW_FUNCTION_NAME: executeWorkflowFunction.functionName,
+        },
     });
-    // Approving a cascade re-evaluates the downstream assets through the evaluation engine.
+    // Approving a cascade re-evaluates the downstream assets through the evaluation engine, which
+    // launches a workflow execution for each pipeline rule.
+    executeWorkflowFunction.grantInvoke(fun);
     storageResources.dynamo.complianceCascadeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAssetStateStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceEvaluationStorageTable.grantReadWriteData(fun);

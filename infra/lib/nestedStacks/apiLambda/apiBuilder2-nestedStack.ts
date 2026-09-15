@@ -718,7 +718,8 @@ export class ApiBuilder2NestedStack extends NestedStack {
             storageResources,
             config,
             vpc,
-            subnets
+            subnets,
+            executeWorkflowV2
         );
         for (const method of [apigateway.HttpMethod.GET, apigateway.HttpMethod.POST]) {
             attachFunctionToApi(this, complianceCascadeService, {

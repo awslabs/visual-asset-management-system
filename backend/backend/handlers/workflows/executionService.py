@@ -214,6 +214,37 @@ except Exception as e:
 
 lambda_client = boto3.client('lambda', config=retry_config)
 
+# Orchestration bus the workflow completion event is published on when an abort finishes an execution.
+orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
+orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
+events_retry_config = Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})
+events_client = boto3.client('events', config=events_retry_config)
+
+
+def emit_workflow_execution_completed(workflow_execution_id, workflow_database_id, workflow_id,
+                                      execution_status, started_at, completed_at,
+                                      execution_group_id=""):
+    """Best-effort `workflow.execution.completed` event on the orchestration bus once the main
+    execution row holds its terminal status. Skipped (logged) when no bus is configured; a publish
+    failure is logged and never fails the terminal-status write that precedes it."""
+    if not orchestration_bus_arn:
+        logger.info("No orchestration bus configured; workflow completion event skipped")
+        return
+    try:
+        events_client.put_events(Entries=[er.workflow_execution_completed_event(
+            event_bus_arn=orchestration_bus_arn,
+            event_source_prefix=orchestration_event_source_prefix,
+            execution_id=workflow_execution_id,
+            workflow_database_id=workflow_database_id,
+            workflow_id=workflow_id,
+            status=execution_status,
+            started_at=started_at,
+            completed_at=completed_at,
+            execution_group_id=execution_group_id,
+        )])
+    except Exception as e:
+        logger.exception(f"Failed publishing workflow completion event for {workflow_execution_id}: {e}")
+
 asset_table = dynamodb.Table(asset_storage_table_name)
 asset_file_version_history_table = (
     dynamodb.Table(asset_file_version_history_table_name)
@@ -419,10 +450,11 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
     terminal status by reading the current one first: the read and the write are separate calls, so
     another writer can finish the execution in between and a plain write would revert it. Losing that
     race is the expected outcome for the second writer, so the ConditionalCheckFailed is logged and
-    swallowed while any other write error surfaces."""
+    swallowed while any other write error surfaces. Returns True when the row was written and False
+    when there was nothing to write or the terminal guard rejected the write."""
     reconciled = {attr: main_item[attr] for attr in attributes if attr in main_item}
     if not reconciled:
-        return
+        return False
     names = {f"#a{i}": attr for i, attr in enumerate(reconciled)}
     values = {f":v{i}": main_item[attr] for i, attr in enumerate(reconciled)}
     expr = "SET " + ", ".join(f"{n} = {v}" for n, v in zip(names, values))
@@ -442,6 +474,8 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
             raise
         logger.info(f"Main execution row {main_item.get('workflowExecutionId', '')} already holds a "
                     f"terminal status; the {main_item.get('executionStatus', '')} write was skipped")
+        return False
+    return True
 
 
 def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
@@ -1899,8 +1933,15 @@ def abort_execution(event, execution_id):
         if not main_item.get('executionStopDate'):
             main_item['executionStopDate'] = now
         main_item['lastSfnSyncCheckDate'] = now
-        _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
-                                     only_if_not_terminal=True)
+        # Stopping the state machine skips its error handler, so the abort publishes the completion
+        # event itself once the ABORTED status lands.
+        if _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
+                                        only_if_not_terminal=True):
+            emit_workflow_execution_completed(
+                execution_id, main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''),
+                ABORTED_STATUS, started_at=main_item.get('executionStartDate', ''),
+                completed_at=main_item['executionStopDate'],
+                execution_group_id=main_item.get('executionGroupId', ''))
 
     logger.info(f"Aborted execution {execution_id}")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.

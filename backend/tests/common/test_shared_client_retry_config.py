@@ -92,6 +92,8 @@ DELIBERATE_DEPARTURES = {
     # write's lambda open.
     ("handlers/workflows/sfn/processWorkflowExecutionOutput.py", "events_retry_config"),
     ("handlers/workflows/sfn/handleExecutionError.py", "events_retry_config"),
+    # The abort path publishes the same completion event after it writes the ABORTED status.
+    ("handlers/workflows/executionService.py", "events_retry_config"),
     # An advisory trigger-save lookup, bounded so an unreachable table cannot hold the save open.
     ("handlers/workflows/workflowTriggerService.py", "lookup_retry_config"),
     # The executeWorkflowV2 Invoke is not idempotent: a retry would launch a duplicate execution.

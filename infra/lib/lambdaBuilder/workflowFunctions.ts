@@ -81,8 +81,13 @@ export function buildExecutionServiceFunction(
         // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). The log group each execution
         // was launched against is read from that execution's own record (executionLogGroupArn), so
         // no log group ARN is set here; the read scope is granted on the role policy below.
-        environment: {},
+        environment: {
+            // Abort publishes workflow.execution.completed once the ABORTED status is written.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
+        },
     });
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun); // write for lazy status reconciliation + abort + permanent-delete
     // Permanent-delete removes an execution's rows across every sub-table, so the execution
