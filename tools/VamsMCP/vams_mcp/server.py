@@ -34,6 +34,8 @@ from .client import (  # noqa: E402
     VamsClient,
     API_ASSETS,
     API_DATABASE_ASSETS,
+    COMPLIANCE_AUDIT_DEFAULT_LIMIT,
+    MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE,
     SUBSCRIPTION_ENTITY_ASSET,
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
@@ -189,6 +191,39 @@ def _paginate_with_page_metadata(
         result["warnings"] = warnings
         # Rows were withheld, so the walk did not see everything even when no token remains.
         result["truncated"] = True
+    return result
+
+
+def _single_response_list(
+    page: Any, items_key: str, noun: str, bound: Optional[int] = None
+) -> Dict[str, Any]:
+    """Shape a route that returns its whole list in ONE response, under its own field name.
+
+    The compliance listings (schemas, quarantined assets, pending cascades, audit entries) carry no
+    ``message`` envelope and no continuation token, so ``paginate()`` has nothing to follow and a
+    bare ``Items`` read finds nothing. The list is lifted onto ``Items`` with a ``count`` so the tool
+    matches every other list tool, and every other top-level field is carried through.
+
+    ``bound`` is the row limit the route applied when it has one (the audit ``limit``). A result that
+    reached it is flagged ``truncated``: there is no token to resume with, so the caller must narrow
+    the request rather than treat the count as a total.
+    """
+    items = page.get(items_key) if isinstance(page, dict) else None
+    if not isinstance(items, list):
+        items = []
+    result: Dict[str, Any] = {
+        key: value for key, value in (page.items() if isinstance(page, dict) else ()) if key != items_key
+    }
+    result["Items"] = items
+    result["count"] = len(items)
+    if bound is not None and len(items) >= bound:
+        result["truncated"] = True
+        result["note"] = (
+            f"Result may be INCOMPLETE: returned {len(items)} {noun}(s), which is the limit in force "
+            f"({bound}). This route returns no continuation token, so there is nothing to resume "
+            "with — narrow the date window or raise `limit` to see more, and do not report this "
+            "count as a total."
+        )
     return result
 
 
@@ -1456,6 +1491,213 @@ def list_user_api_keys(
     )
 
 
+# --- Compliance (read) -----------------------------------------------------
+#
+# A compliance schema is a rule set (vams-rules-v1: pipeline, metadata and relationship rules, each
+# with an enforcement level of quarantine / warn / inform) bound to a database, or to one asset as an
+# override. Evaluation checks an asset against its bound schema; a failed quarantine-level rule
+# quarantines the asset until it is released or granted an exception. A cascade re-evaluates the
+# dependents of a changed asset, by default after a human approval.
+
+
+@mcp.tool()
+@tool_result
+def list_compliance_schemas(database_id: Optional[str] = None) -> Dict[str, Any]:
+    """List compliance schemas — the latest version of each — as `Items`, with `count`.
+
+    With `database_id`, only schemas scoped to that database plus GLOBAL ones (the set that database
+    can bind); without it, every schema the caller may read. The route returns the whole list in one
+    response and takes no paging parameters, so there is no `starting_token` and the result is never
+    `truncated`. Each item carries schemaName, databaseId (the scope, or GLOBAL), description,
+    schemaBody (the rule document), version and createdAt.
+    """
+    return _single_response_list(
+        CLIENT.api.list_compliance_schemas(database_id=database_id), "schemas", "schema"
+    )
+
+
+@mcp.tool()
+@tool_result
+def get_compliance_schema(schema_name: str) -> Dict[str, Any]:
+    """Read the latest version of one compliance schema, including its `schemaBody`.
+
+    A vams-rules-v1 body is `{"schemaFormat": "vams-rules-v1", "rules": {<ruleName>: {ruleType,
+    enforcement, ...}}}`; a pipeline rule's `pipelineRef` names the workflow it executes
+    (databaseId — the WORKFLOW's database — and workflowId) and the pipeline whose measurements its
+    checks read (pipelineDatabaseId, pipelineId, optional templateId). An optional `extends` names a
+    parent schema whose rules are inherited.
+    """
+    return CLIENT.api.get_compliance_schema(schema_name)
+
+
+@mcp.tool()
+@tool_result
+def get_compliance_bindings(database_id: str) -> Dict[str, Any]:
+    """Read a database's compliance schema binding and its asset-level overrides.
+
+    Returns `databaseSchema` (the bound schema name, or null when none), `complianceAutoEval`,
+    `assetOverrides` (each assetId, its schemaName and complianceState) and `assetOverrideCount`.
+    An asset override takes precedence over the database binding for that asset. The overrides list
+    is complete — the route returns it whole.
+    """
+    return CLIENT.api.get_compliance_bindings(database_id)
+
+
+@mcp.tool()
+@tool_result
+def get_asset_compliance_state(database_id: str, asset_id: str) -> Dict[str, Any]:
+    """Read one asset's compliance record.
+
+    `complianceState` is one of compliant, non_compliant, pending_evaluation, quarantined or
+    unknown; `schemaName` / `schemaSource` (database or asset) say which binding governs it. A
+    quarantined record carries `quarantineReason`; a released-with-exception record carries
+    `exceptionGranted`, `exceptionReason` and `exceptionGrantedBy`. An asset that is not tracked
+    answers state `unknown` with a null schemaName rather than an error, so `unknown` means "no
+    schema is bound", not "the asset does not exist".
+    """
+    return CLIENT.api.get_compliance_state(database_id, asset_id)
+
+
+@mcp.tool()
+@tool_result
+def get_database_compliance_overview(database_id: str) -> Dict[str, Any]:
+    """Read a database's compliance overview: `totalAssets`, a per-state `summary` (compliant,
+    non_compliant, pending_evaluation, quarantined, unknown) and `assets`, the record of every
+    tracked asset with its `assetName`.
+
+    Only assets with a compliance record are counted — an asset in a database with no binding is
+    absent, not `unknown`. The route returns the whole list in one response.
+    """
+    return CLIENT.api.get_database_compliance_state(database_id)
+
+
+@mcp.tool()
+@tool_result
+def list_compliance_evaluations(
+    database_id: str,
+    asset_id: str,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List an asset's evaluation history, most recent first (auto-paginated).
+
+    Each row carries evaluationId, schemaName, evaluatedAt, the verdict / complianceState once the
+    evaluation completed, ruleResults, and — for an evaluation with pipeline rules — the
+    `executionId` of the workflow execution that produced the measurements.
+
+    The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
+    and `NextToken` continues the walk — pass it back as `starting_token`. Do not conclude an asset
+    was never evaluated from a truncated result.
+    """
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_compliance_evaluations(
+            database_id,
+            asset_id,
+            # The route reads its page size from `maxItems` and clamps it to its own cap.
+            max_items=min(params["pageSize"], MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE),
+            starting_token=params.get("startingToken"),
+        ),
+        max_items=max_items,
+        items_key="evaluations",
+        starting_token=starting_token,
+    )
+
+
+@mcp.tool()
+@tool_result
+def list_quarantined_assets() -> Dict[str, Any]:
+    """List every quarantined asset the caller may read, as `Items` with `count`.
+
+    Each item is the asset's compliance record (databaseId, assetId, assetName, schemaName,
+    quarantineReason, updatedAt). The route returns the whole list in one response and takes no
+    paging parameters, so there is no `starting_token` and the result is never `truncated`.
+    """
+    return _single_response_list(
+        CLIENT.api.list_quarantined_assets(), "quarantinedAssets", "quarantined asset"
+    )
+
+
+@mcp.tool()
+@tool_result
+def list_compliance_cascades() -> Dict[str, Any]:
+    """List cascades AWAITING APPROVAL, as `Items` with `count`.
+
+    Only cascades in state pending_approval are listed; an executing, completed or rejected cascade
+    is read with get_compliance_cascade() by id. Each item carries cascadeId, triggeredByDatabaseId,
+    triggeredByAssetId, triggerReason, createdAt and approvalTimeoutAt (after which an unapproved
+    cascade expires). The route returns the whole list in one response and takes no paging
+    parameters.
+    """
+    return _single_response_list(CLIENT.api.list_compliance_cascades(), "cascades", "cascade")
+
+
+@mcp.tool()
+@tool_result
+def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
+    """Read one cascade: its `state` (pending_approval, executing, completed, aborted), the asset
+    that triggered it, and — once decided — approvedBy / approvalReason or rejectedBy /
+    rejectionReason with completedAt."""
+    return CLIENT.api.get_compliance_cascade(cascade_id)
+
+
+@mcp.tool()
+@tool_result
+def query_compliance_audit(
+    event_type: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Query the global compliance audit trail, as `Items` with `count`.
+
+    `event_type` narrows to one kind of entry (schema_bound_to_database, schema_bound_to_asset,
+    schema_unbound_from_database, schema_unbound_from_asset, schema_deleted, compliance_check,
+    quarantine_released, exception_granted, cascade_triggered, cascade_approved, ...) and is what
+    makes the query indexed; without it the trail is scanned. `start_date` / `end_date` are ISO
+    8601 bounds on the entry timestamp.
+
+    This route is BOUNDED by `limit` and returns NO continuation token: the handler applies its own
+    default when `limit` is omitted, and rows past the bound are unreachable in this call. A result
+    that reached the bound is flagged `truncated` with a `note` — narrow the window or raise `limit`
+    rather than reporting the count as a total. Use get_asset_compliance_audit() for one asset.
+    """
+    return _single_response_list(
+        CLIENT.api.query_compliance_audit(
+            event_type=event_type, start_date=start_date, end_date=end_date, limit=limit
+        ),
+        "entries",
+        "audit entry",
+        bound=limit if limit is not None else COMPLIANCE_AUDIT_DEFAULT_LIMIT,
+    )
+
+
+@mcp.tool()
+@tool_result
+def get_asset_compliance_audit(
+    database_id: str,
+    asset_id: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Read one asset's compliance audit history, most recent first, as `Items` with `count`.
+
+    Same entry shape as query_compliance_audit(). This route has NO event-type filter — the
+    parameter is absent because the handler would ignore it — and, like the global trail, it is
+    BOUNDED by `limit` with no continuation token: a result that reached the bound is flagged
+    `truncated`, and the way past it is a narrower `start_date` / `end_date` window or a larger
+    `limit`.
+    """
+    return _single_response_list(
+        CLIENT.api.get_asset_compliance_audit(
+            database_id, asset_id, start_date=start_date, end_date=end_date, limit=limit
+        ),
+        "entries",
+        "audit entry",
+        bound=limit if limit is not None else COMPLIANCE_AUDIT_DEFAULT_LIMIT,
+    )
+
+
 # =========================================================================
 # WRITE TOOLS (require VAMS_ENABLE_WRITES=true)
 # =========================================================================
@@ -1955,6 +2197,202 @@ if CONFIG.enable_writes:
             payload["isActive"] = "true" if is_active else "false"
         return CLIENT.api.update_user_api_key(api_key_id, payload)
 
+    # --- Compliance (write) ----------------------------------------------
+
+    @mcp.tool()
+    @tool_result
+    def create_compliance_schema(
+        schema_name: str,
+        schema_body: Dict[str, Any],
+        database_id: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Register a compliance schema, or a new version of one that already exists.
+
+        `schema_body` is the rule document: `{"schemaFormat": "vams-rules-v1", "rules": {<name>:
+        {ruleType, enforcement, checks, ...}}}` with ruleType one of pipeline / metadata /
+        relationship and enforcement one of quarantine / warn / inform. A pipeline rule's
+        `pipelineRef` takes databaseId (the WORKFLOW's database; GLOBAL allowed), workflowId,
+        pipelineDatabaseId (GLOBAL allowed), pipelineId and an optional templateId; a metadata rule's
+        `metadataSchemaRef` takes databaseId and schemaName; each rule needs at least one check. A
+        plain JSON Schema (draft-07 subset) body is also accepted. Read an existing schema with
+        get_compliance_schema() and copy its shape.
+
+        `schema_name` is an id (3-63 characters; letters, digits, hyphens, underscores).
+        `database_id` scopes the schema to one database; omitted, it is GLOBAL and any database can
+        bind it. Registering an existing name writes the next version rather than failing — assets
+        keep their state until re-evaluated (sweep_compliance_schema()).
+        """
+        payload: Dict[str, Any] = {"schemaName": schema_name, "schemaBody": schema_body}
+        if database_id:
+            payload["databaseId"] = database_id
+        if description is not None:
+            payload["description"] = description
+        return CLIENT.api.create_compliance_schema(payload)
+
+    @mcp.tool()
+    @tool_result
+    def update_compliance_schema(
+        schema_name: str,
+        schema_body: Optional[Dict[str, Any]] = None,
+        database_id: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Write a new version of a compliance schema. Only the arguments given change; at least
+        one is required.
+
+        `schema_body` REPLACES the whole rule document rather than merging into it — read the
+        current body with get_compliance_schema() and send the complete set. `database_id` re-scopes
+        the schema (or GLOBAL). A system schema (the deployment's default) cannot be modified.
+        Assets bound to the schema keep their current state until the next evaluation or a
+        sweep_compliance_schema().
+        """
+        payload: Dict[str, Any] = {}
+        if schema_body is not None:
+            payload["schemaBody"] = schema_body
+        if database_id is not None:
+            payload["databaseId"] = database_id
+        if description is not None:
+            payload["description"] = description
+        if not payload:
+            raise ValueError(
+                "update_compliance_schema needs at least one of schema_body, database_id or description"
+            )
+        return CLIENT.api.update_compliance_schema(schema_name, payload)
+
+    @mcp.tool()
+    @tool_result
+    def bind_compliance_schema(
+        database_id: str,
+        schema_name: str,
+        asset_id: Optional[str] = None,
+        auto_eval: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Bind a compliance schema to a database, or — with `asset_id` — to one asset as an
+        override of the database binding.
+
+        Only a GLOBAL schema or one scoped to `database_id` can be bound; a schema scoped to another
+        database is refused. A database binding marks every asset in the database that has no
+        override pending_evaluation and returns `assetsPendingEvaluation`; an asset binding marks
+        that one asset. `auto_eval` (database binding only — the asset route does not read it, so
+        it is not sent there) records whether the database's assets are re-evaluated
+        automatically; the handler defaults it to true.
+        """
+        return CLIENT.api.bind_compliance_schema(
+            database_id,
+            schema_name,
+            asset_id=asset_id,
+            auto_eval=None if asset_id else auto_eval,
+        )
+
+    @mcp.tool()
+    @tool_result
+    def unbind_compliance_schema(database_id: str, asset_id: Optional[str] = None) -> Dict[str, Any]:
+        """Remove a database's compliance schema binding, or — with `asset_id` — one asset's
+        override so it falls back to the database binding.
+
+        Unbinding a DATABASE deletes the compliance record (state, last evaluation, quarantine and
+        exception fields) of every asset that inherited the binding, and reports the count as
+        `removedComplianceRecords`; asset overrides are kept. Evaluation history and the audit trail
+        are not removed. Removing an asset's override reverts it to the database schema (marked
+        pending_evaluation), or deletes its record when the database has no binding. Both forms
+        succeed when there was nothing to remove.
+        """
+        return CLIENT.api.unbind_compliance_schema(database_id, asset_id=asset_id)
+
+    @mcp.tool()
+    @tool_result
+    def evaluate_asset_compliance(
+        database_id: str, asset_id: str, schema_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Evaluate an asset against its bound compliance schema (or `schema_name`).
+
+        Metadata and relationship rules run inside the call and the response carries `verdict`,
+        `complianceState` and per-rule `ruleResults`. A PIPELINE rule starts a real VAMS workflow
+        execution — AWS compute that can incur cost — and completes asynchronously:
+        `pipelineRulesPending` counts them, and the final verdict appears in
+        get_asset_compliance_state() / list_compliance_evaluations() once the workflow finishes.
+        Because a schema with pipeline rules launches compute, keep this tool out of `autoApprove`.
+        A quarantine-level failure quarantines the asset at once.
+        """
+        return CLIENT.api.evaluate_asset_compliance(database_id, asset_id, schema_name=schema_name)
+
+    @mcp.tool()
+    @tool_result
+    def sweep_compliance_schema(schema_name: str) -> Dict[str, Any]:
+        """Re-evaluate EVERY asset bound to a schema; returns `assetsTriggered` (databaseId,
+        assetId pairs).
+
+        The usual follow-up to update_compliance_schema(). Each asset is evaluated as by
+        evaluate_asset_compliance(), so a schema with pipeline rules starts one workflow execution
+        per bound asset — real AWS compute, multiplied by the binding count. Keep this tool out of
+        `autoApprove` and check get_compliance_bindings() for the blast radius first.
+        """
+        return CLIENT.api.sweep_compliance_schema(schema_name)
+
+    @mcp.tool()
+    @tool_result
+    def release_quarantine(
+        database_id: str, asset_id: str, reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Release a quarantined asset back to the compliant state.
+
+        The release and `reason` are written to the audit trail. Nothing prevents the next
+        evaluation from quarantining the asset again — use grant_quarantine_exception() to record a
+        deliberate waiver instead. An asset that is not quarantined is refused.
+        """
+        return CLIENT.api.release_quarantine(database_id, asset_id, reason=reason)
+
+    @mcp.tool()
+    @tool_result
+    def grant_quarantine_exception(database_id: str, asset_id: str, reason: str) -> Dict[str, Any]:
+        """Grant a quarantined asset an exception: it returns to compliant with `exceptionGranted`,
+        the required `reason` and the granting user recorded on its compliance record and in the
+        audit trail. An asset that is not quarantined is refused."""
+        return CLIENT.api.grant_quarantine_exception(database_id, asset_id, reason)
+
+    @mcp.tool()
+    @tool_result
+    def create_compliance_cascade(
+        database_id: str,
+        asset_id: str,
+        reason: Optional[str] = None,
+        require_approval: bool = True,
+    ) -> Dict[str, Any]:
+        """Create a cascade that re-evaluates the dependents of an asset. Returns `cascadeId` and
+        `state`.
+
+        With `require_approval` (the default) the cascade waits in pending_approval for
+        approve_compliance_cascade() / reject_compliance_cascade() and expires at its
+        approvalTimeoutAt; with `require_approval=False` it EXECUTES INSIDE THIS CALL and the
+        response also carries `result`. Executing re-evaluates every dependent, which starts a
+        workflow execution per pipeline rule — real AWS compute — so leave approval on unless the
+        user has asked for an immediate run, and keep this tool out of `autoApprove`.
+        """
+        return CLIENT.api.create_compliance_cascade(
+            database_id, asset_id, reason=reason, require_approval=require_approval
+        )
+
+    @mcp.tool()
+    @tool_result
+    def approve_compliance_cascade(cascade_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
+        """Approve a pending cascade. Execution runs INSIDE this call and the response carries
+        `result`.
+
+        Only a cascade in pending_approval can be approved; any other state is reported as not
+        found. Approval starts the dependents' re-evaluation — a workflow execution per pipeline
+        rule, real AWS compute — so read the cascade with get_compliance_cascade() and confirm with
+        the user first, and keep this tool out of `autoApprove`.
+        """
+        return CLIENT.api.approve_compliance_cascade(cascade_id, reason=reason)
+
+    @mcp.tool()
+    @tool_result
+    def reject_compliance_cascade(cascade_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
+        """Reject a pending cascade; it moves to aborted and nothing is executed. Only a cascade in
+        pending_approval can be rejected; any other state is reported as not found."""
+        return CLIENT.api.reject_compliance_cascade(cascade_id, reason=reason)
+
 
 # =========================================================================
 # DESTRUCTIVE TOOLS (require VAMS_ENABLE_DESTRUCTIVE=true AND writes enabled)
@@ -2170,6 +2608,19 @@ if CONFIG.enable_destructive:
         first: it revokes the same access and can be undone.
         """
         return CLIENT.api.delete_user_api_key(api_key_id)
+
+    @mcp.tool()
+    @tool_result
+    def delete_compliance_schema(schema_name: str) -> Dict[str, Any]:
+        """PERMANENTLY delete a compliance schema — every version of it. Irreversible, and there is
+        no archived state.
+
+        The API refuses to delete a schema that any database or asset is still bound to; call
+        get_compliance_bindings() on the databases that use it and unbind_compliance_schema() first.
+        Read the body with get_compliance_schema() before deleting — it can only be re-authored, not
+        recovered. The deletion is written to the audit trail as schema_deleted.
+        """
+        return CLIENT.api.delete_compliance_schema(schema_name)
 
 
 def main() -> None:

@@ -33,14 +33,15 @@ tools/VamsCLI/
 └── README.md               # User documentation
 ```
 
-### **Command Groups (22 top-level)**
+### **Command Groups (25 top-level)**
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
-tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
-pipeline, execution, industry, user, role, api-key
+tag, tag-type, metadata, metadata-schema, comment, subscription, features,
+search, sync, workflow, pipeline, execution, industry, user, role, api-key,
+compliance
 ```
 
 Sync has a nested sub-command group:
@@ -52,6 +53,17 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
 -   `execution list` (global, permission-filtered), `execution details|details-metadata|logs|abort|rerun|permanent-delete`
+
+Comment and subscription cover the comments and subscriptions APIs:
+
+-   `comment list|get|add|update|delete`, `subscription list|create|update|delete|unsubscribe|check`
+
+Compliance covers the schema registry, bindings, evaluation, quarantine, cascades and the audit trail:
+
+-   `compliance schema list|get|create|update|delete` (`create`/`update` take `--schema-file`; `delete` requires `--confirm`)
+-   `compliance bind|unbind|bindings` (`-d` for a database, `-d -a` for one asset's override), `compliance evaluate|sweep|state|evaluations`
+-   `compliance quarantine list|release|exception`, `compliance cascade list|get|create|approve|reject`, `compliance audit`
+-   The compliance list routes return their whole list in one response and take no paging parameters, so those commands carry none; `evaluations` pages on `--max-items`/`--starting-token`, and `audit` is bounded by `--limit` with no token (a full page is flagged as possibly incomplete). Mirrors `tools/VamsCLI/CLAUDE.md`.
 
 Industry has nested sub-command groups:
 
@@ -831,6 +843,7 @@ documentation/docusaurus-site/docs/cli/
 │   ├── workflows.md               # workflow commands
 │   ├── permissions.md             # role, constraint, user-role commands
 │   ├── users-and-keys.md          # user cognito + api-key commands
+│   ├── compliance.md              # compliance schema, bind, evaluate, quarantine, cascade, audit commands
 │   └── industry.md                # industry (BOM, PLM, spatial GLB) commands
 └── troubleshooting/               # CLI-specific troubleshooting (under the CLI section)
     ├── setup-auth.md, assets-files.md, database-tags.md, search.md,

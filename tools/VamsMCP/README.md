@@ -100,7 +100,18 @@ secrets** — just the command:
                 "list_asset_comments",
                 "list_asset_version_comments",
                 "get_comment",
-                "check_subscription"
+                "check_subscription",
+                "list_compliance_schemas",
+                "get_compliance_schema",
+                "get_compliance_bindings",
+                "get_asset_compliance_state",
+                "get_database_compliance_overview",
+                "list_compliance_evaluations",
+                "list_quarantined_assets",
+                "list_compliance_cascades",
+                "get_compliance_cascade",
+                "query_compliance_audit",
+                "get_asset_compliance_audit"
             ]
         }
     }
@@ -135,6 +146,28 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 Comments, subscriptions, and API keys: `list_asset_comments`,
 `list_asset_version_comments`, `get_comment`, `list_subscriptions`,
 `check_subscription`, `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys`.
+
+Compliance: `list_compliance_schemas`, `get_compliance_schema`,
+`get_compliance_bindings`, `get_asset_compliance_state`,
+`get_database_compliance_overview`, `list_compliance_evaluations`,
+`list_quarantined_assets`, `list_compliance_cascades`, `get_compliance_cascade`,
+`query_compliance_audit`, `get_asset_compliance_audit`.
+
+A compliance schema is a rule set (`vams-rules-v1`: pipeline, metadata and
+relationship rules, each enforced at quarantine / warn / inform) bound to a
+database, or to one asset as an override; `get_compliance_bindings` shows both
+for a database. `get_asset_compliance_state` answers `unknown` for an asset with
+no binding rather than an error, and `get_database_compliance_overview` counts
+only assets that have a compliance record. `list_compliance_schemas`,
+`list_quarantined_assets` and `list_compliance_cascades` (pending approval only)
+return their whole list in one response under `Items` and take no paging
+parameters. `list_compliance_evaluations` is a real page (`max_items`,
+`starting_token`, `NextToken`) and carries the `executionId` of the workflow
+execution behind a pipeline rule. The two audit tools are bounded by `limit`
+(the handler's default when omitted) and return **no** continuation token: a result
+that reached the bound is marked `truncated` and the way past it is a narrower
+`start_date` / `end_date` window or a larger `limit`. `event_type` exists on the
+global trail only — the per-asset route ignores it, so the tool does not offer it.
 
 The two comment listings take `max_items` and `page_size` but **no**
 `starting_token`: the routes apply those bounds and then discard the pagination
@@ -276,7 +309,12 @@ AWS compute and can incur cost. `abort_execution` irreversibly STOPS running
 compute and, with `group_id`, fans out across every active execution in that group.
 Keep all three out of `autoApprove`, and confirm a group abort with the user first.
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
-execution's group membership rather than selecting a group to re-run.
+execution's group membership rather than selecting a group to re-run. The
+compliance tools that evaluate assets start compute the same way — a pipeline
+rule runs one workflow execution per evaluated asset — so `evaluate_asset_compliance`,
+`sweep_compliance_schema` (every asset bound to the schema), `create_compliance_cascade`
+(executes at once with `require_approval=False`) and `approve_compliance_cascade`
+(executes inside the call) stay out of `autoApprove` as well.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
@@ -331,6 +369,29 @@ that window keeps working until it expires, a key refused within it stays refuse
 for the same time after re-enabling, and a disabled key not in use is refused on
 its next call.
 
+Compliance: `create_compliance_schema`, `update_compliance_schema`,
+`bind_compliance_schema`, `unbind_compliance_schema`, `evaluate_asset_compliance`,
+`sweep_compliance_schema`, `release_quarantine`, `grant_quarantine_exception`,
+`create_compliance_cascade`, `approve_compliance_cascade`,
+`reject_compliance_cascade`.
+
+`create_compliance_schema` takes the rule document as `schema_body`
+(`{"schemaFormat": "vams-rules-v1", "rules": {...}}`; a pipeline rule's `pipelineRef`
+names the workflow's `databaseId` + `workflowId` and the pipeline's
+`pipelineDatabaseId` + `pipelineId`, with an optional `templateId`); registering an
+existing name writes the next version, and `update_compliance_schema` replaces the
+body wholesale rather than merging. `bind_compliance_schema` binds a database (or,
+with `asset_id`, one asset as an override); only a GLOBAL schema or one scoped to
+that database can be bound, and `auto_eval` is sent on the database binding only
+because the asset route does not read it. `unbind_compliance_schema` on a database
+deletes the compliance record of every asset that inherited the binding
+(`removedComplianceRecords`) — evaluation history and the audit trail stay.
+`release_quarantine` returns an asset to compliant until its next evaluation;
+`grant_quarantine_exception` records a deliberate waiver with its required `reason`.
+A cascade waits in `pending_approval` unless created with `require_approval=False`;
+`approve_compliance_cascade` executes it inside the call and returns `result`, and
+`reject_compliance_cascade` aborts it.
+
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 
 `archive_asset`, `unarchive_asset`, `delete_asset`, `delete_database`.
@@ -367,6 +428,11 @@ API keys: `delete_api_key`, `delete_user_api_key`. Both are permanent and lock
 out every client still presenting the key at once; `update_api_key` /
 `update_user_api_key` with `is_active=False` revokes the same access reversibly
 and is the better first move.
+
+Compliance: `delete_compliance_schema`. Permanent — every version of the schema is
+removed and there is no archived state. The API refuses to delete a schema that a
+database or asset is still bound to, so `unbind_compliance_schema` first; the
+deletion is written to the audit trail as `schema_deleted`.
 
 ## Security notes
 

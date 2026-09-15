@@ -724,6 +724,28 @@ class InvalidMetadataSchemaDataError(MetadataSchemaError):
     pass
 
 
+# Compliance-related business logic exceptions
+class ComplianceError(BusinessLogicError):
+    """Base class for compliance errors."""
+    pass
+
+
+class ComplianceSchemaNotFoundError(ComplianceError):
+    """Raised when a compliance schema is not found."""
+    pass
+
+
+class ComplianceCascadeNotFoundError(ComplianceError):
+    """Raised when a compliance cascade is not found, or is no longer awaiting approval."""
+    pass
+
+
+class InvalidComplianceDataError(ComplianceError):
+    """Raised when a compliance request is rejected (invalid schema body, asset not quarantined,
+    schema not visible to the database, and the other handler-side validation failures)."""
+    pass
+
+
 # User role-related business logic exceptions
 class UserRoleError(BusinessLogicError):
     """Base class for user role-related errors."""

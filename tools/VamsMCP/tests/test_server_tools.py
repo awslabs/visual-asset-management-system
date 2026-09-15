@@ -255,6 +255,7 @@ def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
         lambda: server.list_executions(starting_token="tok"),
         lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
         lambda: server.list_subscriptions(starting_token="tok"),
+        lambda: server.list_compliance_evaluations("db1", "a1", starting_token="tok"),
     ],
 )
 def test_every_paginated_read_tool_forwards_starting_token(mock_client, call):
@@ -507,6 +508,9 @@ def test_no_read_tool_calls_a_mutating_apiclient_method():
         "create_", "update_", "delete_", "set_", "archive_", "unarchive_", "execute_", "rerun_",
         "abort_", "permanent_", "revert_", "move_", "copy_", "import_", "reset_", "initialize_",
         "complete_",
+        # The compliance write verbs: none deletes stored data, but every one of them changes state
+        # or starts compute, and a read-section placement would reach them with both gates off.
+        "bind_", "unbind_", "evaluate_", "sweep_", "release_", "grant_", "approve_", "reject_",
     )
 
     offenders = []
@@ -1040,6 +1044,7 @@ _PAGINATED_READ_TOOLS = (
     "list_subscriptions",
     "list_api_keys",
     "list_user_api_keys",
+    "list_compliance_evaluations",
 )
 
 
@@ -1260,7 +1265,13 @@ def test_non_pipeline_saves_stay_on_plain_unwrap(tool):
 # kill of running AWS compute. The classification is now stated in all three places, so the risk of
 # drift moves to keeping them in step — which is what this asserts.
 
-_COMPUTE_CAUTION_TOOLS = ("execute_workflow", "rerun_execution", "abort_execution")
+_COMPUTE_CAUTION_TOOLS = (
+    "execute_workflow", "rerun_execution", "abort_execution",
+    # A pipeline rule runs a workflow execution per evaluated asset, so these four start compute too:
+    # one asset, every bound asset, and the two ways a cascade's re-evaluation is set running.
+    "evaluate_asset_compliance", "sweep_compliance_schema", "create_compliance_cascade",
+    "approve_compliance_cascade",
+)
 
 
 def _sibling_doc(name):
