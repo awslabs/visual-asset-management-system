@@ -74,6 +74,9 @@ export class DynamoDbComplianceSchemaDefaultsConstruct extends Construct {
 
         const now = new Date().toISOString();
 
+        // Seed-once put: the condition protects an existing row from being overwritten, and the
+        // ignored ConditionalCheckFailed makes the call a no-op against a table that already holds
+        // it -- a redeploy, a construct replacement, or a retained table reused by a new stack.
         const awsSdkCall: AwsSdkCall = {
             service: "DynamoDB",
             action: "putItem",
@@ -94,6 +97,7 @@ export class DynamoDbComplianceSchemaDefaultsConstruct extends Construct {
                 ConditionExpression:
                     "attribute_not_exists(schemaName) AND attribute_not_exists(internalVersion)",
             },
+            ignoreErrorCodesMatching: "ConditionalCheckFailedException",
             physicalResourceId: PhysicalResourceId.of(
                 schemaTable.tableName + "_default_schema_initialization"
             ),
@@ -101,6 +105,7 @@ export class DynamoDbComplianceSchemaDefaultsConstruct extends Construct {
 
         new AwsCustomResource(this, "ComplianceDefaultSchemaCustomResource", {
             onCreate: awsSdkCall,
+            onUpdate: awsSdkCall,
             role: customResourceRole,
         });
 

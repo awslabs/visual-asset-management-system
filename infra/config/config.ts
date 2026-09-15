@@ -1145,6 +1145,24 @@ export function getConfig(app: cdk.App): Config {
         config.app.compliance.quarantineBlocksDownload = false;
     }
 
+    //The default compliance schema holds one metadata rule against the GLOBAL `defaultAsset` metadata
+    //schema, which only autoLoadDefaultAssetSchema seeds. With that schema absent the evaluation
+    //engine skips the rule's required-field and type checks, so the seeded schema reports every
+    //asset compliant while checking nothing, and no deploy step names the missing reference.
+    if (
+        config.app.compliance.autoLoadDefaultSchema &&
+        !config.app.metadataSchema.autoLoadDefaultAssetSchema
+    ) {
+        throw new Error(
+            "Configuration Error: app.compliance.autoLoadDefaultSchema is true but " +
+                "app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance " +
+                "schema validates assets against the GLOBAL defaultAsset metadata schema, which only " +
+                "that flag seeds; without it the seeded rule checks nothing. Set " +
+                "app.metadataSchema.autoLoadDefaultAssetSchema to true, or set " +
+                "app.compliance.autoLoadDefaultSchema to false."
+        );
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),

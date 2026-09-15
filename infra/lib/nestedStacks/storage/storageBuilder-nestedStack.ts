@@ -2181,6 +2181,20 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Cross-database listing of assets in one compliance state (the quarantine list) as a paged query.
+    complianceAssetStateStorageTable.addGlobalSecondaryIndex({
+        indexName: "ComplianceStateIndex",
+        partitionKey: {
+            name: "complianceState",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const complianceEvaluationStorageTable = new dynamodb.Table(
         scope,
         "ComplianceEvaluationStorageTable",
