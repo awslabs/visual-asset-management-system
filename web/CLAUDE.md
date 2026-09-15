@@ -237,7 +237,12 @@ When adding a new API endpoint, add the function to the appropriate service file
 
 ### Rule 4: npm Only
 
+**Package manager:** npm 11.0.0+. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age`. Always pin npm before installing:
+
 ```bash
+# Pin npm to the required version first
+npm install -g npm@11.0.0
+
 # CORRECT
 npm install
 npm run start
