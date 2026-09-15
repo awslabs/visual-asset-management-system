@@ -48,6 +48,7 @@ import {
     buildComplianceSchemaBindingServiceFunction,
     buildComplianceEvaluateServiceFunction,
     buildComplianceQuarantineServiceFunction,
+    buildComplianceCascadeExecutorFunction,
     buildComplianceCascadeServiceFunction,
     buildComplianceAuditServiceFunction,
     buildComplianceTriggerFunction,
@@ -712,7 +713,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
             registry: registry,
         });
 
-        const complianceCascadeService = buildComplianceCascadeServiceFunction(
+        // The cascade executor runs a cascade out of band; the cascade API invokes it asynchronously
+        // and returns 202. The executor has no API route.
+        const complianceCascadeExecutor = buildComplianceCascadeExecutorFunction(
             this,
             lambdaCommonBaseLayer,
             storageResources,
@@ -720,6 +723,15 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets,
             executeWorkflowV2
+        );
+        const complianceCascadeService = buildComplianceCascadeServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets,
+            complianceCascadeExecutor
         );
         for (const method of [apigateway.HttpMethod.GET, apigateway.HttpMethod.POST]) {
             attachFunctionToApi(this, complianceCascadeService, {

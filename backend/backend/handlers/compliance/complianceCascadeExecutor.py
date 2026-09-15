@@ -1,11 +1,13 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""Compliance Cascade Executor.
+"""Compliance Cascade Executor Lambda.
 
-Discovers an asset's downstream descendants through the asset-link DAG, orders them
-topologically (parents before children) and evaluates each against its bound schema,
-recording per-node progress on the cascade row.
+Invoked asynchronously by the cascade service with `{"cascadeId": "<uuid>"}` once a cascade row
+is in the `executing` state. Discovers the trigger asset's downstream descendants through the
+asset-link DAG, orders them topologically (parents before children) and evaluates each against
+its bound schema, recording per-node progress on the cascade row. The row always ends in a
+terminal state: `completed` with `completedAt` and `results`, or `aborted` with `abortReason`.
 """
 
 import json
@@ -17,6 +19,7 @@ import boto3
 from botocore.config import Config
 
 from common.resourceNames import ResourceKeys, get_table_name
+from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
 
@@ -26,6 +29,10 @@ logger = safeLogger(service_name="ComplianceCascadeExecutor")
 
 CASCADE_STATE_EXECUTING = "executing"
 CASCADE_STATE_COMPLETED = "completed"
+CASCADE_STATE_ABORTED = "aborted"
+
+# Recorded as `abortReason` when the run raises out of execute_cascade.
+EXECUTION_FAILED_ABORT_REASON = "Cascade execution failed"
 
 NODE_STATE_PENDING = "pending"
 NODE_STATE_EVALUATING = "evaluating"
@@ -43,6 +50,60 @@ except Exception as e:
     raise e
 
 cascade_table = dynamodb.Table(cascade_table_name)
+
+
+#######################
+# Lambda handler
+#######################
+
+def lambda_handler(event, context) -> Dict[str, Any]:
+    """Run the cascade named by the event. An event that does not carry a UUID `cascadeId` is
+    rejected without a write; a run that raises leaves the row `aborted` rather than `executing`."""
+    cascade_id = _cascade_id_from_event(event)
+    (valid, message) = validate({"cascadeId": {"value": cascade_id, "validator": "UUID"}})
+    if not valid:
+        logger.error(f"Cascade executor event rejected: {message}")
+        return {"error": "Invalid cascade executor event"}
+
+    try:
+        return execute_cascade(cascade_id)
+    except Exception as e:
+        logger.exception(f"Cascade {cascade_id} execution failed: {e}")
+        abort_cascade(cascade_id, EXECUTION_FAILED_ABORT_REASON)
+        return {"cascadeId": cascade_id, "status": CASCADE_STATE_ABORTED,
+                "error": EXECUTION_FAILED_ABORT_REASON}
+
+
+def _cascade_id_from_event(event) -> Any:
+    """The event's `cascadeId`, or None for an event that is not a dict; validate() rejects both
+    None and a non-string value."""
+    return event.get("cascadeId") if isinstance(event, dict) else None
+
+
+def abort_cascade(cascade_id: str, reason: str) -> None:
+    """Mark a still-executing cascade aborted with the reason; the terminal state clients read
+    back. A row that already reached a terminal state (a failure after the completion write) is
+    left as it is."""
+    try:
+        cascade_table.update_item(
+            Key={"cascadeId": cascade_id},
+            UpdateExpression="SET #s = :state, abortReason = :reason, completedAt = :now",
+            ExpressionAttributeNames={"#s": "state"},
+            ExpressionAttributeValues={
+                ":state": CASCADE_STATE_ABORTED,
+                ":reason": reason,
+                ":now": datetime.now(timezone.utc).isoformat(),
+                ":executing": CASCADE_STATE_EXECUTING,
+            },
+            ConditionExpression="#s = :executing",
+        )
+    except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+        logger.info(f"Cascade {cascade_id} is no longer executing; abort not recorded")
+
+
+#######################
+# Descendant discovery
+#######################
 
 
 def _node_key(database_id: str, asset_id: str) -> str:

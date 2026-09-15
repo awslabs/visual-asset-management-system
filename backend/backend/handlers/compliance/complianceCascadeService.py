@@ -6,13 +6,18 @@
 - GET  /compliance/cascades                       — list cascades awaiting approval
 - POST /compliance/cascades                       — create a cascade
 - GET  /compliance/cascades/{cascadeId}           — get a cascade
-- POST /compliance/cascades/{cascadeId}/approve   — approve (and execute) a cascade
+- POST /compliance/cascades/{cascadeId}/approve   — approve a cascade and start it
 - POST /compliance/cascades/{cascadeId}/reject    — reject a cascade
 
 Cascade table (PK cascadeId; GSI StateIndex on state/createdAt).
+
+A cascade runs in the executor Lambda (complianceCascadeExecutor), invoked asynchronously once
+the row is in the `executing` state; the request returns 202 and the client observes completion
+through GET /compliance/cascades/{cascadeId} (`state` executing -> completed | aborted).
 """
 
 import json
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -35,7 +40,6 @@ from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from handlers.compliance import complianceEvaluationStore as store
-from handlers.compliance.complianceCascadeExecutor import execute_cascade
 from models.common import (
     APIGatewayProxyResponseV2,
     VAMSGeneralErrorResponse,
@@ -54,11 +58,13 @@ from models.compliance import (
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
+lambda_client = boto3.client("lambda", config=retry_config)
 logger = safeLogger(service_name="ComplianceCascadeService")
 
 claims_and_roles = {}
 
 COMPLIANCE_CASCADE_OBJECT_TYPE = "complianceCascade"
+COMPLIANCE_EVALUATION_OBJECT_TYPE = "complianceEvaluation"
 
 CASCADE_STATE_PENDING_APPROVAL = "pending_approval"
 CASCADE_STATE_EXECUTING = "executing"
@@ -67,8 +73,14 @@ CASCADE_STATE_ABORTED = "aborted"
 # A cascade awaiting approval expires after this many hours.
 CASCADE_APPROVAL_TIMEOUT_HOURS = 24
 
+# Message returned when the executor Lambda could not be invoked; the row is aborted with the reason.
+CASCADE_START_FAILED_MESSAGE = "Cascade could not be started"
+CASCADE_START_FAILED_ABORT_REASON = "Cascade executor could not be invoked"
+
 try:
     cascade_table_name = get_table_name(ResourceKeys.COMPLIANCE_CASCADE_STORAGE_TABLE)
+    # The executor Lambda that runs a cascade; set on the cascade service Lambda only.
+    cascade_executor_function_name = os.environ.get("COMPLIANCE_CASCADE_EXECUTOR_FUNCTION_NAME", "")
 except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
@@ -161,15 +173,73 @@ def _cascade_object(cascade_id):
     return {"object__type": COMPLIANCE_CASCADE_OBJECT_TYPE, "cascadeId": cascade_id or ""}
 
 
-def _enforce(cascade_id, action):
+def _enforce_cascade(cascade_id, action):
     """Tier-2 check on a cascade object. Fails closed on an empty token list."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
     return CasbinEnforcer(claims_and_roles).enforce(_cascade_object(cascade_id), action)
 
 
+def _enforce_evaluation(database_id, action, compliance_state=""):
+    """Tier-2 check on the compliance evaluation object of the cascade's trigger database: a cascade
+    evaluates that database's downstream assets, so the caller must be allowed to evaluate there.
+    Fails closed on an empty token list."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    return CasbinEnforcer(claims_and_roles).enforce({
+        "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
+        "databaseId": database_id,
+        "complianceState": compliance_state or "",
+    }, action)
+
+
 def _validate_cascade_id(cascade_id):
     return validate({"cascadeId": {"value": cascade_id, "validator": "UUID"}})
+
+
+#######################
+# Executor hand-off
+#######################
+
+def _start_cascade(cascade_id):
+    """Hand an `executing` cascade to the executor Lambda; the invocation returns before it runs."""
+    lambda_client.invoke(
+        FunctionName=cascade_executor_function_name,
+        InvocationType="Event",
+        Payload=json.dumps({"cascadeId": cascade_id}),
+    )
+
+
+def _abort_cascade(cascade_id, reason):
+    """Mark a still-executing cascade aborted with the reason; the terminal state clients read back.
+    A row the executor already moved to a terminal state is left as it is."""
+    try:
+        cascade_table.update_item(
+            Key={"cascadeId": cascade_id},
+            UpdateExpression="SET #s = :state, abortReason = :reason, completedAt = :now",
+            ExpressionAttributeNames={"#s": "state"},
+            ExpressionAttributeValues={
+                ":state": CASCADE_STATE_ABORTED,
+                ":reason": reason,
+                ":now": datetime.now(timezone.utc).isoformat(),
+                ":executing": CASCADE_STATE_EXECUTING,
+            },
+            ConditionExpression="#s = :executing",
+        )
+    except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+        logger.info(f"Cascade {cascade_id} is no longer executing; abort not recorded")
+
+
+def _start_or_abort(event, cascade_id, started_body):
+    """Invoke the executor for a cascade already in the `executing` state. A failed invocation
+    leaves no cascade `executing` with nothing running it: the row is aborted and the caller told."""
+    try:
+        _start_cascade(cascade_id)
+    except Exception as e:
+        logger.exception(f"Cascade {cascade_id} executor invocation failed: {e}")
+        _abort_cascade(cascade_id, CASCADE_START_FAILED_ABORT_REASON)
+        return general_error(body={"message": CASCADE_START_FAILED_MESSAGE}, event=event)
+    return success(status_code=202, body=started_body)
 
 
 #######################
@@ -178,8 +248,12 @@ def _validate_cascade_id(cascade_id):
 
 def create_cascade(event, request: CreateCascadeRequestModel):
     """Create a cascade for the downstream assets of `databaseId:assetId`."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
     cascade_id = str(uuid.uuid4())
-    if not _enforce(cascade_id, "POST"):
+    if not _enforce_cascade(cascade_id, "POST"):
+        return authorization_error()
+    if not _enforce_evaluation(request.databaseId, "POST"):
         return authorization_error()
 
     if not store.get_asset_item(request.databaseId, request.assetId):
@@ -215,23 +289,28 @@ def create_cascade(event, request: CreateCascadeRequestModel):
         details={"reason": reason, "requireApproval": request.requireApproval},
     )
 
-    result = None
-    if not request.requireApproval:
-        result = execute_cascade(cascade_id)
-
     body = {"message": "Cascade created", "cascadeId": cascade_id, "state": state}
-    if result is not None:
-        body["result"] = result
-    return success(body=body)
+    if request.requireApproval:
+        return success(body=body)
+    return _start_or_abort(event, cascade_id, body)
 
 
 def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
-    """Approve a pending cascade and execute it."""
+    """Approve a pending cascade and start it."""
     (valid, message) = _validate_cascade_id(cascade_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
-    if not _enforce(cascade_id, "POST"):
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not _enforce_cascade(cascade_id, "POST"):
+        return authorization_error()
+
+    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
+    if not cascade:
+        return general_error(
+            body={"message": "Cascade not found or not in pending_approval state"}, event=event)
+    if not _enforce_evaluation(cascade.get("triggeredByDatabaseId", ""), "POST"):
         return authorization_error()
 
     actor = claims_and_roles["tokens"][0]
@@ -258,7 +337,6 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
         return general_error(
             body={"message": "Cascade not found or not in pending_approval state"}, event=event)
 
-    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item") or {}
     store.write_audit(
         cascade.get("triggeredByDatabaseId", ""),
         cascade.get("triggeredByAssetId", ""),
@@ -268,13 +346,10 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
         details={"reason": reason},
     )
 
-    result = execute_cascade(cascade_id)
-    logger.info(f"Cascade {cascade_id} execution finished with status {result.get('status')}")
-
-    return success(body={
-        "message": "Cascade approved and executed",
+    return _start_or_abort(event, cascade_id, {
+        "message": "Cascade approved",
         "cascadeId": cascade_id,
-        "result": result,
+        "state": CASCADE_STATE_EXECUTING,
     })
 
 
@@ -284,7 +359,16 @@ def reject_cascade(event, cascade_id, request: RejectCascadeRequestModel):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
-    if not _enforce(cascade_id, "POST"):
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not _enforce_cascade(cascade_id, "POST"):
+        return authorization_error()
+
+    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
+    if not cascade:
+        return general_error(
+            body={"message": "Cascade not found or not in pending_approval state"}, event=event)
+    if not _enforce_evaluation(cascade.get("triggeredByDatabaseId", ""), "POST"):
         return authorization_error()
 
     actor = claims_and_roles["tokens"][0]
@@ -312,7 +396,6 @@ def reject_cascade(event, cascade_id, request: RejectCascadeRequestModel):
         return general_error(
             body={"message": "Cascade not found or not in pending_approval state"}, event=event)
 
-    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item") or {}
     store.write_audit(
         cascade.get("triggeredByDatabaseId", ""),
         cascade.get("triggeredByAssetId", ""),
@@ -331,12 +414,16 @@ def get_cascade(event, cascade_id):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
-    if not _enforce(cascade_id, "GET"):
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not _enforce_cascade(cascade_id, "GET"):
         return authorization_error()
 
     item = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
     if not item:
         return general_error(body={"message": "Cascade not found"}, event=event)
+    if not _enforce_evaluation(item.get("triggeredByDatabaseId", ""), "GET"):
+        return authorization_error()
     return success(body=item)
 
 

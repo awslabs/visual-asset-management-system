@@ -1,10 +1,14 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""complianceCascadeService + complianceCascadeExecutor: dispatch of the five method+path pairs,
-both authorization tiers, input validation, the cascade state transitions (create -> pending_approval
-or executing; approve -> executing and run; reject -> aborted; both conditioned on pending_approval),
-and the executor's descendant discovery (topological order, node cap, per-node states)."""
+"""complianceCascadeService: dispatch of the five method+path pairs, both authorization tiers
+(the cascade object AND the trigger asset's database, each fail-closed on an empty token list),
+input validation with no echo of the offending input, the cascade state transitions (create ->
+pending_approval or executing; approve -> executing; reject -> aborted; both conditioned on
+pending_approval) and the asynchronous hand-off to the executor Lambda (202 + an `Event` invoke;
+an invoke that raises leaves the row aborted and the caller told).
+
+The executor itself is covered in test_complianceCascadeExecutor.py."""
 
 import json
 from unittest.mock import MagicMock, patch
@@ -13,13 +17,14 @@ import pytest
 
 from backend.tests.handlers.compliance._harness import (
     ASSET, CASCADE_ID, DB, USER, body_of, claims_for, enforcer, put_items, rest_event,
+    update_values,
 )
-from handlers.compliance import complianceCascadeExecutor as executor
 from handlers.compliance import complianceCascadeService as svc
 
 MOD = "handlers.compliance.complianceCascadeService"
-EXECUTOR = "handlers.compliance.complianceCascadeExecutor"
 STORE = "handlers.compliance.complianceEvaluationStore"
+
+EXECUTOR_FUNCTION = "vams-complianceCascadeExecutor"
 
 LIST_PATH = "/compliance/cascades"
 BY_ID_PATH = f"/compliance/cascades/{CASCADE_ID}"
@@ -27,8 +32,13 @@ APPROVE_PATH = f"/compliance/cascades/{CASCADE_ID}/approve"
 REJECT_PATH = f"/compliance/cascades/{CASCADE_ID}/reject"
 ID_PARAMS = {"cascadeId": CASCADE_ID}
 CREATE_BODY = {"databaseId": DB, "assetId": ASSET}
+CREATE_NOW_BODY = dict(CREATE_BODY, requireApproval=False)
 PENDING = {"cascadeId": CASCADE_ID, "state": "pending_approval",
            "triggeredByDatabaseId": DB, "triggeredByAssetId": ASSET}
+
+CASCADE_OBJECT = {"object__type": "complianceCascade", "cascadeId": CASCADE_ID}
+EVALUATION_OBJECT = {"object__type": "complianceEvaluation", "databaseId": DB,
+                     "complianceState": ""}
 
 
 def _conditional_failure():
@@ -36,24 +46,48 @@ def _conditional_failure():
         {"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"}}, "UpdateItem")
 
 
+def _enforcer_by_object(cascade=True, evaluation=True):
+    """An enforcer instance whose Tier-2 answer depends on the object type it is handed."""
+    instance = enforcer()
+    instance.enforce.side_effect = lambda obj, action: (
+        evaluation if obj["object__type"] == "complianceEvaluation" else cascade)
+    return instance
+
+
 def _run(event, tokens=(USER,), api=True, obj=True, cascade_item=PENDING, pending_rows=None,
-         asset_exists=True, transition_succeeds=True, execute_result=None):
+         asset_exists=True, transition_succeeds=True, invoke_raises=False, instance=None):
     cascade_table = MagicMock(name="cascade_table")
     cascade_table.get_item.return_value = {"Item": dict(cascade_item)} if cascade_item else {}
     cascade_table.query.return_value = {"Items": list(pending_rows or [])}
     if not transition_succeeds:
         cascade_table.update_item.side_effect = _conditional_failure()
+    lambda_client = MagicMock(name="lambda_client")
+    if invoke_raises:
+        lambda_client.invoke.side_effect = RuntimeError("invoke failed")
+    instance = instance or enforcer(api=api, obj=obj)
     with patch(f"{MOD}.request_to_claims", claims_for(*tokens)), \
-            patch(f"{MOD}.CasbinEnforcer", return_value=enforcer(api=api, obj=obj)), \
+            patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
             patch(f"{MOD}.cascade_table", cascade_table), \
+            patch(f"{MOD}.lambda_client", lambda_client), \
+            patch(f"{MOD}.cascade_executor_function_name", EXECUTOR_FUNCTION), \
             patch(f"{STORE}.get_asset_item",
                   return_value={"assetId": ASSET} if asset_exists else None), \
-            patch(f"{STORE}.write_audit") as write_audit, \
-            patch(f"{MOD}.execute_cascade",
-                  return_value=execute_result or {"status": "completed", "evaluated": 0,
-                                                  "results": []}) as execute:
+            patch(f"{STORE}.write_audit") as write_audit:
         response = svc.lambda_handler(event, MagicMock())
-    return response, {"table": cascade_table, "audit": write_audit, "execute": execute}
+    return response, {"table": cascade_table, "audit": write_audit, "invoke": lambda_client.invoke,
+                      "enforcer": instance}
+
+
+def _invoked_cascade_id(invoke):
+    invoke.assert_called_once()
+    kwargs = invoke.call_args.kwargs
+    assert kwargs["FunctionName"] == EXECUTOR_FUNCTION
+    assert kwargs["InvocationType"] == "Event"
+    return json.loads(kwargs["Payload"])["cascadeId"]
+
+
+def _aborted_writes(table):
+    return [u for u in update_values(table) if u.get("state") == "aborted"]
 
 
 @pytest.mark.unit
@@ -79,8 +113,8 @@ class TestRouteDispatch:
 
     def test_post_approve_reaches_approve(self):
         response, _ = _run(rest_event("POST", APPROVE_PATH, ID_PARAMS, body={}))
-        assert response["statusCode"] == 200, response
-        assert body_of(response)["message"] == "Cascade approved and executed"
+        assert response["statusCode"] == 202, response
+        assert body_of(response)["message"] == "Cascade approved"
 
     def test_post_reject_reaches_reject(self):
         response, _ = _run(rest_event("POST", REJECT_PATH, ID_PARAMS, body={}))
@@ -97,48 +131,142 @@ class TestRouteDispatch:
         assert body_of(response)["message"] == "Method not allowed"
         mocks["table"].put_item.assert_not_called()
         mocks["table"].update_item.assert_not_called()
+        mocks["invoke"].assert_not_called()
+
+
+# Every single-resource path: (method, path, pathParameters, body).
+SINGLE_RESOURCE_REQUESTS = [
+    ("POST", LIST_PATH, None, CREATE_NOW_BODY),
+    ("GET", BY_ID_PATH, ID_PARAMS, None),
+    ("POST", APPROVE_PATH, ID_PARAMS, {}),
+    ("POST", REJECT_PATH, ID_PARAMS, {}),
+]
+SINGLE_RESOURCE_IDS = ["create", "get", "approve", "reject"]
+
+
+class _EnforcerSpy:
+    """A CasbinEnforcer stand-in that records every construction; its verdict is always allow, so a
+    denial observed alongside zero constructions can only have come from the token guard."""
+
+    def __init__(self):
+        self.constructions = []
+
+    @property
+    def factory(self):
+        spy = self
+
+        class _Enforcer:
+            def __init__(self, claims_and_roles):
+                spy.constructions.append(claims_and_roles)
+
+            def enforce(self, obj, action):
+                return True
+
+            def enforceAPI(self, event):
+                return True
+
+        return _Enforcer
 
 
 @pytest.mark.unit
 class TestAuthorization:
 
-    @pytest.mark.parametrize("tokens", [(), (USER,)], ids=["empty-tokens", "api-denied"])
-    def test_tier_one_denies(self, tokens):
-        response, mocks = _run(rest_event("GET", LIST_PATH), tokens=tokens, api=False,
+    @pytest.mark.parametrize("tokens,api", [((), False), ((USER,), False), ((), True)],
+                             ids=["empty-tokens", "api-denied", "empty-tokens-api-allowed"])
+    def test_tier_one_denies(self, tokens, api):
+        response, mocks = _run(rest_event("GET", LIST_PATH), tokens=tokens, api=api,
                                pending_rows=[PENDING])
         assert response["statusCode"] == 403
         mocks["table"].query.assert_not_called()
 
-    @pytest.mark.parametrize("method,path,params,body", [
-        ("POST", LIST_PATH, None, CREATE_BODY),
-        ("GET", BY_ID_PATH, ID_PARAMS, None),
-        ("POST", APPROVE_PATH, ID_PARAMS, {}),
-        ("POST", REJECT_PATH, ID_PARAMS, {}),
-    ])
-    def test_tier_two_denial_changes_nothing(self, method, path, params, body):
+    @pytest.mark.parametrize("method,path,params,body", SINGLE_RESOURCE_REQUESTS,
+                             ids=SINGLE_RESOURCE_IDS)
+    def test_an_empty_token_list_denies_before_any_read_write_or_invoke(
+            self, method, path, params, body):
+        # Unconfounded: the API tier would allow, so the 403 is the empty-token deny alone.
+        response, mocks = _run(rest_event(method, path, params, body=body), tokens=(), api=True)
+        assert response["statusCode"] == 403
+        mocks["table"].get_item.assert_not_called()
+        mocks["table"].put_item.assert_not_called()
+        mocks["table"].update_item.assert_not_called()
+        mocks["invoke"].assert_not_called()
+
+    @pytest.mark.parametrize("function,args", [
+        ("create_cascade", lambda: (svc.CreateCascadeRequestModel(**CREATE_NOW_BODY),)),
+        ("get_cascade", lambda: (CASCADE_ID,)),
+        ("approve_cascade", lambda: (CASCADE_ID, svc.ApproveCascadeRequestModel())),
+        ("reject_cascade", lambda: (CASCADE_ID, svc.RejectCascadeRequestModel())),
+    ], ids=SINGLE_RESOURCE_IDS)
+    def test_the_business_function_itself_denies_an_empty_token_list_without_consulting_casbin(
+            self, function, args):
+        # The Tier-2 guard is a statement of its own in each business function, so it holds even
+        # when the function is reached with no identity: the enforcer is never constructed.
+        spy = _EnforcerSpy()
+        cascade_table = MagicMock(name="cascade_table")
+        lambda_client = MagicMock(name="lambda_client")
+        with patch(f"{MOD}.claims_and_roles", {"tokens": [], "roles": []}), \
+                patch(f"{MOD}.CasbinEnforcer", spy.factory), \
+                patch(f"{MOD}.cascade_table", cascade_table), \
+                patch(f"{MOD}.lambda_client", lambda_client), \
+                patch(f"{STORE}.get_asset_item", return_value={"assetId": ASSET}), \
+                patch(f"{STORE}.write_audit"):
+            response = getattr(svc, function)(rest_event("POST", LIST_PATH), *args())
+        assert response["statusCode"] == 403
+        assert spy.constructions == []
+        assert cascade_table.method_calls == []
+        lambda_client.invoke.assert_not_called()
+
+    @pytest.mark.parametrize("method,path,params,body", SINGLE_RESOURCE_REQUESTS,
+                             ids=SINGLE_RESOURCE_IDS)
+    def test_a_cascade_object_denial_changes_nothing(self, method, path, params, body):
         response, mocks = _run(rest_event(method, path, params, body=body), obj=False)
         assert response["statusCode"] == 403
         mocks["table"].put_item.assert_not_called()
         mocks["table"].update_item.assert_not_called()
         mocks["table"].get_item.assert_not_called()
-        mocks["execute"].assert_not_called()
+        mocks["invoke"].assert_not_called()
+
+    @pytest.mark.parametrize("method,path,params,body", SINGLE_RESOURCE_REQUESTS,
+                             ids=SINGLE_RESOURCE_IDS)
+    def test_a_trigger_database_denial_changes_nothing_even_when_the_cascade_object_is_allowed(
+            self, method, path, params, body):
+        # Tier 2 on the cascade object alone cannot scope a cascade to a database (a fresh uuid
+        # carries no database attribute), so the trigger asset's database is enforced as well.
+        response, mocks = _run(rest_event(method, path, params, body=body),
+                               instance=_enforcer_by_object(cascade=True, evaluation=False))
+        assert response["statusCode"] == 403
+        mocks["table"].put_item.assert_not_called()
+        mocks["table"].update_item.assert_not_called()
+        mocks["invoke"].assert_not_called()
+        mocks["audit"].assert_not_called()
+
+    def test_create_enforces_the_cascade_object_and_the_request_database(self):
+        _, mocks = _run(rest_event("POST", LIST_PATH, body=CREATE_NOW_BODY))
+        calls = [c.args for c in mocks["enforcer"].enforce.call_args_list]
+        assert len(calls) == 2
+        cascade_object, cascade_action = calls[0]
+        assert cascade_object["object__type"] == "complianceCascade"
+        assert cascade_object["cascadeId"] == _invoked_cascade_id(mocks["invoke"])
+        assert cascade_action == "POST"
+        assert calls[1] == (EVALUATION_OBJECT, "POST")
+
+    @pytest.mark.parametrize("method,path,body,action", [
+        ("POST", APPROVE_PATH, {}, "POST"), ("POST", REJECT_PATH, {}, "POST"),
+        ("GET", BY_ID_PATH, None, "GET"),
+    ], ids=["approve", "reject", "get"])
+    def test_the_row_is_read_and_its_trigger_database_enforced(self, method, path, body, action):
+        row = dict(PENDING, triggeredByDatabaseId="other-db")
+        _, mocks = _run(rest_event(method, path, ID_PARAMS, body=body), cascade_item=row)
+        assert [c.args for c in mocks["enforcer"].enforce.call_args_list] == [
+            (CASCADE_OBJECT, action),
+            (dict(EVALUATION_OBJECT, databaseId="other-db"), action),
+        ]
+        mocks["table"].get_item.assert_called_once_with(Key={"cascadeId": CASCADE_ID})
 
     def test_the_listing_filters_to_what_the_caller_may_get(self):
         response, _ = _run(rest_event("GET", LIST_PATH), obj=False, pending_rows=[PENDING])
         assert response["statusCode"] == 200
         assert body_of(response)["cascades"] == []
-
-    def test_approve_checks_a_cascade_object_by_id(self):
-        instance = enforcer()
-        cascade_table = MagicMock()
-        cascade_table.get_item.return_value = {"Item": dict(PENDING)}
-        with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
-                patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
-                patch(f"{MOD}.cascade_table", cascade_table), \
-                patch(f"{STORE}.write_audit"), patch(f"{MOD}.execute_cascade", return_value={}):
-            svc.lambda_handler(rest_event("POST", APPROVE_PATH, ID_PARAMS, body={}), MagicMock())
-        instance.enforce.assert_called_once_with(
-            {"object__type": "complianceCascade", "cascadeId": CASCADE_ID}, "POST")
 
 
 @pytest.mark.unit
@@ -147,28 +275,48 @@ class TestValidation:
     @pytest.mark.parametrize("method,suffix,body", [
         ("GET", "", None), ("POST", "/approve", {}), ("POST", "/reject", {}),
     ])
-    def test_a_cascade_id_that_is_not_a_uuid_is_rejected(self, method, suffix, body):
+    def test_a_bad_cascade_id_is_rejected(self, method, suffix, body):
+        bad = "not-a-uuid-zq9"
         response, mocks = _run(
-            rest_event(method, f"/compliance/cascades/not-a-uuid{suffix}",
-                       {"cascadeId": "not-a-uuid"}, body=body))
+            rest_event(method, f"/compliance/cascades/{bad}{suffix}", {"cascadeId": bad}, body=body))
         assert response["statusCode"] == 400
+        assert bad not in response["body"]
         mocks["table"].get_item.assert_not_called()
         mocks["table"].update_item.assert_not_called()
+        mocks["invoke"].assert_not_called()
 
-    @pytest.mark.parametrize("body", [
-        {}, {"databaseId": DB}, {"assetId": ASSET}, {"databaseId": "x", "assetId": ASSET},
-        {"databaseId": DB, "assetId": "bad<id>"},
-        {"databaseId": DB, "assetId": ASSET, "requireApproval": "sometimes"},
+    @pytest.mark.parametrize("body,bad", [
+        ({}, None),
+        ({"databaseId": DB}, None),
+        ({"assetId": ASSET}, None),
+        ({"databaseId": "zq!zq", "assetId": ASSET}, "zq!zq"),
+        ({"databaseId": DB, "assetId": "bad<id>"}, "bad<id>"),
+        ({"databaseId": DB, "assetId": ASSET, "requireApproval": "sometimesq"}, "sometimesq"),
+        ({"databaseId": DB, "assetId": ASSET, "reason": "r" * 1025}, "r" * 1025),
     ])
-    def test_a_bad_create_body_is_rejected(self, body):
+    def test_a_bad_create_body_is_rejected(self, body, bad):
         response, mocks = _run(rest_event("POST", LIST_PATH, body=body))
         assert response["statusCode"] == 400
+        if bad is not None:
+            assert bad not in response["body"]
         mocks["table"].put_item.assert_not_called()
+        mocks["invoke"].assert_not_called()
+
+    @pytest.mark.parametrize("path", [APPROVE_PATH, REJECT_PATH], ids=["approve", "reject"])
+    def test_a_bad_approve_or_reject_body_is_rejected(self, path):
+        bad = "q" * 1025
+        response, mocks = _run(rest_event("POST", path, ID_PARAMS, body={"reason": bad}))
+        assert response["statusCode"] == 400
+        assert bad not in response["body"]
+        mocks["table"].update_item.assert_not_called()
+        mocks["invoke"].assert_not_called()
 
     def test_a_body_that_is_not_json_is_rejected(self):
-        response, _ = _run(rest_event("POST", LIST_PATH, body="[oops"))
+        bad = "[oops-zq"
+        response, _ = _run(rest_event("POST", LIST_PATH, body=bad))
         assert response["statusCode"] == 400
         assert "Invalid JSON" in body_of(response)["message"]
+        assert bad not in response["body"]
 
 
 @pytest.mark.unit
@@ -185,57 +333,109 @@ class TestCreate:
         assert item["requireApproval"] is True
         assert "approvalTimeoutAt" in item
         assert json.loads(item["nodes"]) == {} and json.loads(item["executionOrder"]) == []
-        mocks["execute"].assert_not_called()
+        mocks["invoke"].assert_not_called()
         audit = mocks["audit"].call_args.kwargs
         assert audit["event_type"] == "cascade_triggered"
         assert audit["cascade_id"] == item["cascadeId"]
-        assert "result" not in body_of(response)
+        assert response["statusCode"] == 200
+        assert body_of(response) == {"message": "Cascade created", "cascadeId": item["cascadeId"],
+                                     "state": "pending_approval"}
 
-    def test_a_cascade_without_approval_executes_immediately(self):
-        response, mocks = _run(rest_event("POST", LIST_PATH,
-                                          body=dict(CREATE_BODY, requireApproval=False)),
-                               execute_result={"status": "completed", "evaluated": 2})
+    def test_a_cascade_without_approval_is_handed_to_the_executor_and_accepted(self):
+        response, mocks = _run(rest_event("POST", LIST_PATH, body=CREATE_NOW_BODY))
         item = put_items(mocks["table"])[0]
         assert item["state"] == "executing"
         assert "approvalTimeoutAt" not in item
-        mocks["execute"].assert_called_once_with(item["cascadeId"])
-        body = body_of(response)
-        assert body["state"] == "executing"
-        assert body["result"] == {"status": "completed", "evaluated": 2}
+        assert _invoked_cascade_id(mocks["invoke"]) == item["cascadeId"]
+        assert response["statusCode"] == 202
+        assert body_of(response) == {"message": "Cascade created", "cascadeId": item["cascadeId"],
+                                     "state": "executing"}
+
+    def test_the_row_and_the_audit_entry_precede_the_invoke(self):
+        # The executor reads the row it is handed, so the put (and the audit entry, which the row's
+        # abort path does not rewrite) must land before the asynchronous invoke is issued.
+        manager = MagicMock(name="manager")
+        cascade_table = MagicMock(name="cascade_table")
+        lambda_client = MagicMock(name="lambda_client")
+        write_audit = MagicMock(name="write_audit")
+        manager.attach_mock(cascade_table.put_item, "put_item")
+        manager.attach_mock(write_audit, "write_audit")
+        manager.attach_mock(lambda_client.invoke, "invoke")
+        with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=enforcer()), \
+                patch(f"{MOD}.cascade_table", cascade_table), \
+                patch(f"{MOD}.lambda_client", lambda_client), \
+                patch(f"{MOD}.cascade_executor_function_name", EXECUTOR_FUNCTION), \
+                patch(f"{STORE}.get_asset_item", return_value={"assetId": ASSET}), \
+                patch(f"{STORE}.write_audit", write_audit):
+            response = svc.lambda_handler(rest_event("POST", LIST_PATH, body=CREATE_NOW_BODY),
+                                          MagicMock())
+        assert response["statusCode"] == 202
+        assert [name for name, _, _ in manager.mock_calls] == ["put_item", "write_audit", "invoke"]
+
+    def test_an_invoke_that_raises_aborts_the_row_and_reports_it(self):
+        response, mocks = _run(rest_event("POST", LIST_PATH, body=CREATE_NOW_BODY),
+                               invoke_raises=True)
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Cascade could not be started"
+        aborted = _aborted_writes(mocks["table"])
+        assert len(aborted) == 1
+        assert aborted[0]["abortReason"]
+        assert aborted[0]["completedAt"]
+        abort = mocks["table"].update_item.call_args.kwargs
+        assert abort["Key"] == {"cascadeId": put_items(mocks["table"])[0]["cascadeId"]}
+        # Only a row still `executing` is aborted; a run that did start keeps its terminal state.
+        condition = abort["ConditionExpression"]
+        assert ":executing" in condition
+        assert abort["ExpressionAttributeValues"][":executing"] == "executing"
 
     def test_a_missing_source_asset_is_refused(self):
-        response, mocks = _run(rest_event("POST", LIST_PATH, body=CREATE_BODY), asset_exists=False)
+        response, mocks = _run(rest_event("POST", LIST_PATH, body=CREATE_NOW_BODY),
+                               asset_exists=False)
         assert response["statusCode"] == 400
         assert body_of(response)["message"] == "Asset not found"
         mocks["table"].put_item.assert_not_called()
+        mocks["invoke"].assert_not_called()
 
 
 @pytest.mark.unit
 class TestApproveAndReject:
 
-    def test_approve_moves_pending_to_executing_and_runs_the_cascade(self):
-        response, mocks = _run(rest_event("POST", APPROVE_PATH, ID_PARAMS, body={"reason": "go"}),
-                               execute_result={"status": "completed", "evaluated": 1})
+    def test_approve_moves_pending_to_executing_and_hands_off_to_the_executor(self):
+        response, mocks = _run(rest_event("POST", APPROVE_PATH, ID_PARAMS, body={"reason": "go"}))
         update = mocks["table"].update_item.call_args.kwargs
         assert update["ExpressionAttributeValues"][":state"] == "executing"
         assert update["ExpressionAttributeValues"][":pending"] == "pending_approval"
         assert update["ExpressionAttributeValues"][":reason"] == "go"
         assert update["ExpressionAttributeValues"][":actor"] == USER
         assert "#s = :pending" in update["ConditionExpression"]
-        mocks["execute"].assert_called_once_with(CASCADE_ID)
+        assert _invoked_cascade_id(mocks["invoke"]) == CASCADE_ID
         audit = mocks["audit"].call_args
         assert audit.kwargs["event_type"] == "cascade_approved"
         assert audit.args == (DB, ASSET)
-        assert body_of(response)["result"] == {"status": "completed", "evaluated": 1}
+        assert response["statusCode"] == 202
+        assert body_of(response) == {"message": "Cascade approved", "cascadeId": CASCADE_ID,
+                                     "state": "executing"}
 
-    def test_reject_moves_pending_to_aborted_without_executing(self):
+    def test_an_approve_whose_invoke_raises_aborts_the_row_and_reports_it(self):
+        response, mocks = _run(rest_event("POST", APPROVE_PATH, ID_PARAMS, body={}),
+                               invoke_raises=True)
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Cascade could not be started"
+        writes = update_values(mocks["table"])
+        assert writes[0]["state"] == "executing"
+        assert writes[1]["state"] == "aborted"
+        assert writes[1]["abortReason"] and writes[1]["completedAt"]
+        assert mocks["audit"].call_args.kwargs["event_type"] == "cascade_approved"
+
+    def test_reject_moves_pending_to_aborted_without_invoking(self):
         response, mocks = _run(rest_event("POST", REJECT_PATH, ID_PARAMS, body={"reason": "no"}))
         update = mocks["table"].update_item.call_args.kwargs
         assert update["ExpressionAttributeValues"][":state"] == "aborted"
         assert update["ExpressionAttributeValues"][":reason"] == "no"
         assert "completedAt = :now" in update["UpdateExpression"]
         assert "#s = :pending" in update["ConditionExpression"]
-        mocks["execute"].assert_not_called()
+        mocks["invoke"].assert_not_called()
         assert mocks["audit"].call_args.kwargs["event_type"] == "cascade_rejected"
         assert response["statusCode"] == 200
 
@@ -245,7 +445,16 @@ class TestApproveAndReject:
                                transition_succeeds=False)
         assert response["statusCode"] == 400
         assert "not in pending_approval state" in body_of(response)["message"]
-        mocks["execute"].assert_not_called()
+        mocks["invoke"].assert_not_called()
+        mocks["audit"].assert_not_called()
+
+    @pytest.mark.parametrize("path", [APPROVE_PATH, REJECT_PATH])
+    def test_a_cascade_that_does_not_exist_is_refused_before_the_transition(self, path):
+        response, mocks = _run(rest_event("POST", path, ID_PARAMS, body={}), cascade_item=None)
+        assert response["statusCode"] == 400
+        assert "not in pending_approval state" in body_of(response)["message"]
+        mocks["table"].update_item.assert_not_called()
+        mocks["invoke"].assert_not_called()
         mocks["audit"].assert_not_called()
 
     def test_default_reasons_apply_when_the_body_is_empty(self):
@@ -258,141 +467,3 @@ class TestApproveAndReject:
         response, _ = _run(rest_event("GET", BY_ID_PATH, ID_PARAMS), cascade_item=None)
         assert response["statusCode"] == 400
         assert body_of(response)["message"] == "Cascade not found"
-
-
-def _link(from_asset, to_asset, database_id=DB):
-    return {"fromAssetDatabaseId": database_id, "fromAssetId": from_asset,
-            "toAssetDatabaseId": database_id, "toAssetId": to_asset}
-
-
-class Graph:
-    """An asset-link DAG served through the store's two link readers."""
-
-    def __init__(self, edges):
-        self.edges = [_link(a, b) for a, b in edges]
-
-    def children(self, database_id, asset_id):
-        return [e for e in self.edges if e["fromAssetId"] == asset_id]
-
-    def parents(self, database_id, asset_id):
-        return [e for e in self.edges if e["toAssetId"] == asset_id]
-
-
-def _run_executor(graph, cascade_item, schema_for=None, evaluation=None):
-    cascade_table = MagicMock(name="cascade_table")
-    cascade_table.get_item.return_value = {"Item": dict(cascade_item)} if cascade_item else {}
-    evaluation = evaluation or (lambda db, asset, schema, actor: {
-        "evaluationId": f"eval-{asset}", "verdict": "compliant"})
-    schema_for = schema_for or (lambda asset: "schema-1")
-    with patch(f"{EXECUTOR}.cascade_table", cascade_table), \
-            patch(f"{STORE}.get_child_links", side_effect=graph.children), \
-            patch(f"{STORE}.get_parent_links", side_effect=graph.parents), \
-            patch(f"{STORE}.get_compliance_record",
-                  side_effect=lambda db, asset: {"schemaName": schema_for(asset)}), \
-            patch(f"{STORE}.run_evaluation", side_effect=evaluation) as run_evaluation, \
-            patch(f"{STORE}.write_audit") as write_audit:
-        result = executor.execute_cascade(CASCADE_ID)
-    return result, {"table": cascade_table, "run_evaluation": run_evaluation, "audit": write_audit}
-
-
-EXECUTING = dict(PENDING, state="executing")
-
-
-@pytest.mark.unit
-class TestExecutor:
-
-    def test_descendants_are_evaluated_parents_before_children(self):
-        # A -> B, A -> C, B -> D, C -> D: D must follow both B and C whichever order BFS found them.
-        graph = Graph([(ASSET, "B"), (ASSET, "C"), ("B", "D"), ("C", "D")])
-        result, mocks = _run_executor(graph, EXECUTING)
-        evaluated = [c.args[1] for c in mocks["run_evaluation"].call_args_list]
-        assert set(evaluated) == {"B", "C", "D"}
-        assert evaluated.index("D") > evaluated.index("B")
-        assert evaluated.index("D") > evaluated.index("C")
-        assert {c.args[3] for c in mocks["run_evaluation"].call_args_list} == {"cascade"}
-        assert result["status"] == "completed"
-        assert result["evaluated"] == 3
-        assert {r["node"]: r["status"] for r in result["results"]} == {
-            f"{DB}:B": "compliant", f"{DB}:C": "compliant", f"{DB}:D": "compliant"}
-
-    def test_the_source_itself_is_not_re_evaluated(self):
-        graph = Graph([(ASSET, "B"), ("B", ASSET)])
-        _, mocks = _run_executor(graph, EXECUTING)
-        assert [c.args[1] for c in mocks["run_evaluation"].call_args_list] == ["B"]
-
-    def test_the_execution_order_and_node_states_land_on_the_cascade_row(self):
-        graph = Graph([(ASSET, "B"), ("B", "C")])
-        _, mocks = _run_executor(graph, EXECUTING,
-                                 schema_for=lambda asset: "" if asset == "C" else "s")
-        updates = [c.kwargs for c in mocks["table"].update_item.call_args_list]
-        first = updates[0]["ExpressionAttributeValues"]
-        assert json.loads(first[":order"]) == [f"{DB}:B", f"{DB}:C"]
-        assert json.loads(first[":nodes"]) == {f"{DB}:B": "pending", f"{DB}:C": "pending"}
-        assert first[":total"] == 2
-        final_nodes = json.loads(
-            [u for u in updates if ":nodes" in u["ExpressionAttributeValues"]
-             and ":order" not in u["ExpressionAttributeValues"]][-1]["ExpressionAttributeValues"][":nodes"])
-        assert final_nodes == {f"{DB}:B": "compliant", f"{DB}:C": "skipped"}
-        completion = updates[-1]["ExpressionAttributeValues"]
-        assert completion[":state"] == "completed"
-        assert [r["status"] for r in json.loads(completion[":results"])] == ["compliant", "skipped"]
-
-    def test_a_node_without_a_schema_is_skipped(self):
-        graph = Graph([(ASSET, "B")])
-        result, mocks = _run_executor(graph, EXECUTING, schema_for=lambda asset: "")
-        mocks["run_evaluation"].assert_not_called()
-        assert result["results"] == [{"node": f"{DB}:B", "status": "skipped"}]
-
-    def test_a_node_whose_evaluation_raises_is_recorded_as_error(self):
-        graph = Graph([(ASSET, "B"), (ASSET, "C")])
-
-        def evaluation(db, asset, schema, actor):
-            if asset == "B":
-                raise RuntimeError("boom")
-            return {"evaluationId": "e", "verdict": "quarantined"}
-
-        result, _ = _run_executor(graph, EXECUTING, evaluation=evaluation)
-        statuses = {r["node"]: r["status"] for r in result["results"]}
-        assert statuses == {f"{DB}:B": "error", f"{DB}:C": "quarantined"}
-
-    def test_discovery_stops_at_the_node_cap(self):
-        edges = [(ASSET, "n0")] + [(f"n{i}", f"n{i + 1}") for i in range(executor.MAX_CASCADE_NODES + 5)]
-        graph = Graph(edges)
-        with patch(f"{STORE}.get_child_links", side_effect=graph.children):
-            descendants = executor.discover_all_descendants(DB, ASSET)
-        assert len(descendants) == executor.MAX_CASCADE_NODES
-
-    def test_a_cycle_does_not_revisit_a_node(self):
-        graph = Graph([(ASSET, "B"), ("B", "C"), ("C", "B")])
-        with patch(f"{STORE}.get_child_links", side_effect=graph.children):
-            descendants = executor.discover_all_descendants(DB, ASSET)
-        assert [d["assetId"] for d in descendants] == ["B", "C"]
-
-    def test_no_descendants_completes_the_cascade_immediately(self):
-        result, mocks = _run_executor(Graph([]), EXECUTING)
-        assert result == {"cascadeId": CASCADE_ID, "status": "completed", "evaluated": 0,
-                          "results": []}
-        completion = mocks["table"].update_item.call_args.kwargs["ExpressionAttributeValues"]
-        assert completion[":state"] == "completed"
-        mocks["run_evaluation"].assert_not_called()
-
-    def test_completion_is_audited_and_notified(self, notifications_aws):
-        notifications_aws.dynamodb_client.query.return_value = {"Items": [
-            {"assetName": {"S": "Root"}, "snsTopic": {"S": "arn:aws:sns:us-east-1:1:t"}}]}
-        _, mocks = _run_executor(Graph([(ASSET, "B")]), EXECUTING)
-        audit = mocks["audit"].call_args.kwargs
-        assert audit["event_type"] == "cascade_completed"
-        assert audit["actor"] == "SYSTEM_USER"
-        assert audit["details"] == {"nodesEvaluated": 1}
-        published = notifications_aws.sns_client.publish.call_args.kwargs
-        assert "CASCADE COMPLETE" in published["Subject"]
-        assert "compliant: 1" in published["Message"]
-
-    @pytest.mark.parametrize("item,error", [
-        (None, "Cascade not found"), (PENDING, "Cascade not in executing state"),
-    ])
-    def test_a_cascade_that_is_not_executing_is_refused(self, item, error):
-        result, mocks = _run_executor(Graph([(ASSET, "B")]), item)
-        assert result == {"cascadeId": CASCADE_ID, "error": error}
-        mocks["run_evaluation"].assert_not_called()
-        mocks["table"].update_item.assert_not_called()

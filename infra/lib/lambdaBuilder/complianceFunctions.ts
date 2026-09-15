@@ -12,6 +12,8 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
 import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
@@ -237,7 +239,13 @@ export function buildComplianceQuarantineServiceFunction(
     return fun;
 }
 
-export function buildComplianceCascadeServiceFunction(
+/**
+ * Cascade executor. Invoked asynchronously by the cascade service once a cascade row is in the
+ * `executing` state; it evaluates the trigger asset's downstream descendants through the evaluation
+ * engine, which launches a workflow execution for each pipeline rule, and records per-node progress
+ * and the terminal state on the cascade row. No API route.
+ */
+export function buildComplianceCascadeExecutorFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
@@ -245,6 +253,59 @@ export function buildComplianceCascadeServiceFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     executeWorkflowFunction: lambda.Function
+): lambda.Function {
+    const name = "complianceCascadeExecutor";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.compliance.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). Pipeline rules launch a
+            // workflow through the V2 execute Lambda.
+            EXECUTE_WORKFLOW_FUNCTION_NAME: executeWorkflowFunction.functionName,
+        },
+    });
+    executeWorkflowFunction.grantInvoke(fun);
+    storageResources.dynamo.complianceCascadeStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.complianceAssetStateStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.complianceEvaluationStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.complianceSchemaStorageTable.grantReadData(fun);
+    grantEvaluationEngineReads(fun, storageResources);
+    grantPublishToAssetTopics(fun, config);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return fun;
+}
+
+/**
+ * Cascade API. Creating a cascade without approval, or approving a pending one, writes the row
+ * in the `executing` state and hands it to the cascade executor with an asynchronous invoke; the
+ * request returns 202 and clients poll GET /compliance/cascades/{cascadeId} for the terminal state.
+ */
+export function buildComplianceCascadeServiceFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    cascadeExecutorFunction: lambda.Function
 ): lambda.Function {
     const name = "complianceCascadeService";
     const fun = new lambda.Function(scope, name, {
@@ -264,19 +325,14 @@ export function buildComplianceCascadeServiceFunction(
                 : undefined,
         // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX).
         environment: {
-            EXECUTE_WORKFLOW_FUNCTION_NAME: executeWorkflowFunction.functionName,
+            COMPLIANCE_CASCADE_EXECUTOR_FUNCTION_NAME: cascadeExecutorFunction.functionName,
         },
     });
-    // Approving a cascade re-evaluates the downstream assets through the evaluation engine, which
-    // launches a workflow execution for each pipeline rule.
-    executeWorkflowFunction.grantInvoke(fun);
+    cascadeExecutorFunction.grantInvoke(fun);
     storageResources.dynamo.complianceCascadeStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.complianceAssetStateStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.complianceEvaluationStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.complianceSchemaStorageTable.grantReadData(fun);
-    grantEvaluationEngineReads(fun, storageResources);
-    grantPublishToAssetTopics(fun, config);
+    // The trigger asset's existence is checked on the asset row before a cascade is created.
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -369,6 +425,9 @@ export function buildComplianceTriggerFunction(
     grantEvaluationEngineReads(fun, storageResources);
     executeWorkflowFunction.grantInvoke(fun);
     grantPublishToAssetTopics(fun, config);
+    // Reads the changed object's metadata (head_object across asset buckets) to skip files a
+    // workflow execution wrote, so a pipeline rule's own output does not re-trigger the evaluation.
+    grantReadPermissionsToAllAssetBuckets(fun);
 
     fun.addEventSource(new eventsources.SnsEventSource(storageResources.sns.assetIndexerSnsTopic));
     fun.addEventSource(new eventsources.SnsEventSource(storageResources.sns.fileIndexerSnsTopic));
@@ -438,7 +497,35 @@ export function buildComplianceWorkflowCallbackFunction(
             detailType: [WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE],
         },
     });
-    completionRule.addTarget(new eventsTargets.LambdaFunction(fun));
+
+    // The completion event is the only signal that resolves a pipeline-rule evaluation: the
+    // evaluation sits in `pending_pipeline` until the callback records the verdict. Without a
+    // dead-letter queue, EventBridge discards a persistently failing delivery after its own retries
+    // and nothing records that it happened, leaving the evaluation pending with no trace. The queue
+    // holds the undeliverable events for an operator to redrive.
+    const completionDlq = new sqs.Queue(scope, "ComplianceWorkflowCompletionDLQ", {
+        encryption: storageResources.encryption.kmsKey
+            ? sqs.QueueEncryption.KMS
+            : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: storageResources.encryption.kmsKey,
+        enforceSSL: true,
+    });
+    NagSuppressions.addResourceSuppressions(completionDlq, [
+        {
+            id: "AwsSolutions-SQS3",
+            reason:
+                "This queue is itself the dead-letter target for the compliance workflow-completion " +
+                "EventBridge rule, so it does not take a further dead-letter queue.",
+        },
+    ]);
+
+    completionRule.addTarget(
+        new eventsTargets.LambdaFunction(fun, {
+            deadLetterQueue: completionDlq,
+            retryAttempts: 3,
+            maxEventAge: Duration.hours(1),
+        })
+    );
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
