@@ -81,8 +81,10 @@ web/
         tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions, Compliance tabs
         versions/           # Asset version management
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
-      compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1 rules)
-                            #   + complianceSchemaRules.ts; ReasonModal.tsx (Cloudscape reason dialog)
+      compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1 rules,
+                            #   incl. the pipeline-rule input-file selector) + complianceSchemaRules.ts;
+                            #   ReasonModal.tsx (Cloudscape reason dialog); complianceStateBadge.tsx
+                            #   (shared state -> StatusIndicator map, `exception` = info)
       createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
       form/

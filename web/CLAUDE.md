@@ -99,10 +99,12 @@ web/
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
       compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
-                              #   pipeline/metadata/relationship rules) + complianceSchemaRules.ts
+                              #   pipeline/metadata/relationship rules, incl. the pipeline-rule
+                              #   input-file selector: mode / globs / explicit paths) + complianceSchemaRules.ts
                               #   (pure pipelineRef fields/validation + rule-draft round-trip);
                               #   ReasonModal.tsx (Cloudscape modal collecting a mandatory reason:
-                              #   reject cascade, grant quarantine exception)
+                              #   reject cascade, grant quarantine exception); complianceStateBadge.tsx
+                              #   (shared compliance-state -> StatusIndicator map; `exception` renders as info)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.

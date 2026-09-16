@@ -579,6 +579,8 @@ Verify before deploying: a cycle is invisible to `cdk synth` and appears only at
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
 coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`.
 
+A Lambda's DynamoDB grants follow the tables its handler (and the shared modules it imports) resolves through `ResourceKeys`; `infra/test/security/complianceLambdaTableGrants.test.ts` derives those needs from the compliance handler source and asserts the synthesized role policy covers each table (read, plus write where the module writes), so a missing grant fails the suite instead of surfacing as an `AccessDeniedException` 500 in production.
+
 ### **Dependency Management Standards**
 
 #### **Rule 8: Proper Stack Dependencies**

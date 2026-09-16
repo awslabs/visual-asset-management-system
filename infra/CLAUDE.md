@@ -243,6 +243,8 @@ suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grant
 
 `suppressCdkNagLambda(fun)` is required on every authored Lambda (including those built inside constructs and custom resources). It replaces a stack-wide suppression that bloated synthesized CloudFormation templates by stamping metadata onto every nested-stack resource. Scope the suppression to the function.
 
+**Table grants follow the handler's `ResourceKeys`.** A handler resolves its tables through `get_table_name(ResourceKeys.*)` at module level, and a shared module it imports (for compliance, `complianceEvaluationStore`) resolves its own — every one of those tables needs a grant on the Lambda's role, read-only unless the module writes through it, or the request 500s with `AccessDeniedException` after the mutation already happened. `test/security/complianceLambdaTableGrants.test.ts` derives each compliance Lambda's table needs from the handler source (function-level reachability through the store) and asserts the synthesized role policy covers them, forbids write grants on read-only tables, and pins the cascade service's exact grant set; a new compliance table read or write fails it until the builder is updated.
+
 ### What the Security Helpers Do
 
 -   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key.

@@ -130,7 +130,10 @@ asymmetry other callers rely on):
    return 202 and the run continues in the background — poll
    `get_compliance_cascade`) are write-tier and stay out of `autoApprove`; `unbind_compliance_schema`
    deletes compliance records but is write-tier because the history it reverses is
-   recomputable from a re-evaluation, and its docstring names the removal.
+   recomputable from a re-evaluation, and its docstring names the removal;
+   `revoke_quarantine_exception` is write-tier too, although it can put an asset back
+   into quarantine (and notify its subscribers) — it only restores the asset's last
+   recorded verdict.
    The same three-place rule holds for the tools that RETURN a credential:
    `create_api_key` and `create_user_api_key` (write tier) hand back the one-time
    API key value, a bearer token with the acting user's permissions, so both stay out
