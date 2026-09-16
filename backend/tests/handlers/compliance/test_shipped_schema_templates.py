@@ -94,12 +94,22 @@ class TestThe3dModelQualityTemplate:
         assert _load(template_path)["templateId"] == ref.templateId
 
     def test_the_selection_matches_one_file_by_the_pipelines_own_extensions(self):
+        """The filter names source formats the pipeline accepts and leaves out the format its
+        template writes back into the asset: with the output selected too, the asset's own
+        converted file would be a second candidate and `matching` would no longer resolve to one
+        file on the next evaluation."""
         rule = self._pipeline_rule()
         pipeline_config = _load(os.path.join(CONVERSION_SCHEMA_DIR, "pipeline.json"))["systemConfig"]
         assert pipeline_config["inputFileArity"] == "one"
         assert pipeline_config["assetScope"] == {"wholeAsset": False}
         assert rule.inputFiles.mode == "matching"
-        assert rule.inputFiles.filter == pipeline_config["inputFileFilters"]["allow"]
+        accepted = pipeline_config["inputFileFilters"]["allow"]
+        template_path = os.path.join(CONVERSION_SCHEMA_DIR, "templates", f"{rule.pipelineRef.templateId}.json")
+        output_extension = json.loads(_load(template_path)["configBody"])["outputType"]
+        assert f"*{output_extension}" in accepted, "the pipeline accepts its own output format"
+        assert rule.inputFiles.filter == [
+            pattern for pattern in accepted if pattern != f"*{output_extension}"]
+        assert "leaves out *.glb" in _load(os.path.join(TEMPLATES_DIR, "3d-model-quality.json"))["description"]
 
     def test_the_checks_read_only_the_measurements_every_execution_provides(self):
         """The conversion pipeline writes no compliance-output document, so the rule can rely only

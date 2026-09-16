@@ -9,13 +9,14 @@ import time
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.assetProvenance import asset_change_provenance
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -287,14 +288,17 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def update_asset_attributes(databaseId, assetId, updates):
-    """Update the named attributes of an existing asset record in DynamoDB.
+def update_asset_attributes(databaseId, assetId, updates, workflow_execution_id=None):
+    """Update the named attributes of an existing asset record in DynamoDB, recording the change
+    provenance beside them.
 
-    Only the supplied attributes are written, so a field another writer changed while
-    the upload was in flight is not reverted. Conditional on the record still existing
-    so an asset removed during the upload is not recreated.
+    Only the supplied attributes and the provenance attributes are written, so a field another
+    writer changed while the upload was in flight is not reverted. Conditional on the record
+    still existing so an asset removed during the upload is not recreated. `workflow_execution_id`
+    is the execution whose outputs the completion writes into the asset, when it is one.
     """
-    keys_map, values_map, expr = to_update_expr(updates)
+    keys_map, values_map, expr = to_update_expr(
+        {**updates, **asset_change_provenance(workflow_execution_id)})
     try:
         asset_table.update_item(
             Key={
@@ -315,6 +319,7 @@ def update_asset_attributes(databaseId, assetId, updates):
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
+
 
 def save_upload_details(upload_data):
     """Save upload details to DynamoDB"""
@@ -1615,7 +1620,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         # If asset already has a type and assetType is None, keep the existing type
         
         # Save updated asset
-        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']})
+        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']},
+                                workflow_execution_id=workflow_execution_id)
         
         # Send notification to subscribers
         send_subscription_email(databaseId, assetId)
@@ -1630,7 +1636,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             }
             
             # Save updated asset
-            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
+            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']},
+                                    workflow_execution_id=workflow_execution_id)
     
     # Update upload status in DynamoDB
     try:

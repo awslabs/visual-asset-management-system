@@ -5,7 +5,7 @@
         "version": "2.0.0"
     },
     "schemaName": "3d-model-quality",
-    "description": "Quality requirements for 3D model assets: polygon count, coordinate system and unit metadata, plus a successful GLB conversion of the model file.",
+    "description": "Quality requirements for 3D model assets: polygon count, coordinate system and unit metadata, plus a successful GLB conversion of the model file. The conversion rule selects source formats only and leaves out *.glb: the conversion pipeline writes its .glb output back into the asset, and selecting it would make the asset's own output a second conversion candidate.",
     "schemaBody": {
         "schemaFormat": "vams-rules-v1",
         "rules": {
@@ -38,7 +38,7 @@
                 },
                 "inputFiles": {
                     "mode": "matching",
-                    "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.glb", "*.xyz"]
+                    "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.xyz"]
                 },
                 "checks": [
                     {

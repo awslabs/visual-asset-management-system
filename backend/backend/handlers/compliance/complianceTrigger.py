@@ -9,14 +9,25 @@ else the database binding — auto-registering the asset under it) and runs an e
 `complianceEvaluationStore.run_evaluation`. After an evaluation of an asset that has children it
 opens a cascade awaiting approval so the downstream assets can be re-evaluated.
 
-Two guards keep the trigger from multiplying evaluations:
+A file indexer message is unwrapped with `common.indexerEvents.s3_records_from_indexer_message`
+(the same walk the file indexer performs) and every S3 record it carries is processed, with one
+evaluation per distinct asset per message.
+
+Three guards keep the trigger from multiplying evaluations or relaunching a pipeline rule's own
+workflow:
 
   - a file event for an object a workflow execution wrote (`vams-changesource` object metadata of
     `workflowExecution`, read with a HEAD on the object) is skipped, so a pipeline rule whose
     workflow writes its outputs into the asset does not re-enter the trigger and relaunch itself;
-  - an event for an asset whose state row already points at a `pending_pipeline` evaluation that
-    began at or after the change is coalesced into that evaluation, so an N-file upload yields one
-    evaluation rather than N concurrent pipeline launches.
+  - a stream MODIFY whose new image records `lastChangeSource` of `workflowExecution` (the
+    provenance `uploadFile` writes onto the asset row when a workflow execution's outputs are
+    completed into the asset) is skipped for the same reason;
+  - an event for an asset whose state row points at an evaluation still awaiting its pipeline
+    rules is coalesced into that evaluation, so an N-file upload yields one evaluation rather than
+    N concurrent pipeline launches.
+
+A cascade awaiting approval is opened once per trigger asset: while one is pending for the asset,
+a further evaluation does not open another.
 """
 
 import json
@@ -25,10 +36,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
 from common.compliance import evaluationEngine as engine
+from models.compliance import EvaluationVerdict
+from common.dynamodb import query_all_items
+from common.indexerEvents import s3_records_from_indexer_message
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
@@ -46,6 +60,11 @@ logger = safeLogger(service_name="ComplianceTrigger")
 SCHEMA_SOURCE_DATABASE = "database"
 SCHEMA_SOURCE_ASSET = "asset"
 CASCADE_STATE_PENDING_APPROVAL = "pending_approval"
+CASCADE_STATE_INDEX = "StateIndex"
+
+# The asset-row attribute `uploadFile` writes with the source of the last change (`upload` or
+# `workflowExecution`); a stream image carries it in DynamoDB's typed form.
+LAST_CHANGE_SOURCE_ATTRIBUTE = "lastChangeSource"
 
 # A cascade awaiting approval expires after this many hours.
 CASCADE_APPROVAL_TIMEOUT_HOURS = 24
@@ -111,43 +130,61 @@ def _process_stream_record(message):
     if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
         return
 
-    _process_compliance_event(
-        database_id, asset_id,
-        event_time=parse_event_time(dynamodb_data.get("ApproximateCreationDateTime")))
-
-
-def _process_file_event(message):
-    """A file indexer message (S3 event shape)."""
-    s3_record = message if message.get("s3") else None
-    if s3_record is None:
-        records = message.get("Records", [])
-        if records:
-            s3_record = records[0]
-    s3_info = (s3_record or {}).get("s3")
-    if not s3_info:
-        logger.info("File event has no s3 data, skipping")
-        return
-
-    object_key = s3_info.get("object", {}).get("key", "")
-    prefix = message.get("ASSET_BUCKET_PREFIX", "")
-
-    asset_id = _extract_asset_id_from_key(object_key, prefix)
-    if not asset_id:
-        logger.info("Could not extract an assetId from the object key")
-        return
-
-    if object_change_source(s3_info, message) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
-        logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
+    if message.get("eventName") == "MODIFY" and _image_change_source(new_image) \
+            == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
+        logger.info(f"Asset {database_id}:{asset_id} row was last changed by a workflow execution; "
                     "skipping compliance evaluation")
         return
 
-    database_id = _resolve_database_for_asset(asset_id)
-    if not database_id:
-        logger.info(f"Could not resolve a databaseId for asset {asset_id}")
+    _process_compliance_event(database_id, asset_id)
+
+
+def _image_change_source(new_image):
+    """The `lastChangeSource` a stream image carries, or "" when the row records none."""
+    value = new_image.get(LAST_CHANGE_SOURCE_ATTRIBUTE)
+    return value.get("S", "") or "" if isinstance(value, dict) else ""
+
+
+def _process_file_event(message):
+    """A file indexer message: every S3 record it carries, one evaluation per distinct asset.
+
+    A record naming an object a workflow execution wrote is skipped. The database of each asset is
+    resolved once per message, and a second record for an asset already evaluated in this message
+    (an N-file upload) is not evaluated again."""
+    s3_records = s3_records_from_indexer_message(message)
+    if not s3_records:
+        logger.info("File event has no s3 data, skipping")
         return
 
-    _process_compliance_event(database_id, asset_id,
-                              event_time=parse_event_time(s3_record.get("eventTime")))
+    prefix = message.get("ASSET_BUCKET_PREFIX", "")
+    databases_by_asset = {}
+    evaluated = set()
+    for s3_record in s3_records:
+        s3_info = s3_record.get("s3") or {}
+        object_key = (s3_info.get("object") or {}).get("key", "")
+
+        asset_id = _extract_asset_id_from_key(object_key, prefix)
+        if not asset_id:
+            logger.info("Could not extract an assetId from the object key")
+            continue
+
+        if object_change_source(s3_info, message) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
+            logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
+                        "skipping compliance evaluation")
+            continue
+
+        if asset_id not in databases_by_asset:
+            databases_by_asset[asset_id] = _resolve_database_for_asset(asset_id)
+        database_id = databases_by_asset[asset_id]
+        if not database_id:
+            logger.info(f"Could not resolve a databaseId for asset {asset_id}")
+            continue
+
+        asset_key = f"{database_id}:{asset_id}"
+        if asset_key in evaluated:
+            continue
+        evaluated.add(asset_key)
+        _process_compliance_event(database_id, asset_id)
 
 
 def object_change_source(s3_info, message):
@@ -177,28 +214,6 @@ def object_change_source(s3_info, message):
             continue
         return (head.get("Metadata") or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY, "") or ""
     return ""
-
-
-def parse_event_time(value):
-    """The instant an event reports as an aware UTC datetime, or None when it carries none.
-
-    Accepts the S3 event `eventTime` (ISO-8601 with a trailing Z), the DynamoDB stream
-    `ApproximateCreationDateTime` (epoch seconds, as a number or its string form) and the
-    evaluation store's `isoformat()` timestamps."""
-    if value is None or value == "":
-        return None
-    text = str(value).strip()
-    try:
-        return datetime.fromtimestamp(float(text), tz=timezone.utc)
-    except (ValueError, OverflowError, OSError):
-        pass
-    try:
-        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def _extract_asset_id_from_key(object_key, prefix):
@@ -238,12 +253,11 @@ def _database_item(database_id):
     return database_table.get_item(Key={"databaseId": database_id}).get("Item")
 
 
-def _process_compliance_event(database_id, asset_id, event_time=None):
+def _process_compliance_event(database_id, asset_id):
     """Evaluate an asset when its database has auto-evaluation on and it has a bound schema.
 
-    `event_time` is the instant of the change the event reports, when the event carries one. An
-    asset whose state row already points at an evaluation still awaiting its pipeline rules, begun at
-    or after that instant, is not evaluated again: the in-flight evaluation covers the change."""
+    An asset whose state row points at an evaluation still awaiting its pipeline rules is not
+    evaluated again: the in-flight evaluation covers the change."""
     db_item = _database_item(database_id)
     if not db_item or db_item.get("complianceAutoEval") is not True:
         logger.info(f"Database {database_id} does not have complianceAutoEval enabled, skipping")
@@ -262,7 +276,7 @@ def _process_compliance_event(database_id, asset_id, event_time=None):
         logger.info(f"Asset {database_id}:{asset_id} has no schema assigned")
         return
 
-    if covered_by_pending_evaluation(compliance_record, event_time):
+    if covered_by_pending_evaluation(compliance_record):
         logger.info(f"Asset {database_id}:{asset_id} has evaluation "
                     f"{compliance_record.get('lastEvaluationId')} awaiting its pipeline rules; "
                     "the change is coalesced into it")
@@ -271,26 +285,22 @@ def _process_compliance_event(database_id, asset_id, event_time=None):
     trigger_evaluation(database_id, asset_id, schema_name)
 
 
-def covered_by_pending_evaluation(compliance_record, event_time):
-    """Whether the asset's state row points at an evaluation still `pending_pipeline` that began at or
-    after `event_time` — or at any such evaluation when the event carries no time.
+def covered_by_pending_evaluation(compliance_record):
+    """Whether the asset's state row points at an evaluation still `pending_pipeline`.
 
     The state row alone is not trusted: its `pending_evaluation` state is confirmed against the
     evaluation row (consistent read), so a state row left behind by an evaluation that has since
-    completed does not suppress the next evaluation. An evaluation that began BEFORE the change may
-    not have seen it, so it does not cover the change and a new evaluation runs."""
+    completed does not suppress the next evaluation. The instant of the change plays no part: the
+    workflow callback that finalizes a pending evaluation re-evaluates nothing, so whatever the
+    change was, the in-flight evaluation's outcome is the one the asset's state reflects until the
+    next evaluation runs."""
     if compliance_record.get("complianceState") != engine.STATE_PENDING_EVALUATION:
         return False
     evaluation_id = compliance_record.get("lastEvaluationId")
     if not evaluation_id:
         return False
     evaluation = store.get_evaluation(evaluation_id, consistent_read=True) or {}
-    if evaluation.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
-        return False
-    if event_time is None:
-        return True
-    evaluated_at = parse_event_time(evaluation.get("evaluatedAt"))
-    return evaluated_at is not None and evaluated_at >= event_time
+    return evaluation.get("status") == engine.EVALUATION_STATUS_PENDING_PIPELINE
 
 
 def check_default_schema(database_id, asset_id, db_item=None):
@@ -324,17 +334,21 @@ def trigger_evaluation(database_id, asset_id, schema_name):
     logger.info(
         f"Evaluation {result.get('evaluationId')} for {database_id}:{asset_id}: "
         f"verdict={result.get('verdict')}")
-    if not result.get("error"):
+    if not result.get("error") and result.get("verdict") != EvaluationVerdict.error.value:
         check_and_trigger_cascade(database_id, asset_id)
 
 
 def check_and_trigger_cascade(database_id: str, asset_id: str):
-    """Open a cascade awaiting approval when the asset has downstream children."""
+    """Open a cascade awaiting approval when the asset has downstream children and none is already
+    pending for it."""
     children = store.get_child_links(database_id, asset_id)
     if not children:
         return
 
     asset_key = f"{database_id}:{asset_id}"
+    if pending_cascade_exists(database_id, asset_id):
+        logger.info(f"Asset {asset_key} already has a cascade awaiting approval; not opening another")
+        return
     logger.info(f"Asset {asset_key} has {len(children)} children; opening a cascade")
 
     now = datetime.now(timezone.utc)
@@ -368,3 +382,19 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
         logger.exception(f"Failed sending cascade notification: {e}")
 
     logger.info(f"Created cascade {cascade_id} for parent {asset_key}")
+
+
+def pending_cascade_exists(database_id: str, asset_id: str) -> bool:
+    """Whether a cascade in `pending_approval` was triggered by the given asset.
+
+    Reads the cascade table's `StateIndex` (partition `state`) to exhaustion with a filter on the
+    trigger asset: the filter is applied after each page is read, so a single page is not an
+    answer (backend Rule 14)."""
+    rows = query_all_items(
+        cascade_table,
+        IndexName=CASCADE_STATE_INDEX,
+        KeyConditionExpression=Key("state").eq(CASCADE_STATE_PENDING_APPROVAL),
+        FilterExpression=(Attr("triggeredByDatabaseId").eq(database_id)
+                          & Attr("triggeredByAssetId").eq(asset_id)),
+    )
+    return len(rows) > 0

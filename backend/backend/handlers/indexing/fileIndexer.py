@@ -20,6 +20,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.indexerEvents import s3_records_from_indexer_message
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
@@ -2134,55 +2135,24 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                             # Check if SNS message contains Records array (nested structure from sqsBucketSync)
                             elif 'Records' in sns_message:
                                 # sqsBucketSync stamps the bucket identity onto the SNS
-                                # payload, not onto the SQS envelope, so read it from the
-                                # message and fall back to the top-level event.
+                                # payload, not onto the SQS envelope or the S3 records it
+                                # wraps, so read it from the message and fall back to the
+                                # top-level event. The records themselves may sit one or two
+                                # SQS/SNS envelopes below the message; the shared helper
+                                # flattens every accepted shape.
                                 sns_bucket_name = sns_message.get('ASSET_BUCKET_NAME') or asset_bucket_name
                                 sns_bucket_prefix = sns_message.get('ASSET_BUCKET_PREFIX')
                                 if sns_bucket_prefix is None:
                                     sns_bucket_prefix = asset_bucket_prefix
-                                for inner_record in sns_message['Records']:
-                                    inner_event_source = inner_record.get('eventSource', '')
-
-                                    if inner_event_source == 'aws:s3':
-                                        # Direct S3 record in SNS message
-                                        if sns_bucket_name:
-                                            inner_record['ASSET_BUCKET_NAME'] = sns_bucket_name
-                                            inner_record['ASSET_BUCKET_PREFIX'] = sns_bucket_prefix
-                                        result = handle_s3_notification(inner_record)
-                                        results.append(result)
-                                    
-                                    elif inner_event_source == 'aws:sqs':
-                                        # Nested SQS record (from sqsBucketSync) - parse further
-                                        try:
-                                            inner_body = inner_record.get('body', '')
-                                            if isinstance(inner_body, str):
-                                                inner_body = json.loads(inner_body)
-                                            
-                                            # Check if this inner SQS message contains SNS notification
-                                            if inner_body.get('Type') == 'Notification' and inner_body.get('Message'):
-                                                inner_sns_message = inner_body.get('Message')
-                                                if isinstance(inner_sns_message, str):
-                                                    inner_sns_message = json.loads(inner_sns_message)
-                                                
-                                                # Now check for S3 records in the inner SNS message
-                                                if 'Records' in inner_sns_message:
-                                                    for s3_record in inner_sns_message['Records']:
-                                                        if s3_record.get('eventSource') == 'aws:s3':
-                                                            # Extract bucket info from the nested structure
-                                                            nested_bucket_name = inner_sns_message.get('ASSET_BUCKET_NAME', asset_bucket_name)
-                                                            nested_bucket_prefix = inner_sns_message.get('ASSET_BUCKET_PREFIX', asset_bucket_prefix)
-                                                            
-                                                            if nested_bucket_name:
-                                                                s3_record['ASSET_BUCKET_NAME'] = nested_bucket_name
-                                                                s3_record['ASSET_BUCKET_PREFIX'] = nested_bucket_prefix
-                                                            
-                                                            result = handle_s3_notification(s3_record)
-                                                            results.append(result)
-                                        except json.JSONDecodeError as inner_e:
-                                            logger.exception(f"Error parsing nested SQS/SNS message: {inner_e}")
-                                    
-                                    else:
-                                        logger.warning(f"Unknown record event source in SNS message: {inner_event_source}")
+                                s3_records = s3_records_from_indexer_message(sns_message)
+                                if not s3_records:
+                                    logger.warning("SNS message carries no S3 event records")
+                                for s3_record in s3_records:
+                                    if sns_bucket_name:
+                                        s3_record['ASSET_BUCKET_NAME'] = sns_bucket_name
+                                        s3_record['ASSET_BUCKET_PREFIX'] = sns_bucket_prefix
+                                    result = handle_s3_notification(s3_record)
+                                    results.append(result)
                             
                             else:
                                 logger.warning(f"SNS message does not contain recognized event format: {sns_message.keys()}")
