@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """complianceEvaluationStore: one evaluation end to end against mock tables -- synchronous rules,
-the pipeline-rule launch through the execute-workflow Lambda (request body per
+the pipeline-rule launch through the execute-workflow Lambda (input files resolved from the asset's
+S3 listing against the workflow / pipeline / template config, request body per
 ExecuteWorkflowRequestV2Model, `manual` trigger, SYSTEM_USER cross-call), the records it writes,
-and the completion path the workflow callback drives."""
+the binding it leaves alone, the quarantine-exception semantics, and the completion path the
+workflow callback drives."""
 
 import json
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,6 +27,22 @@ NOTIFICATIONS = "handlers.compliance.complianceNotifications"
 
 PIPELINE_RULE = PipelineRule(**RULES_SCHEMA_BODY["rules"]["residual-bound"])
 
+# The asset's S3 location as the store resolves it: the bucket row named by the asset's bucketId
+# and the asset's assetLocation key.
+BUCKET_ID = "11111111-2222-3333-4444-555555555555"
+BUCKET_NAME = "asset-bucket"
+ASSET_PREFIX = f"{ASSET}/"
+DEFAULT_ASSET_FILES = ("/model.stl",)
+
+
+def _rule(**overrides):
+    """PIPELINE_RULE with fields replaced."""
+    return PipelineRule(**dict(RULES_SCHEMA_BODY["rules"]["residual-bound"], **overrides))
+
+
+def _inputs(*keys):
+    return [{"databaseId": DB, "assetId": ASSET, "relativeFileKey": key} for key in keys]
+
 
 def _lambda_client(status_code=200, execution_id="exec-1", body=None):
     client = MagicMock(name="lambda_client")
@@ -32,6 +51,17 @@ def _lambda_client(status_code=200, execution_id="exec-1", body=None):
     payload.read.return_value = json.dumps(
         {"statusCode": status_code, "body": json.dumps(response_body)}).encode()
     client.invoke.return_value = {"Payload": payload}
+    return client
+
+
+def _s3_client(*pages):
+    """An S3 client whose list_objects_v2 paginator serves `pages`, each a list of asset-relative
+    keys under ASSET_PREFIX (a key ending in '/' is a folder marker)."""
+    client = MagicMock(name="s3_client")
+    client.get_paginator.return_value.paginate.return_value = [
+        {"Contents": [{"Key": ASSET_PREFIX + key.lstrip("/"), "Size": 1} for key in page]}
+        for page in pages
+    ]
     return client
 
 
@@ -99,18 +129,24 @@ class FakeEvaluationTable:
 
 class Tables:
     """Every table the store touches, each a MagicMock scripted with the row shapes the store reads.
-    Defaults describe an asset with the `owner` metadata key, one parentChild parent, an existing
-    workflow and pipeline, and no prior compliance state. The evaluation table is a
-    FakeEvaluationTable, so the completion path's conditional writes and its consistent re-reads of
-    the tracking rows run against real rows."""
+    Defaults describe an asset with the `owner` metadata key, one parentChild parent, one file
+    (`/model.stl`) under its S3 prefix, an existing workflow (no systemConfig of its own) and
+    pipeline (arity one, no filters), the rule's template when it names one, and no prior compliance
+    state. `previous_row` is the whole prior asset-state row (it wins over `previous_state`). The
+    evaluation table is a FakeEvaluationTable, so the completion path's conditional writes and its
+    consistent re-reads of the tracking rows run against real rows."""
 
-    def __init__(self, schema_body=RULES_SCHEMA_BODY, previous_state=None, metadata_keys=("owner",),
-                 parents=1, workflow_exists=True, pipeline_exists=True):
+    def __init__(self, schema_body=RULES_SCHEMA_BODY, previous_state=None, previous_row=None,
+                 metadata_keys=("owner",), parents=1, workflow_exists=True, pipeline_exists=True,
+                 template_exists=True, workflow_config=None, pipeline_config=None,
+                 template_overrides=None, asset_files=DEFAULT_ASSET_FILES, schema_version=1):
         self.schema = MagicMock(name="schema_table")
-        self.schema.query.return_value = {"Items": [schema_row(body=schema_body)]}
+        self.schema.query.return_value = {"Items": [
+            schema_row(body=schema_body, version=schema_version)]}
         self.state = MagicMock(name="asset_state_table")
-        self.state.get_item.return_value = (
-            {"Item": {"complianceState": previous_state}} if previous_state else {})
+        if previous_row is None and previous_state:
+            previous_row = {"complianceState": previous_state}
+        self.state.get_item.return_value = {"Item": dict(previous_row)} if previous_row else {}
         self.evaluation_rows = FakeEvaluationTable()
         self.evaluation = self.evaluation_rows.mock
         self.audit = MagicMock(name="audit_table")
@@ -125,9 +161,28 @@ class Tables:
             {"Items": [{"relationshipType": "parentChild"}] * parents}
             if kw.get("IndexName") == "toAssetGSI" else {"Items": []})
         self.workflow = MagicMock(name="workflow_table")
-        self.workflow.get_item.return_value = {"Item": {"workflowId": "wf-1"}} if workflow_exists else {}
+        workflow_row = {"workflowId": "wf-1"}
+        if workflow_config is not None:
+            workflow_row["systemConfig"] = workflow_config
+        self.workflow.get_item.return_value = {"Item": workflow_row} if workflow_exists else {}
         self.pipeline = MagicMock(name="pipeline_table")
-        self.pipeline.get_item.return_value = {"Item": {"pipelineId": "pipe-1"}} if pipeline_exists else {}
+        pipeline_row = {"pipelineId": "pipe-1"}
+        if pipeline_config is not None:
+            pipeline_row["systemConfig"] = pipeline_config
+        self.pipeline.get_item.return_value = {"Item": pipeline_row} if pipeline_exists else {}
+        self.templates = MagicMock(name="pipeline_templates_table")
+        template_row = {"templateId": "tmpl-1"}
+        if template_overrides is not None:
+            template_row["overrides"] = template_overrides
+        self.templates.get_item.return_value = {"Item": template_row} if template_exists else {}
+        self.asset = MagicMock(name="asset_table")
+        self.asset.get_item.return_value = {"Item": {
+            "databaseId": DB, "assetId": ASSET, "bucketId": BUCKET_ID,
+            "assetLocation": {"Key": ASSET_PREFIX}}}
+        self.buckets = MagicMock(name="s3_asset_buckets_table")
+        self.buckets.query.return_value = {"Items": [
+            {"bucketId": BUCKET_ID, "bucketName": BUCKET_NAME, "baseAssetsPrefix": "/"}]}
+        self.s3_client = _s3_client(list(asset_files))
         self.lambda_client = _lambda_client()
 
     def patches(self, function_name="execute-workflow-fn"):
@@ -142,6 +197,10 @@ class Tables:
             patch(f"{STORE}.asset_links_table", self.links),
             patch(f"{STORE}.workflow_table", self.workflow),
             patch(f"{STORE}.pipeline_table", self.pipeline),
+            patch(f"{STORE}.pipeline_templates_table", self.templates),
+            patch(f"{STORE}.asset_table", self.asset),
+            patch(f"{STORE}.s3_asset_buckets_table", self.buckets),
+            patch(f"{STORE}.s3_client", self.s3_client),
             patch(f"{STORE}.lambda_client", self.lambda_client),
             patch(f"{STORE}.execute_workflow_function_name", function_name),
         ]
@@ -189,9 +248,35 @@ class TestSynchronousEvaluation:
 
         state = update_values(tables.state)[0]
         assert state["complianceState"] == "compliant"
-        assert state["schemaName"] == SCHEMA
+        assert "schemaName" not in state
+        assert "schemaSource" not in state
         assert state["lastEvaluationId"] == record["evaluationId"]
+        assert record["schemaVersion"] == 1
+        assert "exceptionApplied" not in record
         assert tables.audit_events() == ["compliance_check"]
+
+    def test_the_evaluation_never_rewrites_the_binding(self):
+        """An ad-hoc evaluation against another schema records that schema on the evaluation row
+        only; the asset-state row keeps the schema it is bound to."""
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, previous_row={
+            "complianceState": "compliant", "schemaName": "bound-schema", "schemaSource": "asset"})
+        tables.run(store.run_evaluation, DB, ASSET, "adhoc-schema", USER)
+        parents, _ = tables.evaluation_records()
+        assert parents[0]["schemaName"] == "adhoc-schema"
+        state = update_values(tables.state)[0]
+        assert "schemaName" not in state
+        assert "schemaSource" not in state
+        assert set(state) == {"complianceState", "lastEvaluationId", "lastEvaluatedAt",
+                              "updatedAt", "quarantineReason"}
+        assert put_items(tables.audit)[0]["schemaName"] == "adhoc-schema"
+
+    def test_a_failed_audit_write_does_not_fail_the_evaluation(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY)
+        tables.audit.put_item.side_effect = RuntimeError("AccessDeniedException")
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "compliant"
+        assert update_values(tables.state)[0]["complianceState"] == "compliant"
+        assert tables.audit.put_item.call_count == 1
 
     def test_a_failed_quarantine_rule_quarantines_and_notifies(self, notifications_aws):
         notifications_aws.dynamodb_client.query.return_value = {"Items": [
@@ -279,24 +364,29 @@ class TestSynchronousEvaluation:
 class TestPipelineRuleLaunch:
 
     def test_the_execute_request_follows_the_v2_model(self):
-        rule = PipelineRule(**dict(RULES_SCHEMA_BODY["rules"]["residual-bound"],
-                                   inputParameters={"expected_crs": "EPSG:27700"},
-                                   pipelineRef=dict(PIPELINE_RULE.pipelineRef.dict(),
-                                                    templateId="tmpl-1")))
-        body = store.build_execute_workflow_request(rule, DB, ASSET, "grp-1")
+        rule = _rule(inputParameters={"expected_crs": "EPSG:27700"},
+                     pipelineRef=dict(PIPELINE_RULE.pipelineRef.dict(), templateId="tmpl-1"))
+        body = store.build_execute_workflow_request(rule, _inputs("/models/a.stl"), "grp-1")
         parsed = ExecuteWorkflowRequestV2Model(**body)
         assert parsed.triggerType == "manual"
-        assert body["inputFiles"] == [{"databaseId": DB, "assetId": ASSET, "relativeFileKey": "/"}]
+        assert body["inputFiles"] == [{"databaseId": DB, "assetId": ASSET,
+                                       "relativeFileKey": "/models/a.stl"}]
         assert body["pipelineExecutionParameters"] == {"pipe-1": {
             "templateId": "tmpl-1",
             "templateTags": [{"key": "expected_crs", "value": "EPSG:27700"}]}}
         assert body["executionGroupId"] == "grp-1"
 
     def test_a_rule_without_template_or_parameters_sends_an_empty_parameter_map(self):
-        body = store.build_execute_workflow_request(PIPELINE_RULE, DB, ASSET)
+        body = store.build_execute_workflow_request(PIPELINE_RULE, _inputs("/"))
         assert body["pipelineExecutionParameters"] == {"pipe-1": {}}
+        assert body["inputFiles"] == _inputs("/")
         assert "executionGroupId" not in body
         ExecuteWorkflowRequestV2Model(**body)
+
+    def test_an_arity_none_selection_sends_no_input_files(self):
+        body = store.build_execute_workflow_request(PIPELINE_RULE, [])
+        assert body["inputFiles"] == []
+        assert ExecuteWorkflowRequestV2Model(**body).inputFiles == []
 
     def test_the_cross_call_event_targets_the_execute_route_as_system_user(self):
         event = store.build_execute_workflow_event("GLOBAL", "wf-1", {"x": 1})
@@ -306,7 +396,7 @@ class TestPipelineRuleLaunch:
         assert event["pathParameters"] == {"workflowDatabaseId": "GLOBAL", "workflowId": "wf-1"}
         assert json.loads(event["body"]) == {"x": 1}
 
-    def test_a_pipeline_rule_launches_and_leaves_the_evaluation_pending(self):
+    def test_a_pipeline_rule_launches_with_the_matching_file_and_leaves_the_evaluation_pending(self):
         tables = Tables()
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         assert result["verdict"] == "pending_pipeline"
@@ -320,6 +410,10 @@ class TestPipelineRuleLaunch:
         assert payload["requestContext"]["http"]["path"] == "/workflows/GLOBAL/wf-1/execute"
         launch_body = json.loads(payload["body"])
         assert launch_body["triggerType"] == "manual"
+        # The default `matching` selection resolves to the asset's one file, never to the root.
+        assert launch_body["inputFiles"] == _inputs("/model.stl")
+        listing = tables.s3_client.get_paginator.return_value.paginate.call_args.kwargs
+        assert listing == {"Bucket": BUCKET_NAME, "Prefix": ASSET_PREFIX}
 
         parents, tracking = tables.evaluation_records()
         parent, track = parents[0], tracking[0]
@@ -341,11 +435,29 @@ class TestPipelineRuleLaunch:
         assert "databaseId:assetId" not in track
         assert update_values(tables.state)[0]["complianceState"] == "pending_evaluation"
 
-    @pytest.mark.parametrize("scenario", ["workflow-missing", "pipeline-missing", "refused",
-                                          "no-execution-id", "unconfigured", "invoke-raises"])
+    def test_a_template_rule_reads_its_template_row_and_applies_its_overrides(self):
+        rule = _rule(pipelineRef=dict(PIPELINE_RULE.pipelineRef.dict(), templateId="tmpl-1"))
+        body = dict(RULES_SCHEMA_BODY, rules={"residual-bound": rule.dict()})
+        tables = Tables(schema_body=body, asset_files=("/a.stl", "/b.obj"),
+                        pipeline_config={"inputFileArity": "one"},
+                        template_overrides={"inputFileFilters": {"allow": ["*.obj"]}})
+        tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert tables.templates.get_item.call_args.kwargs["Key"] == {
+            "pipelineDatabaseId:pipelineId": "GLOBAL:pipe-1", "templateId": "tmpl-1"}
+        launch_body = json.loads(json.loads(tables.lambda_client.invoke.call_args.kwargs["Payload"])["body"])
+        assert launch_body["inputFiles"] == _inputs("/b.obj")
+
+    @pytest.mark.parametrize("scenario", ["workflow-missing", "pipeline-missing", "template-missing",
+                                          "refused", "no-execution-id", "unconfigured",
+                                          "invoke-raises"])
     def test_a_launch_that_fails_marks_the_rule_failed_and_completes_synchronously(self, scenario):
-        tables = Tables(workflow_exists=scenario != "workflow-missing",
-                        pipeline_exists=scenario != "pipeline-missing")
+        body = RULES_SCHEMA_BODY
+        if scenario == "template-missing":
+            rule = _rule(pipelineRef=dict(PIPELINE_RULE.pipelineRef.dict(), templateId="tmpl-1"))
+            body = dict(RULES_SCHEMA_BODY, rules={"residual-bound": rule.dict()})
+        tables = Tables(schema_body=body, workflow_exists=scenario != "workflow-missing",
+                        pipeline_exists=scenario != "pipeline-missing",
+                        template_exists=scenario != "template-missing")
         if scenario == "refused":
             tables.lambda_client = _lambda_client(status_code=403)
         if scenario == "no-execution-id":
@@ -364,6 +476,441 @@ class TestPipelineRuleLaunch:
         assert tracking == []
         assert parents[0]["status"] == "completed"
         assert "pipelineRulesPending" not in parents[0]
+
+    @pytest.mark.parametrize("asset_files,message", [
+        ((), store.INPUT_SELECTION_NOT_ONE_FILE),
+        (("/a.stl", "/b.stl"), store.INPUT_SELECTION_NOT_ONE_FILE),
+    ], ids=["no-match", "several-matches"])
+    def test_a_selection_failure_is_the_rules_error_result_with_the_generic_message(
+            self, asset_files, message):
+        tables = Tables(asset_files=asset_files)
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        tables.lambda_client.invoke.assert_not_called()
+        assert result["verdict"] == "quarantined"
+        pipeline_result = next(r for r in result["ruleResults"] if r["ruleName"] == "residual-bound")
+        assert pipeline_result["passed"] is False
+        assert pipeline_result["message"] == message
+        for key in asset_files:
+            assert key not in pipeline_result["message"]
+        parents, tracking = tables.evaluation_records()
+        assert tracking == []
+        assert parents[0]["status"] == "completed"
+        assert parents[0]["violations"] == [message]
+
+    def test_a_whole_asset_selection_the_workflow_refuses_is_the_rules_error(self):
+        rule = _rule(inputFiles={"mode": "wholeAsset"})
+        body = dict(RULES_SCHEMA_BODY, rules={"residual-bound": rule.dict()})
+        tables = Tables(schema_body=body, workflow_config={
+            "inputFileArity": "one", "assetScope": {"wholeAssetAllowed": False}})
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        tables.lambda_client.invoke.assert_not_called()
+        tables.s3_client.get_paginator.assert_not_called()
+        pipeline_result = next(r for r in result["ruleResults"] if r["ruleName"] == "residual-bound")
+        assert pipeline_result["message"] == store.INPUT_SELECTION_REFUSED
+
+    def test_the_asset_files_are_listed_once_for_several_pipeline_rules(self):
+        body = dict(RULES_SCHEMA_BODY, rules={
+            "residual-bound": PIPELINE_RULE.dict(), "other": OTHER_RULE.dict()})
+        tables = Tables(schema_body=body)
+        tables.pipeline.get_item.side_effect = lambda **kw: {"Item": {"pipelineId": kw["Key"]["pipelineId"]}}
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        assert result["pipelineRulesPending"] == 2
+        assert tables.s3_client.get_paginator.return_value.paginate.call_count == 1
+        assert tables.asset.get_item.call_count == 1
+
+
+def _workflow(arity=None, whole_asset=None, allow=None, exclude=None):
+    """A workflow row with the systemConfig keys a test names."""
+    config = {}
+    if arity is not None:
+        config["inputFileArity"] = arity
+    if whole_asset is not None:
+        config["assetScope"] = {"wholeAssetAllowed": whole_asset}
+    if allow is not None or exclude is not None:
+        config["inputFileFilters"] = {"allow": allow or [], "exclude": exclude or []}
+    return {"workflowId": "wf-1", "systemConfig": config}
+
+
+def _pipeline(arity=None, whole_asset=None, allow=None, exclude=None, enabled=True, archived=False):
+    """A pipeline row with the systemConfig keys a test names (assetScope in the registration
+    shorthand the built-in pipelines use)."""
+    config = {}
+    if arity is not None:
+        config["inputFileArity"] = arity
+    if whole_asset is not None:
+        config["assetScope"] = {"wholeAsset": whole_asset}
+    if allow is not None or exclude is not None:
+        config["inputFileFilters"] = {"allow": allow or [], "exclude": exclude or []}
+    return {"pipelineId": "pipe-1", "systemConfig": config, "enabled": enabled, "archived": archived}
+
+
+def _template(**overrides):
+    return {"templateId": "tmpl-1", "overrides": overrides}
+
+
+# The built-in 3D conversion pipeline as seeded: arity one, no whole-asset selection, six model
+# extensions allowed.
+MODEL_EXTENSIONS = ["*.stl", "*.obj", "*.ply", "*.gltf", "*.glb", "*.xyz"]
+CONVERSION_PIPELINE = _pipeline(arity="one", whole_asset=False, allow=MODEL_EXTENSIONS)
+# A workflow row whose systemConfig declares no arity: the pipeline's arity applies.
+BARE_WORKFLOW = {"workflowId": "wf-1"}
+
+
+@pytest.mark.unit
+class TestPipelineInputSelection:
+    """`resolve_pipeline_rule_inputs` over an in-memory file listing: every mode against every arity,
+    the filter chain, the asset-scope gate and the three generic messages."""
+
+    def _resolve(self, rule, files, workflow=BARE_WORKFLOW, pipeline=CONVERSION_PIPELINE,
+                 template=None):
+        listing = MagicMock(name="asset_file_keys", return_value=files)
+        inputs, error = store.resolve_pipeline_rule_inputs(
+            rule, DB, ASSET, workflow, pipeline, template, listing)
+        return inputs, error, listing
+
+    # --- matching ---
+
+    def test_matching_with_arity_one_and_exactly_one_match_sends_that_file(self):
+        inputs, error, _ = self._resolve(PIPELINE_RULE, ["/readme.txt", "/model.stl"])
+        assert error is None
+        assert inputs == _inputs("/model.stl")
+
+    @pytest.mark.parametrize("files", [[], ["/readme.txt"], ["/a.stl", "/b.obj"]],
+                             ids=["no-files", "no-match", "several-matches"])
+    def test_matching_with_arity_one_needs_exactly_one_match(self, files):
+        inputs, error, _ = self._resolve(PIPELINE_RULE, files)
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_NOT_ONE_FILE
+
+    def test_matching_with_arity_multi_sends_every_match_sorted_by_key(self):
+        inputs, error, _ = self._resolve(
+            PIPELINE_RULE, ["/z.stl", "/notes.txt", "/a.obj", "/m/b.glb"],
+            workflow=_workflow(arity="multi"), pipeline=_pipeline(arity="multi", allow=MODEL_EXTENSIONS))
+        assert error is None
+        assert inputs == _inputs("/a.obj", "/m/b.glb", "/z.stl")
+
+    def test_matching_with_arity_multi_and_no_match_is_refused(self):
+        inputs, error, _ = self._resolve(PIPELINE_RULE, ["/notes.txt"],
+                                         workflow=_workflow(arity="multi"),
+                                         pipeline=_pipeline(arity="multi", allow=MODEL_EXTENSIONS))
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_REFUSED
+
+    def test_matching_with_arity_none_sends_no_input_files(self):
+        inputs, error, _ = self._resolve(PIPELINE_RULE, ["/a.stl", "/b.stl"],
+                                         workflow=_workflow(arity="none"), pipeline=_pipeline(arity="none"))
+        assert error is None
+        assert inputs == []
+
+    def test_the_workflow_arity_wins_over_the_pipelines(self):
+        inputs, error, _ = self._resolve(PIPELINE_RULE, ["/a.stl", "/b.stl"],
+                                         workflow=_workflow(arity="multi"),
+                                         pipeline=_pipeline(arity="one", allow=MODEL_EXTENSIONS))
+        # The workflow admits both; the pipeline's own arity is then judged by the shared validator.
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_REFUSED
+
+    def test_the_rules_own_filter_narrows_the_matches(self):
+        rule = _rule(inputFiles={"mode": "matching", "filter": ["*.obj"]})
+        inputs, error, _ = self._resolve(rule, ["/a.stl", "/b.obj"])
+        assert error is None
+        assert inputs == _inputs("/b.obj")
+
+    def test_the_rules_filter_cannot_widen_the_pipelines(self):
+        rule = _rule(inputFiles={"mode": "matching", "filter": ["*.txt"]})
+        inputs, error, _ = self._resolve(rule, ["/a.stl", "/notes.txt"])
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_NOT_ONE_FILE
+
+    def test_the_workflow_filters_apply_before_the_pipelines(self):
+        inputs, error, _ = self._resolve(
+            PIPELINE_RULE, ["/a.stl", "/b.obj"], workflow=_workflow(exclude=["*.stl"]))
+        assert error is None
+        assert inputs == _inputs("/b.obj")
+
+    def test_a_template_override_replaces_the_pipelines_filters(self):
+        inputs, error, _ = self._resolve(
+            PIPELINE_RULE, ["/a.stl", "/b.obj"],
+            template=_template(inputFileFilters={"allow": ["*.obj"]}))
+        assert error is None
+        assert inputs == _inputs("/b.obj")
+
+    def test_a_template_override_of_the_arity_applies(self):
+        pipeline = _pipeline(arity="one", allow=MODEL_EXTENSIONS)
+        refused, error, _ = self._resolve(PIPELINE_RULE, ["/a.stl", "/b.obj"],
+                                          workflow=_workflow(arity="multi"), pipeline=pipeline)
+        assert refused is None and error == store.INPUT_SELECTION_REFUSED
+        inputs, error, _ = self._resolve(
+            PIPELINE_RULE, ["/a.stl", "/b.obj"], workflow=_workflow(arity="multi"),
+            pipeline=pipeline, template=_template(inputFileArity="multi"))
+        assert error is None
+        assert inputs == _inputs("/a.stl", "/b.obj")
+
+    def test_matching_is_refused_when_the_asset_files_cannot_be_listed(self):
+        inputs, error, listing = self._resolve(PIPELINE_RULE, None)
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_REFUSED
+        listing.assert_called_once_with()
+
+    # --- wholeAsset ---
+
+    def test_whole_asset_is_sent_when_the_workflow_allows_it(self):
+        rule = _rule(inputFiles={"mode": "wholeAsset"})
+        inputs, error, listing = self._resolve(
+            rule, ["/a.stl"], workflow=_workflow(arity="one", whole_asset=True),
+            pipeline=_pipeline(arity="one", whole_asset=True))
+        assert error is None
+        assert inputs == _inputs("/")
+        listing.assert_not_called()
+
+    @pytest.mark.parametrize("workflow,pipeline", [
+        (_workflow(arity="one", whole_asset=False), _pipeline(arity="one")),
+        (BARE_WORKFLOW, CONVERSION_PIPELINE),
+        (_workflow(arity="one", whole_asset=True), _pipeline(arity="one", whole_asset=False)),
+    ], ids=["workflow-refuses", "workflow-silent-pipeline-refuses", "pipeline-refuses"])
+    def test_whole_asset_is_refused_when_the_scope_forbids_it(self, workflow, pipeline):
+        rule = _rule(inputFiles={"mode": "wholeAsset"})
+        inputs, error, _ = self._resolve(rule, ["/a.stl"], workflow=workflow, pipeline=pipeline)
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_REFUSED
+
+    # --- explicit ---
+
+    def test_explicit_keys_that_exist_are_sent_sorted(self):
+        rule = _rule(inputFiles={"mode": "explicit", "keys": ["/b.obj", "a.stl"]})
+        inputs, error, _ = self._resolve(
+            rule, ["/a.stl", "/b.obj", "/c.stl"], workflow=_workflow(arity="multi"),
+            pipeline=_pipeline(arity="multi", allow=MODEL_EXTENSIONS))
+        assert error is None
+        assert inputs == _inputs("/a.stl", "/b.obj")
+
+    def test_an_explicit_key_the_asset_lacks_is_refused(self):
+        rule = _rule(inputFiles={"mode": "explicit", "keys": ["/a.stl", "/missing.stl"]})
+        inputs, error, _ = self._resolve(rule, ["/a.stl"], workflow=_workflow(arity="multi"))
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_MISSING_FILE
+        assert "missing.stl" not in error
+
+    def test_explicit_keys_are_held_to_the_arity(self):
+        rule = _rule(inputFiles={"mode": "explicit", "keys": ["/a.stl", "/b.stl"]})
+        inputs, error, _ = self._resolve(rule, ["/a.stl", "/b.stl"])
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_NOT_ONE_FILE
+
+    def test_an_explicit_key_the_workflow_filters_out_is_refused(self):
+        rule = _rule(inputFiles={"mode": "explicit", "keys": ["/notes.txt"]})
+        inputs, error, _ = self._resolve(rule, ["/notes.txt"])
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_REFUSED
+
+    # --- the pipeline row ---
+
+    @pytest.mark.parametrize("pipeline", [
+        _pipeline(arity="one", enabled=False), _pipeline(arity="one", archived=True),
+    ], ids=["disabled", "archived"])
+    def test_a_pipeline_that_cannot_run_is_refused(self, pipeline):
+        inputs, error, _ = self._resolve(PIPELINE_RULE, ["/a.stl"], pipeline=pipeline)
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_REFUSED
+
+    def test_the_messages_carry_no_selection_details(self):
+        """Rule 11: the three texts are fixed strings with no file key, glob or pipeline id."""
+        for message in (store.INPUT_SELECTION_REFUSED, store.INPUT_SELECTION_NOT_ONE_FILE,
+                        store.INPUT_SELECTION_MISSING_FILE):
+            assert "/" not in message and "*" not in message and "pipe-1" not in message
+
+
+@pytest.mark.unit
+class TestAssetFileListing:
+
+    def _list(self, tables):
+        return tables.run(store.list_asset_file_keys, DB, ASSET)
+
+    def test_the_listing_pages_to_exhaustion_and_yields_sorted_relative_keys(self):
+        tables = Tables()
+        tables.s3_client = _s3_client(["/z.stl", "models/", "/models/a.obj"], ["/a.txt", "/z.stl"])
+        keys = self._list(tables)
+        assert keys == ["/a.txt", "/models/a.obj", "/z.stl"]
+        assert tables.s3_client.get_paginator.call_args.args == ("list_objects_v2",)
+        assert tables.s3_client.get_paginator.return_value.paginate.call_args.kwargs == {
+            "Bucket": BUCKET_NAME, "Prefix": ASSET_PREFIX}
+
+    def test_the_prefix_gains_a_trailing_slash(self):
+        tables = Tables()
+        tables.asset.get_item.return_value = {"Item": {
+            "bucketId": BUCKET_ID, "assetLocation": {"Key": ASSET}}}
+        self._list(tables)
+        assert tables.s3_client.get_paginator.return_value.paginate.call_args.kwargs["Prefix"] == ASSET_PREFIX
+
+    @pytest.mark.parametrize("asset", [
+        None, {"assetLocation": {"Key": ASSET_PREFIX}}, {"bucketId": BUCKET_ID},
+        {"bucketId": BUCKET_ID, "assetLocation": "not-a-map"},
+    ], ids=["no-asset", "no-bucket-id", "no-location", "malformed-location"])
+    def test_an_unresolvable_asset_yields_none(self, asset):
+        tables = Tables()
+        tables.asset.get_item.return_value = {"Item": asset} if asset is not None else {}
+        assert self._list(tables) is None
+        tables.s3_client.get_paginator.assert_not_called()
+
+    def test_a_missing_bucket_row_yields_none(self):
+        tables = Tables()
+        tables.buckets.query.return_value = {"Items": []}
+        assert self._list(tables) is None
+        assert tables.buckets.query.call_args.kwargs["KeyConditionExpression"]._values[1] == BUCKET_ID
+
+
+def _exception_row(state="exception", schema_name=SCHEMA, version=1, **extra):
+    """An asset-state row carrying an active exception granted against `schema_name` v`version`
+    (the version stored as DynamoDB returns a number)."""
+    row = {
+        "complianceState": state,
+        "schemaName": SCHEMA,
+        "exceptionGranted": True,
+        "exceptionReason": "vendor waiver",
+        "exceptionGrantedBy": USER,
+        "exceptionGrantedAt": "2026-01-01T00:00:00+00:00",
+        "exceptionSchemaName": schema_name,
+        "exceptionSchemaVersion": Decimal(version),
+    }
+    row.update(extra)
+    return row
+
+
+@pytest.mark.unit
+class TestExceptions:
+    """A quarantine exception scoped to a schema name + version keeps the asset released while it
+    applies; an evaluation against another schema or version supersedes it."""
+
+    def test_failing_rules_under_an_active_exception_leave_the_asset_in_the_exception_state(
+            self, notifications_aws):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row=_exception_row())
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "quarantined"
+        assert result["complianceState"] == "exception"
+        parents, _ = tables.evaluation_records()
+        assert parents[0]["verdict"] == "quarantined"
+        assert parents[0]["violations"] == ["parent: found 0 links, minimum is 1"]
+        assert parents[0]["exceptionApplied"] is True
+        state = update_values(tables.state)[0]
+        assert state["complianceState"] == "exception"
+        assert state["quarantineReason"] is None
+        assert not set(state) & set(store.engine.EXCEPTION_FIELDS)
+        notifications_aws.sns_client.publish.assert_not_called()
+        assert tables.audit_events() == ["compliance_check"]
+        assert json.loads(put_items(tables.audit)[0]["details"])["exceptionApplied"] is True
+
+    def test_passing_rules_under_an_active_exception_are_compliant_and_keep_the_exception(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, previous_row=_exception_row())
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["complianceState"] == "compliant"
+        parents, _ = tables.evaluation_records()
+        assert parents[0]["exceptionApplied"] is True
+        state = update_values(tables.state)[0]
+        assert state["complianceState"] == "compliant"
+        assert not set(state) & set(store.engine.EXCEPTION_FIELDS)
+
+    def test_a_warn_failure_under_an_active_exception_is_the_exception_state_too(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, metadata_keys=(),
+                        previous_row=_exception_row())
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "non_compliant"
+        assert result["complianceState"] == "exception"
+
+    @pytest.mark.parametrize("previous_row,schema_version", [
+        (_exception_row(version=1), 2),
+        (_exception_row(schema_name="other-schema"), 1),
+    ], ids=["newer-version", "other-schema"])
+    def test_an_evaluation_against_another_schema_or_version_supersedes_the_exception(
+            self, notifications_aws, previous_row, schema_version):
+        notifications_aws.dynamodb_client.query.return_value = {"Items": [
+            {"assetName": {"S": "Turbine"}, "snsTopic": {"S": "arn:aws:sns:us-east-1:1:topic"}}]}
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row=previous_row,
+                        schema_version=schema_version)
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["complianceState"] == "quarantined"
+        parents, _ = tables.evaluation_records()
+        assert "exceptionApplied" not in parents[0]
+        state = update_values(tables.state)[0]
+        assert state["complianceState"] == "quarantined"
+        assert state["exceptionGranted"] is False
+        for field in store.engine.EXCEPTION_FIELDS:
+            if field != "exceptionGranted":
+                assert state[field] is None
+        assert tables.audit_events() == ["exception_superseded", "compliance_check"]
+        superseded = put_items(tables.audit)[0]
+        assert superseded["previousState"] == "exception"
+        assert superseded["newState"] == "quarantined"
+        assert superseded["schemaName"] == SCHEMA
+        details = json.loads(superseded["details"])
+        assert details["exceptionSchemaName"] == previous_row["exceptionSchemaName"]
+        assert details["exceptionSchemaVersion"] == 1
+        assert details["schemaVersion"] == schema_version
+        notifications_aws.sns_client.publish.assert_called_once()
+
+    def test_a_row_without_an_exception_is_neither_applied_nor_superseded(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0,
+                        previous_row={"complianceState": "compliant", "exceptionGranted": False})
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["complianceState"] == "quarantined"
+        assert not set(update_values(tables.state)[0]) & set(store.engine.EXCEPTION_FIELDS)
+        assert tables.audit_events() == ["compliance_check"]
+
+    def test_a_pending_pipeline_evaluation_under_an_exception_records_it_and_stays_pending(self):
+        tables = Tables(previous_row=_exception_row())
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["complianceState"] == "pending_evaluation"
+        parents, _ = tables.evaluation_records()
+        assert parents[0]["exceptionApplied"] is True
+        assert parents[0]["schemaVersion"] == 1
+
+    def _finalize(self, tables, output):
+        evaluation = dict(_pending_evaluation(), schemaVersion=1)
+        tables.evaluation_rows.seed(evaluation, _tracking_row())
+        return tables.run(store.complete_pipeline_rule, evaluation, "residual-bound",
+                          "SUCCEEDED", output, None, None)
+
+    def test_the_finalize_path_honours_an_active_exception(self, notifications_aws):
+        tables = Tables(previous_row=_exception_row())
+        outcome = self._finalize(tables, {"complianceOutput": True, "status": "success",
+                                          "measurements": {"residual": 5}})
+        assert outcome["verdict"] == "quarantined"
+        assert outcome["complianceState"] == "exception"
+        assert tables.evaluation_rows.rows["eval-1"]["exceptionApplied"] is True
+        state = update_values(tables.state)[0]
+        assert state["complianceState"] == "exception"
+        assert not set(state) & set(store.engine.EXCEPTION_FIELDS)
+        notifications_aws.sns_client.publish.assert_not_called()
+
+    def test_the_finalize_path_supersedes_an_exception_granted_against_an_older_version(self):
+        tables = Tables(previous_row=_exception_row(version=1))
+        evaluation = dict(_pending_evaluation(), schemaVersion=2)
+        tables.evaluation_rows.seed(evaluation, _tracking_row())
+        outcome = tables.run(store.complete_pipeline_rule, evaluation, "residual-bound",
+                             "SUCCEEDED", {"complianceOutput": True, "status": "success",
+                                           "measurements": {"residual": 5}}, None, None)
+        assert outcome["complianceState"] == "quarantined"
+        assert "exceptionApplied" not in tables.evaluation_rows.rows["eval-1"]
+        assert update_values(tables.state)[0]["exceptionGranted"] is False
+        assert tables.audit_events() == ["exception_superseded", "compliance_check"]
+
+    def test_an_evaluation_row_without_a_version_is_judged_against_the_schemas_current_version(self):
+        tables = Tables(previous_row=_exception_row(version=1), schema_version=1)
+        tables.evaluation_rows.seed(_pending_evaluation(), _tracking_row())
+        outcome = tables.run(store.complete_pipeline_rule, _pending_evaluation(), "residual-bound",
+                             "SUCCEEDED", {"complianceOutput": True, "status": "success",
+                                           "measurements": {"residual": 5}}, None, None)
+        assert outcome["complianceState"] == "exception"
+        assert tables.schema.query.call_args.kwargs["KeyConditionExpression"]._values[1] == SCHEMA
+
+    def test_the_cleared_fields_helper_names_every_exception_attribute(self):
+        cleared = store.engine.cleared_exception_fields()
+        assert set(cleared) == set(store.engine.EXCEPTION_FIELDS) == {
+            "exceptionGranted", "exceptionReason", "exceptionGrantedBy", "exceptionGrantedAt",
+            "exceptionSchemaName", "exceptionSchemaVersion"}
+        assert cleared["exceptionGranted"] is False
+        assert all(value is None for field, value in cleared.items() if field != "exceptionGranted")
+        assert store.engine.STATE_EXCEPTION == "exception"
+        assert store.AUDIT_EXCEPTION_SUPERSEDED == "exception_superseded"
 
 
 def _pending_evaluation(rule_results=None, executions=None, pending_rules=None):

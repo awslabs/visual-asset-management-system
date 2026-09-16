@@ -264,30 +264,50 @@ class TestValidation:
 
     @pytest.mark.parametrize("body,bad", [
         ({"type": "not<a-type>"}, "not<a-type>"),
-        ({"type": ["object", "not<a-type>"]}, "not<a-type>"),
-        ({"type": "object", "properties": {"secret<property>": {"type": "not<a-type>"}}},
-         "secret<property>"),
-        ({"type": "object", "properties": {"secret<property>": {"type": "not<a-type>"}}},
-         "not<a-type>"),
-        ({"type": "object", "properties": {"secret<property>": {"type": ["not<a-type>"]}}},
-         "secret<property>"),
-        ({"type": "object", "properties": {"secret<property>": "not<an-object>"}}, "secret<property>"),
-        ({"type": "object", "properties": {"secret<property>": "not<an-object>"}}, "not<an-object>"),
-        ({"type": "object", "properties": {"secret<property>": {"enum": "a"}}}, "secret<property>"),
-        ({"type": "object", "properties": {"secret<property>": {"minimum": "1"}}}, "secret<property>"),
-        ({"type": "object", "properties": {"secret<property>": {"maximum": "1"}}}, "secret<property>"),
-        ({"type": "object", "properties": {"a": {}}, "required": ["secret<field>"]}, "secret<field>"),
-        ({"type": "array", "items": {"type": "not<a-type>"}}, "not<a-type>"),
-    ], ids=["type", "type-array", "property-type/name", "property-type/type", "property-type-array",
-            "property-not-object/name", "property-not-object/value", "enum", "minimum", "maximum",
-            "required", "items"])
-    def test_a_legacy_json_schema_body_with_a_bad_type_is_rejected(self, body, bad):
+        ({"type": "object", "properties": {"secret<property>": {"type": "string"}},
+          "required": ["secret<property>"]}, "secret<property>"),
+        ({"type": "array", "items": {"type": "string"}}, None),
+        ({"rules": {"secret-rule-name": RULES_SCHEMA_BODY["rules"]["has-parent"]}}, "secret-rule-name"),
+        ({"schemaFormat": "json-schema", "rules": RULES_SCHEMA_BODY["rules"]}, "json-schema"),
+        ({"metadata": {"name": "secret<name>"}, "schemaName": "secret-schema",
+          "schemaBody": RULES_SCHEMA_BODY}, "secret<name>"),
+    ], ids=["json-schema-bad-type", "json-schema-valid", "json-schema-array", "rules-without-format",
+            "other-format", "template-envelope"])
+    def test_a_body_that_is_not_a_vams_rules_document_is_rejected_with_the_generic_message(
+            self, body, bad):
+        """Only `vams-rules-v1` is accepted: a legacy JSON-Schema body (valid or not), a rules map
+        without the format marker, and the raw template envelope are all refused with one fixed
+        message that echoes nothing."""
         response, tables = _run(rest_event("POST", "/compliance/schemas",
                                            body={"schemaName": SCHEMA, "schemaBody": body}))
         assert response["statusCode"] == 400
-        assert "Invalid schema" in body_of(response)["message"]
-        assert bad not in response["body"]
+        assert body_of(response)["message"] == "schemaBody must be a vams-rules-v1 document"
+        if bad is not None:
+            assert bad not in response["body"]
         tables["schema"].put_item.assert_not_called()
+
+    def test_an_update_with_a_body_that_is_not_a_vams_rules_document_is_rejected(self):
+        response, tables = _run(
+            rest_event("PUT", f"/compliance/schemas/{SCHEMA}", {"schemaName": SCHEMA},
+                       body={"schemaBody": {"type": "object", "properties": {"secret<p>": {}}}}),
+            schema_rows=[schema_row()])
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "schemaBody must be a vams-rules-v1 document"
+        assert "secret<p>" not in response["body"]
+        tables["schema"].put_item.assert_not_called()
+
+    def test_the_validator_accepts_only_vams_rules_v1(self):
+        assert svc.validate_schema_body(RULES_SCHEMA_BODY) == (True, None)
+        assert svc.validate_schema_body({"type": "object"}) == (False, svc.NOT_VAMS_RULES_MESSAGE)
+        assert svc.validate_schema_body("not-an-object") == (False, svc.NOT_VAMS_RULES_MESSAGE)
+        valid, message = svc.validate_schema_body({"schemaFormat": "vams-rules-v1", "rules": {}})
+        assert valid is False
+        assert "At least one rule is required" in message
+
+    @pytest.mark.temporary  # pins the removal of the legacy JSON-Schema acceptance path
+    def test_the_legacy_json_schema_validator_is_gone(self):
+        assert not hasattr(svc, "_validate_json_schema")
+        assert not hasattr(svc, "VALID_JSON_SCHEMA_TYPES")
 
     def test_registering_under_a_missing_database_is_refused(self):
         response, tables = _run(

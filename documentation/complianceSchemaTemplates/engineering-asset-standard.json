@@ -1,49 +1,59 @@
 {
     "metadata": {
         "name": "Engineering Asset Standard",
-        "description": "Baseline compliance schema for engineering assets. Requires ownership, classification, and lifecycle metadata.",
-        "version": "1.0.0"
+        "description": "Baseline compliance schema for engineering assets. Requires ownership, classification and lifecycle metadata, and places every engineering asset within an assembly hierarchy.",
+        "version": "2.0.0"
     },
     "schemaName": "engineering-asset-standard",
-    "description": "Requires name, owner, classification, and retention policy for all engineering assets.",
+    "description": "Requires owner, classification and retention metadata for all engineering assets and a parent assembly link.",
     "schemaBody": {
-        "type": "object",
-        "required": ["name", "owner", "classification", "retention_days"],
-        "properties": {
-            "name": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256,
-                "description": "Asset name or identifier"
+        "schemaFormat": "vams-rules-v1",
+        "rules": {
+            "ownership-and-lifecycle": {
+                "ruleType": "metadata",
+                "enforcement": "warn",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
+                },
+                "checks": [
+                    {
+                        "name": "baseline-fields-present",
+                        "description": "The default asset metadata schema's required fields are present and typed as declared, and the asset names its owner, classification level and retention period.",
+                        "validateRequired": true,
+                        "validateTypes": true,
+                        "additionalRequiredFields": ["owner", "classification", "retention_days"]
+                    }
+                ]
             },
-            "owner": {
-                "type": "string",
-                "description": "Owner email address"
+            "review-schedule": {
+                "ruleType": "metadata",
+                "enforcement": "inform",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
+                },
+                "checks": [
+                    {
+                        "name": "review-fields-present",
+                        "description": "The owning department and the next scheduled review date are recorded.",
+                        "additionalRequiredFields": ["department", "review_date"]
+                    }
+                ]
             },
-            "classification": {
-                "type": "string",
-                "enum": ["public", "internal", "confidential", "restricted"],
-                "description": "Data classification level"
-            },
-            "retention_days": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 3650,
-                "description": "Data retention period in days"
-            },
-            "department": {
-                "type": "string",
-                "description": "Owning department or team"
-            },
-            "version": {
-                "type": "string",
-                "description": "Asset version string"
-            },
-            "review_date": {
-                "type": "string",
-                "description": "Next scheduled review date (ISO 8601)"
+            "assembly-membership": {
+                "ruleType": "relationship",
+                "enforcement": "warn",
+                "checks": [
+                    {
+                        "name": "has-parent-assembly",
+                        "description": "The asset belongs to at least one parent assembly.",
+                        "direction": "parents",
+                        "relationshipType": "parentChild",
+                        "minCount": 1
+                    }
+                ]
             }
-        },
-        "additionalProperties": true
+        }
     }
 }

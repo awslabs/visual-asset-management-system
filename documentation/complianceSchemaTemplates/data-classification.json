@@ -2,46 +2,49 @@
     "metadata": {
         "name": "Data Classification Schema",
         "description": "Enforces data classification labeling and handling instructions on assets. Suitable for environments with regulatory requirements around data sensitivity.",
-        "version": "1.0.0"
+        "version": "2.0.0"
     },
     "schemaName": "data-classification",
     "description": "Enforces classification labeling and handling instructions for regulated data environments.",
     "schemaBody": {
-        "type": "object",
-        "required": ["classification", "handling_instructions", "data_steward"],
-        "properties": {
-            "classification": {
-                "type": "string",
-                "enum": ["unclassified", "cui", "confidential", "secret", "top_secret"],
-                "description": "Security classification level"
-            },
-            "handling_instructions": {
-                "type": "string",
-                "minLength": 10,
-                "maxLength": 2000,
-                "description": "Instructions for handling, storing, and transmitting this data"
-            },
-            "data_steward": {
-                "type": "string",
-                "description": "Email of the data steward responsible for this asset"
-            },
-            "dissemination_controls": {
-                "type": "array",
-                "items": {
-                    "type": "string",
-                    "enum": ["noforn", "relto", "orcon", "propin", "fouo"]
+        "schemaFormat": "vams-rules-v1",
+        "rules": {
+            "classification-labels": {
+                "ruleType": "metadata",
+                "enforcement": "quarantine",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
                 },
-                "description": "Dissemination control markings"
+                "checks": [
+                    {
+                        "name": "classification-fields-present",
+                        "description": "The asset carries a security classification level, handling instructions and an accountable data steward.",
+                        "validateRequired": true,
+                        "validateTypes": true,
+                        "additionalRequiredFields": [
+                            "classification",
+                            "handling_instructions",
+                            "data_steward"
+                        ]
+                    }
+                ]
             },
-            "declassification_date": {
-                "type": "string",
-                "description": "Date when classification expires (ISO 8601)"
-            },
-            "originating_agency": {
-                "type": "string",
-                "description": "Agency or organization that originated the classification"
+            "dissemination-markings": {
+                "ruleType": "metadata",
+                "enforcement": "inform",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
+                },
+                "checks": [
+                    {
+                        "name": "dissemination-controls-recorded",
+                        "description": "Dissemination control markings and the originating agency are recorded.",
+                        "additionalRequiredFields": ["dissemination_controls", "originating_agency"]
+                    }
+                ]
             }
-        },
-        "additionalProperties": false
+        }
     }
 }

@@ -149,12 +149,13 @@ class TestRouteDispatch:
             rest_event("GET", STATE_DB_PATH, DB_PARAMS),
             state_rows=[{"assetId": "a", "complianceState": "compliant"},
                         {"assetId": "b", "complianceState": "quarantined"},
-                        {"assetId": "c", "complianceState": "weird"}])
+                        {"assetId": "c", "complianceState": "weird"},
+                        {"assetId": "d", "complianceState": "exception"}])
         assert response["statusCode"] == 200
         body = body_of(response)
-        assert body["totalAssets"] == 3
+        assert body["totalAssets"] == 4
         assert body["summary"] == {"compliant": 1, "non_compliant": 0, "pending_evaluation": 0,
-                                   "quarantined": 1, "unknown": 1}
+                                   "quarantined": 1, "exception": 1, "unknown": 1}
         assert all(a["assetName"] == "Turbine" for a in body["assets"])
         assert "NextToken" not in body
 
@@ -502,7 +503,7 @@ class TestOverviewPaging:
             for i, state in zip((3, 0, 4, 1, 2), ("compliant", "quarantined", "compliant",
                                                   "non_compliant", "pending_evaluation"))]
     SUMMARY = {"compliant": 2, "non_compliant": 1, "pending_evaluation": 1, "quarantined": 1,
-               "unknown": 0}
+               "exception": 0, "unknown": 0}
 
     def _page(self, query_params):
         response, mocks = _run(rest_event("GET", STATE_DB_PATH, DB_PARAMS, query_params=query_params),

@@ -3,19 +3,21 @@
 
 """Compliance evaluation store: the AWS-facing side of the evaluation engine.
 
-Owns every DynamoDB and Lambda access an evaluation needs — schema resolution, asset metadata
-and link reads, metadata-schema field lookup, workflow-execution launch for pipeline rules,
-evaluation / asset-state / audit writes — and orchestrates one evaluation through the pure
+Owns every DynamoDB, S3 and Lambda access an evaluation needs — schema resolution, asset metadata
+and link reads, metadata-schema field lookup, the asset file listing and workflow / pipeline /
+template reads that select a pipeline rule's input files, workflow-execution launch for pipeline
+rules, evaluation / asset-state / audit writes — and orchestrates one evaluation through the pure
 functions in `common/compliance/evaluationEngine.py`. The evaluate service, the trigger, the
 cascade executor and the workflow callback all call into this module.
 
 Evaluation record (COMPLIANCE_EVALUATION_STORAGE_TABLE, PK `evaluationId`):
     evaluationId, databaseId:assetId (AssetIndex PK), evaluatedAt (AssetIndex SK), databaseId,
-    assetId, schemaName, status (completed | pending_pipeline | error | failed), verdict,
-    violations, ruleResults (JSON list of RuleResult), pipelineRulesPending (JSON list of
-    {ruleName, rule}), pipelineExecutions (list of {ruleName, executionId, status}),
-    executionId + pipelineRuleName (ExecutionIdIndex; the first pipeline rule's execution),
-    actor, completedAt, errorMessage.
+    assetId, schemaName + schemaVersion (the schema actually evaluated), status (completed |
+    pending_pipeline | error | failed), verdict, violations, ruleResults (JSON list of RuleResult),
+    pipelineRulesPending (JSON list of {ruleName, rule}), pipelineExecutions (list of {ruleName,
+    executionId, status}), executionId + pipelineRuleName (ExecutionIdIndex; the first pipeline
+    rule's execution), exceptionApplied (true when a quarantine exception was active for the
+    evaluation), actor, completedAt, errorMessage.
 Pipeline-execution tracking row (same table, one per started pipeline rule):
     evaluationId = "<parent evaluationId>#<ruleName>", recordType "pipelineExecution",
     parentEvaluationId, pipelineRuleName, executionId (ExecutionIdIndex), status (pending |
@@ -24,16 +26,18 @@ Pipeline-execution tracking row (same table, one per started pipeline rule):
     pipeline results are the aggregate of these rows.
     It carries no databaseId:assetId, so it stays out of the AssetIndex listing.
 Asset-state record (COMPLIANCE_ASSET_STATE_STORAGE_TABLE, PK databaseId, SK assetId):
-    schemaName (SchemaNameIndex PK), schemaSource (database | asset), complianceState
-    (SchemaNameIndex SK), lastEvaluationId, lastEvaluatedAt, updatedAt, quarantine/exception
-    fields written by the quarantine service.
+    schemaName (SchemaNameIndex PK) and schemaSource (database | asset) — the binding, written only
+    by the schema binding service and the trigger's registration of an asset under its database
+    binding, never by an evaluation — complianceState (SchemaNameIndex SK), lastEvaluationId,
+    lastEvaluatedAt, updatedAt, quarantine/exception fields written by the quarantine service
+    (an evaluation clears the exception fields when it supersedes the exception).
 """
 
 import json
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
@@ -43,9 +47,14 @@ from common.apiRoutes import API_EXECUTE_WORKFLOW
 from common.compliance import evaluationEngine as engine
 from common.dynamodb import query_all_items, to_update_expr
 from common.resourceNames import ResourceKeys, get_table_name
+from common.s3 import list_all_objects
+from common.workflows import executionValidation as execution_validation
+from common.workflows.executionRecords import pipeline_composite_key
 from customLogging.logger import safeLogger
 from models.compliance import (
     GLOBAL_DATABASE_ID,
+    INPUT_FILES_MODE_EXPLICIT,
+    INPUT_FILES_MODE_WHOLE_ASSET,
     EvaluationVerdict,
     PipelineRule,
     RuleResult,
@@ -55,6 +64,7 @@ from models.compliance import (
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 lambda_client = boto3.client("lambda", config=retry_config)
+s3_client = boto3.client("s3", config=retry_config)
 logger = safeLogger(service_name="ComplianceEvaluationStore")
 
 # Actor recorded on system-initiated evaluations and audit entries.
@@ -68,6 +78,10 @@ PIPELINE_EXECUTION_KEY_SEPARATOR = "#"
 PIPELINE_EXECUTION_PENDING = "pending"
 PIPELINE_EXECUTION_COMPLETED = "completed"
 
+# Audit event type written when an evaluation clears an exception granted against another schema
+# name or version.
+AUDIT_EXCEPTION_SUPERSEDED = "exception_superseded"
+
 try:
     schema_table_name = get_table_name(ResourceKeys.COMPLIANCE_SCHEMA_STORAGE_TABLE)
     asset_state_table_name = get_table_name(ResourceKeys.COMPLIANCE_ASSET_STATE_STORAGE_TABLE)
@@ -79,6 +93,8 @@ try:
     metadata_schema_table_name = get_table_name(ResourceKeys.METADATA_SCHEMA_STORAGE_TABLE_V2)
     workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
     pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    pipeline_templates_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATES_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     # Set only on the Lambdas that launch pipeline-rule executions (evaluate service, trigger).
     execute_workflow_function_name = os.environ.get("EXECUTE_WORKFLOW_FUNCTION_NAME", "")
 except Exception as e:
@@ -95,6 +111,8 @@ asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
 metadata_schema_table = dynamodb.Table(metadata_schema_table_name)
 workflow_table = dynamodb.Table(workflow_table_name)
 pipeline_table = dynamodb.Table(pipeline_table_name)
+pipeline_templates_table = dynamodb.Table(pipeline_templates_table_name)
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
 
 def now_iso() -> str:
@@ -245,6 +263,148 @@ def get_pipeline_item(database_id: str, pipeline_id: str) -> Optional[Dict[str, 
         Key={"databaseId": database_id, "pipelineId": pipeline_id}).get("Item")
 
 
+def get_template_item(pipeline_database_id: str, pipeline_id: str,
+                      template_id: str) -> Optional[Dict[str, Any]]:
+    """A pipeline's template row (its `overrides` apply to the pipeline systemConfig), or None."""
+    return pipeline_templates_table.get_item(Key={
+        "pipelineDatabaseId:pipelineId": pipeline_composite_key(pipeline_database_id, pipeline_id),
+        "templateId": template_id,
+    }).get("Item")
+
+
+# --- Asset file listing ---
+
+
+def asset_s3_location(asset: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """`(bucket name, key prefix ending in '/')` under which an asset's files live: the bucket row
+    named by the asset's `bucketId` and the asset's `assetLocation.Key`. None when either is not
+    resolvable."""
+    location = asset.get("assetLocation") or {}
+    key = location.get("Key") if isinstance(location, dict) else None
+    bucket_id = asset.get("bucketId")
+    if not key or not bucket_id:
+        return None
+    response = s3_asset_buckets_table.query(
+        KeyConditionExpression=Key("bucketId").eq(bucket_id), Limit=1)
+    rows = response.get("Items") or []
+    bucket_name = rows[0].get("bucketName") if rows else None
+    if not bucket_name:
+        return None
+    return bucket_name, key if key.endswith("/") else key + "/"
+
+
+def list_asset_file_keys(database_id: str, asset_id: str) -> Optional[List[str]]:
+    """The asset-relative `/…` keys of the asset's current files: every object under its S3 prefix,
+    paged to exhaustion, folder markers dropped, sorted. None when the asset or its location cannot
+    be resolved. An archived file's current version is a delete marker, so it is not listed."""
+    asset = get_asset_item(database_id, asset_id)
+    location = asset_s3_location(asset) if asset else None
+    if location is None:
+        logger.error(f"Asset {database_id}:{asset_id} has no resolvable S3 location")
+        return None
+    bucket, prefix = location
+    keys = set()
+    for entry in list_all_objects(bucket, prefix, client=s3_client):
+        key = entry.get("Key", "")
+        if not key or key.endswith("/"):
+            continue
+        relative = key[len(prefix):] if key.startswith(prefix) else key
+        keys.add("/" + relative.lstrip("/"))
+    return sorted(keys)
+
+
+# --- Pipeline-rule input selection ---
+
+# The only client-visible texts for an input selection that cannot be launched. They name neither
+# the asset's files nor the filters involved (backend Rule 11); the specifics are logged.
+INPUT_SELECTION_REFUSED = "Pipeline rule input selection is not accepted by the workflow"
+INPUT_SELECTION_NOT_ONE_FILE = "Pipeline rule input selection did not match exactly one file"
+INPUT_SELECTION_MISSING_FILE = "Pipeline rule input selection names a file the asset does not have"
+
+# The asset root as an execute-request relativeFileKey.
+WHOLE_ASSET_KEY = "/"
+
+ARITY_NONE = "none"
+ARITY_ONE = "one"
+
+
+def resolve_pipeline_rule_inputs(
+    rule: PipelineRule,
+    database_id: str,
+    asset_id: str,
+    workflow: Dict[str, Any],
+    pipeline: Dict[str, Any],
+    template: Optional[Dict[str, Any]],
+    asset_file_keys: Callable[[], Optional[List[str]]],
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """The execute-request `inputFiles` a pipeline rule's `inputFiles` selection resolves to against
+    the asset's current files, or `(None, message)` when the selection cannot be launched.
+
+    The pipeline's effective config is its systemConfig with the chosen template's `overrides`
+    merged; the arity is the workflow's `inputFileArity`, falling back to the pipeline's when the
+    workflow declares none. `wholeAsset` sends the asset root; `matching` lists the asset's files,
+    applies the workflow's, then the pipeline's, then the rule's own filters and sorts by key;
+    `explicit` requires every listed key to exist. The resolved selection then passes the same
+    cross-entity validation the execute-workflow handler runs (arity, asset scope, filters, a
+    disabled or archived pipeline), so a selection the workflow would refuse is reported here.
+    `asset_file_keys` is read only by the modes that need the listing.
+    """
+    selection = rule.inputFiles
+    workflow_config = workflow.get("systemConfig") or {}
+    template_overrides = (template or {}).get("overrides") if template else None
+    pipeline_config = execution_validation.resolve_effective_pipeline_config(
+        pipeline.get("systemConfig") or {}, template_overrides)
+    arity = execution_validation._arity(
+        workflow_config if workflow_config.get("inputFileArity") else pipeline_config)
+
+    def as_inputs(keys: List[str]) -> List[Dict[str, Any]]:
+        return [{"databaseId": database_id, "assetId": asset_id, "relativeFileKey": key}
+                for key in keys]
+
+    if selection.mode == INPUT_FILES_MODE_WHOLE_ASSET:
+        inputs = as_inputs([WHOLE_ASSET_KEY])
+    else:
+        file_keys = asset_file_keys()
+        if file_keys is None:
+            return None, INPUT_SELECTION_REFUSED
+        if selection.mode == INPUT_FILES_MODE_EXPLICIT:
+            missing = [key for key in selection.keys or [] if key not in file_keys]
+            if missing:
+                logger.info(f"Pipeline rule names {len(missing)} file(s) the asset "
+                            f"{database_id}:{asset_id} does not have")
+                return None, INPUT_SELECTION_MISSING_FILE
+            inputs = as_inputs(sorted(selection.keys or []))
+        else:
+            candidates = as_inputs(file_keys)
+            candidates = execution_validation.apply_input_file_filters(
+                candidates, workflow_config.get("inputFileFilters"))
+            candidates = execution_validation.apply_input_file_filters(
+                candidates, pipeline_config.get("inputFileFilters"))
+            if selection.filter:
+                candidates = execution_validation.apply_input_file_filters(
+                    candidates, {"allow": selection.filter})
+            candidates.sort(key=lambda entry: entry["relativeFileKey"])
+            inputs = [] if arity == ARITY_NONE else candidates
+        if arity == ARITY_ONE and len(inputs) != 1:
+            logger.info(f"Pipeline rule input selection matched {len(inputs)} file(s) of asset "
+                        f"{database_id}:{asset_id}; the workflow accepts exactly one")
+            return None, INPUT_SELECTION_NOT_ONE_FILE
+
+    ref = rule.pipelineRef
+    errors, _ = execution_validation.validate_execution(workflow_config, [{
+        "pipelineId": ref.pipelineId,
+        "pipelineDatabaseId": ref.pipelineDatabaseId,
+        "enabled": pipeline.get("enabled", True),
+        "archived": pipeline.get("archived", False),
+        "systemConfig": pipeline_config,
+    }], inputs)
+    if errors:
+        logger.info(f"Pipeline rule input selection for {database_id}:{asset_id} refused by "
+                    f"workflow {ref.databaseId}/{ref.workflowId}: {errors}")
+        return None, INPUT_SELECTION_REFUSED
+    return inputs, None
+
+
 # --- Writes ---
 
 # Placeholders a status condition adds beside the `#f<n>` / `:v<n>` aliases `to_update_expr`
@@ -322,7 +482,8 @@ def write_audit(
     cascade_id: Optional[str] = None,
 ) -> None:
     """One compliance audit entry (AssetIndex on `databaseId:assetId`, EventTypeIndex on
-    `eventType`)."""
+    `eventType`). Best-effort: a failed write is logged and never raised, so the mutation it
+    describes — already applied — is not reported as failed."""
     item = {
         "entryId": str(uuid.uuid4()),
         "databaseId:assetId": f"{database_id}:{asset_id}",
@@ -343,19 +504,23 @@ def write_audit(
         item["evaluationId"] = evaluation_id
     if cascade_id is not None:
         item["cascadeId"] = cascade_id
-    audit_table.put_item(Item=item)
+    try:
+        audit_table.put_item(Item=item)
+    except Exception as e:
+        logger.exception(
+            f"Failed writing audit entry {event_type} for {database_id}:{asset_id}: {e}")
 
 
 # --- Pipeline-rule execution launch ---
 
 
-def build_execute_workflow_request(rule: PipelineRule, database_id: str, asset_id: str,
+def build_execute_workflow_request(rule: PipelineRule, inputs: List[Dict[str, Any]],
                                    execution_group_id: str = "") -> Dict[str, Any]:
-    """The `ExecuteWorkflowRequestV2Model` body for one pipeline rule: the whole asset as the
-    single input file, the rule's template (and its inputParameters as template tags) keyed by
-    the pipeline id, and a manual trigger. `execution_group_id` is the evaluation id, so every
-    execution the evaluation launches shares one group and its audit entry and completion event
-    name the evaluation they belong to."""
+    """The `ExecuteWorkflowRequestV2Model` body for one pipeline rule: the resolved input files
+    (`resolve_pipeline_rule_inputs`), the rule's template (and its inputParameters as template
+    tags) keyed by the pipeline id, and a manual trigger. `execution_group_id` is the evaluation
+    id, so every execution the evaluation launches shares one group and its audit entry and
+    completion event name the evaluation they belong to."""
     ref = rule.pipelineRef
     parameters: Dict[str, Any] = {}
     if ref.templateId:
@@ -364,11 +529,7 @@ def build_execute_workflow_request(rule: PipelineRule, database_id: str, asset_i
     if template_tags:
         parameters["templateTags"] = template_tags
     body: Dict[str, Any] = {
-        "inputFiles": [{
-            "databaseId": database_id,
-            "assetId": asset_id,
-            "relativeFileKey": "/",
-        }],
+        "inputFiles": [dict(entry) for entry in inputs],
         "pipelineExecutionParameters": {ref.pipelineId: parameters},
         "triggerType": "manual",
     }
@@ -429,6 +590,9 @@ def pipeline_execution_record_id(evaluation_id: str, rule_name: str) -> str:
     return f"{evaluation_id}{PIPELINE_EXECUTION_KEY_SEPARATOR}{rule_name}"
 
 
+LAUNCH_FAILED_MESSAGE = "Pipeline execution could not be started"
+
+
 def start_pipeline_rule_executions(
     pipeline_rules: Dict[str, PipelineRule],
     evaluation_id: str,
@@ -440,29 +604,51 @@ def start_pipeline_rule_executions(
 
     Returns (started, failed): `started` entries are `{ruleName, executionId, status}` (a tracking
     row is written for each); `failed` holds a failed RuleResult for every rule whose execution
-    could not be launched.
+    could not be launched — a workflow, pipeline or template that does not exist or a refused
+    launch (`LAUNCH_FAILED_MESSAGE`), or an input selection the workflow does not accept (one of
+    the INPUT_SELECTION_* messages). The asset's files are listed once per evaluation, on the first
+    rule that needs them.
     """
     started: List[Dict[str, Any]] = []
     failed: List[RuleResult] = []
+    listing: Dict[str, Optional[List[str]]] = {}
+
+    def asset_file_keys() -> Optional[List[str]]:
+        if "keys" not in listing:
+            listing["keys"] = list_asset_file_keys(database_id, asset_id)
+        return listing["keys"]
+
     for rule_name, rule in pipeline_rules.items():
         ref = rule.pipelineRef
         execution_id = None
+        failure_message = LAUNCH_FAILED_MESSAGE
         try:
-            if get_workflow_item(ref.databaseId, ref.workflowId) is None:
+            workflow = get_workflow_item(ref.databaseId, ref.workflowId)
+            pipeline = get_pipeline_item(ref.pipelineDatabaseId, ref.pipelineId)
+            template = None
+            if ref.templateId and pipeline is not None:
+                template = get_template_item(ref.pipelineDatabaseId, ref.pipelineId, ref.templateId)
+            if workflow is None:
                 logger.error(f"Pipeline rule '{rule_name}' references a workflow that does not exist")
-            elif get_pipeline_item(ref.pipelineDatabaseId, ref.pipelineId) is None:
+            elif pipeline is None:
                 logger.error(f"Pipeline rule '{rule_name}' references a pipeline that does not exist")
+            elif ref.templateId and template is None:
+                logger.error(f"Pipeline rule '{rule_name}' references a template that does not exist")
             else:
-                execution_id = invoke_execute_workflow(
-                    ref.databaseId, ref.workflowId,
-                    build_execute_workflow_request(rule, database_id, asset_id,
-                                                   execution_group_id=evaluation_id))
+                inputs, selection_error = resolve_pipeline_rule_inputs(
+                    rule, database_id, asset_id, workflow, pipeline, template, asset_file_keys)
+                if selection_error:
+                    failure_message = selection_error
+                else:
+                    execution_id = invoke_execute_workflow(
+                        ref.databaseId, ref.workflowId,
+                        build_execute_workflow_request(rule, inputs,
+                                                       execution_group_id=evaluation_id))
         except Exception as e:
             logger.exception(f"Failed launching the workflow for pipeline rule '{rule_name}': {e}")
 
         if not execution_id:
-            failed.extend(engine.failed_pipeline_rule_results(
-                {rule_name: rule}, "Pipeline execution could not be started"))
+            failed.extend(engine.failed_pipeline_rule_results({rule_name: rule}, failure_message))
             continue
 
         evaluation_table.put_item(Item={
@@ -498,17 +684,28 @@ def run_evaluation(
     executions and leave the evaluation `pending_pipeline` until the workflow callback finalizes
     it. Writes the evaluation record, the asset-state row and the audit entry, and returns
     `{evaluationId, verdict, complianceState, ruleResults, pipelineRulesPending}`.
+
+    The asset-state row receives the state and the evaluation pointers only: the binding
+    (`schemaName` / `schemaSource`) is never written here, so an evaluation against another schema
+    leaves the binding as it is and records the schema it used on the evaluation row alone.
+
+    An exception granted against this schema name and version keeps the asset released: the
+    verdict is recorded as computed, the evaluation row carries `exceptionApplied`, and the state
+    becomes `exception` on a failing verdict. An exception granted against another schema or an
+    earlier version is superseded — cleared, audited, and the verdict applied normally.
     """
     evaluated_at = now_iso()
     evaluation_id = str(uuid.uuid4())
 
-    schema_body = load_schema_body(schema_name)
-    if schema_body is None:
+    schema_item = load_schema_item(schema_name)
+    if schema_item is None:
         return _record_error(evaluation_id, database_id, asset_id, schema_name,
                              "Schema not found", evaluated_at, actor)
+    schema_body = engine.parse_schema_body(schema_item.get("schemaBody", "{}"))
     if not engine.is_vams_rules_schema(schema_body):
         return _record_error(evaluation_id, database_id, asset_id, schema_name,
                              "Schema is not vams-rules-v1 format", evaluated_at, actor)
+    schema_version = engine.schema_version_number(schema_item.get("internalVersion"))
 
     typed_rules = engine.parse_resolved_rules(resolve_schema_rules(schema_body))
     _, _, pipeline_rules = engine.split_rules(typed_rules)
@@ -538,7 +735,11 @@ def run_evaluation(
 
     has_pending = bool(started)
     verdict = EvaluationVerdict.pending_pipeline if has_pending else determine_verdict(rule_results)
-    compliance_state = engine.verdict_to_state(verdict)
+
+    previous = get_compliance_record(database_id, asset_id) or {}
+    exception_applies = engine.exception_applies(previous, schema_name, schema_version)
+    compliance_state = (engine.exception_state(verdict) if exception_applies
+                        else engine.verdict_to_state(verdict))
 
     record: Dict[str, Any] = {
         "evaluationId": evaluation_id,
@@ -554,6 +755,10 @@ def run_evaluation(
         "ruleResults": json.dumps([r.dict() for r in rule_results]),
         "actor": actor,
     }
+    if schema_version is not None:
+        record["schemaVersion"] = schema_version
+    if exception_applies:
+        record["exceptionApplied"] = True
     if has_pending:
         record["pipelineRulesPending"] = engine.pipeline_rules_to_json(pipeline_rules)
         record["pipelineExecutions"] = started
@@ -563,33 +768,15 @@ def run_evaluation(
         record["completedAt"] = evaluated_at
     evaluation_table.put_item(Item=record)
 
-    previous = get_compliance_record(database_id, asset_id) or {}
-    previous_state = previous.get("complianceState")
-    update_asset_state(database_id, asset_id, {
-        "complianceState": compliance_state,
-        "schemaName": schema_name,
-        "lastEvaluationId": evaluation_id,
-        "lastEvaluatedAt": evaluated_at,
-        "updatedAt": evaluated_at,
-        **_quarantine_state_fields(compliance_state, rule_results),
-    })
-
-    write_audit(
-        database_id, asset_id,
-        event_type="compliance_check",
-        actor=actor,
-        schema_name=schema_name,
-        evaluation_id=evaluation_id,
-        details={
+    _write_evaluation_state(
+        database_id, asset_id, actor, evaluation_id, evaluated_at, schema_name, schema_version,
+        previous, compliance_state, rule_results,
+        audit_details={
             "verdict": verdict.value,
             "ruleResultCount": len(rule_results),
             "pipelineRulesPending": len(started),
-        },
-        previous_state=previous_state,
-        new_state=compliance_state,
-    )
-    _audit_state_transition(database_id, asset_id, actor, evaluation_id, previous_state,
-                            compliance_state, engine.failed_rule_names(rule_results), schema_name)
+            **({"exceptionApplied": True} if exception_applies else {}),
+        })
 
     return {
         "evaluationId": evaluation_id,
@@ -600,9 +787,61 @@ def run_evaluation(
     }
 
 
+def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluated_at,
+                            schema_name, schema_version, previous, compliance_state,
+                            rule_results, audit_details) -> None:
+    """Apply an evaluation's outcome to the asset-state row and the audit trail: the state and the
+    evaluation pointers (never the binding), the quarantine reason, the clearing of an exception the
+    evaluation supersedes (audited as `exception_superseded`), the `compliance_check` entry, and the
+    release audit / quarantine notification a state transition calls for."""
+    previous_state = previous.get("complianceState")
+    updates: Dict[str, Any] = {
+        "complianceState": compliance_state,
+        "lastEvaluationId": evaluation_id,
+        "lastEvaluatedAt": evaluated_at,
+        "updatedAt": evaluated_at,
+        **_quarantine_state_fields(compliance_state, rule_results),
+    }
+    superseded = engine.exception_is_superseded(previous, schema_name, schema_version)
+    if superseded:
+        updates.update(engine.cleared_exception_fields())
+    update_asset_state(database_id, asset_id, updates)
+
+    if superseded:
+        write_audit(
+            database_id, asset_id,
+            event_type=AUDIT_EXCEPTION_SUPERSEDED,
+            actor=actor,
+            schema_name=schema_name,
+            evaluation_id=evaluation_id,
+            details={
+                "exceptionSchemaName": previous.get(engine.EXCEPTION_SCHEMA_NAME_FIELD),
+                "exceptionSchemaVersion": engine.schema_version_number(
+                    previous.get(engine.EXCEPTION_SCHEMA_VERSION_FIELD)),
+                "schemaName": schema_name,
+                "schemaVersion": schema_version,
+            },
+            previous_state=previous_state,
+            new_state=compliance_state,
+        )
+    write_audit(
+        database_id, asset_id,
+        event_type="compliance_check",
+        actor=actor,
+        schema_name=schema_name,
+        evaluation_id=evaluation_id,
+        details=audit_details,
+        previous_state=previous_state,
+        new_state=compliance_state,
+    )
+    _audit_state_transition(database_id, asset_id, actor, evaluation_id, previous_state,
+                            compliance_state, engine.failed_rule_names(rule_results), schema_name)
+
+
 def _quarantine_state_fields(compliance_state, rule_results) -> Dict[str, Any]:
     """The asset-state attributes that describe a quarantine: the failed-rule messages are kept as
-    the quarantine reason while the asset is quarantined and cleared on any other state."""
+    the quarantine reason while the asset is quarantined and cleared on any other state (an
+    `exception` state keeps its violations on the evaluation row only)."""
     if compliance_state == engine.STATE_QUARANTINED:
         reason = "; ".join(engine.violations(rule_results)) or "Compliance evaluation failed"
         return {"quarantineReason": reason[:1024]}
@@ -769,50 +1008,45 @@ def complete_pipeline_rule(
             logger.info(f"Evaluation {evaluation_id} was finalized by another callback")
         return _not_finalized(evaluation_id, rule_name)
 
+    database_id = evaluation["databaseId"]
+    asset_id = evaluation["assetId"]
+    schema_name = evaluation.get("schemaName", "")
+    previous = get_compliance_record(database_id, asset_id) or {}
+    # The schema version matters only to a row that carries an exception to scope it against.
+    schema_version = (_evaluated_schema_version(evaluation)
+                      if previous.get(engine.EXCEPTION_GRANTED_FIELD) else None)
+    exception_applies = engine.exception_applies(previous, schema_name, schema_version)
+
     verdict = determine_verdict(all_results)
-    compliance_state = engine.verdict_to_state(verdict)
+    compliance_state = (engine.exception_state(verdict) if exception_applies
+                        else engine.verdict_to_state(verdict))
+    finalize: Dict[str, Any] = {
+        **progress,
+        "status": engine.EVALUATION_STATUS_COMPLETED,
+        "verdict": verdict.value,
+        "violations": engine.violations(all_results),
+        "completedAt": finished_at,
+    }
+    if exception_applies:
+        finalize["exceptionApplied"] = True
     try:
-        update_evaluation(evaluation_id, {
-            **progress,
-            "status": engine.EVALUATION_STATUS_COMPLETED,
-            "verdict": verdict.value,
-            "violations": engine.violations(all_results),
-            "completedAt": finished_at,
-        }, condition=status_condition(engine.EVALUATION_STATUS_PENDING_PIPELINE))
+        update_evaluation(evaluation_id, finalize,
+                          condition=status_condition(engine.EVALUATION_STATUS_PENDING_PIPELINE))
     except Exception as e:
         if not is_conditional_check_failure(e):
             raise
         logger.info(f"Evaluation {evaluation_id} was finalized by another callback")
         return _not_finalized(evaluation_id, rule_name)
 
-    database_id = evaluation["databaseId"]
-    asset_id = evaluation["assetId"]
-    schema_name = evaluation.get("schemaName", "")
-    previous = get_compliance_record(database_id, asset_id) or {}
-    previous_state = previous.get("complianceState")
-    update_asset_state(database_id, asset_id, {
-        "complianceState": compliance_state,
-        "lastEvaluationId": evaluation_id,
-        "lastEvaluatedAt": finished_at,
-        "updatedAt": finished_at,
-        **_quarantine_state_fields(compliance_state, all_results),
-    })
-    write_audit(
-        database_id, asset_id,
-        event_type="compliance_check",
-        actor=SYSTEM_ACTOR,
-        schema_name=schema_name,
-        evaluation_id=evaluation_id,
-        details={
+    _write_evaluation_state(
+        database_id, asset_id, SYSTEM_ACTOR, evaluation_id, finished_at, schema_name,
+        schema_version, previous, compliance_state, all_results,
+        audit_details={
             "verdict": verdict.value,
             "pipelineExecutionStatus": execution_status,
             "phase": "pipeline_callback",
-        },
-        previous_state=previous_state,
-        new_state=compliance_state,
-    )
-    _audit_state_transition(database_id, asset_id, SYSTEM_ACTOR, evaluation_id, previous_state,
-                            compliance_state, engine.failed_rule_names(all_results), schema_name)
+            **({"exceptionApplied": True} if exception_applies else {}),
+        })
     return {
         "evaluationId": evaluation_id,
         "ruleName": rule_name,
@@ -820,6 +1054,16 @@ def complete_pipeline_rule(
         "verdict": verdict.value,
         "complianceState": compliance_state,
     }
+
+
+def _evaluated_schema_version(evaluation: Dict[str, Any]) -> Optional[int]:
+    """The `internalVersion` an evaluation ran against: the version recorded on the evaluation row,
+    or — for a row written without one — the schema's current version."""
+    version = engine.schema_version_number(evaluation.get("schemaVersion"))
+    if version is not None:
+        return version
+    current = load_schema_item(evaluation.get("schemaName", "")) or {}
+    return engine.schema_version_number(current.get("internalVersion"))
 
 
 def _not_finalized(evaluation_id: str, rule_name: str) -> Dict[str, Any]:

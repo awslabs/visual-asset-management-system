@@ -125,13 +125,80 @@ class PipelineCheck(BaseModel, extra='ignore'):
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
 
+# Input-file selection modes of a pipeline rule.
+INPUT_FILES_MODE_MATCHING = "matching"
+INPUT_FILES_MODE_WHOLE_ASSET = "wholeAsset"
+INPUT_FILES_MODE_EXPLICIT = "explicit"
+INPUT_FILES_MODES = (INPUT_FILES_MODE_MATCHING, INPUT_FILES_MODE_WHOLE_ASSET, INPUT_FILES_MODE_EXPLICIT)
+
+# Bounds on a pipeline rule's input selection: `filter` globs and `explicit` keys.
+MAX_INPUT_FILE_FILTERS = 32
+MAX_INPUT_FILE_FILTER_LENGTH = 256
+MAX_EXPLICIT_INPUT_KEYS = 64
+
+
+def trim_entries(value):
+    """Surrounding whitespace removed from every string entry of a list; other values pass through
+    to the field's own type check."""
+    if isinstance(value, list):
+        return [trim_name(entry) for entry in value]
+    return value
+
+
+class PipelineInputFiles(BaseModel, extra='ignore'):
+    """Which of the asset's files a pipeline rule hands to its workflow execution.
+
+    `matching` (the default) selects the asset's current files that pass the workflow's and the
+    pipeline's input-file filters, narrowed by the rule's own `filter` globs; `wholeAsset` selects
+    the asset root (`/`) and is accepted only by a workflow that allows whole-asset selection;
+    `explicit` selects the listed asset-relative `keys`, every one of which must exist. `filter`
+    is accepted only with `matching`; `keys` is required with `explicit` and refused otherwise.
+    """
+    mode: str = Field(INPUT_FILES_MODE_MATCHING, regex="^(" + "|".join(INPUT_FILES_MODES) + ")$")
+    filter: Optional[List[str]] = Field(None, max_items=MAX_INPUT_FILE_FILTERS)
+    keys: Optional[List[str]] = Field(None, min_items=1, max_items=MAX_EXPLICIT_INPUT_KEYS)
+
+    _trim_mode = validator('mode', pre=True, allow_reuse=True)(trim_name)
+    _trim_entries = validator('filter', 'keys', pre=True, allow_reuse=True)(trim_entries)
+
+    @root_validator
+    def validate_selection(cls, values):
+        mode = values.get("mode")
+        filters = values.get("filter")
+        keys = values.get("keys")
+        if filters is not None and mode != INPUT_FILES_MODE_MATCHING:
+            raise ValueError("'filter' is only accepted with the matching mode")
+        if mode == INPUT_FILES_MODE_EXPLICIT and not keys:
+            raise ValueError("'keys' is required with the explicit mode")
+        if keys is not None and mode != INPUT_FILES_MODE_EXPLICIT:
+            raise ValueError("'keys' is only accepted with the explicit mode")
+        if filters is not None:
+            for entry in filters:
+                if not isinstance(entry, str) or not entry \
+                        or len(entry) > MAX_INPUT_FILE_FILTER_LENGTH:
+                    raise ValueError(
+                        f"Every 'filter' entry must be 1 to {MAX_INPUT_FILE_FILTER_LENGTH} characters")
+        if keys is not None:
+            # Keys are asset-relative and stored with a single leading '/'.
+            normalized = ["/" + str(key).lstrip("/") for key in keys]
+            (valid, message) = validate({
+                'keys': {'value': normalized, 'validator': 'RELATIVE_FILE_PATH_ARRAY'},
+            })
+            if not valid:
+                raise ValueError(message)
+            values["keys"] = normalized
+        return values
+
+
 class PipelineRule(BaseModel, extra='ignore'):
     """Pipeline rule: executes a VAMS workflow and compares the pipeline's measurements to
-    tolerances. `inputParameters` are handed to the pipeline as template tag values."""
+    tolerances. `inputParameters` are handed to the pipeline as template tag values; `inputFiles`
+    selects which of the asset's files the execution receives."""
     ruleType: RuleType = Field(RuleType.pipeline, const=True)
     enforcement: EnforcementLevel
     pipelineRef: PipelineRef
     inputParameters: Optional[Dict[str, Any]] = {}
+    inputFiles: PipelineInputFiles = Field(default_factory=PipelineInputFiles)
     checks: List[PipelineCheck] = Field(min_items=1)
 
 

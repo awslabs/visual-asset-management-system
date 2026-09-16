@@ -38,6 +38,24 @@ STATE_NON_COMPLIANT = "non_compliant"
 STATE_QUARANTINED = "quarantined"
 STATE_PENDING_EVALUATION = "pending_evaluation"
 STATE_UNKNOWN = "unknown"
+# An asset whose latest evaluation failed while a quarantine exception is active: released, never
+# quarantined, with the violations kept on the evaluation row.
+STATE_EXCEPTION = "exception"
+
+# Asset-state attributes a quarantine exception writes. `exceptionSchemaName` /
+# `exceptionSchemaVersion` scope the exception to the schema name and `internalVersion` it was
+# granted against; an evaluation against any other schema or version supersedes it.
+EXCEPTION_GRANTED_FIELD = "exceptionGranted"
+EXCEPTION_SCHEMA_NAME_FIELD = "exceptionSchemaName"
+EXCEPTION_SCHEMA_VERSION_FIELD = "exceptionSchemaVersion"
+EXCEPTION_FIELDS = (
+    EXCEPTION_GRANTED_FIELD,
+    "exceptionReason",
+    "exceptionGrantedBy",
+    "exceptionGrantedAt",
+    EXCEPTION_SCHEMA_NAME_FIELD,
+    EXCEPTION_SCHEMA_VERSION_FIELD,
+)
 
 # Evaluation record statuses.
 EVALUATION_STATUS_COMPLETED = "completed"
@@ -501,6 +519,59 @@ def metadata_schema_ref_key(ref) -> str:
 def verdict_to_state(verdict: EvaluationVerdict) -> str:
     """The asset-state value for an evaluation verdict."""
     return _VERDICT_TO_STATE.get(verdict, STATE_UNKNOWN)
+
+
+# --- Quarantine exceptions ---
+
+
+def schema_version_number(value: Any) -> Optional[int]:
+    """A stored `internalVersion` (int, Decimal or numeric string) as an int; None when absent or
+    not numeric."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def exception_applies(state_row: Optional[Dict[str, Any]], schema_name: str,
+                      schema_version: Any) -> bool:
+    """Whether the asset-state row carries an exception granted against exactly this schema name
+    and `internalVersion`. An exception granted against another schema or an earlier version does
+    not apply; the evaluation supersedes it."""
+    if not state_row or not state_row.get(EXCEPTION_GRANTED_FIELD):
+        return False
+    if state_row.get(EXCEPTION_SCHEMA_NAME_FIELD) != schema_name:
+        return False
+    granted_version = schema_version_number(state_row.get(EXCEPTION_SCHEMA_VERSION_FIELD))
+    return granted_version is not None and granted_version == schema_version_number(schema_version)
+
+
+def exception_is_superseded(state_row: Optional[Dict[str, Any]], schema_name: str,
+                            schema_version: Any) -> bool:
+    """Whether the row carries an exception that this evaluation's schema name / version does not
+    match, so the evaluation clears it and applies its verdict normally."""
+    return bool((state_row or {}).get(EXCEPTION_GRANTED_FIELD)) and not exception_applies(
+        state_row, schema_name, schema_version)
+
+
+def cleared_exception_fields() -> Dict[str, Any]:
+    """The asset-state update that removes an exception: `exceptionGranted` false and every other
+    exception attribute null. Written when an exception is revoked or superseded."""
+    return {field: (False if field == EXCEPTION_GRANTED_FIELD else None)
+            for field in EXCEPTION_FIELDS}
+
+
+def exception_state(verdict: EvaluationVerdict) -> str:
+    """The asset state an evaluation produces while an exception is active: a compliant verdict is
+    `compliant`, a verdict still awaiting pipeline rules is `pending_evaluation`, an evaluation that
+    could not run is `unknown`, and any failing verdict is `exception` — never `quarantined` or
+    `non_compliant`."""
+    if verdict in (EvaluationVerdict.compliant, EvaluationVerdict.pending_pipeline,
+                   EvaluationVerdict.error):
+        return verdict_to_state(verdict)
+    return STATE_EXCEPTION
 
 
 def violations(rule_results: List[RuleResult]) -> List[str]:

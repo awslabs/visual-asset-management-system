@@ -1,56 +1,60 @@
 {
     "metadata": {
         "name": "3D Model Quality Schema",
-        "description": "Quality gate schema for 3D model assets. Ensures polygon budgets, LOD requirements, and coordinate system documentation are met before assets are approved for use.",
-        "version": "1.0.0"
+        "description": "Quality gate schema for 3D model assets. Requires polygon budget, coordinate system and unit metadata, and proves every model converts through the built-in 3D conversion pipeline before it is approved for use.",
+        "version": "2.0.0"
     },
     "schemaName": "3d-model-quality",
-    "description": "Quality requirements for 3D model assets including polygon limits, LOD levels, and coordinate system.",
+    "description": "Quality requirements for 3D model assets: polygon count, coordinate system and unit metadata, plus a successful GLB conversion of the model file.",
     "schemaBody": {
-        "type": "object",
-        "required": ["polygon_count", "coordinate_system", "units"],
-        "properties": {
-            "polygon_count": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 50000000,
-                "description": "Total polygon count for the model"
+        "schemaFormat": "vams-rules-v1",
+        "rules": {
+            "model-metadata": {
+                "ruleType": "metadata",
+                "enforcement": "warn",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
+                },
+                "checks": [
+                    {
+                        "name": "geometry-fields-present",
+                        "description": "The default asset metadata schema's required fields are present and typed as declared, and the model documents its polygon count, coordinate reference system and unit of measurement.",
+                        "validateRequired": true,
+                        "validateTypes": true,
+                        "additionalRequiredFields": ["polygon_count", "coordinate_system", "units"]
+                    }
+                ]
             },
-            "coordinate_system": {
-                "type": "string",
-                "enum": ["wgs84", "utm", "local", "enu", "ecef"],
-                "description": "Coordinate reference system used by the model"
-            },
-            "units": {
-                "type": "string",
-                "enum": ["meters", "centimeters", "millimeters", "feet", "inches"],
-                "description": "Unit of measurement for model geometry"
-            },
-            "lod_levels": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 10,
-                "description": "Number of Level of Detail variants provided"
-            },
-            "texture_resolution_max": {
-                "type": "integer",
-                "minimum": 64,
-                "maximum": 16384,
-                "description": "Maximum texture resolution in pixels (width or height)"
-            },
-            "has_collision_mesh": {
-                "type": "boolean",
-                "description": "Whether a collision/physics mesh is included"
-            },
-            "source_application": {
-                "type": "string",
-                "description": "Application used to create the model (e.g., Blender, Maya, Revit)"
-            },
-            "export_format_version": {
-                "type": "string",
-                "description": "Version of the export format (e.g., glTF 2.0, USD 23.05)"
+            "converts-to-glb": {
+                "ruleType": "pipeline",
+                "enforcement": "quarantine",
+                "pipelineRef": {
+                    "databaseId": "GLOBAL",
+                    "workflowId": "conversion-3d-basic",
+                    "pipelineDatabaseId": "GLOBAL",
+                    "pipelineId": "conversion-3d-basic",
+                    "templateId": "convert-to-glb"
+                },
+                "inputFiles": {
+                    "mode": "matching",
+                    "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.glb", "*.xyz"]
+                },
+                "checks": [
+                    {
+                        "name": "conversion-succeeds",
+                        "description": "The model file converts to GLB. The pipeline writes no compliance-output document, so the check reads the execution's own success measurement.",
+                        "outputField": "execution_success",
+                        "tolerance": { "operator": "eq", "value": 1 }
+                    },
+                    {
+                        "name": "conversion-duration",
+                        "description": "The conversion completes within ten minutes.",
+                        "outputField": "processing_duration_seconds",
+                        "tolerance": { "operator": "lte", "value": 600 }
+                    }
+                ]
             }
-        },
-        "additionalProperties": true
+        }
     }
 }

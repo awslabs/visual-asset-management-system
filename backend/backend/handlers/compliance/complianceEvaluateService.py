@@ -380,6 +380,7 @@ def get_database_compliance_overview(event, database_id, query_params):
         engine.STATE_NON_COMPLIANT: 0,
         engine.STATE_PENDING_EVALUATION: 0,
         engine.STATE_QUARANTINED: 0,
+        engine.STATE_EXCEPTION: 0,
         engine.STATE_UNKNOWN: 0,
     }
     for item in items:

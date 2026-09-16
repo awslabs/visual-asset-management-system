@@ -23,6 +23,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_SCHEMA_BY_NAME, API_COMPLIANCE_SCHEMAS
+from common.compliance import evaluationEngine as engine
 from common.dynamodb import query_all_items, query_has_match
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -57,8 +58,6 @@ COMPLIANCE_SCHEMA_OBJECT_TYPE = "complianceSchema"
 # The system actor: the only identity that registers or modifies system schemas.
 SYSTEM_USER = "SYSTEM_USER"
 
-VALID_JSON_SCHEMA_TYPES = {"string", "number", "integer", "boolean", "array", "object", "null"}
-
 try:
     schema_table_name = get_table_name(ResourceKeys.COMPLIANCE_SCHEMA_STORAGE_TABLE)
     asset_state_table_name = get_table_name(ResourceKeys.COMPLIANCE_ASSET_STATE_STORAGE_TABLE)
@@ -78,19 +77,26 @@ database_table = dynamodb.Table(database_table_name)
 # Schema body validation
 #######################
 
+# The one client-visible message for a body that is not a vams-rules-v1 document; the specifics
+# (missing format marker, missing rules, model errors) are logged.
+NOT_VAMS_RULES_MESSAGE = "schemaBody must be a vams-rules-v1 document"
+
+
 def validate_schema_body(schema_body):
-    """Validate a schema body in either supported format.
+    """Validate a schema body. Only the `vams-rules-v1` format (`schemaFormat: "vams-rules-v1"` plus
+    a `rules` object of pipeline, metadata and relationship rules) is accepted.
 
-    1. vams-rules-v1: structured rules (pipeline, metadata, relationship rule types).
-    2. Legacy JSON Schema (draft-07 subset): freeform property validation.
-
-    Returns (True, None) when valid, (False, error_message) otherwise.
+    Returns (True, None) when valid, (False, error_message) otherwise. A body that does not declare
+    the format is refused with NOT_VAMS_RULES_MESSAGE; a declared body whose rules fail their models
+    is refused with the model's caller-safe message.
     """
     if not isinstance(schema_body, dict):
-        return False, "schemaBody must be a JSON object"
-    if schema_body.get("schemaFormat") == "vams-rules-v1":
-        return _validate_vams_rules_v1(schema_body)
-    return _validate_json_schema(schema_body)
+        logger.info("Schema body rejected: not a JSON object")
+        return False, NOT_VAMS_RULES_MESSAGE
+    if schema_body.get("schemaFormat") != engine.VAMS_RULES_V1:
+        logger.info(f"Schema body rejected: schemaFormat is not {engine.VAMS_RULES_V1}")
+        return False, NOT_VAMS_RULES_MESSAGE
+    return _validate_vams_rules_v1(schema_body)
 
 
 def _validate_vams_rules_v1(schema_body):
@@ -107,7 +113,7 @@ def _validate_vams_rules_v1(schema_body):
         return False, validation_error_message(v)
     except (ValueError, TypeError) as e:
         logger.warning(f"vams-rules-v1 body rejected: {e}")
-        return False, "Schema body is not a valid vams-rules-v1 document"
+        return False, NOT_VAMS_RULES_MESSAGE
 
     for position, (rule_name, rule_def) in enumerate(schema.rules.items()):
         try:
@@ -118,81 +124,6 @@ def _validate_vams_rules_v1(schema_body):
         except (ValueError, TypeError) as e:
             logger.warning(f"vams-rules-v1 rule '{rule_name}' at position {position} rejected: {e}")
             return False, f"rules[{position}]: rule definition is not valid"
-    return True, None
-
-
-def _validate_json_schema(schema_body):
-    """Validate a legacy JSON Schema (draft-07 subset).
-
-    Messages describe the rule that failed without echoing the submitted type, property or
-    field names; those are logged.
-    """
-    schema_type = schema_body.get("type")
-    if schema_type is not None:
-        if isinstance(schema_type, list):
-            for t in schema_type:
-                if t not in VALID_JSON_SCHEMA_TYPES:
-                    logger.info(f"JSON Schema body rejected: unsupported type '{t}' in type array")
-                    return False, "'type' array contains an unsupported JSON Schema type"
-        elif schema_type not in VALID_JSON_SCHEMA_TYPES:
-            logger.info(f"JSON Schema body rejected: unsupported type '{schema_type}'")
-            return False, "'type' is not a supported JSON Schema type"
-
-    properties = schema_body.get("properties")
-    if properties is not None:
-        if not isinstance(properties, dict):
-            return False, "'properties' must be an object"
-        for prop_name, prop_def in properties.items():
-            if not isinstance(prop_def, dict):
-                logger.info(f"JSON Schema body rejected: property '{prop_name}' is not an object")
-                return False, "Every property definition must be an object"
-            prop_type = prop_def.get("type")
-            if prop_type is not None:
-                if isinstance(prop_type, list):
-                    for t in prop_type:
-                        if t not in VALID_JSON_SCHEMA_TYPES:
-                            logger.info(f"JSON Schema body rejected: property '{prop_name}' has "
-                                        f"unsupported type '{t}'")
-                            return False, "A property 'type' array contains an unsupported JSON Schema type"
-                elif prop_type not in VALID_JSON_SCHEMA_TYPES:
-                    logger.info(f"JSON Schema body rejected: property '{prop_name}' has unsupported "
-                                f"type '{prop_type}'")
-                    return False, "A property 'type' is not a supported JSON Schema type"
-            if "enum" in prop_def and not isinstance(prop_def["enum"], list):
-                logger.info(f"JSON Schema body rejected: property '{prop_name}' enum is not an array")
-                return False, "A property 'enum' must be an array"
-            if "minimum" in prop_def and not isinstance(prop_def["minimum"], (int, float)):
-                logger.info(f"JSON Schema body rejected: property '{prop_name}' minimum is not a number")
-                return False, "A property 'minimum' must be a number"
-            if "maximum" in prop_def and not isinstance(prop_def["maximum"], (int, float)):
-                logger.info(f"JSON Schema body rejected: property '{prop_name}' maximum is not a number")
-                return False, "A property 'maximum' must be a number"
-
-    required = schema_body.get("required")
-    if required is not None:
-        if not isinstance(required, list):
-            return False, "'required' must be an array"
-        for item in required:
-            if not isinstance(item, str):
-                return False, "'required' array must contain only strings"
-        if properties is not None:
-            for req_field in required:
-                if req_field not in properties:
-                    logger.info(f"JSON Schema body rejected: required field '{req_field}' is not a "
-                                f"defined property")
-                    return False, "Every 'required' entry must name a defined property"
-
-    if "items" in schema_body:
-        items = schema_body["items"]
-        if isinstance(items, dict):
-            valid, err = _validate_json_schema(items)
-            if not valid:
-                return False, f"In 'items': {err}"
-
-    additional = schema_body.get("additionalProperties")
-    if additional is not None and not isinstance(additional, (bool, dict)):
-        return False, "'additionalProperties' must be a boolean or object"
-
     return True, None
 
 
@@ -436,13 +367,20 @@ def register_schema(event, request: CreateSchemaRequestModel):
 
     valid, err = validate_schema_body(request.schemaBody)
     if not valid:
-        logger.info(f"Schema body rejected: {err}")
-        return validation_error(body={"message": f"Invalid schema: {err}"}, event=event)
+        return _schema_body_rejected(event, err)
 
     # Only the system actor registers system schemas (which no other caller can later modify).
     is_system = bool(request.isSystem) and claims_and_roles["tokens"][0] == SYSTEM_USER
     return _write_schema_version(event, request.schemaName, request.databaseId,
                                  request.description or "", request.schemaBody, is_system)
+
+
+def _schema_body_rejected(event, err):
+    """The 400 for a schema body `validate_schema_body` refused: the generic format message as is,
+    a model message prefixed as an invalid schema."""
+    logger.info(f"Schema body rejected: {err}")
+    message = err if err == NOT_VAMS_RULES_MESSAGE else f"Invalid schema: {err}"
+    return validation_error(body={"message": message}, event=event)
 
 
 def _write_schema_version(event, schema_name, database_id, description, schema_body, is_system):
@@ -499,8 +437,7 @@ def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
         schema_body = normalize_schema_item(current)["schemaBody"]
     valid, err = validate_schema_body(schema_body)
     if not valid:
-        logger.info(f"Schema body rejected: {err}")
-        return validation_error(body={"message": f"Invalid schema: {err}"}, event=event)
+        return _schema_body_rejected(event, err)
 
     description = request.description if request.description is not None else current.get("description", "")
     return _write_schema_version(event, schema_name, database_id, description, schema_body,
