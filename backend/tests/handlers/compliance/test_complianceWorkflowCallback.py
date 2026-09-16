@@ -269,11 +269,95 @@ class TestEventContract:
         assert len(harness.finalized()) == 1
         assert harness.state.update_item.call_count == 1
 
-    def test_a_failure_inside_the_callback_answers_500(self):
+    def test_an_unexpected_store_failure_raises_out_of_the_handler(self):
+        """A failure while the completion is being recorded fails the invocation, so Lambda
+        retries it and a persistent failure reaches the dead-letter queue; nothing is written."""
         harness = Callback()
         harness.evaluation.query.side_effect = RuntimeError("table unavailable")
+        with pytest.raises(RuntimeError):
+            harness.run(completion_event())
+        harness.evaluation.update_item.assert_not_called()
+        harness.state.update_item.assert_not_called()
+
+
+@pytest.mark.unit
+class TestARetryConverges:
+    """A delivery that fails part-way is retried by Lambda; the retry completes what the failed
+    attempt left undone without recording anything twice, because the tracking write and the
+    finalize write are conditional and the asset state is written from the rows as they stand."""
+
+    STATE_ROW = {"complianceState": "pending_evaluation", "lastEvaluationId": "eval-1",
+                 "lastEvaluatedAt": "2026-03-01T12:00:00+00:00",
+                 "lastEvaluationStatus": "pending_pipeline"}
+
+    def test_a_redelivery_after_a_failed_finalize_completes_without_duplicating_results(self):
+        harness = Callback()
+        harness.state.get_item.return_value = {"Item": dict(self.STATE_ROW)}
+        real_update = harness.evaluation.update_item.side_effect
+
+        def parent_write_fails_once(Key, **kw):
+            if Key["evaluationId"] == "eval-1":
+                harness.evaluation.update_item.side_effect = real_update
+                raise RuntimeError("throttled")
+            return real_update(Key=Key, **kw)
+
+        harness.evaluation.update_item.side_effect = parent_write_fails_once
+        with pytest.raises(RuntimeError):
+            harness.run(completion_event())
+        # The rule's outcome landed before the failure; the evaluation is still pending.
+        assert harness.evaluation_rows.rows["eval-1#residual-bound"]["status"] == "completed"
+        assert harness.evaluation_rows.rows["eval-1"]["status"] == "pending_pipeline"
+        harness.state.update_item.assert_not_called()
+        failed_attempts = len(harness.finalized())
+
+        second = json.loads(harness.run(completion_event())["body"])
+        assert second["finalized"] is True
+        assert second["verdict"] == "compliant"
+        stored = harness.evaluation_rows.rows["eval-1"]
+        assert stored["status"] == "completed"
+        rule_names = [r["ruleName"] for r in json.loads(stored["ruleResults"])]
+        assert rule_names
+        assert len(rule_names) == len(set(rule_names))
+        assert stored["pipelineExecutions"] == [
+            {"ruleName": "residual-bound", "executionId": EXECUTION_ID, "status": "completed"}]
+        # One finalize write landed (the failed attempt's is in the call history, not in the row).
+        assert len(harness.finalized()) == failed_attempts + 1
+        assert harness.state.update_item.call_count == 1
+        assert harness.audit.put_item.call_count == 1
+
+    def test_a_redelivery_after_a_failed_state_write_applies_the_state(self):
+        harness = Callback()
+        harness.state.get_item.return_value = {"Item": dict(self.STATE_ROW)}
+        harness.state.update_item.side_effect = RuntimeError("throttled")
+        with pytest.raises(RuntimeError):
+            harness.run(completion_event())
+        assert harness.evaluation_rows.rows["eval-1"]["status"] == "completed"
+        assert len(harness.finalized()) == 1
+        harness.audit.put_item.assert_not_called()
+
+        harness.state.update_item.side_effect = None
         response = harness.run(completion_event())
-        assert response["statusCode"] == 500
+        assert response == {"statusCode": 200, "body": "Already processed"}
+        # The evaluation row is not finalized again; the asset state it decided is written once.
+        assert len(harness.finalized()) == 1
+        assert harness.state.update_item.call_count == 2
+        state = update_values(harness.state)[-1]
+        assert state["complianceState"] == "compliant"
+        assert state["lastEvaluationId"] == "eval-1"
+        assert state["lastEvaluationStatus"] == "completed"
+        assert harness.audit.put_item.call_count == 1
+
+    def test_a_redelivery_for_a_finalized_evaluation_whose_state_is_written_is_a_no_op(self):
+        harness = Callback()
+        harness.state.get_item.return_value = {"Item": dict(self.STATE_ROW)}
+        first = json.loads(harness.run(completion_event())["body"])
+        assert first["finalized"] is True
+        harness.state.get_item.return_value = {"Item": dict(
+            self.STATE_ROW, complianceState="compliant", lastEvaluationStatus="completed")}
+        response = harness.run(completion_event())
+        assert response == {"statusCode": 200, "body": "Already processed"}
+        assert harness.state.update_item.call_count == 1
+        assert len(harness.finalized()) == 1
 
 
 @pytest.mark.unit

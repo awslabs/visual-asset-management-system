@@ -1308,7 +1308,9 @@ def complete_pipeline_rule(
     Idempotent under at-least-once delivery and safe under concurrent completions:
 
       - the rule's outcome lands on its tracking row under a `status = pending` condition, so a
-        redelivered completion event finds the row completed and records nothing twice;
+        redelivered completion event finds the row completed and records nothing twice — it then
+        re-drives the finalization from the rows as they stand, so a delivery that failed after the
+        tracking write (and was retried) converges instead of leaving the evaluation pending;
       - the parent is re-read consistently after this rule's write and the evaluation's pipeline
         results are aggregated from the tracking rows, rather than from the caller's snapshot of the
         parent record — the callback whose tracking write was the last to land therefore sees every
@@ -1348,8 +1350,7 @@ def complete_pipeline_rule(
         if not is_conditional_check_failure(e):
             raise
         logger.info(f"Evaluation {evaluation_id} rule '{rule_name}' was already recorded; "
-                    "the redelivered completion is ignored")
-        return _not_finalized(evaluation_id, rule_name)
+                    "the redelivered completion finalizes whatever the rows now allow")
 
     current = get_evaluation(evaluation_id, consistent_read=True) or evaluation
     if current.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
@@ -1358,6 +1359,44 @@ def complete_pipeline_rule(
     outcome = _finalize_when_complete(current, phase="pipeline_callback",
                                       execution_status=execution_status)
     return {**outcome, "ruleName": rule_name}
+
+
+def apply_finalized_state_if_missing(evaluation: Dict[str, Any]) -> bool:
+    """Write the asset state a finalized evaluation decided when that write never landed: the
+    asset-state row still names the evaluation as its last one with `lastEvaluationStatus`
+    `pending_pipeline`. The outcome is recomputed from the evaluation row's verdict and rule
+    results, exactly as the finalize computed it; a row that records another evaluation, or this
+    one's final status, is left alone. Returns whether the state was written."""
+    if evaluation.get("status") == engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        return False
+    evaluation_id = evaluation["evaluationId"]
+    database_id = evaluation["databaseId"]
+    asset_id = evaluation["assetId"]
+    previous = get_compliance_record(database_id, asset_id) or {}
+    if previous.get("lastEvaluationId") != evaluation_id \
+            or previous.get("lastEvaluationStatus") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        return False
+
+    logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is finalized but the "
+                "asset state still awaits it; the state is written from the evaluation row")
+    schema_name = evaluation.get("schemaName", "")
+    schema_version = (_evaluated_schema_version(evaluation)
+                      if previous.get(engine.EXCEPTION_GRANTED_FIELD) else None)
+    verdict = EvaluationVerdict(evaluation.get("verdict", EvaluationVerdict.error.value))
+    all_results = engine.rule_results_from_json(evaluation.get("ruleResults", "[]"))
+    error_rules = engine.errored_rule_names(all_results)
+    exception_applies, compliance_state = _state_for_verdict(
+        verdict, previous, schema_name, schema_version)
+    return _write_evaluation_state(
+        database_id, asset_id, SYSTEM_ACTOR, evaluation_id,
+        evaluation.get("evaluatedAt") or now_iso(), now_iso(), schema_name, schema_version,
+        previous, compliance_state, evaluation.get("status", ""), all_results,
+        audit_details={
+            "verdict": verdict.value,
+            "phase": "pipeline_callback",
+            **({"exceptionApplied": True} if exception_applies else {}),
+            **({"errorRules": error_rules} if error_rules else {}),
+        })
 
 
 def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,

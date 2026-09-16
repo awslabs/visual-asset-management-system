@@ -57,11 +57,16 @@ def lambda_handler(event, context):
     `WorkflowExecutionCompletedDetailModel` is processed; an event with another or no detail type,
     or a detail that is not a JSON object of that shape, is logged and skipped.
 
-    A completion of a compliance execution whose evaluation rows cannot be resolved yet
-    (`store.ComplianceExecutionUnresolved`: a tracking row whose parent row is absent, or an
-    execution of a still-launching evaluation whose tracking row is not written) is raised out of
-    the handler: the asynchronous invocation fails, Lambda retries it, and a delivery that keeps
-    failing lands in the completion dead-letter queue instead of being answered as processed."""
+    Any failure while a compliance execution's completion is being recorded — its evaluation rows
+    cannot be resolved yet (`store.ComplianceExecutionUnresolved`: a tracking row whose parent row
+    is absent, or an execution of a still-launching evaluation whose tracking row is not written),
+    or a table, key or output read fails — is logged and raised out of the handler: the
+    asynchronous invocation fails, Lambda retries it, and a delivery that keeps failing lands in the
+    completion dead-letter queue instead of being answered as processed. A retry converges: the
+    tracking write and the finalize write are conditional, so nothing is recorded twice, and a
+    redelivery completes whatever the failed attempt left undone (the finalization, or the asset
+    state a finalized evaluation decided). The 200 answers are for an event that is not a
+    compliance execution's and for one whose evaluation is already recorded."""
     detail_type = event.get("detail-type") or event.get("detailType") or ""
     if detail_type != WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE:
         logger.info(f"Ignoring event of detail type '{detail_type}'")
@@ -84,9 +89,9 @@ def lambda_handler(event, context):
                          "evaluation rows cannot be resolved yet; the completion is retried")
         raise
     except Exception as e:
-        logger.exception(
-            f"Error finalizing compliance evaluation for execution {detail.executionId}: {e}")
-        return {"statusCode": 500, "body": json.dumps({"message": "Callback failed"})}
+        logger.exception(f"Error finalizing compliance evaluation for execution "
+                         f"{detail.executionId}; the completion is retried: {e}")
+        raise
 
 
 def parse_completion_detail(raw_detail) -> Optional[WorkflowExecutionCompletedDetailModel]:
@@ -129,6 +134,9 @@ def process_completed_execution(execution_id: str, execution_status: str,
     evaluation, rule_name = resolved
 
     if evaluation.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        # A retry after a delivery that finalized the evaluation but failed before the asset state
+        # was written completes that write; otherwise the redelivery is a no-op.
+        store.apply_finalized_state_if_missing(evaluation)
         logger.info(f"Evaluation {evaluation['evaluationId']} is not pending a pipeline result")
         return {"statusCode": 200, "body": "Already processed"}
 
