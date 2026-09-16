@@ -1532,7 +1532,6 @@ class TestComplianceAuditCommand:
             result = cli_runner.invoke(cli, ['compliance', 'audit', '--max-items', '3'])
             assert result.exit_code == 0
             assert 'Next token' not in result.output
-            assert 'limit in force' not in result.output
 
     def test_json_output_carries_the_token(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:

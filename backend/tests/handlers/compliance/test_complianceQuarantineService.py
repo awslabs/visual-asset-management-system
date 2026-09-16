@@ -456,6 +456,16 @@ class TestRevokeException:
         assert mocks["update_state"].call_args.args[2]["complianceState"] == "quarantined"
         mocks["notify"].assert_called_once()
 
+    def test_a_last_evaluation_whose_row_is_gone_falls_back_to_the_newest_verdict(self):
+        """The state row names an evaluation the table no longer holds; the newest verdict-bearing
+        evaluation decides the state as for an evaluation without a verdict."""
+        response, mocks = _run(rest_event("DELETE", EXCEPTION_PATH, ASSET_PARAMS),
+                               compliance_record=EXCEPTED, evaluation=None,
+                               latest_verdict_evaluation=_evaluation("non_compliant"))
+        assert body_of(response)["complianceState"] == "non_compliant"
+        mocks["latest_verdict"].assert_called_once_with(DB, ASSET)
+        assert mocks["update_state"].call_args.args[2]["complianceState"] == "non_compliant"
+
     @pytest.mark.parametrize("verdict", ["pending_pipeline", "error", "not-a-verdict"])
     def test_a_last_evaluation_without_a_verdict_and_no_earlier_verdict_returns_to_pending(self, verdict):
         response, mocks = _run(rest_event("DELETE", EXCEPTION_PATH, ASSET_PARAMS),

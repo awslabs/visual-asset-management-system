@@ -54,6 +54,11 @@ mistakes, not properties of the asset.
         rule that cannot run quarantines the asset).
 
 The switch is read at call time, so flipping this one line changes the behaviour everywhere.
+
+A workflow execution that ran and ended other than SUCCEEDED (FAILED, ABORTED, TIMED_OUT) is not a
+tooling failure in this sense: the rule was evaluated and the execution's outcome is its result, so
+`evaluate_pipeline_rules` records it as `status: evaluated`, failed, and its enforcement applies
+whatever this switch says. An asset whose pipeline cannot complete on it does not pass the rule.
 """
 
 # Compliance states stored on the asset-state table.
