@@ -70,6 +70,9 @@ CASCADE_STATE_INDEX = "StateIndex"
 # (`upload` or `workflowExecution`); a stream image carries them in DynamoDB's typed form.
 LAST_CHANGE_SOURCE_ATTRIBUTE = "lastChangeSource"
 LAST_CHANGE_AT_ATTRIBUTE = "lastChangeAt"
+# The instant of the asset's last user-upload completion; a workflow execution's output write moves
+# `lastChangeAt` but not this, so an uploaded object is judged against the upload that completed it.
+LAST_UPLOAD_AT_ATTRIBUTE = "lastUploadAt"
 
 # Skew margin for the one coverage comparison whose two instants come from unrelated clocks: an S3
 # object's `eventTime` against an evaluation start, used only for an object written outside a recorded
@@ -178,9 +181,12 @@ def parse_event_time(value):
 def change_covered_by_last_evaluation(compliance_record, change_time=None, completion_time=None):
     """Whether the asset's last evaluation started after the change and so already covers it.
 
-    `completion_time` is the asset row's `lastChangeAt`: the upload completion that stamped it ran
-    after every object of that upload was copied, so an evaluation whose start (`lastEvaluatedAt`)
-    is at or after the stamp has seen those files — the comparison is causal and needs no margin.
+    `completion_time` is the instant of the upload completion the change belongs to — the row's
+    `lastUploadAt` on the file path, the MODIFY image's `lastChangeAt` on the stream path (a
+    workflow execution's MODIFY is skipped before this point, so that stamp is an upload's). The
+    completion ran after every object of its upload was copied, so an evaluation whose start
+    (`lastEvaluatedAt`) is at or after the stamp has seen those files — the comparison is causal and
+    needs no margin.
     `change_time` is an S3 object's `eventTime`. An object written at or before the recorded
     completion belongs to that upload and is judged by the stamp; an object written after it (or an
     asset with no stamp) is judged against its own `eventTime` with EVALUATION_COVERS_CHANGE_MARGIN,
@@ -237,9 +243,12 @@ def _process_file_event(message):
             continue
 
         evaluated.add(asset_id)
+        # The object is a user upload's (workflow-written objects were skipped above), so the
+        # upload completion is the stamp it belongs to; a pipeline rule's output write that landed
+        # since re-stamped `lastChangeAt` but not `lastUploadAt`.
         _evaluate_if_uncovered(
             database_id, asset_id, target, change_time=change_time,
-            completion_time=parse_event_time(asset_row.get(LAST_CHANGE_AT_ATTRIBUTE)))
+            completion_time=parse_event_time(asset_row.get(LAST_UPLOAD_AT_ATTRIBUTE)))
 
 
 def _file_event_target(asset_id):
@@ -327,8 +336,9 @@ def _database_item(database_id):
 def _process_compliance_event(database_id, asset_id, change_time=None, completion_time=None):
     """Evaluate an asset when its database has auto-evaluation on and it has a bound schema.
 
-    `completion_time` is the asset row's `lastChangeAt` (the stream path's own instant; read from
-    the row on the file path) and `change_time` the S3 record's `eventTime` (file path only). A
+    `completion_time` is the upload completion's instant (the MODIFY image's `lastChangeAt` on the
+    stream path, the row's `lastUploadAt` on the file path) and `change_time` the S3 record's
+    `eventTime` (file path only). A
     change the asset's last evaluation already covers is not evaluated again, so one upload reaches
     one evaluation whichever of the two paths reports it first and however many files it carries.
     An evaluation still awaiting its pipeline rules covers the changes made at or before its start

@@ -76,6 +76,7 @@ class TestAPlainUploadRecordsUploadProvenance:
         assert written['lastChangeSource'] == VAMS_CHANGE_SOURCE_UPLOAD == 'upload'
         assert 'lastChangeWorkflowExecutionId' not in written
         _is_recent_iso_instant(written['lastChangeAt'])
+        assert written['lastUploadAt'] == written['lastChangeAt']
 
     def test_external_preview_completion(self):
         table = FakeAssetTable(_asset())
@@ -120,6 +121,8 @@ class TestAWorkflowExecutionUploadRecordsWorkflowProvenance:
         assert written['lastChangeSource'] == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION == 'workflowExecution'
         assert written['lastChangeWorkflowExecutionId'] == EXECUTION_ID
         _is_recent_iso_instant(written['lastChangeAt'])
+        # The last user upload's instant stays on the row for the compliance trigger.
+        assert 'lastUploadAt' not in written
 
     def test_external_preview_completion_names_the_execution(self):
         table = FakeAssetTable(_asset())
@@ -160,12 +163,25 @@ class TestTheUpdateHelper:
         written = {kwargs['ExpressionAttributeNames'][n.strip()]: kwargs['ExpressionAttributeValues'][v.strip()]
                    for n, v in (a.split(' = ') for a in kwargs['UpdateExpression'][len('SET '):].split(', '))}
         assert set(written) == {'assetType', 'lastChangeSource', 'lastChangeWorkflowExecutionId', 'lastChangeAt'}
+        assert kwargs['UpdateExpression'].startswith('SET ') and 'REMOVE' not in kwargs['UpdateExpression']
+
+    def test_an_upload_completions_write_stamps_the_upload_instant(self):
+        from backend.backend.handlers.assets import uploadFile as uf
+        table = MagicMock()
+        with patch.object(uf, 'to_update_expr', _real_to_update_expr), patch.object(uf, 'asset_table', table):
+            uf.update_asset_attributes(DATABASE_ID, ASSET_ID, {'assetType': 'folder'})
+        kwargs = table.update_item.call_args.kwargs
+        written = {kwargs['ExpressionAttributeNames'][n.strip()]: kwargs['ExpressionAttributeValues'][v.strip()]
+                   for n, v in (a.split(' = ') for a in kwargs['UpdateExpression'][len('SET '):].split(', '))}
+        assert set(written) == {'assetType', 'lastChangeSource', 'lastChangeAt', 'lastUploadAt'}
+        assert written['lastUploadAt'] == written['lastChangeAt']
 
     def test_provenance_for_an_upload_and_for_an_execution(self):
         from backend.backend.handlers.assets import uploadFile as uf
         upload = uf.asset_change_provenance()
         assert upload['lastChangeSource'] == 'upload'
-        assert set(upload) == {'lastChangeSource', 'lastChangeAt'}
+        assert set(upload) == {'lastChangeSource', 'lastChangeAt', 'lastUploadAt'}
+        assert upload['lastUploadAt'] == upload['lastChangeAt']
         execution = uf.asset_change_provenance(EXECUTION_ID)
         assert execution['lastChangeSource'] == 'workflowExecution'
         assert execution['lastChangeWorkflowExecutionId'] == EXECUTION_ID

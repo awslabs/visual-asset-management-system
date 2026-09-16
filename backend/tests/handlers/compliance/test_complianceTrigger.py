@@ -667,6 +667,66 @@ class TestAPendingEvaluationCoversOnlyTheChangesItRead:
 
 
 @pytest.mark.unit
+class TestAPipelineRulesOutputWriteIsNotTheUploadsCompletion:
+    """An asset bound to a pipeline rule: the upload completes and is evaluated, the rule's workflow
+    writes its outputs into the asset — re-stamping the row's `lastChangeAt` as a workflow change —
+    and only then does the indexer's message for the upload arrive. The uploaded object is judged
+    against the upload's own completion (`lastUploadAt`), which the output write did not move, so
+    the evaluation that covered the upload still covers it."""
+
+    UPLOAD_EVENT = "2026-03-01T07:43:12.117Z"
+    UPLOAD_STAMP = "2026-03-01T07:43:12.212000+00:00"
+    EVALUATION_START = "2026-03-01T07:43:12.760000+00:00"
+    WORKFLOW_STAMP = "2026-03-01T07:43:14.500000+00:00"
+
+    def _rows_after_the_output_write(self, with_upload_stamp=True):
+        row = {"databaseId": DB, "assetId": ASSET, "lastChangeAt": self.WORKFLOW_STAMP,
+               "lastChangeSource": "workflowExecution", "lastChangeWorkflowExecutionId": "exec-1"}
+        if with_upload_stamp:
+            row["lastUploadAt"] = self.UPLOAD_STAMP
+        return [row]
+
+    def test_the_uploads_file_message_is_covered_although_a_later_output_write_re_stamped_the_row(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/model.stl",
+                                                                event_time=self.UPLOAD_EVENT))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(self.EVALUATION_START,
+                                                            status="pending_pipeline"),
+                     asset_rows=self._rows_after_the_output_write())
+        mocks["run_evaluation"].assert_not_called()
+        assert any("already covered" in text for text in _info_messages(mocks))
+
+    def test_a_row_without_an_upload_stamp_falls_back_to_the_object_time_and_the_margin(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/model.stl",
+                                                                event_time=self.UPLOAD_EVENT))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(self.EVALUATION_START,
+                                                            status="pending_pipeline"),
+                     asset_rows=self._rows_after_the_output_write(with_upload_stamp=False))
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_a_new_upload_after_the_evaluation_is_evaluated(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/second.stl",
+                                                                event_time="2026-03-01T07:43:19.900Z"))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(self.EVALUATION_START),
+                     asset_rows=_stamped_rows("2026-03-01T07:43:20.000000+00:00"))
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_the_file_path_reads_the_upload_stamp_not_the_latest_change(self):
+        """The row's latest change is the workflow's; the upload's file message is nevertheless
+        judged by the upload stamp, which the evaluation started after."""
+        rows = self._rows_after_the_output_write()
+        rows[0]["lastUploadAt"] = "2026-03-01T07:43:12.700000+00:00"
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/model.stl",
+                                                                event_time=self.UPLOAD_EVENT))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(self.EVALUATION_START),
+                     asset_rows=rows)
+        mocks["run_evaluation"].assert_not_called()
+
+
+@pytest.mark.unit
 class TestAnInsertCarriesNoCompletion:
     """A stream INSERT's image carries whatever `lastChangeAt` the row was written with — an
     unarchived asset keeps its old stamp — so the stamp is not the completion that raised the event
@@ -779,9 +839,12 @@ class TestOneUploadIsEvaluatedOnce:
         assert trigger.parse_event_time(value) is None
 
 
-def _stamped_rows(last_change_at):
-    """The asset's row as the assetIdGSI returns it, carrying the last upload completion's stamp."""
-    return [{"databaseId": DB, "assetId": ASSET, "lastChangeAt": last_change_at}]
+def _stamped_rows(last_upload_at, last_change_at=None, change_source="upload"):
+    """The asset's row as the assetIdGSI returns it, carrying the last upload completion's stamp
+    (`lastUploadAt`) and the latest change of either kind (`lastChangeAt`, the same instant unless
+    a workflow execution's output write landed since)."""
+    return [{"databaseId": DB, "assetId": ASSET, "lastUploadAt": last_upload_at,
+             "lastChangeAt": last_change_at or last_upload_at, "lastChangeSource": change_source}]
 
 
 def _record_evaluated_at(last_evaluated_at, status="completed"):

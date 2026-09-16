@@ -7,8 +7,8 @@ An upload completion reads the asset once and finishes seconds to minutes later,
 field a concurrent writer changed in between is still in the record it holds. The
 completion owns exactly two attributes -- ``assetType`` for an asset-file upload and
 ``previewLocation`` for a preview upload -- plus the change-provenance attributes every
-completion records (``lastChangeSource``, ``lastChangeAt`` and, for a workflow execution's
-outputs, ``lastChangeWorkflowExecutionId``; covered in
+completion records (``lastChangeSource``, ``lastChangeAt``, ``lastUploadAt`` for a user upload
+and, for a workflow execution's outputs, ``lastChangeWorkflowExecutionId``; covered in
 ``test_uploadFile_asset_row_provenance.py``), so it must write only those, and only to a
 record that still exists: a full-record write reverts the concurrent edit, and an
 unconditional write recreates an asset removed during the upload.
@@ -34,7 +34,7 @@ ASSET_ID = "asset-1"
 BUCKET = "asset-bucket"
 
 # The provenance attributes a plain (non-workflow) completion writes beside the attribute it owns.
-UPLOAD_PROVENANCE_KEYS = {'lastChangeSource', 'lastChangeAt'}
+UPLOAD_PROVENANCE_KEYS = {'lastChangeSource', 'lastChangeAt', 'lastUploadAt'}
 
 
 def _only_owned_attribute_written(table, **owned):
