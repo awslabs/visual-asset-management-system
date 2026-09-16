@@ -17,14 +17,18 @@ Three guards keep the trigger from multiplying evaluations or relaunching a pipe
 workflow:
 
   - a file event for an object a workflow execution wrote (`vams-changesource` object metadata of
-    `workflowExecution`, read with a HEAD on the object) is skipped, so a pipeline rule whose
-    workflow writes its outputs into the asset does not re-enter the trigger and relaunch itself;
+    `workflowExecution`, read with a HEAD on the object once the asset has passed the
+    auto-evaluation and binding gate) is skipped, so a pipeline rule whose workflow writes its
+    outputs into the asset does not re-enter the trigger and relaunch itself;
   - a stream MODIFY whose new image records `lastChangeSource` of `workflowExecution` (the
     provenance `uploadFile` writes onto the asset row when a workflow execution's outputs are
     completed into the asset) is skipped for the same reason;
-  - an event for an asset whose state row points at an evaluation still awaiting its pipeline
-    rules is coalesced into that evaluation, so an N-file upload yields one evaluation rather than
-    N concurrent pipeline launches.
+  - a change the asset's last evaluation already covers (`change_covered_by_last_evaluation`: the
+    evaluation started at or after the change, whatever its status — a `pending_pipeline`
+    evaluation covers the changes it read too) is not evaluated again, so an N-file upload yields
+    one evaluation rather than N concurrent pipeline launches; a change after that evaluation's
+    start is new and starts another evaluation, and the older evaluation's callback never
+    overwrites the newer state.
 
 A cascade awaiting approval is opened once per trigger asset: while one is pending for the asset,
 a further evaluation does not open another.
@@ -140,15 +144,18 @@ def _process_stream_record(message):
     if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
         return
 
-    if message.get("eventName") == "MODIFY" and _image_change_source(new_image) \
-            == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
+    is_modify = message.get("eventName") == "MODIFY"
+    if is_modify and _image_change_source(new_image) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
         logger.info(f"Asset {database_id}:{asset_id} row was last changed by a workflow execution; "
                     "skipping compliance evaluation")
         return
 
-    _process_compliance_event(
-        database_id, asset_id,
-        completion_time=parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE)))
+    # An INSERT's image carries whatever `lastChangeAt` the row had when it was written (an
+    # unarchived asset keeps its old stamp), which says nothing about this change; only a MODIFY's
+    # stamp is the completion that raised the event.
+    completion_time = (parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE))
+                       if is_modify else None)
+    _process_compliance_event(database_id, asset_id, completion_time=completion_time)
 
 
 def _image_string(new_image, attribute):
@@ -194,16 +201,18 @@ def change_covered_by_last_evaluation(compliance_record, change_time=None, compl
 def _process_file_event(message):
     """A file indexer message: every S3 record it carries, one evaluation per distinct asset.
 
-    A record naming an object a workflow execution wrote is skipped. The database of each asset is
-    resolved once per message, and a second record for an asset already evaluated in this message
-    (an N-file upload) is not evaluated again."""
+    The asset row and the evaluation target (the database's auto-evaluation flag and the asset's
+    bound schema) are resolved once per asset per message, before any object is read: an asset
+    that is not evaluated costs no HEAD. For an asset that is, the object's provenance is read and a
+    record naming an object a workflow execution wrote is skipped; a second record for an asset
+    already evaluated in this message (an N-file upload) is neither read nor evaluated again."""
     s3_records = s3_records_from_indexer_message(message)
     if not s3_records:
         logger.info("File event has no s3 data, skipping")
         return
 
     prefix = message.get("ASSET_BUCKET_PREFIX", "")
-    rows_by_asset = {}
+    targets_by_asset = {}
     evaluated = set()
     for s3_record in s3_records:
         s3_info = s3_record.get("s3") or {}
@@ -215,26 +224,37 @@ def _process_file_event(message):
             logger.info("Could not extract an assetId from the object key")
             continue
 
+        if asset_id not in targets_by_asset:
+            targets_by_asset[asset_id] = _file_event_target(asset_id)
+        resolved = targets_by_asset[asset_id]
+        if resolved is None or asset_id in evaluated:
+            continue
+        database_id, asset_row, target = resolved
+
         if object_change_source(s3_info, message) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
             logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
                         "skipping compliance evaluation")
             continue
 
-        if asset_id not in rows_by_asset:
-            rows_by_asset[asset_id] = _resolve_asset_row(asset_id)
-        asset_row = rows_by_asset[asset_id]
-        database_id = (asset_row or {}).get("databaseId") or None
-        if not database_id:
-            logger.info(f"Could not resolve a databaseId for asset {asset_id}")
-            continue
-
-        asset_key = f"{database_id}:{asset_id}"
-        if asset_key in evaluated:
-            continue
-        evaluated.add(asset_key)
-        _process_compliance_event(
-            database_id, asset_id, change_time=change_time,
+        evaluated.add(asset_id)
+        _evaluate_if_uncovered(
+            database_id, asset_id, target, change_time=change_time,
             completion_time=parse_event_time(asset_row.get(LAST_CHANGE_AT_ATTRIBUTE)))
+
+
+def _file_event_target(asset_id):
+    """`(database_id, asset row, evaluation target)` for an asset a file event names, or None
+    (logged) when the asset has no row, is archived, or its database or binding does not evaluate
+    it."""
+    asset_row = _resolve_asset_row(asset_id)
+    database_id = (asset_row or {}).get("databaseId") or None
+    if not database_id:
+        logger.info(f"Could not resolve a databaseId for asset {asset_id}")
+        return None
+    target = _evaluation_target(database_id, asset_id)
+    if target is None:
+        return None
+    return database_id, asset_row, target
 
 
 def object_change_source(s3_info, message):
@@ -310,27 +330,43 @@ def _process_compliance_event(database_id, asset_id, change_time=None, completio
     `completion_time` is the asset row's `lastChangeAt` (the stream path's own instant; read from
     the row on the file path) and `change_time` the S3 record's `eventTime` (file path only). A
     change the asset's last evaluation already covers is not evaluated again, so one upload reaches
-    one evaluation whichever of the two paths reports it first and however many files it carries;
-    neither is an asset whose state row points at an evaluation still awaiting its pipeline rules,
-    since the in-flight evaluation covers the change."""
+    one evaluation whichever of the two paths reports it first and however many files it carries.
+    An evaluation still awaiting its pipeline rules covers the changes made at or before its start
+    like any other; a change after its start is evaluated now, and the state row records whichever
+    evaluation is newest."""
+    target = _evaluation_target(database_id, asset_id)
+    if target is None:
+        return
+    _evaluate_if_uncovered(database_id, asset_id, target, change_time, completion_time)
+
+
+def _evaluation_target(database_id, asset_id):
+    """`(compliance record, schema name)` for an asset to evaluate: its database has
+    `complianceAutoEval` on and it has a bound schema (the asset override, else the database
+    binding, registering the asset under it). None (logged) when it is not to be evaluated."""
     db_item = _database_item(database_id)
     if not db_item or db_item.get("complianceAutoEval") is not True:
         logger.info(f"Database {database_id} does not have complianceAutoEval enabled, skipping")
-        return
+        return None
 
     compliance_record = store.get_compliance_record(database_id, asset_id)
     if not compliance_record:
         compliance_record = check_default_schema(database_id, asset_id, db_item)
         if not compliance_record:
-            return
+            return None
     elif compliance_record.get("schemaSource") == SCHEMA_SOURCE_ASSET:
         logger.info(f"Asset {database_id}:{asset_id} has an asset-level schema override")
 
     schema_name = compliance_record.get("schemaName")
     if not schema_name:
         logger.info(f"Asset {database_id}:{asset_id} has no schema assigned")
-        return
+        return None
+    return compliance_record, schema_name
 
+
+def _evaluate_if_uncovered(database_id, asset_id, target, change_time=None, completion_time=None):
+    """Run the evaluation unless the asset's last evaluation already covers the change."""
+    compliance_record, schema_name = target
     if change_covered_by_last_evaluation(compliance_record, change_time, completion_time):
         changed_at = (completion_time or change_time).isoformat()
         logger.info(f"Asset {database_id}:{asset_id} changed at {changed_at} and its evaluation "
@@ -338,32 +374,7 @@ def _process_compliance_event(database_id, asset_id, change_time=None, completio
                     f"{compliance_record.get('lastEvaluatedAt')}, after the change; the change is "
                     "already covered")
         return
-
-    if covered_by_pending_evaluation(compliance_record):
-        logger.info(f"Asset {database_id}:{asset_id} has evaluation "
-                    f"{compliance_record.get('lastEvaluationId')} awaiting its pipeline rules; "
-                    "the change is coalesced into it")
-        return
-
     trigger_evaluation(database_id, asset_id, schema_name)
-
-
-def covered_by_pending_evaluation(compliance_record):
-    """Whether the asset's state row points at an evaluation still `pending_pipeline`.
-
-    The state row alone is not trusted: its `pending_evaluation` state is confirmed against the
-    evaluation row (consistent read), so a state row left behind by an evaluation that has since
-    completed does not suppress the next evaluation. The instant of the change plays no part: the
-    workflow callback that finalizes a pending evaluation re-evaluates nothing, so whatever the
-    change was, the in-flight evaluation's outcome is the one the asset's state reflects until the
-    next evaluation runs."""
-    if compliance_record.get("complianceState") != engine.STATE_PENDING_EVALUATION:
-        return False
-    evaluation_id = compliance_record.get("lastEvaluationId")
-    if not evaluation_id:
-        return False
-    evaluation = store.get_evaluation(evaluation_id, consistent_read=True) or {}
-    return evaluation.get("status") == engine.EVALUATION_STATUS_PENDING_PIPELINE
 
 
 def check_default_schema(database_id, asset_id, db_item=None):

@@ -7,8 +7,9 @@ complianceAutoEval gate, schema resolution (asset override, else the database bi
 auto-registration), the evaluation it runs, the cascade it opens for an asset with children (once
 per trigger asset while one is pending), and the guards against multiplying evaluations: the
 provenance skip for objects a workflow execution wrote, the provenance skip for an asset row a
-workflow execution's outputs last changed, and the coalescing of a change into an evaluation still
-awaiting its pipeline rules."""
+workflow execution's outputs last changed, and the coverage rule under which a change the asset's
+last evaluation already read — an evaluation still awaiting its pipeline rules included — is not
+evaluated again while a later change is."""
 
 import json
 from datetime import timezone
@@ -251,16 +252,18 @@ class TestIndexerMessagesAreUnwrapped:
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
 
     def test_a_multi_record_message_for_one_asset_queues_one_evaluation(self):
-        """An N-file upload arrives as N notifications in one message; each object's provenance is
-        read, the asset's database is resolved once, and the asset is evaluated once."""
+        """An N-file upload arrives as N notifications in one message; the asset's row and target
+        are resolved once, the first object's provenance is read and the asset is evaluated once —
+        the later records of the same asset are neither read nor evaluated."""
         message = indexer_message(s3_event_record(f"{ASSET}/one.stl"),
                                   s3_event_record(f"{ASSET}/two.stl"),
                                   s3_event_record(f"{ASSET}/three.stl"))
         mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS)
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
-        assert mocks["s3"].head_object.call_count == 3
+        assert mocks["s3"].head_object.call_count == 1
         assert mocks["asset"].query.call_count == 1
+        assert mocks["database"].get_item.call_count == 1
 
     def test_a_multi_record_message_for_two_assets_queues_one_evaluation_each(self):
         message = indexer_message(s3_event_record(f"{ASSET}/one.stl"),
@@ -287,7 +290,10 @@ class TestIndexerMessagesAreUnwrapped:
                      compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS,
                      head=_s3_head("workflowExecution"))
         mocks["run_evaluation"].assert_not_called()
-        mocks["asset"].query.assert_not_called()
+        # Every record is read (none evaluated, so none is skipped as a duplicate); the asset's
+        # row and target were resolved once for both.
+        assert mocks["s3"].head_object.call_count == 2
+        assert mocks["asset"].query.call_count == 1
 
     def test_a_message_without_s3_data_queues_nothing_and_says_so(self):
         message = {"Records": [sqs_record(sns_envelope({"eventName": "MODIFY", "dynamodb": {}}))],
@@ -472,7 +478,24 @@ class TestWorkflowWrittenObjectsAreSkipped:
                      compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS,
                      head=_s3_head("workflowExecution"))
         mocks["run_evaluation"].assert_not_called()
-        mocks["database"].get_item.assert_not_called()
+        mocks["s3"].head_object.assert_called_once()
+
+    def test_an_object_of_a_database_without_auto_evaluation_is_not_read(self):
+        """The auto-evaluation and binding gate runs before the object HEAD, so a file event in a
+        deployment that does not evaluate the asset costs no object read."""
+        mocks = _run(_sns_event(_file_message()),
+                     database_item={"databaseId": DB, "complianceAutoEval": False},
+                     compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_not_called()
+        mocks["s3"].head_object.assert_not_called()
+        assert mocks["asset"].query.call_count == 1
+
+    def test_an_object_of_an_asset_without_a_binding_is_not_read(self):
+        mocks = _run(_sns_event(_file_message()),
+                     database_item={"databaseId": DB, "complianceAutoEval": True},
+                     compliance_record=None, asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_not_called()
+        mocks["s3"].head_object.assert_not_called()
 
     def test_the_provenance_is_read_from_the_events_object_version(self):
         mocks = _run(_sns_event(_file_message(key="a%20b/x.glb", version_id="v7")),
@@ -576,85 +599,90 @@ class TestWorkflowSourcedRowChangesAreSkipped:
 
 
 @pytest.mark.unit
-class TestChangesCoalesceIntoAPendingEvaluation:
-    """An N-file upload emits N file events; the first starts an evaluation whose pipeline rules are in
-    flight, and the rest land while the asset's state row points at it. Those are coalesced into it
-    rather than each launching another execution -- whether the change is older or newer than the
-    evaluation's start, because the callback that finalizes the evaluation re-evaluates nothing, so
-    the in-flight run's outcome is what the asset's state will reflect either way."""
+class TestAPendingEvaluationCoversOnlyTheChangesItRead:
+    """An evaluation still awaiting its pipeline rules covers the changes made at or before its start
+    (the N-file upload that raised it) like any other evaluation, and no more: a change after its
+    start is evaluated now, since the callback that finalizes the pending evaluation re-evaluates
+    nothing and would otherwise record a verdict for a file set the change has already left behind.
+    The state row's `lastEvaluatedAt` / `lastEvaluationStatus` decide it; the evaluation row is not
+    read."""
 
-    def test_a_second_file_event_while_the_evaluation_is_pending_launches_nothing(self):
+    PENDING_START = "2026-03-01T12:00:05+00:00"
+
+    @staticmethod
+    def _pending_record(started_at="2026-03-01T12:00:05+00:00"):
+        return {"schemaName": SCHEMA, "complianceState": "pending_evaluation",
+                "lastEvaluationId": "eval-pending", "lastEvaluatedAt": started_at,
+                "lastEvaluationStatus": "pending_pipeline"}
+
+    def test_a_file_that_landed_before_the_pending_evaluation_started_is_covered(self):
         mocks = _run(_sns_event(_file_message(event_time="2026-03-01T12:00:00.000Z")),
-                     database_item=AUTO_EVAL_DB, compliance_record=PENDING_RECORD,
-                     asset_rows=ASSET_ROWS, evaluation_rows=_pending_rows("2026-03-01T12:00:05+00:00"))
+                     database_item=AUTO_EVAL_DB, compliance_record=self._pending_record(),
+                     asset_rows=ASSET_ROWS)
         mocks["run_evaluation"].assert_not_called()
         mocks["cascade"].put_item.assert_not_called()
-        read = mocks["get_evaluation"].call_args
-        assert read.args[0] == "eval-pending"
-        assert read.kwargs["consistent_read"] is True
-        assert any("coalesced" in text for text in _info_messages(mocks))
+        mocks["get_evaluation"].assert_not_called()
+        assert any("already covered" in text for text in _info_messages(mocks))
 
-    def test_a_change_after_the_pending_evaluation_began_is_coalesced_too(self):
-        """The evaluation began at 12:00:05 and the file landed at 12:00:10: the evaluation is older
-        than the change, and the change is still absorbed by it."""
+    def test_a_stamped_upload_completed_before_the_pending_evaluation_started_is_covered(self):
+        mocks = _run(_sns_event(_stream_message(change_source="upload",
+                                                change_at="2026-03-01T12:00:04+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=self._pending_record())
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_a_change_after_the_pending_evaluation_started_is_evaluated_now(self):
+        """The evaluation began at 12:00:05 and the upload completion is stamped at 12:00:10: the
+        pending evaluation read a file set the change has left behind, so a new evaluation starts."""
+        mocks = _run(_sns_event(_stream_message(change_source="upload",
+                                                change_at="2026-03-01T12:00:10+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=self._pending_record())
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+        mocks["get_evaluation"].assert_not_called()
+
+    def test_a_file_written_after_the_pending_evaluation_started_is_evaluated_now(self):
         mocks = _run(_sns_event(_file_message(event_time="2026-03-01T12:00:10.000Z")),
-                     database_item=AUTO_EVAL_DB, compliance_record=PENDING_RECORD,
-                     asset_rows=ASSET_ROWS, evaluation_rows=_pending_rows("2026-03-01T12:00:05+00:00"))
-        mocks["run_evaluation"].assert_not_called()
-
-    def test_a_stream_record_is_coalesced_whatever_its_creation_time(self):
-        for created_at in (1772366400.0, "1772366410", None):  # 12:00:00Z, 12:00:10Z, absent
-            mocks = _run(_sns_event(_stream_message(created_at=created_at)),
-                         database_item=AUTO_EVAL_DB, compliance_record=PENDING_RECORD,
-                         evaluation_rows=_pending_rows("2026-03-01T12:00:05+00:00"))
-            mocks["run_evaluation"].assert_not_called()
-
-    def test_an_event_without_a_time_is_covered_by_any_pending_evaluation(self):
-        mocks = _run(_sns_event({"databaseId": DB, "assetId": ASSET}), database_item=AUTO_EVAL_DB,
-                     compliance_record=PENDING_RECORD, evaluation_rows=_pending_rows())
-        mocks["run_evaluation"].assert_not_called()
-
-    def test_a_pending_evaluation_without_a_start_time_still_covers(self):
-        mocks = _run(_sns_event(_file_message()), database_item=AUTO_EVAL_DB,
-                     compliance_record=PENDING_RECORD, asset_rows=ASSET_ROWS,
-                     evaluation_rows={"eval-pending": {"evaluationId": "eval-pending",
-                                                       "status": "pending_pipeline"}})
-        mocks["run_evaluation"].assert_not_called()
-
-    @pytest.mark.parametrize("status", ["completed", "error", "failed"])
-    def test_a_state_row_left_pending_by_a_finished_evaluation_does_not_suppress(self, status):
-        mocks = _run(_sns_event(_file_message()), database_item=AUTO_EVAL_DB,
-                     compliance_record=PENDING_RECORD, asset_rows=ASSET_ROWS,
-                     evaluation_rows=_pending_rows(status=status))
-        mocks["run_evaluation"].assert_called_once()
-
-    def test_a_pending_state_row_whose_evaluation_is_gone_does_not_suppress(self):
-        mocks = _run(_sns_event(_file_message()), database_item=AUTO_EVAL_DB,
-                     compliance_record=PENDING_RECORD, asset_rows=ASSET_ROWS, evaluation_rows={})
-        mocks["run_evaluation"].assert_called_once()
-
-    @pytest.mark.parametrize("state", ["compliant", "non_compliant", "quarantined", "unknown"])
-    def test_a_settled_state_row_reads_no_evaluation(self, state):
-        mocks = _run(_sns_event(_file_message()), database_item=AUTO_EVAL_DB,
-                     compliance_record={"schemaName": SCHEMA, "complianceState": state,
-                                        "lastEvaluationId": "eval-old"},
-                     asset_rows=ASSET_ROWS, evaluation_rows=_pending_rows())
-        mocks["get_evaluation"].assert_not_called()
-        mocks["run_evaluation"].assert_called_once()
-
-    def test_a_pending_state_row_without_an_evaluation_id_does_not_suppress(self):
-        mocks = _run(_sns_event(_file_message()), database_item=AUTO_EVAL_DB,
-                     compliance_record={"schemaName": SCHEMA, "complianceState": "pending_evaluation"},
+                     database_item=AUTO_EVAL_DB, compliance_record=self._pending_record(),
                      asset_rows=ASSET_ROWS)
-        mocks["get_evaluation"].assert_not_called()
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_a_change_without_an_instant_is_evaluated(self):
+        mocks = _run(_sns_event({"databaseId": DB, "assetId": ASSET}), database_item=AUTO_EVAL_DB,
+                     compliance_record=self._pending_record())
         mocks["run_evaluation"].assert_called_once()
 
-    def test_a_multi_record_message_reads_the_pending_evaluation_once_per_asset(self):
-        message = indexer_message(s3_event_record(f"{ASSET}/one.stl"), s3_event_record(f"{ASSET}/two.stl"))
-        mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB, compliance_record=PENDING_RECORD,
-                     asset_rows=ASSET_ROWS, evaluation_rows=_pending_rows())
+    def test_a_pending_state_row_without_a_start_does_not_cover(self):
+        mocks = _run(_sns_event(_file_message()), database_item=AUTO_EVAL_DB,
+                     compliance_record={"schemaName": SCHEMA, "complianceState": "pending_evaluation",
+                                        "lastEvaluationId": "eval-pending"},
+                     asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_called_once()
+
+    def test_a_multi_record_message_for_a_covered_asset_evaluates_nothing(self):
+        message = indexer_message(s3_event_record(f"{ASSET}/one.stl", event_time="2026-03-01T12:00:00.000Z"),
+                                  s3_event_record(f"{ASSET}/two.stl", event_time="2026-03-01T12:00:00.000Z"))
+        mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB,
+                     compliance_record=self._pending_record(), asset_rows=ASSET_ROWS)
         mocks["run_evaluation"].assert_not_called()
-        assert mocks["get_evaluation"].call_count == 1
+        assert mocks["get_evaluation"].call_count == 0
+
+
+@pytest.mark.unit
+class TestAnInsertCarriesNoCompletion:
+    """A stream INSERT's image carries whatever `lastChangeAt` the row was written with — an
+    unarchived asset keeps its old stamp — so the stamp is not the completion that raised the event
+    and does not mark the change as covered."""
+
+    def test_a_stamped_insert_is_evaluated_although_the_stamp_predates_the_last_evaluation(self):
+        mocks = _run(_sns_event(_stream_message(event_name="INSERT", change_source="upload",
+                                                change_at="2026-03-01T12:00:00+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=_evaluated_record(5))
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_a_stamped_modify_with_the_same_stamp_is_covered(self):
+        mocks = _run(_sns_event(_stream_message(event_name="MODIFY", change_source="upload",
+                                                change_at="2026-03-01T12:00:00+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=_evaluated_record(5))
+        mocks["run_evaluation"].assert_not_called()
 
 
 # The instant an upload landed (S3 `eventTime` on the file path, the asset row's `lastChangeAt` on the
