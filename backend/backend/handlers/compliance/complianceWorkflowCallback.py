@@ -55,7 +55,13 @@ def lambda_handler(event, context):
 
     Only a `workflow.execution.completed` event whose detail parses as
     `WorkflowExecutionCompletedDetailModel` is processed; an event with another or no detail type,
-    or a detail that is not a JSON object of that shape, is logged and skipped."""
+    or a detail that is not a JSON object of that shape, is logged and skipped.
+
+    A completion of a compliance execution whose evaluation rows cannot be resolved yet
+    (`store.ComplianceExecutionUnresolved`: a tracking row whose parent row is absent, or an
+    execution of a still-launching evaluation whose tracking row is not written) is raised out of
+    the handler: the asynchronous invocation fails, Lambda retries it, and a delivery that keeps
+    failing lands in the completion dead-letter queue instead of being answered as processed."""
     detail_type = event.get("detail-type") or event.get("detailType") or ""
     if detail_type != WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE:
         logger.info(f"Ignoring event of detail type '{detail_type}'")
@@ -71,7 +77,12 @@ def lambda_handler(event, context):
             execution_status=detail.status,
             started_at=detail.startedAt,
             completed_at=detail.completedAt,
+            execution_group_id=detail.executionGroupId,
         )
+    except store.ComplianceExecutionUnresolved:
+        logger.exception(f"Execution {detail.executionId} is a compliance execution whose "
+                         "evaluation rows cannot be resolved yet; the completion is retried")
+        raise
     except Exception as e:
         logger.exception(
             f"Error finalizing compliance evaluation for execution {detail.executionId}: {e}")
@@ -100,11 +111,19 @@ def parse_completion_detail(raw_detail) -> Optional[WorkflowExecutionCompletedDe
 
 
 def process_completed_execution(execution_id: str, execution_status: str,
-                                started_at: Optional[str], completed_at: Optional[str]) -> Dict[str, Any]:
+                                started_at: Optional[str], completed_at: Optional[str],
+                                execution_group_id: Optional[str] = None) -> Dict[str, Any]:
     """Resolve the execution's evaluation and pipeline rule, read the pipeline's compliance output
-    on success, and record the rule's outcome."""
+    on success, and record the rule's outcome. An execution no row names is not a compliance
+    execution and is answered as processed — unless its execution group names an evaluation still
+    launching, whose tracking row for this execution is simply not written yet; that, and a tracking
+    row whose parent is absent, raise `store.ComplianceExecutionUnresolved`."""
     resolved = store.resolve_pipeline_execution(execution_id)
     if resolved is None:
+        if store.evaluation_still_launching(execution_group_id):
+            raise store.ComplianceExecutionUnresolved(
+                f"Execution {execution_id} belongs to evaluation {execution_group_id}, which is "
+                "still launching its pipeline rules")
         logger.info(f"Execution {execution_id} is not a compliance execution, skipping")
         return {"statusCode": 200, "body": "Not a compliance execution"}
     evaluation, rule_name = resolved

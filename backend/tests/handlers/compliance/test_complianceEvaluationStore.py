@@ -218,7 +218,9 @@ class Tables:
                 p.stop()
 
     def evaluation_records(self):
-        rows = put_items(self.evaluation)
+        """The evaluation table's rows as they stand (every put with the updates that followed it),
+        split into parent evaluations and pipeline-execution tracking rows."""
+        rows = list(self.evaluation_rows.rows.values())
         parents = [r for r in rows if r.get("recordType") is None]
         tracking = [r for r in rows if r.get("recordType") == store.PIPELINE_EXECUTION_RECORD_TYPE]
         return parents, tracking
@@ -1265,12 +1267,15 @@ class TestResolvePipelineExecution:
         tables = Tables()
         assert tables.run(store.resolve_pipeline_execution, "other") is None
 
-    def test_a_tracking_row_whose_parent_is_gone_is_none(self):
+    def test_a_tracking_row_whose_parent_is_absent_raises(self):
+        """The tracking row proves the execution is a compliance execution, so a missing parent is
+        a failure to retry, not an execution to ignore."""
         tables = Tables()
         tables.evaluation.query.return_value = {"Items": [
             {"recordType": "pipelineExecution", "parentEvaluationId": "eval-x",
              "pipelineRuleName": "r"}]}
-        assert tables.run(store.resolve_pipeline_execution, "exec-1") is None
+        with pytest.raises(store.ComplianceExecutionUnresolved):
+            tables.run(store.resolve_pipeline_execution, "exec-1")
 
 
 @pytest.mark.unit
@@ -1412,7 +1417,9 @@ class TestCompletePipelineRule:
                    "SUCCEEDED", self.OUTPUT, None, None)
         reads = [c.kwargs for c in tables.evaluation.get_item.call_args_list]
         assert reads
-        assert [r["Key"]["evaluationId"] for r in reads] == ["eval-1#residual-bound", "eval-1#other"]
+        # The parent is re-read after this rule's write, then every sibling's tracking row.
+        assert [r["Key"]["evaluationId"] for r in reads] == [
+            "eval-1", "eval-1#residual-bound", "eval-1#other"]
         assert all(r["ConsistentRead"] is True for r in reads)
         assert tables.evaluation.update_item.call_args_list[0].kwargs["Key"] == {
             "evaluationId": "eval-1#residual-bound"}
@@ -1581,6 +1588,210 @@ class TestCompletePipelineRule:
         tables.run(store.complete_pipeline_rule, _pending_evaluation(), "residual-bound",
                    "SUCCEEDED", self.OUTPUT, None, None)
         assert update_values(tables.state)[0]["complianceState"] == "compliant"
+
+
+@pytest.mark.unit
+class TestParentRowBeforeLaunch:
+    """The evaluation row exists before any pipeline execution is launched, so a completion event
+    that lands during the launches finds its parent; the rules not yet launched keep the evaluation
+    open until the launch outcome is recorded, and `run_evaluation` finalizes an evaluation whose
+    every launched rule reported while it was still launching."""
+
+    TWO_RULES = dict(RULES_SCHEMA_BODY, rules={
+        "residual-bound": PIPELINE_RULE.dict(), "other": OTHER_RULE.dict()})
+
+    @staticmethod
+    def _record_invocations(tables):
+        """Interleave the evaluation table's writes and the execute-workflow invokes in one list."""
+        events = []
+        real_put, real_update = tables.evaluation.put_item.side_effect, tables.evaluation.update_item.side_effect
+        real_invoke = tables.lambda_client.invoke.side_effect or tables.lambda_client.invoke.return_value
+
+        def put(Item, **kw):
+            events.append(("put", Item["evaluationId"], Item.get("status"),
+                           Item.get("pipelineExecutions")))
+            return real_put(Item, **kw)
+
+        def update(Key, **kw):
+            events.append(("update", Key["evaluationId"]))
+            return real_update(Key=Key, **kw)
+
+        def invoke(**kw):
+            events.append(("invoke",))
+            return real_invoke(**kw) if callable(real_invoke) else real_invoke
+
+        tables.evaluation.put_item.side_effect = put
+        tables.evaluation.update_item.side_effect = update
+        tables.lambda_client.invoke.side_effect = invoke
+        return events
+
+    def test_the_parent_row_is_written_before_the_first_launch(self):
+        tables = Tables(schema_body=self.TWO_RULES)
+        tables.pipeline.get_item.side_effect = lambda **kw: {"Item": {"pipelineId": kw["Key"]["pipelineId"]}}
+        events = self._record_invocations(tables)
+        tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+
+        assert events
+        first_invoke = events.index(("invoke",))
+        parent_puts = [e for e in events[:first_invoke] if e[0] == "put" and "#" not in e[1]]
+        assert len(parent_puts) == 1
+        _, _, status, executions = parent_puts[0]
+        assert status == "pending_pipeline"
+        assert executions == [{"ruleName": "residual-bound", "status": "starting"},
+                              {"ruleName": "other", "status": "starting"}]
+        # The launch outcome is an update of that row after the last launch, never a second put.
+        parent_writes_after = [e for e in events[first_invoke:] if len(e) > 1 and "#" not in e[1]]
+        assert parent_writes_after
+        assert all(e[0] == "update" for e in parent_writes_after)
+
+        parents, tracking = tables.evaluation_records()
+        parent = parents[0]
+        assert parent["executionId"] == "exec-1"
+        assert parent["pipelineExecutions"] == [
+            {"ruleName": "residual-bound", "executionId": "exec-1", "status": "pending"},
+            {"ruleName": "other", "executionId": "exec-1", "status": "pending"}]
+        assert [r["ruleName"] for r in json.loads(parent["pipelineRulesPending"])] == [
+            "residual-bound", "other"]
+        assert len(tracking) == 2
+
+    def test_a_launch_failure_is_recorded_as_not_started_beside_the_launched_rule(self):
+        tables = Tables(schema_body=self.TWO_RULES)
+        tables.pipeline.get_item.side_effect = lambda **kw: (
+            {"Item": {"pipelineId": kw["Key"]["pipelineId"]}}
+            if kw["Key"]["pipelineId"] == "pipe-1" else {})
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "pending_pipeline"
+        assert result["pipelineRulesPending"] == 1
+        assert result["errorRules"] == ["other"]
+        parent = tables.evaluation_records()[0][0]
+        assert parent["pipelineExecutions"] == [
+            {"ruleName": "residual-bound", "executionId": "exec-1", "status": "pending"},
+            {"ruleName": "other", "status": "not_started"}]
+        assert [r["ruleName"] for r in json.loads(parent["pipelineRulesPending"])] == ["residual-bound"]
+        assert parent["hasRuleErrors"] is True and parent["errorRules"] == ["other"]
+
+    def test_a_completion_that_lands_during_the_launches_is_held_until_the_launch_outcome(self):
+        """The first rule's completion arrives while the second is still `starting`: the callback
+        records the rule but cannot finalize (a rule is unlaunched) and writes no progress over the
+        starting list; `run_evaluation` then finalizes once the second launch fails, so the
+        evaluation is never left pending with every launched rule reported."""
+        tables = Tables(schema_body=self.TWO_RULES)
+        tables.pipeline.get_item.side_effect = lambda **kw: (
+            {"Item": {"pipelineId": kw["Key"]["pipelineId"]}}
+            if kw["Key"]["pipelineId"] == "pipe-1" else {})
+        callback_outcomes = []
+
+        def put_then_complete(Item, **kw):
+            # The completion lands the moment the first rule's tracking row exists, before the
+            # launch loop reaches the second rule.
+            tables.evaluation_rows._put_item(Item, **kw)
+            if Item.get("recordType") == "pipelineExecution" \
+                    and Item["pipelineRuleName"] == "residual-bound":
+                parent = tables.evaluation_rows.rows[Item["parentEvaluationId"]]
+                callback_outcomes.append(store.complete_pipeline_rule(
+                    parent, "residual-bound", "SUCCEEDED", TestCompletePipelineRule.OUTPUT,
+                    None, None))
+            return {}
+
+        tables.evaluation.put_item.side_effect = put_then_complete
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+
+        assert callback_outcomes and callback_outcomes[0]["finalized"] is False
+        assert result["verdict"] == "compliant"
+        assert result["complianceState"] == "compliant"
+        assert result["pipelineRulesPending"] == 0
+        parent = tables.evaluation_records()[0][0]
+        assert parent["status"] == "completed"
+        assert parent["verdict"] == "compliant"
+        assert parent["pipelineExecutions"] == [
+            {"ruleName": "residual-bound", "executionId": "exec-1", "status": "completed"},
+            {"ruleName": "other", "status": "not_started"}]
+        results = {r["ruleName"]: r for r in json.loads(parent["ruleResults"])}
+        assert results["residual-bound"]["passed"] is True
+        assert results["other"]["status"] == "error"
+        states = [u["complianceState"] for u in update_values(tables.state) if "complianceState" in u]
+        assert states == ["pending_evaluation", "compliant"]
+
+
+@pytest.mark.unit
+class TestOwnedStateWrite:
+    """The asset-state write carries the ownership rule as a condition, so an evaluation that read
+    the row as its own cannot overwrite a newer evaluation that landed in between."""
+
+    def test_the_state_write_is_conditioned_on_the_evaluations_ownership(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0)
+        tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        write = tables.state.update_item.call_args.kwargs
+        condition = write["ConditionExpression"]
+        names, values = write["ExpressionAttributeNames"], write["ExpressionAttributeValues"]
+        assert "attribute_not_exists(" in condition and " < " in condition and " = " in condition
+        assert {names[n] for n in names if n.startswith("#owned")} == {
+            "lastEvaluatedAt", "lastEvaluationId"}
+        evaluation_id = tables.evaluation_records()[0][0]["evaluationId"]
+        assert values[":ownedEvaluationId"] == evaluation_id
+        assert values[":ownedEvaluatedAt"] == tables.evaluation_records()[0][0]["evaluatedAt"]
+
+    def test_a_write_that_loses_the_condition_leaves_the_row_and_the_audit_alone(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0)
+        tables.state.update_item.side_effect = conditional_check_failure()
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "quarantined"
+        assert tables.state.update_item.call_count == 1
+        tables.audit.put_item.assert_not_called()
+        assert tables.evaluation_records()[0][0]["status"] == "completed"
+
+    def test_a_real_write_failure_is_raised(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0)
+        tables.state.update_item.side_effect = RuntimeError("table unavailable")
+        with pytest.raises(RuntimeError):
+            tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+
+
+@pytest.mark.unit
+class TestLatestVerdictEvaluation:
+
+    def _pages(self, *pages):
+        responses = []
+        for index, items in enumerate(pages):
+            response = {"Items": list(items)}
+            if index < len(pages) - 1:
+                response["LastEvaluatedKey"] = {"evaluationId": f"page-{index}"}
+            responses.append(response)
+        return responses
+
+    def test_the_newest_verdict_bearing_row_is_returned_from_the_first_page(self):
+        tables = Tables()
+        tables.evaluation.query.side_effect = self._pages([
+            {"evaluationId": "e3", "verdict": "pending_pipeline"},
+            {"evaluationId": "e2", "verdict": "error"},
+            {"evaluationId": "e1", "verdict": "non_compliant"},
+            {"evaluationId": "e0", "verdict": "compliant"}])
+        row = tables.run(store.latest_verdict_evaluation, DB, ASSET)
+        assert row["evaluationId"] == "e1"
+        query = tables.evaluation.query.call_args.kwargs
+        assert query["IndexName"] == "AssetIndex" and query["ScanIndexForward"] is False
+        assert query["Limit"] <= store.LATEST_VERDICT_LOOKBACK
+
+    def test_the_history_is_paged_until_a_verdict_is_found(self):
+        tables = Tables()
+        tables.evaluation.query.side_effect = self._pages(
+            [{"evaluationId": "e5", "verdict": "error"}, {"evaluationId": "e4", "verdict": "error"}],
+            [{"evaluationId": "e3", "verdict": "pending_pipeline"}],
+            [{"evaluationId": "e2", "verdict": "quarantined"}, {"evaluationId": "e1", "verdict": "compliant"}])
+        row = tables.run(store.latest_verdict_evaluation, DB, ASSET)
+        assert row["evaluationId"] == "e2"
+        calls = tables.evaluation.query.call_args_list
+        assert len(calls) == 3
+        assert "ExclusiveStartKey" not in calls[0].kwargs
+        assert calls[1].kwargs["ExclusiveStartKey"] == {"evaluationId": "page-0"}
+        assert calls[2].kwargs["ExclusiveStartKey"] == {"evaluationId": "page-1"}
+
+    def test_an_asset_with_no_verdict_bearing_evaluation_is_none(self):
+        tables = Tables()
+        tables.evaluation.query.side_effect = self._pages(
+            [{"evaluationId": "e2", "verdict": "error"}], [{"evaluationId": "e1", "verdict": "error"}])
+        assert tables.run(store.latest_verdict_evaluation, DB, ASSET) is None
+        assert len(tables.evaluation.query.call_args_list) == 2
 
 
 @pytest.mark.unit

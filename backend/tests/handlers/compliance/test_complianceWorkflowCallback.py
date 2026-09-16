@@ -35,12 +35,14 @@ PIPELINE_RULE = PipelineRule(**RULES_SCHEMA_BODY["rules"]["residual-bound"])
 OUTPUT = {"complianceOutput": True, "status": "success", "measurements": {"residual": 0.2}}
 
 
-def completion_event(status="SUCCEEDED", execution_id=EXECUTION_ID, detail_type=None):
+def completion_event(status="SUCCEEDED", execution_id=EXECUTION_ID, detail_type=None,
+                     execution_group_id=None):
     """The event as EventBridge delivers the emitters' `put_events` entry: the entry's `Detail`
     JSON becomes `detail`, its `DetailType` becomes `detail-type`."""
     entry = workflow_execution_completed_event(
         "arn:aws:events:us-east-1:123456789012:event-bus/orchestration", "vams.orch",
-        execution_id, "GLOBAL", "wf-1", status, STARTED, COMPLETED)
+        execution_id, "GLOBAL", "wf-1", status, STARTED, COMPLETED,
+        execution_group_id=execution_group_id)
     return {
         "source": entry["Source"],
         "detail-type": detail_type or entry["DetailType"],
@@ -221,6 +223,35 @@ class TestEventContract:
         harness.evaluation.update_item.assert_not_called()
         harness.state.update_item.assert_not_called()
 
+    def test_a_tracking_row_without_its_parent_fails_the_invocation(self):
+        """The completion is a compliance execution's (its tracking row exists) but the parent row
+        is not readable yet, so the handler raises: the asynchronous invocation is retried instead
+        of the completion being answered as processed and lost."""
+        harness = Callback()
+        del harness.evaluation_rows.rows["eval-1"]
+        with pytest.raises(store.ComplianceExecutionUnresolved):
+            harness.run(completion_event())
+        assert harness.evaluation_rows.rows["eval-1#residual-bound"]["status"] == "pending"
+        harness.state.update_item.assert_not_called()
+
+    def test_an_execution_of_a_still_launching_evaluation_without_its_tracking_row_is_retried(self):
+        """No row names the execution yet (its tracking row is written after the launch returns),
+        but the event's execution group names an evaluation whose rules are still `starting`."""
+        launching = dict(_pending_evaluation(), pipelineExecutions=[
+            {"ruleName": "residual-bound", "status": "starting"}])
+        harness = Callback(evaluation=launching, found=False)
+        harness.evaluation_rows.seed(launching)
+        with pytest.raises(store.ComplianceExecutionUnresolved):
+            harness.run(completion_event(execution_group_id="eval-1"))
+        harness.evaluation.update_item.assert_not_called()
+
+    def test_an_execution_of_an_evaluation_past_its_launches_that_no_row_names_is_a_no_op(self):
+        harness = Callback(found=False)
+        harness.evaluation_rows.seed(_pending_evaluation())
+        response = harness.run(completion_event(execution_group_id="eval-1"))
+        assert response == {"statusCode": 200, "body": "Not a compliance execution"}
+        harness.evaluation.update_item.assert_not_called()
+
     def test_an_evaluation_that_already_completed_is_not_touched(self):
         harness = Callback(evaluation=_pending_evaluation(status="completed"))
         response = harness.run(completion_event())
@@ -361,9 +392,10 @@ class TestCorrelation:
         harness = Callback(tracking=False)
         outcome = json.loads(harness.run(completion_event("SUCCEEDED"))["body"])
         assert outcome["finalized"] is True
+        # The one parent read is the re-read after the tracking write, not a resolution lookup.
         parent_lookups = [c for c in harness.evaluation.get_item.call_args_list
                           if c.kwargs["Key"] == {"evaluationId": "eval-1"}]
-        assert parent_lookups == []
+        assert len(parent_lookups) == 1
         assert harness.evaluation_rows.rows["eval-1#residual-bound"]["status"] == "completed"
 
     def test_finalization_is_recorded_by_the_system_actor(self):

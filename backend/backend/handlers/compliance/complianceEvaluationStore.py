@@ -16,8 +16,11 @@ Evaluation record (COMPLIANCE_EVALUATION_STORAGE_TABLE, PK `evaluationId`):
     pending_pipeline | error | failed), verdict, violations, ruleResults (JSON list of RuleResult,
     each `evaluated` or `error`), hasRuleErrors + errorRules (the rules the tooling could not
     evaluate; see `evaluationEngine.TOOLING_FAILURES_APPLY_ENFORCEMENT`), pipelineRulesPending (JSON
-    list of {ruleName, rule}), pipelineExecutions (list of {ruleName, executionId, status}),
-    executionId + pipelineRuleName (ExecutionIdIndex; the first pipeline rule's execution),
+    list of {ruleName, rule}), pipelineExecutions (list of {ruleName, executionId, status}; the
+    status is `starting` until the launch is attempted, `pending` once launched, `completed` once
+    the completion event landed, `not_started` when the launch failed — that rule's result on the
+    row is `status: error`), executionId + pipelineRuleName (ExecutionIdIndex; the first pipeline
+    rule's execution),
     exceptionApplied (true when a quarantine exception was active for the evaluation), actor,
     completedAt, errorMessage.
 Pipeline-execution tracking row (same table, one per started pipeline rule):
@@ -27,6 +30,11 @@ Pipeline-execution tracking row (same table, one per started pipeline rule):
     `status = pending`, which is what makes a redelivered completion event a no-op; the parent's
     pipeline results are the aggregate of these rows.
     It carries no databaseId:assetId, so it stays out of the AssetIndex listing.
+    The parent row is written before any execution is launched, so a completion event always finds
+    it; a completion the rows cannot resolve yet (a tracking row whose parent is absent, or an
+    execution of a still-launching evaluation whose tracking row is not written) is reported by
+    `ComplianceExecutionUnresolved` so the callback's invocation fails and is retried instead of
+    dropping the completion.
 Asset-state record (COMPLIANCE_ASSET_STATE_STORAGE_TABLE, PK databaseId, SK assetId):
     schemaName (SchemaNameIndex PK) and schemaSource (database | asset) — the binding, written only
     by the schema binding service and the trigger's registration of an asset under its database
@@ -82,9 +90,22 @@ SYSTEM_ACTOR = "SYSTEM_USER"
 PIPELINE_EXECUTION_RECORD_TYPE = "pipelineExecution"
 PIPELINE_EXECUTION_KEY_SEPARATOR = "#"
 
-# Statuses on a pipelineExecutions entry / tracking row.
+# Statuses on a pipelineExecutions entry / tracking row. `starting` and `not_started` occur on the
+# parent's entries only: the parent row lists every pipeline rule as `starting` before the first
+# launch, and a rule whose launch failed becomes `not_started` (its `status: error` result is on the
+# parent's ruleResults; it has no tracking row).
+PIPELINE_EXECUTION_STARTING = "starting"
 PIPELINE_EXECUTION_PENDING = "pending"
 PIPELINE_EXECUTION_COMPLETED = "completed"
+PIPELINE_EXECUTION_NOT_STARTED = "not_started"
+
+
+class ComplianceExecutionUnresolved(Exception):
+    """A workflow execution is a compliance execution but its evaluation rows cannot be resolved
+    yet: its tracking row exists and names a parent evaluation row that is absent, or the execution
+    group names a `pending_pipeline` evaluation still launching (`starting` rules) while no tracking
+    row carries this execution id. The caller fails the invocation so the completion is retried,
+    not dropped."""
 
 # Audit event type written when an evaluation clears an exception granted against another schema
 # name or version.
@@ -536,9 +557,30 @@ def update_evaluation(evaluation_id: str, updates: Dict[str, Any], condition=Non
                        condition=condition, **kwargs)
 
 
-def update_asset_state(database_id: str, asset_id: str, updates: Dict[str, Any]) -> None:
-    """SET attributes on an asset's compliance state row (created when absent)."""
-    update_item(asset_state_table, {"databaseId": database_id, "assetId": asset_id}, updates)
+def update_asset_state(database_id: str, asset_id: str, updates: Dict[str, Any],
+                       condition=None) -> None:
+    """SET attributes on an asset's compliance state row (created when absent), optionally under a
+    `(ConditionExpression, names, values)` condition."""
+    update_item(asset_state_table, {"databaseId": database_id, "assetId": asset_id}, updates,
+                condition=condition)
+
+
+_OWNERSHIP_AT_NAME = "#ownedEvaluatedAt"
+_OWNERSHIP_ID_NAME = "#ownedEvaluationId"
+
+
+def evaluation_ownership_condition(evaluation_id: str, evaluated_at: str,
+                                   ) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
+    """The write-time form of `engine.evaluation_owns_state_row`: the asset-state row records no
+    evaluation yet, or its last evaluation began before this one, or it is this evaluation. Applied
+    to every state write an evaluation makes, so two evaluations finalizing within the same instant
+    cannot let the older one land after the newer one's read."""
+    names = {_OWNERSHIP_AT_NAME: "lastEvaluatedAt", _OWNERSHIP_ID_NAME: "lastEvaluationId"}
+    values = {":ownedEvaluatedAt": evaluated_at, ":ownedEvaluationId": evaluation_id}
+    expression = (f"attribute_not_exists({_OWNERSHIP_AT_NAME}) OR "
+                  f"{_OWNERSHIP_AT_NAME} < :ownedEvaluatedAt OR "
+                  f"{_OWNERSHIP_ID_NAME} = :ownedEvaluationId")
+    return expression, names, values
 
 
 def write_audit(
@@ -821,15 +863,28 @@ def run_evaluation(
     rule_results, pipeline_rules = engine.evaluate_rules(
         typed_rules, asset_metadata, metadata_schema_fields, asset_links)
 
+    base_record = _evaluation_record_base(evaluation_id, database_id, asset_id, schema_name,
+                                          schema_version, evaluated_at, actor)
     started: List[Dict[str, Any]] = []
     if pipeline_rules:
+        # The parent row goes down before the first launch, listing every pipeline rule as
+        # `starting`: a completion event that lands while the launches are still under way finds
+        # its parent, and the rules not yet launched keep the evaluation from finalizing until the
+        # launch outcome is recorded below.
+        evaluation_table.put_item(Item={
+            **base_record,
+            "status": engine.EVALUATION_STATUS_PENDING_PIPELINE,
+            "verdict": EvaluationVerdict.pending_pipeline.value,
+            "violations": engine.violations(rule_results),
+            "ruleResults": json.dumps([r.dict() for r in rule_results]),
+            "hasRuleErrors": False,
+            "pipelineRulesPending": engine.pipeline_rules_to_json(pipeline_rules),
+            "pipelineExecutions": [{"ruleName": name, "status": PIPELINE_EXECUTION_STARTING}
+                                   for name in pipeline_rules],
+        })
         started, launch_errors = start_pipeline_rule_executions(
             pipeline_rules, evaluation_id, database_id, asset_id, evaluated_at)
         rule_results.extend(launch_errors)
-        pipeline_rules = {
-            name: rule for name, rule in pipeline_rules.items()
-            if any(entry["ruleName"] == name for entry in started)
-        }
 
     has_pending = bool(started)
     verdict = (EvaluationVerdict.pending_pipeline if has_pending
@@ -840,51 +895,14 @@ def run_evaluation(
     previous = get_compliance_record(database_id, asset_id) or {}
     exception_applies, compliance_state = _state_for_verdict(
         verdict, previous, schema_name, schema_version)
-
-    record: Dict[str, Any] = {
-        "evaluationId": evaluation_id,
-        "databaseId:assetId": f"{database_id}:{asset_id}",
-        "databaseId": database_id,
-        "assetId": asset_id,
-        "schemaName": schema_name,
-        "evaluatedAt": evaluated_at,
-        "status": status,
+    audit_details = {
         "verdict": verdict.value,
-        "violations": engine.violations(rule_results),
-        "ruleResults": json.dumps([r.dict() for r in rule_results]),
-        "actor": actor,
-        **_rule_error_fields(error_rules),
+        "ruleResultCount": len(rule_results),
+        "pipelineRulesPending": len(started),
+        **({"exceptionApplied": True} if exception_applies else {}),
+        **({"errorRules": error_rules} if error_rules else {}),
     }
-    if schema_version is not None:
-        record["schemaVersion"] = schema_version
-    if exception_applies:
-        record["exceptionApplied"] = True
-    if verdict == EvaluationVerdict.error:
-        record["errorMessage"] = ALL_RULES_ERRORED_MESSAGE
-    if has_pending:
-        record["pipelineRulesPending"] = engine.pipeline_rules_to_json(pipeline_rules)
-        record["pipelineExecutions"] = started
-        record["executionId"] = started[0]["executionId"]
-        record["pipelineRuleName"] = started[0]["ruleName"]
-    else:
-        record["completedAt"] = evaluated_at
-    evaluation_table.put_item(Item=record)
-
-    if error_rules:
-        _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
-                                      {"ruleNames": error_rules, "verdict": verdict.value})
-    _write_evaluation_state(
-        database_id, asset_id, actor, evaluation_id, evaluated_at, evaluated_at, schema_name,
-        schema_version, previous, compliance_state, status, rule_results,
-        audit_details={
-            "verdict": verdict.value,
-            "ruleResultCount": len(rule_results),
-            "pipelineRulesPending": len(started),
-            **({"exceptionApplied": True} if exception_applies else {}),
-            **({"errorRules": error_rules} if error_rules else {}),
-        })
-
-    return {
+    result = {
         "evaluationId": evaluation_id,
         "verdict": verdict.value,
         "complianceState": compliance_state if compliance_state is not None
@@ -896,6 +914,96 @@ def run_evaluation(
         "hasRuleErrors": bool(error_rules),
         "errorRules": error_rules,
     }
+
+    if not has_pending:
+        # No execution is in flight (none was launched, or none started), so the row is written
+        # whole as a completed evaluation; when pipeline rules were listed this replaces the
+        # `starting` row and nothing can have written to it in between.
+        record: Dict[str, Any] = {
+            **base_record,
+            "status": status,
+            "verdict": verdict.value,
+            "violations": engine.violations(rule_results),
+            "ruleResults": json.dumps([r.dict() for r in rule_results]),
+            "completedAt": evaluated_at,
+            **_rule_error_fields(error_rules),
+        }
+        if exception_applies:
+            record["exceptionApplied"] = True
+        if verdict == EvaluationVerdict.error:
+            record["errorMessage"] = ALL_RULES_ERRORED_MESSAGE
+        evaluation_table.put_item(Item=record)
+        if error_rules:
+            _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
+                                          {"ruleNames": error_rules, "verdict": verdict.value})
+        _write_evaluation_state(
+            database_id, asset_id, actor, evaluation_id, evaluated_at, evaluated_at, schema_name,
+            schema_version, previous, compliance_state, status, rule_results, audit_details)
+        return result
+
+    # The pending state row and its audit go down before the launch outcome opens the evaluation
+    # to finalization, so a callback that finalizes right after finds the row it supersedes.
+    if error_rules:
+        _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
+                                      {"ruleNames": error_rules, "verdict": verdict.value})
+    _write_evaluation_state(
+        database_id, asset_id, actor, evaluation_id, evaluated_at, evaluated_at, schema_name,
+        schema_version, previous, compliance_state, status, rule_results, audit_details)
+
+    launched = {name: rule for name, rule in pipeline_rules.items()
+                if any(entry["ruleName"] == name for entry in started)}
+    launch_outcome = {
+        "pipelineExecutions": _launch_outcome_entries(pipeline_rules, started),
+        "pipelineRulesPending": engine.pipeline_rules_to_json(launched),
+        "executionId": started[0]["executionId"],
+        "pipelineRuleName": started[0]["ruleName"],
+        "ruleResults": json.dumps([r.dict() for r in rule_results]),
+        **_rule_error_fields(error_rules),
+    }
+    if exception_applies:
+        launch_outcome["exceptionApplied"] = True
+    update_evaluation(evaluation_id, launch_outcome)
+
+    # A completion that landed during the launches could not finalize while a sibling rule was
+    # still `starting`; once every launched rule has reported, this run finalizes the evaluation.
+    current = get_evaluation(evaluation_id, consistent_read=True)
+    if current is not None and current.get("status") == engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        outcome = _finalize_when_complete(current, phase="launch")
+        if outcome["finalized"]:
+            result.update({
+                "verdict": outcome["verdict"],
+                "complianceState": outcome["complianceState"],
+                "pipelineRulesPending": 0,
+            })
+    return result
+
+
+def _evaluation_record_base(evaluation_id, database_id, asset_id, schema_name, schema_version,
+                            evaluated_at, actor) -> Dict[str, Any]:
+    """The attributes every evaluation row carries whatever its outcome."""
+    record: Dict[str, Any] = {
+        "evaluationId": evaluation_id,
+        "databaseId:assetId": f"{database_id}:{asset_id}",
+        "databaseId": database_id,
+        "assetId": asset_id,
+        "schemaName": schema_name,
+        "evaluatedAt": evaluated_at,
+        "actor": actor,
+    }
+    if schema_version is not None:
+        record["schemaVersion"] = schema_version
+    return record
+
+
+def _launch_outcome_entries(pipeline_rules, started: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The `pipelineExecutions` entries once every launch was attempted, in rule order: a launched
+    rule with its execution id (`pending`), a rule whose launch failed as `not_started`."""
+    by_name = {entry["ruleName"]: entry for entry in started}
+    return [
+        dict(by_name[name]) if name in by_name
+        else {"ruleName": name, "status": PIPELINE_EXECUTION_NOT_STARTED}
+        for name in pipeline_rules
+    ]
 
 
 def _state_for_verdict(verdict: EvaluationVerdict, previous: Dict[str, Any], schema_name: str,
@@ -928,16 +1036,19 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     the evaluation supersedes (audited as `exception_superseded`), the `compliance_check` entry, and
     the release audit / quarantine notification a state transition calls for.
 
-    The row is written only while this evaluation owns it (`engine.evaluation_owns_state_row`); an
-    evaluation a newer one has already superseded leaves the row and the audit trail alone (logged),
-    so its outcome is recorded on its own evaluation row only. A `compliance_state` of None (a
-    verdict of `error`) writes the evaluation pointers and status and leaves the state, the
-    quarantine reason and any exception as they are. Returns whether the row was written."""
+    The row is written only while this evaluation owns it (`engine.evaluation_owns_state_row` on
+    the row as read, and `evaluation_ownership_condition` on the write itself, so an evaluation that
+    lands between the read and the write cannot be overwritten by an older one); an evaluation a
+    newer one has already superseded leaves the row and the audit trail alone (logged), so its
+    outcome is recorded on its own evaluation row only. A `compliance_state` of None (a verdict of
+    `error`) writes the evaluation pointers and status and leaves the state, the quarantine reason
+    and any exception as they are. Returns whether the row was written."""
     if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
         logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} is older than the "
                     f"asset's last evaluation {previous.get('lastEvaluationId')}; the asset state "
                     "is left as it is")
         return False
+    ownership = evaluation_ownership_condition(evaluation_id, evaluated_at)
 
     updates: Dict[str, Any] = {
         "lastEvaluationId": evaluation_id,
@@ -950,8 +1061,7 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
         # evaluation creates is a well-formed one.
         if "complianceState" not in previous:
             updates["complianceState"] = engine.STATE_UNKNOWN
-        update_asset_state(database_id, asset_id, updates)
-        return True
+        return _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership)
 
     previous_state = previous.get("complianceState")
     updates["complianceState"] = compliance_state
@@ -959,7 +1069,8 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     superseded = engine.exception_is_superseded(previous, schema_name, schema_version)
     if superseded:
         updates.update(engine.cleared_exception_fields())
-    update_asset_state(database_id, asset_id, updates)
+    if not _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership):
+        return False
 
     if superseded:
         write_audit(
@@ -990,6 +1101,20 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     )
     _audit_state_transition(database_id, asset_id, actor, evaluation_id, previous_state,
                             compliance_state, engine.failed_rule_names(rule_results), schema_name)
+    return True
+
+
+def _write_owned_state(database_id, asset_id, evaluation_id, updates, ownership) -> bool:
+    """The asset-state write under the evaluation's ownership condition; a conditional failure
+    means a newer evaluation wrote the row first, which is logged and reported as not written."""
+    try:
+        update_asset_state(database_id, asset_id, updates, condition=ownership)
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} lost the asset-state "
+                    "write to a newer evaluation; the asset state is left as it is")
+        return False
     return True
 
 
@@ -1111,22 +1236,42 @@ VERDICT_BEARING = (
 def latest_verdict_evaluation(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]:
     """The asset's newest evaluation whose verdict maps to a compliance state (compliant,
     non_compliant or quarantined), skipping error and still-pending evaluations; None when the
-    asset has none within the lookback."""
-    response = evaluation_table.query(
-        IndexName="AssetIndex",
-        KeyConditionExpression=Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
-        ScanIndexForward=False,
-        Limit=LATEST_VERDICT_LOOKBACK,
-    )
-    for row in response.get("Items", []):
-        if row.get("verdict") in VERDICT_BEARING:
-            return row
-    return None
+    asset has never had one. The AssetIndex is read newest-first in pages of
+    LATEST_VERDICT_LOOKBACK until a verdict-bearing row is found or the history is exhausted."""
+    query: Dict[str, Any] = {
+        "IndexName": "AssetIndex",
+        "KeyConditionExpression": Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
+        "ScanIndexForward": False,
+        "Limit": LATEST_VERDICT_LOOKBACK,
+    }
+    while True:
+        response = evaluation_table.query(**query)
+        for row in response.get("Items", []):
+            if row.get("verdict") in VERDICT_BEARING:
+                return row
+        if "LastEvaluatedKey" not in response:
+            return None
+        query["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def evaluation_still_launching(evaluation_id: Optional[str]) -> bool:
+    """Whether `evaluation_id` names a `pending_pipeline` evaluation row with a pipeline rule still
+    `starting` — its launches are under way, so an execution of its group whose tracking row is not
+    written yet belongs to it. False for no id, no such row, or a row past its launches."""
+    if not evaluation_id:
+        return False
+    row = get_evaluation(evaluation_id, consistent_read=True) or {}
+    if row.get("recordType") is not None or row.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        return False
+    return any(entry.get("status") == PIPELINE_EXECUTION_STARTING
+               for entry in row.get("pipelineExecutions") or [])
 
 
 def resolve_pipeline_execution(execution_id: str) -> Optional[Tuple[Dict[str, Any], str]]:
     """The parent evaluation record and the pipeline rule name a workflow execution belongs to,
-    or None when the execution is not a compliance execution."""
+    or None when the execution is not a compliance execution (no row names it). A tracking row
+    whose parent evaluation row is absent raises `ComplianceExecutionUnresolved`: the execution is a
+    compliance execution whose completion must not be dropped."""
     rows = find_evaluation_rows_by_execution_id(execution_id)
     if not rows:
         return None
@@ -1136,10 +1281,14 @@ def resolve_pipeline_execution(execution_id: str) -> Optional[Tuple[Dict[str, An
         # sees it, so a finalized evaluation is recognized before any work is done for it.
         parent = get_evaluation(tracking["parentEvaluationId"], consistent_read=True)
         rule_name = tracking.get("pipelineRuleName", "")
+        if parent is None:
+            raise ComplianceExecutionUnresolved(
+                f"Execution {execution_id} is tracked under evaluation "
+                f"{tracking['parentEvaluationId']}, which has no row")
     else:
         parent = rows[0]
         rule_name = parent.get("pipelineRuleName", "")
-    if parent is None or not rule_name:
+    if not rule_name:
         return None
     return parent, rule_name
 
@@ -1160,9 +1309,14 @@ def complete_pipeline_rule(
 
       - the rule's outcome lands on its tracking row under a `status = pending` condition, so a
         redelivered completion event finds the row completed and records nothing twice;
-      - the evaluation's pipeline results are aggregated from the tracking rows, read consistently
-        after this rule's write, rather than from the caller's snapshot of the parent record — the
-        callback whose tracking write was the last to land therefore sees every sibling completed;
+      - the parent is re-read consistently after this rule's write and the evaluation's pipeline
+        results are aggregated from the tracking rows, rather than from the caller's snapshot of the
+        parent record — the callback whose tracking write was the last to land therefore sees every
+        sibling completed, and the launch outcome `run_evaluation` records after its launches;
+      - a rule still `starting` on the parent (its launch not yet attempted) keeps the evaluation
+        open, and the progress write is skipped while any rule is, so a stale execution list never
+        overwrites the recorded launch outcome; `run_evaluation` finalizes itself when every
+        launched rule reported during the launches;
       - the progress write and the finalize write both carry a `status = pending_pipeline`
         condition, so two callbacks that each see the other completed finalize exactly once, and a
         late progress write cannot overwrite a finalized evaluation with a partial result set;
@@ -1197,12 +1351,33 @@ def complete_pipeline_rule(
                     "the redelivered completion is ignored")
         return _not_finalized(evaluation_id, rule_name)
 
+    current = get_evaluation(evaluation_id, consistent_read=True) or evaluation
+    if current.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        logger.info(f"Evaluation {evaluation_id} was finalized by another callback")
+        return _not_finalized(evaluation_id, rule_name)
+    outcome = _finalize_when_complete(current, phase="pipeline_callback",
+                                      execution_status=execution_status)
+    return {**outcome, "ruleName": rule_name}
+
+
+def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
+                            execution_status: Optional[str] = None) -> Dict[str, Any]:
+    """Finalize a `pending_pipeline` evaluation once every launched pipeline rule has reported:
+    the verdict over the synchronous results and the tracking rows' results, the evaluation row
+    (under a `status = pending_pipeline` condition, so it happens once), the asset state and the
+    audit trail. While a rule is outstanding the evaluation's progress is recorded instead — unless
+    a rule is still `starting`, when the launch outcome has yet to land and the execution list on
+    the row is not this caller's to write. Returns `{evaluationId, finalized, verdict?,
+    complianceState?}`."""
+    evaluation_id = evaluation["evaluationId"]
+    finished_at = now_iso()
     executions, pipeline_results, outstanding = _aggregate_tracking_rows(
         evaluation_id, evaluation.get("pipelineExecutions") or [])
-    started_rule_names = {entry.get("ruleName") for entry in executions}
+    tracked_rule_names = {entry.get("ruleName") for entry in executions
+                          if entry.get("status") != PIPELINE_EXECUTION_NOT_STARTED}
     base_results = [
         result for result in engine.rule_results_from_json(evaluation.get("ruleResults", "[]"))
-        if result.ruleName not in started_rule_names
+        if result.ruleName not in tracked_rule_names
     ]
     all_results = base_results + pipeline_results
     progress = {
@@ -1211,14 +1386,17 @@ def complete_pipeline_rule(
     }
 
     if outstanding:
-        try:
-            update_evaluation(evaluation_id, progress,
-                              condition=status_condition(engine.EVALUATION_STATUS_PENDING_PIPELINE))
-        except Exception as e:
-            if not is_conditional_check_failure(e):
-                raise
-            logger.info(f"Evaluation {evaluation_id} was finalized by another callback")
-        return _not_finalized(evaluation_id, rule_name)
+        launches_over = all(entry.get("status") != PIPELINE_EXECUTION_STARTING
+                            for entry in executions)
+        if launches_over:
+            try:
+                update_evaluation(evaluation_id, progress,
+                                  condition=status_condition(engine.EVALUATION_STATUS_PENDING_PIPELINE))
+            except Exception as e:
+                if not is_conditional_check_failure(e):
+                    raise
+                logger.info(f"Evaluation {evaluation_id} was finalized by another callback")
+        return {"evaluationId": evaluation_id, "finalized": False}
 
     database_id = evaluation["databaseId"]
     asset_id = evaluation["assetId"]
@@ -1250,7 +1428,7 @@ def complete_pipeline_rule(
         if not is_conditional_check_failure(e):
             raise
         logger.info(f"Evaluation {evaluation_id} was finalized by another callback")
-        return _not_finalized(evaluation_id, rule_name)
+        return {"evaluationId": evaluation_id, "finalized": False}
 
     # The row's `lastEvaluatedAt` is the evaluation's start, the instant its inputs were read, so a
     # synchronous evaluation begun during the pipeline run is the newer of the two.
@@ -1260,14 +1438,13 @@ def complete_pipeline_rule(
         previous, compliance_state, status, all_results,
         audit_details={
             "verdict": verdict.value,
-            "pipelineExecutionStatus": execution_status,
-            "phase": "pipeline_callback",
+            **({"pipelineExecutionStatus": execution_status} if execution_status else {}),
+            "phase": phase,
             **({"exceptionApplied": True} if exception_applies else {}),
             **({"errorRules": error_rules} if error_rules else {}),
         })
     return {
         "evaluationId": evaluation_id,
-        "ruleName": rule_name,
         "finalized": True,
         "verdict": verdict.value,
         "complianceState": compliance_state if compliance_state is not None
@@ -1292,18 +1469,28 @@ def _not_finalized(evaluation_id: str, rule_name: str) -> Dict[str, Any]:
 def _aggregate_tracking_rows(
     evaluation_id: str, started: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], List[RuleResult], List[str]]:
-    """Read every started pipeline rule's tracking row with a consistent read and fold them into
+    """Read every pipeline rule's tracking row with a consistent read and fold them into
     `(pipelineExecutions entries with their current status, the completed rules' results in
-    start order, the names of the rules still outstanding)`."""
+    rule order, the names of the rules still outstanding)`. A rule whose launch failed
+    (`not_started`) has reported — its error result sits on the parent row — and has no tracking
+    row; a rule still `starting` has no tracking row yet and is outstanding; a launched rule is
+    outstanding until its tracking row is `completed`. The tracking row's execution id, when it
+    has one, is the entry's."""
     executions: List[Dict[str, Any]] = []
     results: List[RuleResult] = []
     outstanding: List[str] = []
     for entry in started:
         rule_name = entry.get("ruleName", "")
+        if entry.get("status") == PIPELINE_EXECUTION_NOT_STARTED:
+            executions.append(dict(entry))
+            continue
         row = get_evaluation(pipeline_execution_record_id(evaluation_id, rule_name),
                              consistent_read=True) or {}
-        status = row.get("status") or PIPELINE_EXECUTION_PENDING
-        executions.append({**entry, "status": status})
+        status = row.get("status") or entry.get("status") or PIPELINE_EXECUTION_PENDING
+        merged = {**entry, "status": status}
+        if row.get("executionId"):
+            merged["executionId"] = row["executionId"]
+        executions.append(merged)
         if status == PIPELINE_EXECUTION_COMPLETED:
             results.extend(engine.rule_results_from_json(row.get("ruleResults", "[]")))
         else:

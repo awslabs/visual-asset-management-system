@@ -11,6 +11,7 @@ import { Duration } from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
 import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
+import * as destinations from "aws-cdk-lib/aws-lambda-destinations";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import { NagSuppressions } from "cdk-nag";
@@ -510,7 +511,11 @@ export function buildComplianceWorkflowCallbackFunction(
     // evaluation sits in `pending_pipeline` until the callback records the verdict. Without a
     // dead-letter queue, EventBridge discards a persistently failing delivery after its own retries
     // and nothing records that it happened, leaving the evaluation pending with no trace. The queue
-    // holds the undeliverable events for an operator to redrive.
+    // holds the undeliverable events for an operator to redrive. It receives both kinds of failure:
+    // an event EventBridge could not hand to the function (the rule target's dead-letter queue) and
+    // an invocation the function itself failed after Lambda's asynchronous retries (the function's
+    // on-failure destination) — the callback raises for a completion it cannot resolve yet rather
+    // than answering it as processed, so such a completion is retried and, if it keeps failing, kept.
     const completionDlq = new sqs.Queue(scope, "ComplianceWorkflowCompletionDLQ", {
         encryption: storageResources.encryption.kmsKey
             ? sqs.QueueEncryption.KMS
@@ -523,7 +528,8 @@ export function buildComplianceWorkflowCallbackFunction(
             id: "AwsSolutions-SQS3",
             reason:
                 "This queue is itself the dead-letter target for the compliance workflow-completion " +
-                "EventBridge rule, so it does not take a further dead-letter queue.",
+                "EventBridge rule and the callback function's asynchronous-invocation failure " +
+                "destination, so it does not take a further dead-letter queue.",
         },
     ]);
 
@@ -534,6 +540,11 @@ export function buildComplianceWorkflowCallbackFunction(
             maxEventAge: Duration.hours(1),
         })
     );
+    fun.configureAsyncInvoke({
+        retryAttempts: 2,
+        maxEventAge: Duration.hours(1),
+        onFailure: new destinations.SqsDestination(completionDlq),
+    });
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
