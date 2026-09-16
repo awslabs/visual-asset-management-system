@@ -17,13 +17,165 @@ import {
     fetchEvaluationHistory,
     fetchQuarantinedAssets,
     fetchDatabaseComplianceOverview,
+    fetchComplianceSchemas,
+    fetchComplianceState,
+    evaluateAssetCompliance,
     getDatabaseBindings,
     revokeException,
+    complianceSchemaFormat,
+    erroredRuleNames,
+    ComplianceSchema,
+    EvaluationRecord,
 } from "./ComplianceService";
 
 const post = apiClient.post as jest.Mock;
 const get = apiClient.get as jest.Mock;
 const del = apiClient.del as jest.Mock;
+
+describe("schema format", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    const schema = (overrides: Partial<ComplianceSchema>): ComplianceSchema => ({
+        schemaName: "s",
+        schemaBody: {},
+        ...overrides,
+    });
+
+    it("reads the record's own schemaFormat first", () => {
+        expect(
+            complianceSchemaFormat(
+                schema({ schemaFormat: "legacy", schemaBody: { schemaFormat: "vams-rules-v1" } })
+            )
+        ).toBe("legacy");
+        expect(complianceSchemaFormat(schema({ schemaFormat: "vams-rules-v1" }))).toBe(
+            "vams-rules-v1"
+        );
+    });
+
+    it("derives the format from the body when the record does not carry it", () => {
+        expect(
+            complianceSchemaFormat(schema({ schemaBody: { schemaFormat: "vams-rules-v1" } }))
+        ).toBe("vams-rules-v1");
+        expect(complianceSchemaFormat(schema({ schemaBody: { type: "object" } }))).toBe("legacy");
+    });
+
+    it("fetchComplianceSchemas passes the top-level schemaFormat through", async () => {
+        get.mockResolvedValue({
+            schemas: [
+                { schemaName: "modern", schemaFormat: "vams-rules-v1", schemaBody: {} },
+                { schemaName: "old", schemaFormat: "legacy", schemaBody: { type: "object" } },
+            ],
+        });
+        const result = await fetchComplianceSchemas();
+        expect(result[0]).toBe(true);
+        expect((result[1] as ComplianceSchema[]).map((s) => s.schemaFormat)).toEqual([
+            "vams-rules-v1",
+            "legacy",
+        ]);
+    });
+});
+
+describe("evaluation errors", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    const evaluation = (overrides: Partial<EvaluationRecord>): EvaluationRecord => ({
+        evaluationId: "ev",
+        databaseId: "db1",
+        assetId: "a1",
+        schemaName: "std",
+        result: "compliant",
+        evaluatedAt: "2026-01-01T00:00:00Z",
+        ...overrides,
+    });
+
+    it("erroredRuleNames prefers the record's errorRules", () => {
+        expect(
+            erroredRuleNames(
+                evaluation({
+                    errorRules: ["geometry"],
+                    ruleResults: [
+                        {
+                            ruleName: "other",
+                            ruleType: "metadata",
+                            enforcement: "warn",
+                            passed: false,
+                            status: "error",
+                        },
+                    ],
+                })
+            )
+        ).toEqual(["geometry"]);
+    });
+
+    it("erroredRuleNames reads status error out of JSON-encoded or listed rule results", () => {
+        const results = [
+            {
+                ruleName: "geometry",
+                ruleType: "pipeline",
+                enforcement: "quarantine",
+                passed: false,
+                status: "error",
+            },
+            {
+                ruleName: "owner",
+                ruleType: "metadata",
+                enforcement: "warn",
+                passed: false,
+                status: "evaluated",
+            },
+            { ruleName: "links", ruleType: "relationship", enforcement: "inform", passed: true },
+        ];
+        expect(erroredRuleNames(evaluation({ ruleResults: JSON.stringify(results) }))).toEqual([
+            "geometry",
+        ]);
+        expect(erroredRuleNames(evaluation({ ruleResults: results as any }))).toEqual(["geometry"]);
+        expect(erroredRuleNames(evaluation({ ruleResults: "not json" }))).toEqual([]);
+        expect(erroredRuleNames(evaluation({}))).toEqual([]);
+    });
+
+    it("fetchComplianceState returns the row with its lastEvaluationStatus", async () => {
+        get.mockResolvedValue({
+            databaseId: "db1",
+            assetId: "a1",
+            complianceState: "compliant",
+            lastEvaluationStatus: "error",
+        });
+        const result = await fetchComplianceState("db1", "a1");
+        expect(get).toHaveBeenCalledWith("compliance/state/db1/a1", {});
+        expect(result).toEqual([
+            true,
+            {
+                databaseId: "db1",
+                assetId: "a1",
+                complianceState: "compliant",
+                lastEvaluationStatus: "error",
+            },
+        ]);
+    });
+
+    it("evaluateAssetCompliance returns the schema version, exception and rule-error flags", async () => {
+        post.mockResolvedValue({
+            message: "Evaluation completed",
+            evaluationId: "ev-1",
+            schemaName: "std",
+            schemaVersion: 3,
+            verdict: "compliant",
+            complianceState: "compliant",
+            ruleResults: [],
+            pipelineRulesPending: 0,
+            exceptionApplied: false,
+            hasRuleErrors: true,
+        });
+        const result = await evaluateAssetCompliance("db1", "a1");
+        expect(post).toHaveBeenCalledWith("compliance/evaluate/db1/a1", { body: {} });
+        expect(result[0]).toBe(true);
+        expect(result[1]).toMatchObject({
+            schemaVersion: 3,
+            exceptionApplied: false,
+            hasRuleErrors: true,
+        });
+    });
+});
 
 describe("quarantine exceptions", () => {
     beforeEach(() => jest.clearAllMocks());
@@ -167,8 +319,8 @@ describe("paged listings", () => {
         get.mockResolvedValue({
             databaseId: "db1",
             totalAssets: 120,
-            summary: { compliant: 100, non_compliant: 18, exception: 2 },
-            assets: [{ assetId: "a1" }],
+            summary: { compliant: 100, non_compliant: 18, exception: 2, error: 5 },
+            assets: [{ assetId: "a1", lastEvaluationStatus: "error" }],
             NextToken: "tok-2",
         });
         const result = await fetchDatabaseComplianceOverview("db1", { maxItems: 50 });
@@ -180,8 +332,8 @@ describe("paged listings", () => {
             {
                 databaseId: "db1",
                 totalAssets: 120,
-                summary: { compliant: 100, non_compliant: 18, exception: 2 },
-                assets: [{ assetId: "a1" }],
+                summary: { compliant: 100, non_compliant: 18, exception: 2, error: 5 },
+                assets: [{ assetId: "a1", lastEvaluationStatus: "error" }],
                 nextToken: "tok-2",
             },
         ]);

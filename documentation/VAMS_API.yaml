@@ -9107,7 +9107,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/schemas:
         get:
             summary: "List compliance schemas."
-            description: "Returns the latest version of every registered compliance schema the caller may read. With `databaseId`, only GLOBAL schemas and schemas scoped to that database are returned."
+            description: "Returns the latest version of every registered compliance schema the caller may read. With `databaseId`, only GLOBAL schemas and schemas scoped to that database are returned. Each record carries `schemaFormat` (`vams-rules-v1`, or `legacy` for a body that is not a vams-rules-v1 document; a legacy schema cannot be bound, updated or evaluated and is listed so it can be deleted)."
             parameters:
                 - name: databaseId
                   in: query
@@ -9360,7 +9360,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bindDatabaseResponse"
                 "400":
-                    description: Invalid parameters, the schema or database does not exist, or the schema is scoped to another database.
+                    description: "Invalid parameters, the schema or database does not exist, the schema is scoped to another database, or the schema is a legacy row (`schemaFormat` legacy) and is refused with `Schema body must be a vams-rules-v1 document`."
                     content:
                         application/json:
                             schema:
@@ -9447,7 +9447,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bindAssetResponse"
                 "400":
-                    description: Invalid parameters, the schema or asset does not exist, or the schema is scoped to another database.
+                    description: "Invalid parameters, the schema or asset does not exist, the schema is scoped to another database, or the schema is a legacy row (`schemaFormat` legacy) and is refused with `Schema body must be a vams-rules-v1 document`."
                     content:
                         application/json:
                             schema:
@@ -9512,7 +9512,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}/{assetId}:
         post:
             summary: "Evaluate an asset."
-            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata and relationship rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined."
+            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata and relationship rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending."
             parameters:
                 - name: databaseId
                   in: path
@@ -15688,6 +15688,10 @@ components:
                     description: "Human-readable description of the schema."
                 schemaBody:
                     $ref: "#/components/schemas/vamsRulesV1Schema"
+                schemaFormat:
+                    type: string
+                    enum: [vams-rules-v1, legacy]
+                    description: "Derived from the body: `vams-rules-v1`, or `legacy` for a row whose body is not a vams-rules-v1 document. A legacy schema cannot be bound, updated or evaluated; it is listed so it can be found and deleted."
                 version:
                     type: integer
                     description: "Version number of this row; every registration or update writes the next version."
@@ -15702,6 +15706,7 @@ components:
                 - schemaName
                 - databaseId
                 - schemaBody
+                - schemaFormat
                 - version
                 - createdAt
                 - isSystem
@@ -16161,6 +16166,11 @@ components:
                     enum: [pipeline, metadata, relationship]
                 enforcement:
                     $ref: "#/components/schemas/complianceEnforcementLevel"
+                status:
+                    type: string
+                    enum: [evaluated, error]
+                    default: evaluated
+                    description: "`evaluated` when the rule produced a pass or fail. `error` when its tooling failed before it could — an input selection not accepted by the workflow, one that did not match exactly one file or named a file the asset does not have, or an execution that could not be launched: `passed` is false, but the result is not a verdict and the rule's enforcement does not apply."
                 passed:
                     type: boolean
                 message:
@@ -16190,9 +16200,13 @@ components:
                     format: uuid
                 schemaName:
                     type: string
+                schemaVersion:
+                    type: integer
+                    description: "Version of the schema the evaluation read."
                 verdict:
                     type: string
                     enum: [compliant, non_compliant, quarantined, pending_pipeline, error]
+                    description: "`error` when every rule errored (or the schema could not be loaded): no verdict, and the asset's compliance state is left unchanged."
                 complianceState:
                     type: string
                     enum: [compliant, non_compliant, quarantined, exception, pending_evaluation, unknown]
@@ -16205,6 +16219,12 @@ components:
                 pipelineRulesPending:
                     type: integer
                     description: "Number of pipeline rules whose workflow execution was launched and is awaited."
+                exceptionApplied:
+                    type: boolean
+                    description: "`true` when an active quarantine exception held the asset released while the verdict was computed."
+                hasRuleErrors:
+                    type: boolean
+                    description: "`true` when at least one rule result has `status` `error`; the verdict was computed from the remaining rules and an `evaluation_error` audit entry names the errored rules."
             required:
                 - message
                 - evaluationId
@@ -16277,10 +16297,18 @@ components:
                         type: string
                 ruleResults:
                     type: string
-                    description: "JSON-encoded list of rule results (see `complianceRuleResult`)."
+                    description: "JSON-encoded list of rule results (see `complianceRuleResult`); a result with `status` `error` is a tooling failure, not a verdict."
                 exceptionApplied:
                     type: boolean
                     description: "`true` when the evaluation ran while a quarantine exception against this schema version was active: the violations are recorded as computed, but the asset state stayed released (`exception` on a failing verdict, never `quarantined`)."
+                hasRuleErrors:
+                    type: boolean
+                    description: "`true` when at least one rule result has `status` `error`. The verdict was computed from the remaining rules; when every rule errored the evaluation's `status` is `error` and the asset's state was left unchanged."
+                errorRules:
+                    type: array
+                    description: "Names of the rules whose result has `status` `error`. They are absent from `violations` because their enforcement did not apply."
+                    items:
+                        type: string
                 pipelineRulesPending:
                     type: string
                     description: "JSON-encoded pipeline rules awaiting their workflow execution. Present while `status` is `pending_pipeline`."
@@ -16358,6 +16386,10 @@ components:
                 lastEvaluatedAt:
                     type: string
                     format: date-time
+                lastEvaluationStatus:
+                    type: string
+                    enum: [completed, pending_pipeline, error]
+                    description: "Status of the evaluation `lastEvaluationId` names. `error` means it produced no verdict (every rule errored, or the schema could not be loaded), so `complianceState` is the state the asset held before it."
                 updatedAt:
                     type: string
                     format: date-time
@@ -16399,7 +16431,7 @@ components:
                     description: "Number of assets in the database that have a compliance record, across every page."
                 summary:
                     type: object
-                    description: "Per-state counts across every tracked asset, not just this page."
+                    description: "Per-state counts across every tracked asset, not just this page. `error` overlays the state buckets rather than adding to them."
                     properties:
                         compliant:
                             type: integer
@@ -16414,6 +16446,9 @@ components:
                             description: "Assets released under an active quarantine exception."
                         unknown:
                             type: integer
+                        error:
+                            type: integer
+                            description: "Assets whose `lastEvaluationStatus` is `error` (their last evaluation produced no verdict). An overlay, not a state: each is also counted under the state it kept."
                 assets:
                     type: array
                     description: "One page of the tracked assets, in `assetId` order, each with its `assetName`."
@@ -16669,6 +16704,7 @@ components:
                     type: string
                     enum:
                         - compliance_check
+                        - evaluation_error
                         - quarantine_released
                         - exception_granted
                         - exception_revoked

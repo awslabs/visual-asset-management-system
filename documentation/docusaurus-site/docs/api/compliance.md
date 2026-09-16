@@ -41,6 +41,7 @@ GET /compliance/schemas
                 "schemaFormat": "vams-rules-v1",
                 "rules": { "...": "..." }
             },
+            "schemaFormat": "vams-rules-v1",
             "version": 2,
             "createdAt": "2026-03-15T10:30:00+00:00",
             "isSystem": false
@@ -49,7 +50,7 @@ GET /compliance/schemas
 }
 ```
 
-The listing is not paged; a schema appears once, at its highest version.
+The listing is not paged; a schema appears once, at its highest version. The top-level `schemaFormat` is derived from the body: `vams-rules-v1`, or `legacy` for a row whose body is not a `vams-rules-v1` document. A legacy schema cannot be bound (see [Bind a schema to a database](#bind-a-schema-to-a-database)), updated or evaluated; it is listed so that it can be found and [deleted](#delete-a-compliance-schema).
 
 ### Error responses
 
@@ -106,7 +107,7 @@ POST /compliance/schemas
                 },
                 "inputFiles": {
                     "mode": "matching",
-                    "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.glb", "*.xyz"]
+                    "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.xyz"]
                 },
                 "checks": [
                     {
@@ -330,11 +331,11 @@ PUT /compliance/bind/{databaseId}
 
 ### Error responses
 
-| Status | Description                                                                                            |
-| ------ | ------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, the schema or database does not exist, or the schema is scoped to another database |
-| `403`  | Not authorized                                                                                         |
-| `500`  | Internal server error                                                                                  |
+| Status | Description                                                                                                                                                                                                                        |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the schema or database does not exist, the schema is scoped to another database, or the schema is a `legacy` row — its body is not a `vams-rules-v1` document (`Schema body must be a vams-rules-v1 document`) |
+| `403`  | Not authorized                                                                                                                                                                                                                     |
+| `500`  | Internal server error                                                                                                                                                                                                              |
 
 ---
 
@@ -397,11 +398,11 @@ PUT /compliance/bind/{databaseId}/{assetId}
 
 ### Error responses
 
-| Status | Description                                                                                         |
-| ------ | --------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, the schema or asset does not exist, or the schema is scoped to another database |
-| `403`  | Not authorized                                                                                      |
-| `500`  | Internal server error                                                                               |
+| Status | Description                                                                                                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the schema or asset does not exist, the schema is scoped to another database, or the schema is a `legacy` row — its body is not a `vams-rules-v1` document (`Schema body must be a vams-rules-v1 document`) |
+| `403`  | Not authorized                                                                                                                                                                                                                  |
+| `500`  | Internal server error                                                                                                                                                                                                           |
 
 ---
 
@@ -439,9 +440,11 @@ DELETE /compliance/bind/{databaseId}/{assetId}
 
 ## Evaluate an asset
 
-Evaluates an asset against the named schema, or against its bound schema when the body names none. Naming a schema evaluates against it without changing the asset's binding; the evaluation record carries the `schemaName` used. Metadata and relationship rules complete within the request. Each pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and the evaluation stays `pending_pipeline` (asset state `pending_evaluation`) until the execution completes — see [Pipeline rules](../concepts/compliance.md#pipeline-rules). When the asset has children linked by `parentChild` asset links, a cascade awaiting approval is opened after the evaluation.
+Evaluates an asset against the named schema, or against its bound schema when the body names none. Naming a schema evaluates against it without changing the asset's binding; the evaluation record carries the `schemaName` used. Metadata and relationship rules complete within the request. Each pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and the evaluation stays `pending_pipeline` (asset state `pending_evaluation`) until the execution completes — see [Pipeline rules](../concepts/compliance.md#pipeline-rules). When the asset has children linked by `parentChild` asset links, a cascade awaiting approval is opened after the evaluation, unless one for this asset is already pending approval.
 
 While the asset holds an active exception against the schema version evaluated, the rule results and violations are recorded on the evaluation as computed, the evaluation carries `exceptionApplied: true`, and a failing verdict leaves the asset in the `exception` state rather than quarantining it; an evaluation against another schema or a newer version supersedes the exception and applies its verdict normally (see [Grant an exception](#grant-an-exception-to-a-quarantined-asset)).
+
+A rule whose tooling fails — an input selection that is not accepted by the workflow, does not match exactly one file or names a file the asset does not have, or an execution that cannot be launched — is recorded as a rule result with `status: "error"`. It is not a verdict: `passed` is `false`, but the rule's enforcement does not apply, the verdict is computed from the remaining rules and the response carries `hasRuleErrors: true`. When every rule errored the `verdict` is `error` and the asset's compliance state is left unchanged (`lastEvaluationStatus: "error"` on its record). Either way an `evaluation_error` audit entry names the errored rules. See [Tooling failures](../concepts/compliance.md#tooling-failures).
 
 ```
 POST /compliance/evaluate/{databaseId}/{assetId}
@@ -460,6 +463,7 @@ POST /compliance/evaluate/{databaseId}/{assetId}
     "message": "Evaluation completed",
     "evaluationId": "3f6c1a2e-0b7d-4f7e-9d1c-5a2b8c9d0e1f",
     "schemaName": "survey-compliance",
+    "schemaVersion": 2,
     "verdict": "pending_pipeline",
     "complianceState": "pending_evaluation",
     "ruleResults": [
@@ -467,17 +471,20 @@ POST /compliance/evaluate/{databaseId}/{assetId}
             "ruleName": "required-metadata",
             "ruleType": "metadata",
             "enforcement": "quarantine",
+            "status": "evaluated",
             "passed": true,
             "message": null,
             "measured": null,
             "expected": null
         }
     ],
-    "pipelineRulesPending": 1
+    "pipelineRulesPending": 1,
+    "exceptionApplied": false,
+    "hasRuleErrors": false
 }
 ```
 
-`verdict` is one of `compliant`, `non_compliant`, `quarantined`, `pending_pipeline` or `error`; `complianceState` is the asset state the verdict maps to — `exception` when the verdict failed while an exception is active. `ruleResults` holds the rules that completed in the request, and `pipelineRulesPending` counts the pipeline rules whose execution is awaited.
+`verdict` is one of `compliant`, `non_compliant`, `quarantined`, `pending_pipeline` or `error`; `complianceState` is the asset state the verdict maps to — `exception` when the verdict failed while an exception is active. `schemaVersion` is the version of the schema the evaluation read. `ruleResults` holds the rules that completed in the request, each with a `status` of `evaluated` or `error`, and `pipelineRulesPending` counts the pipeline rules whose execution is awaited. `exceptionApplied` is `true` when an active exception held the asset released, and `hasRuleErrors` is `true` when at least one rule result has `status` `error`.
 
 ### Error responses
 
@@ -562,8 +569,10 @@ GET /compliance/evaluations/{databaseId}/{assetId}
             "status": "completed",
             "verdict": "compliant",
             "violations": [],
-            "ruleResults": "[{\"ruleName\": \"required-metadata\", \"ruleType\": \"metadata\", \"enforcement\": \"quarantine\", \"passed\": true}]",
+            "ruleResults": "[{\"ruleName\": \"required-metadata\", \"ruleType\": \"metadata\", \"enforcement\": \"quarantine\", \"status\": \"evaluated\", \"passed\": true}]",
             "exceptionApplied": false,
+            "hasRuleErrors": false,
+            "errorRules": [],
             "pipelineExecutions": [
                 {
                     "ruleName": "coord-accuracy",
@@ -581,7 +590,7 @@ GET /compliance/evaluations/{databaseId}/{assetId}
 }
 ```
 
-`status` is `completed`, `pending_pipeline`, `error` or `failed`. `ruleResults` is a JSON-encoded list of rule results; `exceptionApplied` is `true` on an evaluation that ran while an exception against its schema version was active (the violations are recorded, the asset stayed released); `pipelineExecutions`, `executionId` and `pipelineRuleName` are present on evaluations that launched a workflow execution, and `executionId` is the value the workflow completion event is correlated by. `NextToken` is absent on the last page.
+`status` is `completed`, `pending_pipeline`, `error` or `failed`. `ruleResults` is a JSON-encoded list of rule results, each with a `status` of `evaluated` or `error`; `exceptionApplied` is `true` on an evaluation that ran while an exception against its schema version was active (the violations are recorded, the asset stayed released); `hasRuleErrors` is `true` when at least one rule result has `status` `error` — the rule's tooling failed, it produced no verdict and its enforcement did not apply — and `errorRules` names those rules, which are absent from `violations`. An evaluation with `status` `error` produced no verdict at all (every rule errored, or the schema could not be loaded) and left the asset's state unchanged. `pipelineExecutions`, `executionId` and `pipelineRuleName` are present on evaluations that launched a workflow execution, and `executionId` is the value the workflow completion event is correlated by. `NextToken` is absent on the last page.
 
 ### Error responses
 
@@ -612,12 +621,13 @@ GET /compliance/state/{databaseId}/{assetId}
     "schemaSource": "database",
     "lastEvaluationId": "3f6c1a2e-0b7d-4f7e-9d1c-5a2b8c9d0e1f",
     "lastEvaluatedAt": "2026-03-15T10:30:00+00:00",
+    "lastEvaluationStatus": "completed",
     "updatedAt": "2026-03-15T10:31:12+00:00",
     "exceptionGranted": false
 }
 ```
 
-`complianceState` is one of `compliant`, `non_compliant`, `quarantined`, `exception`, `pending_evaluation` or `unknown`. An asset with no compliance record is reported with `complianceState` `unknown` and `null` for `schemaName` and `schemaSource`. An asset holding an active exception is in state `exception` and carries `exceptionGranted: true`, `exceptionReason`, `exceptionGrantedBy`, `exceptionGrantedAt`, and `exceptionSchemaName` / `exceptionSchemaVersion` — the schema name and version the exception is scoped to; revoking or superseding the exception sets `exceptionGranted` to `false` and clears the other exception fields. The rule failures behind a quarantine are summarised in `quarantineReason` while the asset is quarantined and listed in full on the last evaluation's `violations` (see [List the evaluations of an asset](#list-the-evaluations-of-an-asset)).
+`complianceState` is one of `compliant`, `non_compliant`, `quarantined`, `exception`, `pending_evaluation` or `unknown`. An asset with no compliance record is reported with `complianceState` `unknown` and `null` for `schemaName` and `schemaSource`. `lastEvaluationStatus` is the status of the evaluation `lastEvaluationId` names — `completed`, `pending_pipeline` or `error`; when it is `error` that evaluation produced no verdict (every rule of it errored, or its schema could not be loaded), so `complianceState` is the state the asset held before it. An asset holding an active exception is in state `exception` and carries `exceptionGranted: true`, `exceptionReason`, `exceptionGrantedBy`, `exceptionGrantedAt`, and `exceptionSchemaName` / `exceptionSchemaVersion` — the schema name and version the exception is scoped to; revoking or superseding the exception sets `exceptionGranted` to `false` and clears the other exception fields. The rule failures behind a quarantine are summarised in `quarantineReason` while the asset is quarantined and listed in full on the last evaluation's `violations` (see [List the evaluations of an asset](#list-the-evaluations-of-an-asset)).
 
 ### Error responses
 
@@ -656,7 +666,8 @@ GET /compliance/state/{databaseId}
         "pending_evaluation": 0,
         "quarantined": 1,
         "exception": 0,
-        "unknown": 0
+        "unknown": 0,
+        "error": 1
     },
     "assets": [
         {
@@ -666,14 +677,15 @@ GET /compliance/state/{databaseId}
             "complianceState": "compliant",
             "schemaName": "survey-compliance",
             "schemaSource": "database",
-            "lastEvaluatedAt": "2026-03-15T10:30:00+00:00"
+            "lastEvaluatedAt": "2026-03-15T10:30:00+00:00",
+            "lastEvaluationStatus": "error"
         }
     ],
     "NextToken": "eyJvZmZzZXQiOiAxfQ=="
 }
 ```
 
-`totalAssets` and `summary` cover every tracked asset of the database regardless of the page; `summary` holds one bucket per state (`compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception`, `unknown`). `assets` is one page of their records in `assetId` order — each a compliance record as returned by [Get the compliance state of an asset](#get-the-compliance-state-of-an-asset), plus the asset's display name as `assetName` — and `NextToken` is absent on the last page.
+`totalAssets` and `summary` cover every tracked asset of the database regardless of the page; `summary` holds one bucket per state (`compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception`, `unknown`) plus `error`, the number of assets whose `lastEvaluationStatus` is `error`. `error` is an overlay on the state buckets, not a state: an asset whose last evaluation produced no verdict is counted under the state it kept and again under `error`, so the state buckets sum to `totalAssets` without it. `assets` is one page of their records in `assetId` order — each a compliance record as returned by [Get the compliance state of an asset](#get-the-compliance-state-of-an-asset), plus the asset's display name as `assetName` — and `NextToken` is absent on the last page.
 
 ### Error responses
 
@@ -874,7 +886,7 @@ The listing is not paged. Each row carries `databaseId` and `assetId` naming the
 
 ## Create a cascade
 
-Creates a cascade that re-evaluates the downstream assets of an asset — every descendant reachable through `parentChild` asset links, in dependency order. With `requireApproval` (the default) the cascade waits in `pending_approval` for [approval](#approve-a-pending-cascade) and the response is `200`. With `requireApproval: false` the cascade is written in the `executing` state, its execution is started in the background and the response is `202`; the evaluations do not run inside the request.
+Creates a cascade that re-evaluates the downstream assets of an asset — every descendant reachable through `parentChild` asset links, in dependency order. With `requireApproval` (the default) the cascade waits in `pending_approval` for [approval](#approve-a-pending-cascade) and the response is `200`. With `requireApproval: false` the cascade is written in the `executing` state, its execution is started in the background and the response is `202`; the evaluations do not run inside the request. This route always opens a new cascade; only the cascade an evaluation opens automatically for an asset with children is de-duplicated — while one for the same parent is pending approval, further evaluations of that parent open no new one.
 
 ```
 POST /compliance/cascades
@@ -1068,23 +1080,24 @@ GET /compliance/audit
 
 ### Event types
 
-| Event type                     | Written when                                                                              |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| `compliance_check`             | An asset is evaluated                                                                     |
-| `quarantine_released`          | A quarantined asset is released, by request or by a passing re-evaluation                 |
-| `exception_granted`            | An exception is granted to a quarantined asset                                            |
-| `exception_revoked`            | An active exception is revoked; the asset returns to its last verdict's state             |
-| `exception_superseded`         | An evaluation against another schema or a newer schema version clears an active exception |
-| `schema_bound_to_database`     | A schema is bound to a database                                                           |
-| `schema_unbound_from_database` | A database binding is removed                                                             |
-| `schema_bound_to_asset`        | A schema is bound to an asset as an override                                              |
-| `schema_unbound_from_asset`    | An asset override is removed                                                              |
-| `schema_deleted`               | A schema is deleted                                                                       |
-| `cascade_triggered`            | A cascade is created through the API                                                      |
-| `cascade_auto_triggered`       | A cascade is opened after the evaluation of an asset that has children                    |
-| `cascade_approved`             | A pending cascade is approved                                                             |
-| `cascade_rejected`             | A pending cascade is rejected                                                             |
-| `cascade_completed`            | A cascade finishes evaluating its downstream assets                                       |
+| Event type                     | Written when                                                                                                                  |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `compliance_check`             | An asset is evaluated                                                                                                         |
+| `evaluation_error`             | A rule's tooling failed in an evaluation, or the schema could not be loaded; `details` names the errored rules as `ruleNames` |
+| `quarantine_released`          | A quarantined asset is released, by request or by a passing re-evaluation                                                     |
+| `exception_granted`            | An exception is granted to a quarantined asset                                                                                |
+| `exception_revoked`            | An active exception is revoked; the asset returns to its last verdict's state                                                 |
+| `exception_superseded`         | An evaluation against another schema or a newer schema version clears an active exception                                     |
+| `schema_bound_to_database`     | A schema is bound to a database                                                                                               |
+| `schema_unbound_from_database` | A database binding is removed                                                                                                 |
+| `schema_bound_to_asset`        | A schema is bound to an asset as an override                                                                                  |
+| `schema_unbound_from_asset`    | An asset override is removed                                                                                                  |
+| `schema_deleted`               | A schema is deleted                                                                                                           |
+| `cascade_triggered`            | A cascade is created through the API                                                                                          |
+| `cascade_auto_triggered`       | A cascade is opened after the evaluation of an asset that has children                                                        |
+| `cascade_approved`             | A pending cascade is approved                                                                                                 |
+| `cascade_rejected`             | A pending cascade is rejected                                                                                                 |
+| `cascade_completed`            | A cascade finishes evaluating its downstream assets                                                                           |
 
 ### Error responses
 

@@ -1496,7 +1496,10 @@ def list_compliance_schemas(database_id: Optional[str] = None) -> Dict[str, Any]
     can bind); without it, every schema the caller may read. The route returns the whole list in one
     response and takes no paging parameters, so there is no `starting_token` and the result is never
     `truncated`. Each item carries schemaName, databaseId (the scope, or GLOBAL), description,
-    schemaBody (the rule document), version and createdAt.
+    schemaBody (the rule document), `schemaFormat`, version and createdAt. `schemaFormat` is
+    `vams-rules-v1`, or `legacy` for a row whose body is not a vams-rules-v1 document: a legacy
+    schema cannot be bound, updated or evaluated and is listed only so it can be found and removed
+    with delete_compliance_schema().
     """
     return _single_response_list(CLIENT.api.list_compliance_schemas(database_id=database_id), "schemas")
 
@@ -1512,7 +1515,9 @@ def get_compliance_schema(schema_name: str) -> Dict[str, Any]:
     checks read (pipelineDatabaseId, pipelineId, optional templateId), and its `inputFiles`
     (`mode` matching / wholeAsset / explicit, with `filter` globs or explicit `keys`) selects
     which of the asset's files the execution receives. An optional `extends` names a parent
-    schema whose rules are inherited.
+    schema whose rules are inherited. The record's top-level `schemaFormat` is `vams-rules-v1`,
+    or `legacy` when the body is not such a document — a legacy schema cannot be bound, updated
+    or evaluated; delete it with delete_compliance_schema().
     """
     return CLIENT.api.get_compliance_schema(schema_name)
 
@@ -1556,6 +1561,10 @@ def get_asset_compliance_state(database_id: str, asset_id: str) -> Dict[str, Any
     asset released, while an evaluation against another schema or a newer version supersedes the
     exception. An asset that is not tracked answers state `unknown` with a null schemaName rather
     than an error, so `unknown` means "no schema is bound", not "the asset does not exist".
+    `lastEvaluationStatus` (completed, pending_pipeline or error) qualifies the state: `error`
+    means the last evaluation produced no verdict — every rule of it errored, or its schema could
+    not be loaded — so `complianceState` is the state the asset held BEFORE that evaluation. Read
+    list_compliance_evaluations() for the cause before treating such an asset as compliant.
     """
     return CLIENT.api.get_compliance_state(database_id, asset_id)
 
@@ -1570,6 +1579,10 @@ def get_database_compliance_overview(
     """Read a database's compliance overview: `totalAssets` and a per-state `summary` (compliant,
     non_compliant, pending_evaluation, quarantined, exception, unknown) covering EVERY tracked
     asset, plus `assets` — ONE PAGE of their records, each with its `assetName`, in assetId order.
+
+    `summary.error` counts the assets whose `lastEvaluationStatus` is `error` (their last
+    evaluation produced no verdict). It is an OVERLAY on the state buckets, not a state: those
+    assets are also counted under the state they kept, so do not add it to the others.
 
     Only assets with a compliance record are counted — an asset in a database with no binding is
     absent, not `unknown`. The response is the route's own page, not a walk: `max_items` is the
@@ -1597,6 +1610,13 @@ def list_compliance_evaluations(
     `executionId` of the workflow execution that produced the measurements. A row with
     `exceptionApplied` true ran while a quarantine exception was active: its violations are
     recorded as computed but the asset stayed released (state `exception`, never quarantined).
+
+    A rule result with `status` `error` is NOT a verdict: the rule's tooling failed (an input
+    selection that did not resolve to the files its workflow takes, a launch that could not start),
+    so `passed` is false but its enforcement did not apply. Such a row carries `hasRuleErrors` true
+    and the rule names in `errorRules`, with the verdict computed from the remaining rules; an
+    evaluation in which EVERY rule errored has `status` `error`, no verdict, and left the asset's
+    state unchanged. Report an errored rule as "not evaluated", not as a failure.
 
     The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
     and `NextToken` continues the walk — pass it back as `starting_token`. Do not conclude an asset
@@ -1657,7 +1677,9 @@ def list_compliance_cascades() -> Dict[str, Any]:
     present too), triggerReason, createdAt and approvalTimeoutAt (after which an unapproved cascade
     expires). Only cascades whose trigger asset's database the caller may read are listed, so a
     short list is a permission boundary as much as a queue length. The route returns the whole
-    list in one response and takes no paging parameters.
+    list in one response and takes no paging parameters. A cascade opened automatically after the
+    evaluation of a parent is not duplicated: while one for that parent is pending approval, further
+    evaluations of it open no new one, so one row per parent is the expected shape.
     """
     return _single_response_list(CLIENT.api.list_compliance_cascades(), "cascades")
 
@@ -1689,9 +1711,11 @@ def query_compliance_audit(
 
     `event_type` narrows to one kind of entry (schema_bound_to_database, schema_bound_to_asset,
     schema_unbound_from_database, schema_unbound_from_asset, schema_deleted, compliance_check,
-    quarantine_released, exception_granted, exception_revoked, exception_superseded,
-    cascade_triggered, cascade_approved, ...); without it every event type is read in turn and the
-    token carries the position of that walk. `start_date` / `end_date` are ISO 8601 bounds on the
+    evaluation_error, quarantine_released, exception_granted, exception_revoked,
+    exception_superseded, cascade_triggered, cascade_approved, ...); without it every event type is
+    read in turn and the token carries the position of that walk. An `evaluation_error` entry is
+    written whenever a rule errored in an evaluation (details name the `ruleNames`) or a schema
+    could not be loaded. `start_date` / `end_date` are ISO 8601 bounds on the
     entry timestamp. The trail is filtered to the entries whose database the caller may read, so
     a short page is a permission boundary as much as a quiet trail. Use
     get_asset_compliance_audit() for one asset.
@@ -2279,7 +2303,10 @@ if CONFIG.enable_writes:
         sends the listed asset-relative keys, every one of which must exist. `filter` is accepted
         only with matching and `keys` only (and required) with explicit. A workflow that takes
         exactly one input file needs the selection to resolve to exactly one file; otherwise the
-        rule records an `error` result. A pipeline that writes no `compliance-output.json` is
+        rule records an `error` result — a non-verdict `status` `error` whose enforcement does not
+        apply (see evaluate_asset_compliance()). Files a workflow execution wrote into the asset are
+        never selected in matching mode, so a rule's filter should still name source formats only.
+        A pipeline that writes no `compliance-output.json` is
         checked on the derived `execution_success` / `processing_duration_seconds` measurements
         only.
 
@@ -2341,8 +2368,10 @@ if CONFIG.enable_writes:
         override of the database binding.
 
         Only a GLOBAL schema or one scoped to `database_id` can be bound; a schema scoped to another
-        database is refused. A database binding marks every asset in the database that has no
-        override pending_evaluation and returns `assetsPendingEvaluation`; an asset binding marks
+        database is refused, and so is a `legacy` schema (see `schemaFormat` in
+        list_compliance_schemas()) — with `Schema body must be a vams-rules-v1 document`, because
+        it could never be evaluated. A database binding marks every asset in the database that has
+        no override pending_evaluation and returns `assetsPendingEvaluation`; an asset binding marks
         that one asset. `auto_eval` (database binding only — the asset route does not read it, so
         it is not sent there) records whether the database's assets are re-evaluated
         automatically; the handler defaults it to true.
@@ -2377,7 +2406,8 @@ if CONFIG.enable_writes:
         """Evaluate an asset against its bound compliance schema (or `schema_name`).
 
         Metadata and relationship rules run inside the call and the response carries `verdict`,
-        `complianceState` and per-rule `ruleResults`. A PIPELINE rule starts a real VAMS workflow
+        `complianceState`, `schemaVersion` (the schema version read), per-rule `ruleResults`,
+        `exceptionApplied` and `hasRuleErrors`. A PIPELINE rule starts a real VAMS workflow
         execution — AWS compute that can incur cost — and completes asynchronously:
         `pipelineRulesPending` counts them, and the final verdict appears in
         get_asset_compliance_state() / list_compliance_evaluations() once the workflow finishes.
@@ -2387,6 +2417,15 @@ if CONFIG.enable_writes:
         evaluation (`exceptionApplied`) and the asset stays released in state `exception`. Naming
         `schema_name` evaluates against that schema WITHOUT changing the asset's binding; the
         response's `schemaName` says which schema was used.
+
+        A rule whose tooling failed — an input selection that did not resolve to the files its
+        workflow takes, or a launch that could not start — is a rule result with `status` `error`:
+        not a verdict, so its enforcement does not apply and the asset is not quarantined for it.
+        `hasRuleErrors` true means the verdict came from the remaining rules; when EVERY rule
+        errored the response `verdict` is `error` and the asset's state is left unchanged, with
+        `lastEvaluationStatus` `error` on its record and an `evaluation_error` audit entry. An
+        evaluation of an asset that has child assets opens a cascade awaiting approval unless one
+        for that asset is already pending.
         """
         return CLIENT.api.evaluate_asset_compliance(database_id, asset_id, schema_name=schema_name)
 
@@ -2471,7 +2510,10 @@ if CONFIG.enable_writes:
         executor could not be started for is recorded as aborted and reported as an error here.
         Executing re-evaluates every dependent, which starts a workflow execution per pipeline
         rule — real AWS compute — so leave approval on unless the user has asked for an immediate
-        run, and keep this tool out of `autoApprove`.
+        run, and keep this tool out of `autoApprove`. This tool always opens a new cascade; only
+        the cascade an evaluation opens AUTOMATICALLY is de-duplicated — while one for the same
+        parent is pending approval, further evaluations of that parent open no new one — so check
+        list_compliance_cascades() for a pending row before creating another for the same asset.
         """
         return CLIENT.api.create_compliance_cascade(
             database_id, asset_id, reason=reason, require_approval=require_approval

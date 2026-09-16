@@ -8,6 +8,8 @@ import { render, screen } from "@testing-library/react";
 import {
     COMPLIANCE_STATE_INDICATORS,
     ComplianceStateBadge,
+    EvaluationErrorIndicator,
+    complianceStateBadgeColor,
     complianceStateIndicator,
 } from "./complianceStateBadge";
 
@@ -22,10 +24,15 @@ describe("complianceStateBadge", () => {
             "quarantined",
             "unknown",
         ]);
-        expect(complianceStateIndicator("exception")).toEqual({ type: "info", label: "Exception" });
+        expect(complianceStateIndicator("exception")).toEqual({
+            type: "info",
+            label: "Exception",
+            badgeColor: "blue",
+        });
         expect(complianceStateIndicator("quarantined")).toEqual({
             type: "error",
             label: "Quarantined",
+            badgeColor: "red",
         });
     });
 
@@ -35,8 +42,29 @@ describe("complianceStateBadge", () => {
         expect(complianceStateIndicator("bogus")).toEqual(COMPLIANCE_STATE_INDICATORS.unknown);
     });
 
+    it("gives every state a badge color from the same map, with the same fallback", () => {
+        expect(complianceStateBadgeColor("compliant")).toBe("green");
+        expect(complianceStateBadgeColor("quarantined")).toBe("red");
+        expect(complianceStateBadgeColor("exception")).toBe("blue");
+        expect(complianceStateBadgeColor("bogus")).toBe(
+            COMPLIANCE_STATE_INDICATORS.unknown.badgeColor
+        );
+        expect(complianceStateBadgeColor(undefined)).toBe("grey");
+    });
+
     it("renders the label of the state", () => {
         render(<ComplianceStateBadge state="exception" />);
         expect(screen.getByText("Exception")).toBeInTheDocument();
+    });
+
+    it("renders the evaluation-error indicator only for an errored last evaluation", () => {
+        const { rerender } = render(<EvaluationErrorIndicator lastEvaluationStatus="error" />);
+        expect(screen.getByText("Evaluation error")).toBeInTheDocument();
+
+        rerender(<EvaluationErrorIndicator lastEvaluationStatus="completed" />);
+        expect(screen.queryByText("Evaluation error")).not.toBeInTheDocument();
+
+        rerender(<EvaluationErrorIndicator lastEvaluationStatus={undefined} />);
+        expect(screen.queryByText("Evaluation error")).not.toBeInTheDocument();
     });
 });

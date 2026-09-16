@@ -18,6 +18,7 @@ import {
     Select,
     Flashbar,
     FlashbarProps,
+    StatusIndicator,
 } from "@cloudscape-design/components";
 import { usePageTitle } from "../hooks/usePageTitle";
 import {
@@ -25,10 +26,14 @@ import {
     createComplianceSchema,
     updateComplianceSchema,
     sweepSchema,
+    complianceSchemaFormat,
     ComplianceSchema,
 } from "../services/ComplianceService";
 import ComplianceSchemaEditor from "../components/compliance/ComplianceSchemaEditor";
 import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchemaRules";
+
+/** Shown on a schema row whose body is not a vams-rules-v1 document. */
+export const LEGACY_SCHEMA_LABEL = "Legacy — cannot be bound or evaluated";
 
 const SCHEMA_TEMPLATES: Record<
     string,
@@ -190,7 +195,8 @@ const SCHEMA_TEMPLATES: Record<
     },
     model3d: {
         label: "3D Model Quality",
-        description: "Geometry metadata and a conversion through the built-in 3D pipeline",
+        description:
+            "Geometry metadata and a conversion through the built-in 3D pipeline; the filter names source formats only, because the pipeline writes .glb",
         body: {
             schemaFormat: "vams-rules-v1",
             rules: {
@@ -228,13 +234,13 @@ const SCHEMA_TEMPLATES: Record<
                     },
                     inputFiles: {
                         mode: "matching",
-                        filter: ["*.stl", "*.obj", "*.ply", "*.gltf", "*.glb", "*.xyz"],
+                        filter: ["*.stl", "*.obj", "*.ply", "*.gltf", "*.xyz"],
                     },
                     checks: [
                         {
                             name: "conversion-succeeds",
                             description:
-                                "The model file converts to GLB. The pipeline writes no compliance-output document, so the check reads the execution's own success measurement.",
+                                "The model file converts to GLB. The filter lists source formats only: the pipeline writes a .glb, so admitting *.glb would select the pipeline's own output on re-evaluation. The pipeline writes no compliance-output document, so the check reads the execution's own success measurement.",
                             outputField: "execution_success",
                             tolerance: {
                                 operator: "eq",
@@ -503,6 +509,22 @@ export default function ComplianceSchemas() {
                                 header: "Description",
                                 cell: (item) => item.description || "-",
                                 maxWidth: 300,
+                            },
+                            {
+                                id: "schemaFormat",
+                                header: "Format",
+                                cell: (item) => {
+                                    const format = complianceSchemaFormat(item);
+                                    if (format === "legacy") {
+                                        return (
+                                            <StatusIndicator type="warning">
+                                                {LEGACY_SCHEMA_LABEL}
+                                            </StatusIndicator>
+                                        );
+                                    }
+                                    return format;
+                                },
+                                width: 180,
                             },
                             {
                                 id: "version",

@@ -26,6 +26,8 @@ Stores the primary record for each asset within a database.
 
 **Common Attributes:** `assetName`, `assetType`, `description`, `isDistributable`, `tags`, `assetLocation`, `previewLocation`, `bucketId`, `createdAt`, `updatedAt`
 
+**Change provenance:** every upload completion writes `lastChangeSource` (`upload`, or `workflowExecution` when a workflow execution wrote the files back), `lastChangeWorkflowExecutionId` (that execution's id; absent for an upload) and `lastChangeAt`. The compliance trigger reads them from the table's stream image to tell a pipeline rule's own output apart from a user change.
+
 ### Database Storage Table
 
 Stores database (collection) records.

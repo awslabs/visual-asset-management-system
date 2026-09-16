@@ -26,6 +26,10 @@ import {
     downloadAsset,
 } from "../../services/APIService";
 import { fetchComplianceState, ComplianceState } from "../../services/ComplianceService";
+import {
+    complianceStateBadgeColor,
+    complianceStateIndicator,
+} from "../compliance/complianceStateBadge";
 import PreviewModal from "../filemanager/components/PreviewModal";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
@@ -35,14 +39,6 @@ import { useAllowedRoutes } from "../../features/orchestration/permissions/useAl
 
 // The API route the badge reads; the badge is fetched only when the caller may call it.
 const COMPLIANCE_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
-
-const COMPLIANCE_BADGE: Record<string, { color: "green" | "red" | "grey"; label: string }> = {
-    compliant: { color: "green", label: "Compliant" },
-    non_compliant: { color: "red", label: "Non-Compliant" },
-    quarantined: { color: "red", label: "Quarantined" },
-    pending_evaluation: { color: "grey", label: "Pending" },
-};
-const UNKNOWN_BADGE = { color: "grey" as const, label: "Unknown" };
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -269,18 +265,13 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             </span>
                             {complianceBadge && (
                                 <Badge
-                                    color={
-                                        (
-                                            COMPLIANCE_BADGE[complianceBadge.complianceState] ||
-                                            UNKNOWN_BADGE
-                                        ).color
-                                    }
+                                    color={complianceStateBadgeColor(
+                                        complianceBadge.complianceState
+                                    )}
                                 >
                                     {
-                                        (
-                                            COMPLIANCE_BADGE[complianceBadge.complianceState] ||
-                                            UNKNOWN_BADGE
-                                        ).label
+                                        complianceStateIndicator(complianceBadge.complianceState)
+                                            .label
                                     }
                                 </Badge>
                             )}

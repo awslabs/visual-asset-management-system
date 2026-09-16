@@ -114,14 +114,33 @@ export interface VamsRulesV1SchemaBody {
 /** A schema body is either a vams-rules-v1 rule set or a JSON Schema (draft-07 subset). */
 export type ComplianceSchemaBody = VamsRulesV1SchemaBody | Record<string, any>;
 
+/**
+ * The format of a schema record as the listing reports it: `legacy` marks a row whose body is not a
+ * vams-rules-v1 document. A legacy schema cannot be bound, updated or evaluated; it is kept only
+ * so it can be found and deleted.
+ */
+export type ComplianceSchemaFormat = typeof VAMS_RULES_V1_FORMAT | "legacy";
+
 export interface ComplianceSchema {
     schemaName: string;
     description?: string;
     schemaBody: ComplianceSchemaBody;
+    /** Derived by the backend from the body; absent on a response that predates the field. */
+    schemaFormat?: ComplianceSchemaFormat;
     version?: number;
     createdAt?: string;
     updatedAt?: string;
 }
+
+/** The format of a schema record, derived from its body when the record does not carry it. */
+export const complianceSchemaFormat = (schema: ComplianceSchema): ComplianceSchemaFormat => {
+    if (schema.schemaFormat === VAMS_RULES_V1_FORMAT || schema.schemaFormat === "legacy") {
+        return schema.schemaFormat;
+    }
+    return (schema.schemaBody as any)?.schemaFormat === VAMS_RULES_V1_FORMAT
+        ? VAMS_RULES_V1_FORMAT
+        : "legacy";
+};
 
 /**
  * States of an asset's compliance record. `exception` is a quarantine verdict the asset is
@@ -136,6 +155,12 @@ export type ComplianceStateValue =
     | "exception"
     | "pending_parent_resolution";
 
+/**
+ * Status of an asset's last evaluation. `error` means it produced no verdict — every rule errored
+ * or the schema could not be loaded — so `complianceState` is the state the asset held before it.
+ */
+export type ComplianceLastEvaluationStatus = "error" | "completed" | "pending_pipeline";
+
 export interface ComplianceState {
     databaseId: string;
     assetId: string;
@@ -144,6 +169,7 @@ export interface ComplianceState {
     lastEvaluationAt?: string;
     lastEvaluatedAt?: string;
     lastEvaluationId?: string;
+    lastEvaluationStatus?: ComplianceLastEvaluationStatus;
     schemaSource?: string;
     updatedAt?: string;
     quarantineReason?: string | null;
@@ -164,6 +190,22 @@ export type ComplianceEvaluationVerdict =
     | "pending_pipeline"
     | "error";
 
+/**
+ * Outcome of one rule. `status` `error` is a non-verdict result: the rule's tooling failed (an
+ * input selection that could not be satisfied, a launch that did not start), so `passed` is false
+ * but the rule's enforcement did not apply to the verdict.
+ */
+export interface ComplianceRuleResult {
+    ruleName: string;
+    ruleType: ComplianceRuleType;
+    enforcement: ComplianceEnforcementLevel;
+    passed: boolean;
+    status?: "evaluated" | "error";
+    message?: string | null;
+    measured?: Record<string, any> | null;
+    expected?: Record<string, any> | null;
+}
+
 export interface EvaluationRecord {
     evaluationId: string;
     databaseId: string;
@@ -173,12 +215,50 @@ export interface EvaluationRecord {
     verdict?: ComplianceEvaluationVerdict;
     status?: "pending_pipeline" | "completed" | "error";
     violations?: string[];
+    /** The rule results, JSON-encoded on the history listing. */
+    ruleResults?: string | ComplianceRuleResult[];
+    /** At least one rule errored; its name is in `errorRules` and it did not count toward the verdict. */
+    hasRuleErrors?: boolean;
+    errorRules?: string[];
     evaluatedAt: string;
     /** Workflow execution a pipeline rule launched; set once the execution has started. */
     executionId?: string;
     pipelineRuleName?: string;
     /** The verdict was computed while an exception held the asset released from quarantine. */
     exceptionApplied?: boolean;
+}
+
+/** Names of the rules of an evaluation that errored, read from `errorRules` or the rule results. */
+export const erroredRuleNames = (evaluation: EvaluationRecord): string[] => {
+    if (Array.isArray(evaluation.errorRules)) {
+        return evaluation.errorRules;
+    }
+    let results = evaluation.ruleResults;
+    if (typeof results === "string") {
+        try {
+            results = JSON.parse(results);
+        } catch {
+            return [];
+        }
+    }
+    return Array.isArray(results)
+        ? results.filter((rule) => rule?.status === "error").map((rule) => rule.ruleName)
+        : [];
+};
+
+/** Response of the evaluate route: the verdict of the rules that completed in the request. */
+export interface EvaluateAssetResponse {
+    message: string;
+    evaluationId: string;
+    schemaName: string;
+    /** Version of the schema the evaluation read. */
+    schemaVersion?: number;
+    verdict: ComplianceEvaluationVerdict;
+    complianceState: ComplianceStateValue;
+    ruleResults: ComplianceRuleResult[];
+    pipelineRulesPending: number;
+    exceptionApplied?: boolean;
+    hasRuleErrors?: boolean;
 }
 
 export type CascadeState = "pending_approval" | "executing" | "completed" | "aborted" | "rejected";
@@ -339,7 +419,7 @@ export const updateComplianceSchema = async (
 export const evaluateAssetCompliance = async (
     databaseId: string,
     assetId: string
-): Promise<[boolean, EvaluationRecord | string]> => {
+): Promise<[boolean, EvaluateAssetResponse | string]> => {
     try {
         const response = await apiClient.post(`compliance/evaluate/${databaseId}/${assetId}`, {
             body: {},
@@ -426,7 +506,11 @@ export interface DatabaseComplianceAsset extends ComplianceState {
     assetName?: string;
 }
 
-/** `summary` and `totalAssets` cover the whole database; `assets` is one page of it. */
+/**
+ * `summary` and `totalAssets` cover the whole database; `assets` is one page of it. `summary.error`
+ * counts the assets whose last evaluation ended in an error — an overlay on the state buckets,
+ * not a state, so it is not part of their sum.
+ */
 export interface DatabaseComplianceOverview {
     databaseId: string;
     totalAssets: number;
@@ -437,6 +521,7 @@ export interface DatabaseComplianceOverview {
         quarantined: number;
         exception: number;
         unknown: number;
+        error?: number;
     };
     assets: DatabaseComplianceAsset[];
     nextToken?: string;

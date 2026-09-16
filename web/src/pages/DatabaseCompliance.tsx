@@ -28,6 +28,7 @@ import {
 import {
     COMPLIANCE_STATE_INDICATORS,
     ComplianceStateBadge,
+    EvaluationErrorIndicator,
 } from "../components/compliance/complianceStateBadge";
 
 const DatabaseCompliancePage: React.FC = () => {
@@ -188,7 +189,7 @@ const DatabaseCompliancePage: React.FC = () => {
                     </Header>
                 }
             >
-                <ColumnLayout columns={7} minColumnWidth={130} variant="text-grid">
+                <ColumnLayout columns={8} minColumnWidth={130} variant="text-grid">
                     <div>
                         <Box variant="awsui-key-label">Tracked {Synonyms.Assets}</Box>
                         <Box variant="awsui-value-large">{totalTracked}</Box>
@@ -233,6 +234,14 @@ const DatabaseCompliancePage: React.FC = () => {
                             >
                                 {summary?.pending_evaluation || 0}
                             </StatusIndicator>
+                        </Box>
+                    </div>
+                    {/* An overlay on the state buckets: these assets keep the state shown in their
+                        row, and their last evaluation produced no verdict. */}
+                    <div>
+                        <Box variant="awsui-key-label">Evaluation errors</Box>
+                        <Box variant="awsui-value-large">
+                            <StatusIndicator type="error">{summary?.error || 0}</StatusIndicator>
                         </Box>
                     </div>
                     <div>
@@ -302,13 +311,18 @@ const DatabaseCompliancePage: React.FC = () => {
                             id: "complianceState",
                             header: "State",
                             cell: (item: any) => (
-                                <ComplianceStateBadge state={item.complianceState} />
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <ComplianceStateBadge state={item.complianceState} />
+                                    <EvaluationErrorIndicator
+                                        lastEvaluationStatus={item.lastEvaluationStatus}
+                                    />
+                                </SpaceBetween>
                             ),
                             sortingField: "complianceState",
                         },
                         {
                             id: "schemaName",
-                            header: "Schema",
+                            header: "Bound schema",
                             cell: (item: any) => item.schemaName || "-",
                             sortingField: "schemaName",
                         },

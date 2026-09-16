@@ -156,19 +156,31 @@ Compliance: `list_compliance_schemas`, `get_compliance_schema`,
 A compliance schema is a rule set (`vams-rules-v1`: pipeline, metadata and
 relationship rules, each enforced at quarantine / warn / inform) bound to a
 database, or to one asset as an override; `get_compliance_bindings` shows both
-for a database. `get_asset_compliance_state` answers `unknown` for an asset with
+for a database. Each schema record carries `schemaFormat` — `vams-rules-v1`, or
+`legacy` for a row whose body is not such a document; a legacy schema cannot be
+bound, updated or evaluated and is listed only so it can be found and deleted.
+`get_asset_compliance_state` answers `unknown` for an asset with
 no binding rather than an error, and reports `exception` for an asset released
 under an active quarantine exception (scoped to `exceptionSchemaName` /
-`exceptionSchemaVersion`); `get_database_compliance_overview` counts only assets
-that have a compliance record, with an `exception` bucket in its `summary`.
+`exceptionSchemaVersion`); its `lastEvaluationStatus` is `error` when the last
+evaluation produced no verdict, in which case `complianceState` is the state the
+asset held before it. `get_database_compliance_overview` counts only assets
+that have a compliance record, with an `exception` bucket in its `summary` and an
+`error` count that overlays the state buckets (assets whose last evaluation
+errored) rather than adding to them.
 `list_compliance_schemas` and `list_compliance_cascades` (pending approval only;
-each row carries `databaseId` / `assetId` of the trigger asset) return their whole
+each row carries `databaseId` / `assetId` of the trigger asset, and an
+automatically opened cascade is not duplicated while one for the same parent is
+pending) return their whole
 list in one response under `Items` and take no paging parameters.
 `list_compliance_evaluations`, `list_quarantined_assets`, `query_compliance_audit`
 and `get_asset_compliance_audit` are real pages (`max_items`, `starting_token`,
 `NextToken`), auto-paginated and marked `truncated` when a bound stopped the walk;
 the evaluation rows carry the `executionId` of the workflow execution behind a
-pipeline rule and `exceptionApplied` when the evaluation ran under an exception,
+pipeline rule, `exceptionApplied` when the evaluation ran under an exception, and
+`hasRuleErrors` / `errorRules` when a rule's tooling failed — such a rule result
+has `status` `error`, is not a verdict, and its enforcement did not apply (an
+`evaluation_error` audit entry names the rules) —
 and a quarantine page is filtered to the caller's databases after it is read, so
 the walk follows an empty page's token (the global audit trail and the cascade
 listing return only rows whose database the caller may read, too).
@@ -395,17 +407,22 @@ workflow's and pipeline's input-file filters, narrowed by the rule's `filter` gl
 `wholeAsset` (the asset root, only where the workflow allows it) or `explicit` (the
 listed `keys`, which must all exist). A workflow that takes exactly one input file
 needs the selection to resolve to exactly one file, otherwise the rule records an
-error; a pipeline that writes no `compliance-output.json` is checked on the derived
+`error` result — a non-verdict `status` `error` whose enforcement does not apply;
+files a workflow execution wrote are never selected, so a filter names source
+formats only. A pipeline that writes no `compliance-output.json` is checked on the derived
 `execution_success` / `processing_duration_seconds` measurements only. Registering an
 existing name writes the next version, and `update_compliance_schema` replaces the
 body wholesale rather than merging. `bind_compliance_schema` binds a database (or,
 with `asset_id`, one asset as an override); only a GLOBAL schema or one scoped to
-that database can be bound, and `auto_eval` is sent on the database binding only
-because the asset route does not read it. `unbind_compliance_schema` on a database
+that database can be bound, a `legacy` schema is refused, and `auto_eval` is sent on
+the database binding only because the asset route does not read it.
+`unbind_compliance_schema` on a database
 deletes the compliance record of every asset that inherited the binding
 (`removedComplianceRecords`) — evaluation history and the audit trail stay.
 `evaluate_asset_compliance` with `schema_name` evaluates against that schema without
-changing the asset's binding. `sweep_compliance_schema` returns `assetsTriggered` plus
+changing the asset's binding; its response carries `schemaVersion`,
+`exceptionApplied` and `hasRuleErrors`, and when every rule errored the asset's
+state is left unchanged with `lastEvaluationStatus` `error`. `sweep_compliance_schema` returns `assetsTriggered` plus
 `skipped` (bound assets the caller may not evaluate, counted but never listed) and
 `assetsRemaining` (beyond the per-call cap). `release_quarantine` returns an asset to
 compliant until its next evaluation; `grant_quarantine_exception` records a
@@ -417,7 +434,9 @@ the exception. `revoke_quarantine_exception` (no reason; the route carries no bo
 clears it and returns the asset to its last verdict's state — quarantined again when
 that verdict was quarantined, `pending_evaluation` when it has no recorded
 evaluation — and is refused when no exception is active. A cascade waits in
-`pending_approval` unless created with `require_approval=False`;
+`pending_approval` unless created with `require_approval=False`; the cascade an
+evaluation opens automatically is not duplicated while one for the same parent is
+pending, but `create_compliance_cascade` always opens a new one.
 `approve_compliance_cascade` (and a create without approval) returns at once with
 `state` `executing` and no `result` — the run continues in the background, so poll
 `get_compliance_cascade` until `state` is `completed` or `aborted` (`abortReason`)

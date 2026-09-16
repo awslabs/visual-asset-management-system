@@ -1583,3 +1583,180 @@ class TestSchemaBodyLoading:
         from vamscli.commands.compliance import load_schema_body
         with pytest.raises(click.BadParameter):
             load_schema_body('"just a string"')
+
+
+class TestSchemaFormatOutput:
+    """`schema list` / `schema get` print the record's format, marking a legacy row as such.
+
+    The listing derives `schemaFormat` from the body and puts it at the top level of each record;
+    the formatter reads that field first and falls back to the body for a record without it.
+    """
+
+    LEGACY_RECORD = {
+        "schemaName": "old-json-schema",
+        "databaseId": "GLOBAL",
+        "schemaFormat": "legacy",
+        "schemaBody": {"type": "object", "properties": {"owner": {"type": "string"}}},
+        "version": 1,
+    }
+
+    def test_list_prints_the_top_level_format_and_marks_legacy_rows(self, cli_runner,
+                                                                     generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_schemas.return_value = {
+                'schemas': [dict(SCHEMA_RECORD, schemaFormat='vams-rules-v1'), self.LEGACY_RECORD]}
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list'])
+            assert result.exit_code == 0
+            assert 'Format: vams-rules-v1' in result.output
+            assert 'Format: legacy' in result.output
+            assert 'cannot be bound, updated or evaluated' in result.output
+
+    def test_get_prints_legacy_for_a_legacy_record(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_schema.return_value = self.LEGACY_RECORD
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'get', '-n', 'old-json-schema'])
+            assert result.exit_code == 0
+            assert 'Format: legacy' in result.output
+            # The body is still shown so the operator can see what the row holds.
+            assert '"properties"' in result.output
+
+    def test_the_top_level_field_wins_over_the_body(self):
+        # A record the API marks legacy is legacy even when its body names the format.
+        from vamscli.commands.compliance import format_schema
+        record = dict(self.LEGACY_RECORD, schemaBody=dict(SCHEMA_BODY))
+        assert 'Format: legacy' in format_schema(record)
+
+    def test_a_record_without_the_field_is_classified_from_its_body(self):
+        from vamscli.commands.compliance import format_schema
+        assert 'Format: vams-rules-v1' in format_schema(SCHEMA_RECORD)
+        assert 'Format: legacy' in format_schema(
+            {'schemaName': 's', 'schemaBody': {'type': 'object'}})
+        assert 'Format: N/A' in format_schema({'schemaName': 's'})
+
+    def test_list_json_output_carries_the_field_unchanged(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_schemas.return_value = {'schemas': [self.LEGACY_RECORD]}
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['schemas'][0]['schemaFormat'] == 'legacy'
+
+
+class TestEvaluationErrorOutput:
+    """`evaluate` prints the schema version and the exception / rule-error flags, and marks a rule
+    result with status `error` apart from a rule that failed: an errored rule was not evaluated and
+    its enforcement did not apply to the verdict."""
+
+    def test_evaluate_prints_the_version_and_the_flags_and_marks_errored_rules(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_asset_compliance.return_value = {
+                'message': 'Evaluation completed', 'evaluationId': 'ev-1', 'schemaName': 'cad-quality',
+                'schemaVersion': 4, 'verdict': 'non_compliant', 'complianceState': 'non_compliant',
+                'exceptionApplied': False, 'hasRuleErrors': True, 'errorRules': ['converts-to-glb'],
+                'ruleResults': [
+                    {'ruleName': 'converts-to-glb', 'enforcement': 'quarantine', 'passed': False,
+                     'status': 'error',
+                     'message': 'Input selection did not match exactly one file'},
+                    {'ruleName': 'has-owner', 'enforcement': 'warn', 'passed': False,
+                     'status': 'evaluated', 'message': 'owner missing'},
+                    {'ruleName': 'has-parent', 'enforcement': 'inform', 'passed': True},
+                ],
+                'pipelineRulesPending': 0}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluate', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Schema Version: 4' in result.output
+            assert 'Verdict: non_compliant' in result.output
+            assert 'Rule Errors: yes: converts-to-glb' in result.output
+            assert '! converts-to-glb [quarantine] (error): Input selection did not match exactly one file' \
+                in result.output
+            assert '✗ has-owner [warn]: owner missing' in result.output
+            assert '✓ has-parent [inform]' in result.output
+            assert 'Exception Applied' not in result.output
+
+    def test_evaluate_prints_the_exception_flag_when_applied(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_asset_compliance.return_value = {
+                'message': 'Evaluation completed', 'evaluationId': 'ev-1', 'schemaName': 'cad-quality',
+                'schemaVersion': 2, 'verdict': 'quarantined', 'complianceState': 'exception',
+                'exceptionApplied': True, 'hasRuleErrors': False, 'ruleResults': [],
+                'pipelineRulesPending': 0}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluate', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Exception Applied: yes' in result.output
+            assert 'Rule Errors' not in result.output
+
+    def test_evaluate_json_output_carries_the_new_fields_unchanged(self, cli_runner,
+                                                                    generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_asset_compliance.return_value = {
+                'message': 'Evaluation completed', 'evaluationId': 'ev-1', 'schemaName': 'cad-quality',
+                'schemaVersion': 4, 'exceptionApplied': False, 'hasRuleErrors': True}
+            result = cli_runner.invoke(cli, [
+                'compliance', 'evaluate', '-d', 'my-database', '-a', 'my-asset', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data['schemaVersion'] == 4
+            assert data['exceptionApplied'] is False
+            assert data['hasRuleErrors'] is True
+
+    def test_evaluations_mark_errored_rules_in_json_encoded_rule_results(self, cli_runner,
+                                                                          generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_evaluations.return_value = {'evaluations': [{
+                'evaluationId': 'ev-1', 'schemaName': 'cad-quality', 'status': 'completed',
+                'verdict': 'compliant', 'evaluatedAt': '2026-09-01T00:00:00+00:00',
+                'hasRuleErrors': True, 'errorRules': ['converts-to-glb'],
+                'ruleResults': json.dumps([
+                    {'ruleName': 'converts-to-glb', 'enforcement': 'quarantine', 'passed': False,
+                     'status': 'error', 'message': 'Input selection did not match exactly one file'}])}]}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Rule Errors: yes: converts-to-glb' in result.output
+            assert '! converts-to-glb [quarantine] (error)' in result.output
+
+    def test_state_prints_the_last_evaluation_status(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_state.return_value = dict(
+                STATE_RECORD, complianceState='compliant', quarantineReason=None,
+                lastEvaluationStatus='error', lastEvaluatedAt='2026-09-01T00:00:00+00:00')
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Compliance State: compliant' in result.output
+            assert 'Last Evaluation Status: error (no verdict' in result.output
+            assert result.output.count('Last Evaluated:') == 1
+
+    def test_state_overview_prints_the_error_overlay_and_flags_errored_rows(self, cli_runner,
+                                                                            generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_database_compliance_state.return_value = {
+                'databaseId': 'my-database', 'totalAssets': 2,
+                'summary': {'compliant': 2, 'non_compliant': 0, 'pending_evaluation': 0,
+                            'quarantined': 0, 'exception': 0, 'unknown': 0, 'error': 1},
+                'assets': [{'assetId': 'a1', 'complianceState': 'compliant', 'schemaName': 'cad-quality',
+                            'lastEvaluationStatus': 'error'},
+                           {'assetId': 'a2', 'complianceState': 'compliant', 'schemaName': 'cad-quality',
+                            'lastEvaluationStatus': 'completed'}]}
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database'])
+            assert result.exit_code == 0
+            assert 'error=1' in result.output
+            assert 'overlays the state buckets' in result.output
+            assert 'a1: compliant (evaluation error) [cad-quality]' in result.output
+            assert 'a2: compliant [cad-quality]' in result.output
+
+    def test_help_texts_describe_the_error_status_the_legacy_format_and_the_cascade_dedup(
+            self, cli_runner):
+        evaluate_help = cli_runner.invoke(cli, ['compliance', 'evaluate', '--help']).output
+        assert 'hasRuleErrors' in evaluate_help
+        assert 'schemaVersion' in evaluate_help
+        assert 'exceptionApplied' in evaluate_help
+        assert 'lastEvaluationStatus' in evaluate_help
+        state_help = cli_runner.invoke(cli, ['compliance', 'state', '--help']).output
+        assert 'lastEvaluationStatus' in state_help
+        list_help = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--help']).output
+        assert 'legacy' in list_help
+        bind_help = cli_runner.invoke(cli, ['compliance', 'bind', '--help']).output
+        assert 'Schema body must be a vams-rules-v1 document' in bind_help
+        cascade_help = cli_runner.invoke(cli, ['compliance', 'cascade', 'list', '--help']).output
+        assert 'not duplicated' in cascade_help
+        audit_help = cli_runner.invoke(cli, ['compliance', 'audit', '--help']).output
+        assert 'evaluation_error' in audit_help

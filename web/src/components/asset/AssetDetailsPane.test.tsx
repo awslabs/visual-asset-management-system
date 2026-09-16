@@ -28,9 +28,16 @@ jest.mock("../common/StatusMessage", () => ({
     useStatusMessage: () => ({ showMessage: jest.fn() }),
 }));
 
-// The compliance badge gates on this hook; a deny keeps these distribution-notice tests focused.
+// The compliance badge gates on this hook; the distribution-notice tests keep it denied.
+let mockCanReadCompliance = false;
 jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
-    useAllowedRoutes: () => ({ loading: false, can: () => false }),
+    useAllowedRoutes: () => ({ loading: false, can: () => mockCanReadCompliance }),
+}));
+
+const mockFetchComplianceState = jest.fn();
+jest.mock("../../services/ComplianceService", () => ({
+    ...jest.requireActual("../../services/ComplianceService"),
+    fetchComplianceState: (...args: any[]) => mockFetchComplianceState(...args),
 }));
 
 const baseAsset = {
@@ -55,6 +62,7 @@ const renderPane = (asset: any) =>
 describe("AssetDetailsPane distribution notice", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        mockCanReadCompliance = false;
         mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
     });
 
@@ -82,5 +90,49 @@ describe("AssetDetailsPane distribution notice", () => {
 
         await waitFor(() => expect(mockDownloadAsset).toHaveBeenCalled());
         expect(screen.queryByText(/turned off for this/i)).not.toBeInTheDocument();
+    });
+});
+
+describe("AssetDetailsPane compliance badge", () => {
+    const stateRow = (complianceState: string) => ({
+        databaseId: "db1",
+        assetId: "a1",
+        complianceState,
+    });
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCanReadCompliance = true;
+        mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
+    });
+
+    it("renders every state through the shared map, so exception reads Exception", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("exception")]);
+        renderPane({ ...baseAsset, isDistributable: true });
+
+        expect(await screen.findByText("Exception")).toBeInTheDocument();
+        expect(mockFetchComplianceState).toHaveBeenCalledWith("db1", "a1");
+    });
+
+    it("labels a quarantined asset as the shared map does", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("quarantined")]);
+        renderPane({ ...baseAsset, isDistributable: true });
+
+        expect(await screen.findByText("Quarantined")).toBeInTheDocument();
+    });
+
+    it("falls back to Unknown for a state the map does not know", async () => {
+        mockFetchComplianceState.mockResolvedValue([true, stateRow("bogus_state")]);
+        renderPane({ ...baseAsset, isDistributable: true });
+
+        expect(await screen.findByText("Unknown")).toBeInTheDocument();
+    });
+
+    it("does not read the state without the route", async () => {
+        mockCanReadCompliance = false;
+        renderPane({ ...baseAsset, isDistributable: true });
+
+        await waitFor(() => expect(mockDownloadAsset).toHaveBeenCalled());
+        expect(mockFetchComplianceState).not.toHaveBeenCalled();
     });
 });

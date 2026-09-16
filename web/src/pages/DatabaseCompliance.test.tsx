@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DatabaseCompliancePage from "./DatabaseCompliance";
 import { COMPLIANCE_LISTING_PAGE_SIZE } from "../services/ComplianceService";
@@ -105,5 +105,63 @@ describe("DatabaseCompliance asset-state paging", () => {
         expect(screen.getAllByText("Exception")).toHaveLength(2);
         expect(screen.getByText("4")).toBeInTheDocument();
         expect(screen.getAllByText("Compliant")).toHaveLength(2);
+    });
+});
+
+describe("DatabaseCompliance evaluation errors", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        service().getDatabaseBindings.mockResolvedValue([
+            true,
+            { databaseId: "db1", databaseSchema: "std", assetOverrides: [], assetOverrideCount: 0 },
+        ]);
+    });
+
+    it("shows the error overlay tile and flags the rows whose last evaluation errored", async () => {
+        const page = overviewPage("asset");
+        service().fetchDatabaseComplianceOverview.mockResolvedValue([
+            true,
+            {
+                ...page,
+                summary: { ...page.summary, error: 7 },
+                assets: [
+                    { ...page.assets[0], lastEvaluationStatus: "error" },
+                    { ...page.assets[1], lastEvaluationStatus: "completed" },
+                ],
+            },
+        ]);
+
+        render(<DatabaseCompliancePage />);
+        await screen.findByText("asset-excepted");
+
+        expect(screen.getByText("Evaluation errors")).toBeInTheDocument();
+        expect(screen.getByText("7")).toBeInTheDocument();
+
+        const rowOf = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+        // The errored asset keeps its state badge and gains the indicator; the other row has none.
+        expect(within(rowOf("asset")).getByText("Compliant")).toBeInTheDocument();
+        expect(within(rowOf("asset")).getByText("Evaluation error")).toBeInTheDocument();
+        expect(within(rowOf("asset-excepted")).queryByText("Evaluation error")).toBeNull();
+    });
+
+    it("renders a zero tile when the summary carries no error bucket", async () => {
+        service().fetchDatabaseComplianceOverview.mockResolvedValue([true, overviewPage("asset")]);
+
+        render(<DatabaseCompliancePage />);
+        await screen.findByText("asset-excepted");
+
+        const tile = screen.getByText("Evaluation errors").parentElement as HTMLElement;
+        expect(within(tile).getByText("0")).toBeInTheDocument();
+        expect(screen.queryByText("Evaluation error")).not.toBeInTheDocument();
+    });
+
+    it("labels the schema column as the bound schema", async () => {
+        service().fetchDatabaseComplianceOverview.mockResolvedValue([true, overviewPage("asset")]);
+
+        render(<DatabaseCompliancePage />);
+        await screen.findByText("asset-excepted");
+
+        expect(screen.getByRole("columnheader", { name: "Bound schema" })).toBeInTheDocument();
+        expect(screen.queryByRole("columnheader", { name: "Schema" })).not.toBeInTheDocument();
     });
 });

@@ -119,7 +119,7 @@ describe("ComplianceSchemaEditor input files", () => {
 
         await userEvent.click(screen.getByRole("button", { name: "Add file path" }));
         await userEvent.type(screen.getByLabelText("File path 1"), "models/part.stl");
-        expect(screen.getByText(/Each path must begin with \//)).toBeInTheDocument();
+        expect(screen.getAllByText(/Each path must begin with \//).length).toBeGreaterThan(0);
 
         await userEvent.clear(screen.getByLabelText("File path 1"));
         await userEvent.type(screen.getByLabelText("File path 1"), "/models/part.stl");
@@ -129,7 +129,7 @@ describe("ComplianceSchemaEditor input files", () => {
                 keys: ["/models/part.stl"],
             });
         });
-        expect(screen.queryByText(/Each path must begin with \//)).not.toBeInTheDocument();
+        expect(screen.queryAllByText(/Each path must begin with \//)).toHaveLength(0);
     });
 
     it("loads an existing explicit selection into the builder", async () => {

@@ -201,7 +201,7 @@ const ComplianceQuarantine: React.FC = () => {
                     },
                     {
                         id: "schemaName",
-                        header: "Schema",
+                        header: "Bound schema",
                         cell: (item) => item.schemaName || "-",
                         sortingField: "schemaName",
                     },

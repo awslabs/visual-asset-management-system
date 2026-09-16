@@ -755,3 +755,89 @@ def test_readme_documents_the_exception_tools_and_the_exception_state():
     readme = (Path(vams_mcp.__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
     assert "`revoke_quarantine_exception`" in readme
     assert "`exception`" in readme
+
+
+# --- Non-verdict rule errors, legacy schema rows, the evaluate fields, cascade dedup ----
+
+
+def test_schema_read_docstrings_name_the_format_and_the_legacy_row():
+    """`schemaFormat` is the only way an agent tells a legacy row from a usable schema; the
+    docstring must say what a legacy row cannot do and what to do with it."""
+    for tool in ("list_compliance_schemas", "get_compliance_schema"):
+        docstring = _docstring_of(tool)
+        assert "`schemaFormat`" in docstring
+        assert "`legacy`" in docstring
+        assert "cannot be bound, updated or evaluated" in docstring
+        assert "delete_compliance_schema()" in docstring
+
+
+def test_bind_docstring_names_the_legacy_refusal():
+    docstring = _docstring_of("bind_compliance_schema")
+    assert "`legacy`" in docstring
+    assert "Schema body must be a vams-rules-v1 document" in docstring
+
+
+def test_evaluate_docstring_names_the_response_fields_and_the_non_verdict_error():
+    """A rule with status `error` was not evaluated; an agent that reads it as a failure reports a
+    quarantine that never happened."""
+    docstring = _docstring_of("evaluate_asset_compliance")
+    for field in ("`schemaVersion`", "`exceptionApplied`", "`hasRuleErrors`"):
+        assert field in docstring
+    assert "`status` `error`" in docstring
+    assert "not a verdict" in docstring
+    assert "enforcement does not apply" in docstring
+    assert "state is left unchanged" in docstring
+    assert "`lastEvaluationStatus` `error`" in docstring
+    assert "evaluation_error" in docstring
+
+
+def test_evaluations_docstring_describes_rule_errors_apart_from_failures():
+    docstring = _docstring_of("list_compliance_evaluations")
+    assert "`hasRuleErrors`" in docstring and "`errorRules`" in docstring
+    assert "`status` `error`" in docstring
+    assert "NOT a verdict" in docstring
+    assert "not evaluated" in docstring
+
+
+def test_state_docstring_explains_last_evaluation_status():
+    docstring = _docstring_of("get_asset_compliance_state")
+    assert "`lastEvaluationStatus`" in docstring
+    assert "completed, pending_pipeline or error" in docstring
+    assert "BEFORE that evaluation" in docstring
+
+
+def test_overview_docstring_says_the_error_count_is_an_overlay():
+    docstring = _docstring_of("get_database_compliance_overview")
+    assert "`summary.error`" in docstring
+    assert "OVERLAY" in docstring
+    assert "do not add it to the others" in docstring
+    # The state list itself is unchanged: `error` is not a state.
+    assert "exception, unknown" in docstring
+
+
+def test_audit_docstring_names_the_evaluation_error_event():
+    docstring = _docstring_of("query_compliance_audit")
+    assert "evaluation_error" in docstring
+    assert "`ruleNames`" in docstring
+
+
+@pytest.mark.parametrize("tool", ["list_compliance_cascades", "create_compliance_cascade"])
+def test_cascade_docstrings_describe_the_auto_cascade_dedup(tool):
+    docstring = _docstring_of(tool)
+    assert "pending approval" in docstring
+    assert "same parent" in docstring or "that parent" in docstring
+    assert "duplicated" in docstring
+
+
+def test_readme_documents_the_format_the_error_status_and_the_dedup():
+    from pathlib import Path
+
+    import vams_mcp
+
+    readme = (Path(vams_mcp.__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    assert "`schemaFormat`" in readme
+    assert "`legacy`" in readme
+    assert "`lastEvaluationStatus`" in readme
+    assert "`hasRuleErrors`" in readme
+    assert "`schemaVersion`" in readme
+    assert "not duplicated" in readme

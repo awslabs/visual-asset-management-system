@@ -29,12 +29,16 @@ import {
     releaseFromQuarantine,
     grantException,
     revokeException,
+    erroredRuleNames,
     ComplianceState,
     EvaluationRecord,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../../../services/ComplianceService";
 import ReasonModal from "../../compliance/ReasonModal";
-import { ComplianceStateBadge } from "../../compliance/complianceStateBadge";
+import {
+    ComplianceStateBadge,
+    EvaluationErrorIndicator,
+} from "../../compliance/complianceStateBadge";
 import Synonyms from "../../../synonyms";
 
 interface ComplianceTabProps {
@@ -266,7 +270,19 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                 <SpaceBetween size="m">
                     <div>
                         <Box variant="awsui-key-label">Current State</Box>
-                        <ComplianceStateBadge state={complianceState?.complianceState} />
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <ComplianceStateBadge state={complianceState?.complianceState} />
+                            <EvaluationErrorIndicator
+                                lastEvaluationStatus={complianceState?.lastEvaluationStatus}
+                            />
+                        </SpaceBetween>
+                        {complianceState?.lastEvaluationStatus === "error" && (
+                            <Box variant="small" color="text-status-error">
+                                The last evaluation produced no verdict, so the state is the one the{" "}
+                                {Synonyms.asset} held before it. The evaluation history shows the
+                                cause.
+                            </Box>
+                        )}
                     </div>
                     {complianceState?.schemaName && (
                         <div>
@@ -380,6 +396,12 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                                                 Exception applied
                                             </StatusIndicator>
                                         )}
+                                        {(item.hasRuleErrors ||
+                                            erroredRuleNames(item).length > 0) && (
+                                            <StatusIndicator type="error">
+                                                Rule errors
+                                            </StatusIndicator>
+                                        )}
                                     </SpaceBetween>
                                 );
                             },
@@ -387,8 +409,25 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                         {
                             id: "violations",
                             header: "Violations",
-                            cell: (item) =>
-                                item.violations?.length ? item.violations.join(", ") : "-",
+                            cell: (item) => {
+                                // An errored rule was not evaluated, so it is listed apart from the
+                                // rules that failed: its enforcement did not apply to the verdict.
+                                const errored = erroredRuleNames(item);
+                                const violations = item.violations?.length
+                                    ? item.violations.join(", ")
+                                    : "-";
+                                if (errored.length === 0) {
+                                    return violations;
+                                }
+                                return (
+                                    <SpaceBetween size="xxs">
+                                        <span>{violations}</span>
+                                        <StatusIndicator type="error">
+                                            Not evaluated: {errored.join(", ")}
+                                        </StatusIndicator>
+                                    </SpaceBetween>
+                                );
+                            },
                         },
                         {
                             id: "executionId",

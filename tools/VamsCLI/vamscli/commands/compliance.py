@@ -124,6 +124,22 @@ def _next_page_lines(result: Dict[str, Any]) -> list:
     return [f"\nNext token: {result['NextToken']}", "Use --starting-token to get the next page"]
 
 
+def schema_format_of(schema: Dict[str, Any]) -> Optional[str]:
+    """The format of a schema record: its top-level `schemaFormat`, else derived from the body.
+
+    The listing marks a row whose body is not a vams-rules-v1 document as `legacy`; a record
+    without the top-level field is classified the same way from its body. None when the record
+    carries no body either.
+    """
+    top_level = schema.get('schemaFormat')
+    if top_level:
+        return top_level
+    body = schema.get('schemaBody')
+    if not isinstance(body, dict):
+        return None
+    return 'vams-rules-v1' if body.get('schemaFormat') == 'vams-rules-v1' else 'legacy'
+
+
 def format_schema(schema: Dict[str, Any], include_body: bool = False) -> str:
     lines = [
         f"Schema Name: {schema.get('schemaName', 'N/A')}",
@@ -133,9 +149,13 @@ def format_schema(schema: Dict[str, Any], include_body: bool = False) -> str:
     description = schema.get('description')
     if description:
         lines.append(f"Description: {description}")
+    schema_format = schema_format_of(schema)
+    if schema_format == 'legacy':
+        lines.append("Format: legacy (cannot be bound, updated or evaluated; delete it)")
+    else:
+        lines.append(f"Format: {schema_format or 'N/A'}")
     body = schema.get('schemaBody')
     if isinstance(body, dict):
-        lines.append(f"Format: {body.get('schemaFormat', 'N/A')}")
         rules = body.get('rules')
         if isinstance(rules, dict):
             lines.append(f"Rules: {', '.join(rules) if rules else 'none'}")
@@ -198,10 +218,14 @@ def format_state_record(record: Dict[str, Any]) -> str:
         f"Schema: {record.get('schemaName') or 'none'}",
         f"Schema Source: {record.get('schemaSource') or 'none'}",
     ]
+    if record.get('assetName'):
+        lines.append(f"Asset Name: {record['assetName']}")
+    if record.get('lastEvaluationId'):
+        lines.append(f"Last Evaluation: {record['lastEvaluationId']}")
+    last_evaluated = record.get('lastEvaluatedAt') or record.get('lastEvaluationAt')
+    if last_evaluated:
+        lines.append(f"Last Evaluated: {last_evaluated}")
     for key, label in (
-        ('assetName', 'Asset Name'),
-        ('lastEvaluationId', 'Last Evaluation'),
-        ('lastEvaluationAt', 'Last Evaluated'),
         ('quarantineReason', 'Quarantine Reason'),
         ('exceptionReason', 'Exception Reason'),
         ('exceptionGrantedBy', 'Exception Granted By'),
@@ -212,6 +236,12 @@ def format_state_record(record: Dict[str, Any]) -> str:
     ):
         if record.get(key):
             lines.append(f"{label}: {record[key]}")
+    last_status = record.get('lastEvaluationStatus')
+    if last_status == 'error':
+        lines.append("Last Evaluation Status: error (no verdict; the compliance state is the one "
+                     "held before that evaluation)")
+    elif last_status:
+        lines.append(f"Last Evaluation Status: {last_status}")
     return '\n'.join(lines)
 
 
@@ -223,13 +253,17 @@ def format_database_state(result: Dict[str, Any]) -> str:
         f"Tracked Assets: {result.get('totalAssets', 0)} ({len(assets)} on this page)",
         "Summary: " + ', '.join(f"{state}={count}" for state, count in summary.items()),
     ]
+    if 'error' in summary:
+        lines.append("  (error counts assets whose last evaluation produced no verdict; it overlays "
+                     "the state buckets rather than adding to them)")
     if assets:
         lines.append("-" * 80)
         for record in assets:
             name = f" ({record['assetName']})" if record.get('assetName') else ""
+            flag = " (evaluation error)" if record.get('lastEvaluationStatus') == 'error' else ""
             lines.append(
                 f"  {record.get('assetId', 'N/A')}{name}: {record.get('complianceState', 'unknown')}"
-                f" [{record.get('schemaName') or 'no schema'}]"
+                f"{flag} [{record.get('schemaName') or 'no schema'}]"
             )
     lines.extend(_next_page_lines(result))
     return '\n'.join(lines)
@@ -240,6 +274,8 @@ def format_evaluation(result: Dict[str, Any]) -> str:
         f"Evaluation ID: {result.get('evaluationId', 'N/A')}",
         f"Schema: {result.get('schemaName', 'N/A')}",
     ]
+    if result.get('schemaVersion') is not None:
+        lines.append(f"Schema Version: {result['schemaVersion']}")
     if result.get('verdict'):
         lines.append(f"Verdict: {result['verdict']}")
     if result.get('complianceState'):
@@ -252,6 +288,10 @@ def format_evaluation(result: Dict[str, Any]) -> str:
         lines.append(f"Execution ID: {result['executionId']}")
     if result.get('exceptionApplied'):
         lines.append("Exception Applied: yes (violations recorded; the asset stays released)")
+    if result.get('hasRuleErrors'):
+        errored = result.get('errorRules') or []
+        names = f": {', '.join(errored)}" if errored else ""
+        lines.append(f"Rule Errors: yes{names} (not evaluated; their enforcement did not apply)")
     pending = result.get('pipelineRulesPending')
     if pending:
         lines.append(f"Pipeline Rules Pending: {pending}")
@@ -264,8 +304,12 @@ def format_evaluation(result: Dict[str, Any]) -> str:
     if rule_results:
         lines.append("Rule Results:")
         for rule in rule_results:
-            mark = '✓' if rule.get('passed') else '✗'
-            line = f"  {mark} {rule.get('ruleName', 'N/A')} [{rule.get('enforcement', 'N/A')}]"
+            # An errored rule was not evaluated: it is marked apart from a rule that failed.
+            if rule.get('status') == 'error':
+                mark, suffix = '!', ' (error)'
+            else:
+                mark, suffix = ('✓' if rule.get('passed') else '✗'), ''
+            line = f"  {mark} {rule.get('ruleName', 'N/A')} [{rule.get('enforcement', 'N/A')}]{suffix}"
             if rule.get('message'):
                 line += f": {rule['message']}"
             lines.append(line)
@@ -398,6 +442,10 @@ def schema():
 def list_schemas(ctx: click.Context, database_id: Optional[str], json_output: bool):
     """List compliance schemas (the latest version of each).
 
+    Each record carries schemaFormat: vams-rules-v1, or legacy for a row whose body is not a
+    vams-rules-v1 document. A legacy schema cannot be bound, updated or evaluated; it is listed so
+    it can be found and deleted with 'compliance schema delete'.
+
     Examples:
         vamscli compliance schema list
         vamscli compliance schema list -d my-database
@@ -421,6 +469,9 @@ def list_schemas(ctx: click.Context, database_id: Optional[str], json_output: bo
 @requires_setup_and_auth
 def get_schema(ctx: click.Context, schema_name: str, json_output: bool):
     """Get the latest version of a compliance schema, including its body.
+
+    The record's schemaFormat is vams-rules-v1, or legacy for a body that is not a vams-rules-v1
+    document (such a schema cannot be bound, updated or evaluated; delete it).
 
     Examples:
         vamscli compliance schema get -n cad-quality
@@ -611,7 +662,8 @@ def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optio
 
     A database binding marks every asset in the database (except those with their own override)
     pending evaluation. An asset binding takes precedence over the database binding for that asset.
-    Only a GLOBAL schema or one scoped to the database can be bound.
+    Only a GLOBAL schema or one scoped to the database can be bound. A legacy schema (schemaFormat
+    legacy in 'schema list') is refused with 'Schema body must be a vams-rules-v1 document'.
 
     Examples:
         vamscli compliance bind -n cad-quality -d my-database
@@ -723,6 +775,15 @@ def evaluate(ctx: click.Context, database_id: str, asset_id: str, schema_name: O
     holds an active exception against the schema evaluated, a failing verdict is recorded on the
     evaluation and the asset stays released in the 'exception' state.
 
+    The response carries schemaVersion (the schema version evaluated), exceptionApplied and
+    hasRuleErrors. A rule whose tooling failed — an input selection that did not resolve to the
+    files its workflow takes, or a launch that could not start — is a rule result with status
+    'error': it is not a verdict, its enforcement does not apply, and the verdict comes from the
+    remaining rules (hasRuleErrors true). When every rule errored the evaluation itself is an
+    error and the asset's compliance state is left unchanged, with lastEvaluationStatus 'error'
+    on its record. An evaluation of an asset that has child assets opens a cascade awaiting
+    approval, unless one for that asset is already pending.
+
     Examples:
         vamscli compliance evaluate -d my-database -a my-asset
         vamscli compliance evaluate -d my-database -a my-asset -n cad-quality --json-output
@@ -797,12 +858,15 @@ def state(ctx: click.Context, database_id: str, asset_id: Optional[str], max_ite
     """Show compliance state: one asset's record, or a database's overview.
 
     complianceState is one of compliant, non_compliant, quarantined, exception (released under an
-    active exception although the last evaluation failed), pending_evaluation or unknown. The
-    database overview carries a per-state summary (one bucket per state, including exception) and
-    totalAssets covering every tracked asset, and one page of their records as assets; the
-    response carries a NextToken when more exist — pass it back as --starting-token. An asset
-    that is not tracked is reported with state 'unknown'. --max-items and --starting-token apply
-    to the overview only; the single-asset route is not paged.
+    active exception although the last evaluation failed), pending_evaluation or unknown. A record
+    also carries lastEvaluationStatus (completed, pending_pipeline or error): 'error' means the
+    last evaluation produced no verdict, so complianceState is the state held before it. The
+    database overview carries a per-state summary (one bucket per state, including exception, plus
+    an error count of the assets whose last evaluation errored — an overlay on the state buckets,
+    not a state) and totalAssets covering every tracked asset, and one page of their records as
+    assets; the response carries a NextToken when more exist — pass it back as --starting-token.
+    An asset that is not tracked is reported with state 'unknown'. --max-items and
+    --starting-token apply to the overview only; the single-asset route is not paged.
 
     Examples:
         vamscli compliance state -d my-database
@@ -1024,7 +1088,8 @@ def list_cascades(ctx: click.Context, json_output: bool):
 
     Each row carries databaseId and assetId naming the trigger asset (beside triggeredByDatabaseId
     and triggeredByAssetId), and only cascades whose trigger asset's database the caller may read
-    are listed.
+    are listed. A cascade opened automatically after the evaluation of a parent is not duplicated:
+    while one for that parent is pending approval, further evaluations of it open no new one.
 
     Examples:
         vamscli compliance cascade list
@@ -1084,7 +1149,8 @@ def create_cascade(ctx: click.Context, database_id: str, asset_id: str, reason: 
     an unapproved cascade expires after the approval timeout. With --no-approval it is created in
     the executing state and the evaluations run in the background: the command returns the
     cascadeId and state at once, and 'cascade get' shows the outcome once the state is completed
-    or aborted.
+    or aborted. This command always opens a new cascade; only the cascade an evaluation opens
+    automatically is de-duplicated against one already pending for the same parent.
 
     Examples:
         vamscli compliance cascade create -d my-database -a my-asset
@@ -1185,10 +1251,11 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
 
     Without --database-id/--asset-id the global trail is listed, optionally narrowed to one
     --event-type (schema_bound_to_database, schema_bound_to_asset, compliance_check,
-    quarantine_released, exception_granted, exception_revoked, exception_superseded,
-    cascade_triggered, cascade_approved, ...); the listing carries only the entries whose database
-    the caller may read. With both, one asset's history is listed; that route has no event-type
-    filter.
+    evaluation_error, quarantine_released, exception_granted, exception_revoked,
+    exception_superseded, cascade_triggered, cascade_approved, ...); the listing carries only the
+    entries whose database the caller may read. With both, one asset's history is listed; that
+    route has no event-type filter. An evaluation_error entry names the rules that errored
+    (ruleNames) in an evaluation, or the schema that could not be loaded.
 
     Entries are returned one page per call, most recent first. The response carries a NextToken
     when more entries exist; pass it back as --starting-token to read the next page. --limit is

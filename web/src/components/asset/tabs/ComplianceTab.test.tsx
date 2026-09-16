@@ -232,3 +232,142 @@ describe("ComplianceTab exception state", () => {
         expect(screen.queryByRole("button", { name: "Revoke exception" })).not.toBeInTheDocument();
     });
 });
+
+describe("ComplianceTab evaluation errors", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (permissions.useAllowedRoutes as jest.Mock).mockReturnValue({
+            can: () => true,
+            loading: false,
+        });
+    });
+
+    it("flags a record whose last evaluation produced no verdict beside its unchanged state", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            {
+                databaseId: "db1",
+                assetId: "asset-1",
+                complianceState: "compliant",
+                lastEvaluationStatus: "error",
+            },
+        ]);
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            {
+                evaluations: [{ ...evaluation("ev-1", "std"), result: "error", status: "error" }],
+                nextToken: undefined,
+            },
+        ]);
+
+        renderTab();
+
+        expect(await screen.findByText("Evaluation error")).toBeInTheDocument();
+        // The state badge is the state the asset held before the errored evaluation.
+        expect(screen.getByText("Compliant")).toBeInTheDocument();
+        expect(screen.getByText(/produced no verdict/)).toBeInTheDocument();
+        // The history row shows the evaluation's own error verdict.
+        expect(screen.getByText("Error")).toBeInTheDocument();
+    });
+
+    it("shows no error indicator for a completed last evaluation", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            {
+                databaseId: "db1",
+                assetId: "asset-1",
+                complianceState: "compliant",
+                lastEvaluationStatus: "completed",
+            },
+        ]);
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            { evaluations: [evaluation("ev-1", "std")], nextToken: undefined },
+        ]);
+
+        renderTab();
+        await screen.findByText("std");
+
+        expect(screen.queryByText("Evaluation error")).not.toBeInTheDocument();
+        expect(screen.queryByText("Rule errors")).not.toBeInTheDocument();
+        expect(screen.queryByText(/Not evaluated/)).not.toBeInTheDocument();
+    });
+
+    it("lists errored rules apart from the failed ones on an evaluation row", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            {
+                databaseId: "db1",
+                assetId: "asset-1",
+                complianceState: "non_compliant",
+                lastEvaluationStatus: "completed",
+            },
+        ]);
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            {
+                evaluations: [
+                    {
+                        ...evaluation("ev-1", "std"),
+                        result: "non_compliant",
+                        status: "completed",
+                        violations: ["owner missing"],
+                        hasRuleErrors: true,
+                        errorRules: ["geometry-check"],
+                    },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+
+        renderTab();
+        const row = (await screen.findByText("owner missing")).closest("tr") as HTMLElement;
+
+        expect(within(row).getByText("Rule errors")).toBeInTheDocument();
+        expect(within(row).getByText("Not evaluated: geometry-check")).toBeInTheDocument();
+        // The verdict came from the remaining rules, so the row is Non-Compliant, not Error.
+        expect(within(row).getAllByText("Non-Compliant")).toHaveLength(1);
+        // A completed evaluation with rule errors leaves the state indicator alone.
+        expect(screen.queryByText("Evaluation error")).not.toBeInTheDocument();
+    });
+
+    it("reads errored rules out of JSON-encoded rule results when errorRules is absent", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            { databaseId: "db1", assetId: "asset-1", complianceState: "compliant" },
+        ]);
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            {
+                evaluations: [
+                    {
+                        ...evaluation("ev-1", "std"),
+                        violations: [],
+                        ruleResults: JSON.stringify([
+                            {
+                                ruleName: "converts",
+                                ruleType: "pipeline",
+                                enforcement: "quarantine",
+                                passed: false,
+                                status: "error",
+                                message: "Input selection did not match exactly one file",
+                            },
+                            {
+                                ruleName: "owner",
+                                ruleType: "metadata",
+                                enforcement: "warn",
+                                passed: true,
+                            },
+                        ]),
+                    },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+
+        renderTab();
+
+        expect(await screen.findByText("Not evaluated: converts")).toBeInTheDocument();
+        expect(screen.getByText("Rule errors")).toBeInTheDocument();
+    });
+});

@@ -42,6 +42,8 @@ vamscli compliance schema list --json-output
 The route returns every schema in one response and takes no paging options; there is no `--starting-token`.
 :::
 
+Each record carries `schemaFormat`, printed as `Format:` — `vams-rules-v1`, or `legacy` for a row whose body is not a `vams-rules-v1` document. A legacy schema cannot be bound (`compliance bind` is refused with `Schema body must be a vams-rules-v1 document`), updated or evaluated; it is listed so that it can be found and removed with `compliance schema delete`.
+
 ---
 
 ## compliance schema get
@@ -61,6 +63,8 @@ vamscli compliance schema get [OPTIONS]
 vamscli compliance schema get -n cad-quality
 vamscli compliance schema get -n cad-quality --json-output
 ```
+
+The output prints the record's `Format:` (`vams-rules-v1` or `legacy`, as on `schema list`) before the body.
 
 ---
 
@@ -202,7 +206,7 @@ vamscli compliance bind -n cad-quality -d my-database --no-auto-eval
 vamscli compliance bind -n strict-cad -d my-database -a my-asset
 ```
 
-A database binding marks every asset in the database that has no override `pending_evaluation` and reports the count as `assetsPendingEvaluation`. Only a `GLOBAL` schema or one scoped to the database can be bound. `--no-auto-eval` is rejected together with `--asset-id`: the asset route does not read that flag.
+A database binding marks every asset in the database that has no override `pending_evaluation` and reports the count as `assetsPendingEvaluation`. Only a `GLOBAL` schema or one scoped to the database can be bound, and a `legacy` schema (see `schema list`) is refused with `Schema body must be a vams-rules-v1 document`. `--no-auto-eval` is rejected together with `--asset-id`: the asset route does not read that flag.
 
 ---
 
@@ -280,7 +284,9 @@ vamscli compliance evaluate -d my-database -a my-asset
 vamscli compliance evaluate -d my-database -a my-asset -n cad-quality --json-output
 ```
 
-Metadata and relationship rules are evaluated within the request and their results returned as `ruleResults`, with the `verdict` and `complianceState`. Pipeline rules start a workflow execution and complete asynchronously: `pipelineRulesPending` counts them, and `compliance state` shows the final verdict once the workflow finishes. A failed quarantine-level rule quarantines the asset at once.
+Metadata and relationship rules are evaluated within the request and their results returned as `ruleResults`, with the `verdict`, `complianceState` and the `schemaVersion` evaluated. Pipeline rules start a workflow execution and complete asynchronously: `pipelineRulesPending` counts them, and `compliance state` shows the final verdict once the workflow finishes. A failed quarantine-level rule quarantines the asset at once. The response also carries `exceptionApplied` (an active exception held the asset released) and `hasRuleErrors`.
+
+A rule whose tooling failed — its input selection did not resolve to the files the workflow takes, or the execution could not start — is a rule result with `status` `error`, printed as `! rule-name [enforcement] (error): message` apart from a failed rule's `✗`. It is not a verdict: its enforcement does not apply, the verdict comes from the remaining rules (`Rule Errors: yes: <names>`), and when every rule errored the evaluation is an `error` that leaves the asset's compliance state unchanged (`lastEvaluationStatus` `error` on its record).
 
 ---
 
@@ -333,7 +339,7 @@ vamscli compliance state -d my-database -a my-asset
 vamscli compliance state -d my-database --json-output
 ```
 
-`complianceState` is one of `compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception` or `unknown`. An asset with no binding is reported as `unknown` rather than as an error. The database overview carries a per-state `summary` and `totalAssets` covering every tracked asset, and one page of their records as `assets`, each with its `assetName`; only assets with a compliance record are counted. The response carries a `NextToken` when more records exist; pass it back as `--starting-token`. `--max-items` and `--starting-token` are rejected with `-a`, because the single-asset route is not paged.
+`complianceState` is one of `compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception` or `unknown`. An asset with no binding is reported as `unknown` rather than as an error. A record also carries `lastEvaluationStatus` (`completed`, `pending_pipeline` or `error`); `error` means the last evaluation produced no verdict, so `complianceState` is the state the asset held before it, and the CLI says so on the `Last Evaluation Status` line. The database overview carries a per-state `summary` and `totalAssets` covering every tracked asset, and one page of their records as `assets`, each with its `assetName`; only assets with a compliance record are counted. The summary's `error` count is the number of assets whose last evaluation errored — an overlay on the state buckets, not a state — and such a row is printed with `(evaluation error)` after its state. The response carries a `NextToken` when more records exist; pass it back as `--starting-token`. `--max-items` and `--starting-token` are rejected with `-a`, because the single-asset route is not paged.
 
 ---
 
@@ -359,7 +365,7 @@ vamscli compliance evaluations -d my-database -a my-asset --max-items 10
 vamscli compliance evaluations -d my-database -a my-asset --starting-token "token123" --json-output
 ```
 
-Each evaluation carries its `evaluationId`, `schemaName`, `evaluatedAt`, the `verdict` and `ruleResults` once complete, and — for an evaluation with pipeline rules — the `executionId` of the workflow execution behind it. The response carries a `NextToken` when more evaluations exist; pass it back as `--starting-token`.
+Each evaluation carries its `evaluationId`, `schemaName`, `evaluatedAt`, the `verdict` and `ruleResults` once complete, and — for an evaluation with pipeline rules — the `executionId` of the workflow execution behind it. A row with `hasRuleErrors` names in `errorRules` the rules whose tooling failed; they are printed as `! rule-name [enforcement] (error)` apart from the failed rules and are absent from `violations`, because they produced no verdict. The response carries a `NextToken` when more evaluations exist; pass it back as `--starting-token`.
 
 ---
 
@@ -458,7 +464,7 @@ vamscli compliance quarantine revoke-exception -d my-database -a my-asset
 
 ## Cascade Commands
 
-A cascade re-evaluates the dependents of a changed asset. By default it waits in `pending_approval` for `cascade approve` or `cascade reject`, and expires after the approval timeout.
+A cascade re-evaluates the dependents of a changed asset. By default it waits in `pending_approval` for `cascade approve` or `cascade reject`, and expires after the approval timeout. The cascade an evaluation opens automatically for an asset with children is not duplicated: while one for that parent is pending approval, further evaluations of it open no new one. `cascade create` always opens a new cascade.
 
 ---
 
@@ -602,7 +608,7 @@ vamscli compliance audit -d my-database -a my-asset
 vamscli compliance audit -d my-database -a my-asset --json-output
 ```
 
-Event types include `schema_bound_to_database`, `schema_bound_to_asset`, `schema_unbound_from_database`, `schema_unbound_from_asset`, `schema_deleted`, `compliance_check`, `quarantine_released`, `exception_granted`, `cascade_triggered` and `cascade_approved`. `--database-id` and `--asset-id` are given together; `--event-type` is rejected with them because the per-asset route has no such filter.
+Event types include `schema_bound_to_database`, `schema_bound_to_asset`, `schema_unbound_from_database`, `schema_unbound_from_asset`, `schema_deleted`, `compliance_check`, `evaluation_error` (a rule's tooling failed in an evaluation, or its schema could not be loaded; the details name the rules), `quarantine_released`, `exception_granted`, `cascade_triggered` and `cascade_approved`. `--database-id` and `--asset-id` are given together; `--event-type` is rejected with them because the per-asset route has no such filter.
 
 :::note[The audit routes return one page per call]
 Entries are returned most recent first, `--max-items` per page (`--limit` is the same option). The response carries a `NextToken` when more entries exist; pass it back as `--starting-token` with the same filters to read the next page. Without `--event-type` the global trail reads every event type in turn, and the token carries the position of that walk.

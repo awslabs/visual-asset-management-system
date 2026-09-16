@@ -120,6 +120,20 @@ describe("ComplianceQuarantine", () => {
         ).toBeInTheDocument();
     });
 
+    it("labels the schema column as the bound schema", async () => {
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            { quarantinedAssets: [quarantined("asset-1")], nextToken: undefined },
+        ]);
+        render(<ComplianceQuarantine />);
+        await screen.findByText("Name of asset-1");
+
+        // The column shows the state row's bound schema, which is not necessarily the schema
+        // whose evaluation produced the quarantine verdict.
+        expect(screen.getByRole("columnheader", { name: "Bound schema" })).toBeInTheDocument();
+        expect(screen.queryByRole("columnheader", { name: "Schema" })).not.toBeInTheDocument();
+    });
+
     it("renders each row's state through the shared badge", async () => {
         service().fetchQuarantinedAssets.mockResolvedValue([
             true,
