@@ -498,7 +498,7 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 
 ## Sweep the assets bound to a schema
 
-Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate. One call evaluates at most 200 assets; `assetsRemaining` reports how many bound assets were not reached, and repeated calls work through them. Bound assets the caller is not authorized to evaluate are counted in `skipped` and never listed.
+Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate. Assets in `pending_evaluation` are evaluated first, then the rest. One call evaluates at most 200 assets and stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window; `assetsRemaining` reports how many bound assets were not reached — a value above 0 means call again — and repeated calls work through them. Bound assets the caller is not authorized to evaluate are counted in `skipped` and never listed.
 
 ```
 POST /compliance/sweep/{schemaName}
@@ -590,7 +590,7 @@ GET /compliance/evaluations/{databaseId}/{assetId}
 }
 ```
 
-`status` is `completed`, `pending_pipeline`, `error` or `failed`. `ruleResults` is a JSON-encoded list of rule results, each with a `status` of `evaluated` or `error`; `exceptionApplied` is `true` on an evaluation that ran while an exception against its schema version was active (the violations are recorded, the asset stayed released); `hasRuleErrors` is `true` when at least one rule result has `status` `error` — the rule's tooling failed, it produced no verdict and its enforcement did not apply — and `errorRules` names those rules, which are absent from `violations`. An evaluation with `status` `error` produced no verdict at all (every rule errored, or the schema could not be loaded) and left the asset's state unchanged. `pipelineExecutions`, `executionId` and `pipelineRuleName` are present on evaluations that launched a workflow execution, and `executionId` is the value the workflow completion event is correlated by. `NextToken` is absent on the last page.
+`status` is `completed`, `pending_pipeline`, `error` or `failed`. `ruleResults` is a JSON-encoded list of rule results, each with a `status` of `evaluated` or `error`; `exceptionApplied` is `true` on an evaluation that ran while an exception against its schema version was active (the violations are recorded, the asset stayed released); `hasRuleErrors` is `true` when at least one rule result has `status` `error` — the rule's tooling failed, it produced no verdict and its enforcement did not apply — and `errorRules` names those rules, which are absent from `violations`. An evaluation with `status` `error` produced no verdict at all (every rule errored, or the schema could not be loaded) and left the asset's state unchanged. `pipelineExecutions`, `executionId` and `pipelineRuleName` are present on evaluations with pipeline rules, and `executionId` is the value the workflow completion event is correlated by. The evaluation row is written before any execution is launched, so each `pipelineExecutions` entry carries a `status` of `starting` (the launch has not been attempted yet), `pending` (launched, awaiting its completion event), `completed`, or `not_started` (the launch failed; that rule's result on the row has `status` `error`). `NextToken` is absent on the last page.
 
 ### Error responses
 

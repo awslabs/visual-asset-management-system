@@ -575,7 +575,7 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`Api
 
 ## Compliance (`app.compliance`)
 
-Compliance deploys with every VAMS deployment: five Amazon DynamoDB tables, eight AWS Lambda functions, and the `/compliance/*` API routes for schema management, automated evaluation, quarantine management, cascade execution, and audit logging. There is no enable switch; access to the routes is governed by permissions like every other page. These two fields tune its behavior.
+Compliance deploys with every VAMS deployment: five Amazon DynamoDB tables, nine AWS Lambda functions, and the `/compliance/*` API routes for schema management, automated evaluation, quarantine management, cascade execution, and audit logging. There is no enable switch; access to the routes is governed by permissions like every other page. These two fields tune its behavior.
 
 | Field                                     | Type    | Default | Description                                                                                                                                                                                                                                                                                     |
 | ----------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -121,8 +121,15 @@ web/
           hooks/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
       compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
-                            #   pipeline/metadata/relationship rules); complianceSchemaRules.ts
-                            #   (pure pipelineRef fields/validation + rule-draft round-trip)
+                            #   pipeline/metadata/relationship rules, incl. the pipeline-rule
+                            #   input-file selector: mode / globs / explicit paths); complianceSchemaRules.ts
+                            #   (pure pipelineRef fields/validation + rule-draft round-trip);
+                            #   ReasonModal.tsx (Cloudscape modal collecting a mandatory reason:
+                            #   reject cascade, grant quarantine exception, release from
+                            #   quarantine); complianceStateBadge.tsx
+                            #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
+                            #   `exception` renders as info/blue; EvaluationErrorIndicator flags a
+                            #   record whose lastEvaluationStatus is `error`)
       createupdate/         # CreateDatabase.tsx, UpdateAsset.tsx + form definitions
       filemanager/          # File tree and file operations; EnhancedFileManager lazy-loads the
                             #   orchestration execution quick view for a file's "View execution" link

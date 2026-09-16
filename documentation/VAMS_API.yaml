@@ -2078,6 +2078,7 @@ paths:
                         - Ambiguous alias: multiple versions share this alias.
                         - Asset, asset version, or file not found (also when no asset version carries the specified alias).
                         - Asset not distributable.
+                        - Asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`.
                     content:
                         application/json:
                             schema:
@@ -2303,7 +2304,7 @@ paths:
                                         type: integer
                                         description: "Lifetime of the presigned URL in seconds, from the deployment's PRESIGNED_URL_TIMEOUT_SECONDS setting"
                 "400":
-                    description: Invalid parameters or pagination token.
+                    description: "Invalid parameters or pagination token, or `generatePresignedUrls` was requested for an asset on the page that is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`."
                     content:
                         application/json:
                             schema:
@@ -2491,6 +2492,7 @@ paths:
                         - Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified.
                         - Version parameters are not allowed for assetPreview downloads.
                         - Ambiguous alias: multiple versions share this alias.
+                        - The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`.
                     content:
                         application/json:
                             schema:
@@ -2760,7 +2762,7 @@ paths:
                             schema:
                                 type: string
                 "400":
-                    description: Invalid parameters, file too large for streaming, or unallowed file type.
+                    description: "Invalid parameters, file too large for streaming, or unallowed file type; or the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`."
                     content:
                         application/json:
                             schema:
@@ -9562,7 +9564,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/sweep/{schemaName}:
         post:
             summary: "Sweep the assets bound to a schema."
-            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate, up to 200 assets per call. `skipped` counts the bound assets the caller is not authorized to evaluate (they are never listed); `assetsRemaining` reports how many were not reached."
+            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the rest, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. `skipped` counts the bound assets the caller is not authorized to evaluate (they are never listed); `assetsRemaining` reports how many were not reached — a value above 0 means call again."
             parameters:
                 - name: schemaName
                   in: path
@@ -16257,7 +16259,7 @@ components:
                                 type: string
                 assetsRemaining:
                     type: integer
-                    description: "Bound assets beyond the 200-asset cap of one call."
+                    description: "Bound assets the call did not reach, beyond the 200-asset cap or after the time budget; a value above 0 means call again."
                 skipped:
                     type: integer
                     description: "Bound assets the caller is not authorized to evaluate; counted, never listed."
@@ -16314,7 +16316,7 @@ components:
                     description: "JSON-encoded pipeline rules awaiting their workflow execution. Present while `status` is `pending_pipeline`."
                 pipelineExecutions:
                     type: array
-                    description: "Workflow executions launched for the pipeline rules."
+                    description: "One entry per pipeline rule of the evaluation, listed before any execution is launched."
                     items:
                         type: object
                         properties:
@@ -16322,8 +16324,10 @@ components:
                                 type: string
                             executionId:
                                 type: string
+                                description: "Present once the rule's workflow execution was launched."
                             status:
                                 type: string
+                                description: "`starting` (launch not yet attempted), `pending` (launched, awaiting its completion event), `completed`, or `not_started` (the launch failed; the rule's result has `status` `error`)."
                 executionId:
                     type: string
                     description: "Execution launched for the first pipeline rule; correlates the workflow completion event to this evaluation."

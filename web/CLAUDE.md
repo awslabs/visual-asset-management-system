@@ -103,7 +103,8 @@ web/
                               #   input-file selector: mode / globs / explicit paths) + complianceSchemaRules.ts
                               #   (pure pipelineRef fields/validation + rule-draft round-trip);
                               #   ReasonModal.tsx (Cloudscape modal collecting a mandatory reason:
-                              #   reject cascade, grant quarantine exception); complianceStateBadge.tsx
+                              #   reject cascade, grant quarantine exception, release from
+                              #   quarantine); complianceStateBadge.tsx
                               #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
                               #   `exception` renders as info/blue; EvaluationErrorIndicator flags a
                               #   record whose lastEvaluationStatus is `error`)

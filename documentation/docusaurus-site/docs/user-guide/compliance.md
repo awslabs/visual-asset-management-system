@@ -392,7 +392,7 @@ An asset that fails a rule with `quarantine` enforcement enters the `quarantined
 ### Viewing quarantined assets
 
 1. Navigate to **Compliance > Quarantine** in the left sidebar.
-2. The page lists every quarantined asset you may read with its Asset Name, Asset ID, Database ID, **Bound schema** (the schema the asset is currently bound to; the quarantine may have been produced by an evaluation against a different version or schema) and the quarantine reason.
+2. The page lists every quarantined asset you may read with its Asset Name, Asset ID, Database ID, **Bound schema** (the schema the asset is currently bound to; the quarantine may have been produced by an evaluation against a different version or schema) and the quarantine reason. The list is paged: use the pagination control to move through the pages.
 
 ### Releasing from quarantine
 
@@ -440,7 +440,7 @@ A cascade re-evaluates the downstream assets of a parent — every descendant li
 1. Locate the cascade in the list.
 2. Choose **Approve**.
 3. Enter an optional reason.
-4. The downstream assets are evaluated in dependency order and the cascade completes.
+4. The cascade moves to `executing` and its downstream assets are evaluated in dependency order in the background; the API answers `202` with the cascade `state`. The Cascade Approvals page follows the execution and shows its progress (nodes evaluated of the total) until the cascade is `completed` or `aborted`.
 
 ### Rejecting a cascade
 
@@ -449,7 +449,7 @@ A cascade re-evaluates the downstream assets of a parent — every descendant li
 3. Enter an optional reason.
 4. The cascade is aborted.
 
-A cascade can also be created directly — `POST /compliance/cascades` with the parent's `databaseId` and `assetId` — and executes at once when created with `requireApproval: false`.
+A cascade can also be created directly — `POST /compliance/cascades` with the parent's `databaseId` and `assetId`. Created with `requireApproval: false` it starts executing in the background at once: the API answers `202` with the cascade `state`, and `GET /compliance/cascades/{cascadeId}` reports its progress until it is `completed` or `aborted`.
 
 ---
 
@@ -461,7 +461,7 @@ The compliance audit log records every compliance action across the deployment.
 
 1. Navigate to **Compliance > Audit Log** in the left sidebar.
 2. Use the **Event Type** filter to narrow the list (for example, only `quarantine_released` events).
-3. Entries are ordered newest first.
+3. Entries are ordered newest first and the list is paged: use the pagination control to move through the pages.
 
 ### Event types
 
