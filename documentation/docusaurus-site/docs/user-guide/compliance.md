@@ -14,13 +14,14 @@ The **Compliance** section of the left sidebar — **Compliance Schemas**, **Qua
 
 Each asset detail view includes a **Compliance** tab showing:
 
--   **Current state** -- the compliance state as a colored indicator: green (compliant), yellow (non-compliant), red (quarantined), or blue (pending evaluation).
+-   **Current state** -- the compliance state as a colored indicator: green (compliant), yellow (non-compliant), red (quarantined), blue (pending evaluation), or the blue **Exception** indicator for an asset released from quarantine by a granted exception.
 -   **Schema binding** -- which schema governs the asset and whether it is inherited from the database or set on the asset.
+-   **Active exception** -- when an exception holds, its reason, grantor, time and the schema and version it was granted against, with a **Revoke exception** action (a confirmation dialog, no reason) that returns the asset to the state of its last evaluation.
 -   **Evaluate Now** -- evaluates the asset and, when it has child assets, opens a cascade awaiting approval.
 -   **Evaluation history** -- past evaluations with their timestamps, verdicts and violations.
 
 :::info[Evaluation history]
-Each row lists the rules that failed as violations. An evaluation against a schema that is not in the `vams-rules-v1` format records an `error` status rather than a verdict.
+Each row lists the rules that failed as violations. A row flagged **Exception applied** was evaluated while an exception held, so its violations did not change the asset's state. An evaluation whose schema cannot be loaded records an `error` status rather than a verdict.
 :::
 
 ### Database compliance overview
@@ -28,7 +29,7 @@ Each row lists the rules that failed as violations. An evaluation against a sche
 1. Navigate to **Databases** in the left sidebar.
 2. In the databases table, choose the **Compliance** link for the database you want to inspect.
 3. The overview page shows:
-    - A summary row with counts for each state: Compliant, Non-Compliant, Quarantined, Pending Evaluation, and Unknown.
+    - A summary row with counts for each state: Compliant, Non-Compliant, Quarantined, Exception, Pending Evaluation, and Unknown.
     - A compliance rate (compliant assets divided by tracked assets).
     - A table of tracked assets with Asset Name, Asset ID, compliance state, schema name, and last evaluation time.
 
@@ -88,7 +89,7 @@ Removing the override (`DELETE /compliance/bind/{databaseId}/{assetId}`) returns
 
 ## Managing schemas
 
-Compliance schemas define the rules assets are evaluated against. Write schemas in the `vams-rules-v1` format: named rules of the `pipeline`, `metadata` and `relationship` types, each with a `quarantine`, `warn` or `inform` enforcement level. A JSON Schema draft-07 body is accepted at registration but is not evaluated — an evaluation against it records an `error` status.
+Compliance schemas define the rules assets are evaluated against. Write schemas in the `vams-rules-v1` format: named rules of the `pipeline`, `metadata` and `relationship` types, each with a `quarantine`, `warn` or `inform` enforcement level. Only `vams-rules-v1` bodies are accepted; any other body (including a legacy JSON Schema document) is rejected at registration. A pipeline rule's **Input files** selection decides which of the asset's files its workflow execution receives: **Matching files** (the default) applies the workflow's and pipeline's own file filters plus the rule's glob filters and must leave exactly one file for a single-input workflow; **Whole asset** sends the asset root where the workflow allows it; **Explicit files** names asset-relative paths. The pipeline's `compliance-output.json` is optional — without it the rule's checks can read only `execution_success` and `processing_duration_seconds`. The four templates in `documentation/complianceSchemaTemplates/` are ready-to-register `vams-rules-v1` schemas; see [Compliance concepts](../concepts/compliance.md#schema-templates).
 
 The **Compliance Schemas** page lists every schema you may read with its name, description and version. **Create Schema** opens the schema editor, which builds a `vams-rules-v1` body rule by rule; **Edit** opens an existing schema in the same editor and writes its next version; **Sweep** evaluates every asset bound to the schema.
 
@@ -408,11 +409,16 @@ If an asset must remain available despite the failure:
 3. Enter the reason for the exception in the confirmation dialog.
 4. Choose **Confirm**.
 
-The asset's compliance state changes to `compliant`, and the reason, the grantor and the time are recorded on the asset's compliance record and in the audit log.
+The asset's compliance state changes to `exception`, and the reason, the grantor, the time and the schema name and version the exception was granted against are recorded on the asset's compliance record and in the audit log.
 
-:::note
-An exception holds until the asset is evaluated again; a later evaluation that fails a `quarantine`-level rule quarantines the asset once more.
-:::
+The exception holds until it is revoked or superseded. While it holds, a re-evaluation against the same schema version records its violations on the evaluation (flagged **Exception applied**) but never quarantines the asset: the state is `compliant` when the evaluation passes and `exception` when it fails, and the download block never applies. An evaluation against a different schema, or a newer version of the same schema, supersedes the exception (`exception_superseded`) and applies its verdict normally.
+
+### Revoking an exception
+
+1. Open the asset's **Compliance** tab.
+2. In **Active exception**, choose **Revoke exception** and confirm.
+
+The asset returns to the state of its last evaluation: back into quarantine, with its quarantine reason restored and its subscribers notified, when that evaluation failed a `quarantine`-level rule; `pending_evaluation` when it has no recorded evaluation. The revocation is recorded as `exception_revoked`. The same action is `DELETE /compliance/quarantine/{databaseId}/{assetId}/exception` and `vamscli compliance quarantine revoke-exception`.
 
 ---
 
@@ -455,21 +461,23 @@ The compliance audit log records every compliance action across the deployment.
 
 ### Event types
 
-| Event type                     | Description                                                         |
-| ------------------------------ | ------------------------------------------------------------------- |
-| `compliance_check`             | An asset was evaluated against a schema                             |
-| `quarantine_released`          | An asset left quarantine, by release or by a passing re-evaluation  |
-| `exception_granted`            | An exception was granted to a quarantined asset                     |
-| `schema_bound_to_database`     | A schema was bound to a database                                    |
-| `schema_unbound_from_database` | A database's schema binding was removed                             |
-| `schema_bound_to_asset`        | A schema was bound directly to an asset                             |
-| `schema_unbound_from_asset`    | An asset-level schema override was removed                          |
-| `schema_deleted`               | A schema was deleted                                                |
-| `cascade_triggered`            | A cascade was created through the API                               |
-| `cascade_auto_triggered`       | A cascade was opened after the evaluation of an asset with children |
-| `cascade_approved`             | A pending cascade was approved and executed                         |
-| `cascade_rejected`             | A pending cascade was rejected                                      |
-| `cascade_completed`            | A cascade finished evaluating its downstream assets                 |
+| Event type                     | Description                                                          |
+| ------------------------------ | -------------------------------------------------------------------- |
+| `compliance_check`             | An asset was evaluated against a schema                              |
+| `quarantine_released`          | An asset left quarantine, by release or by a passing re-evaluation   |
+| `exception_granted`            | An exception was granted to a quarantined asset                      |
+| `exception_revoked`            | An exception was revoked; the asset returned to its last verdict     |
+| `exception_superseded`         | An evaluation against another schema or version cleared an exception |
+| `schema_bound_to_database`     | A schema was bound to a database                                     |
+| `schema_unbound_from_database` | A database's schema binding was removed                              |
+| `schema_bound_to_asset`        | A schema was bound directly to an asset                              |
+| `schema_unbound_from_asset`    | An asset-level schema override was removed                           |
+| `schema_deleted`               | A schema was deleted                                                 |
+| `cascade_triggered`            | A cascade was created through the API                                |
+| `cascade_auto_triggered`       | A cascade was opened after the evaluation of an asset with children  |
+| `cascade_approved`             | A pending cascade was approved and executed                          |
+| `cascade_rejected`             | A pending cascade was rejected                                       |
+| `cascade_completed`            | A cascade finished evaluating its downstream assets                  |
 
 ---
 

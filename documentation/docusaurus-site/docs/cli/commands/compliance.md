@@ -114,7 +114,7 @@ The schema body is a `vams-rules-v1` document. A pipeline rule names the workflo
 }
 ```
 
-`pipelineRef.databaseId` is the **workflow's** database and `pipelineDatabaseId` the pipeline's; both accept `GLOBAL`. `templateId` is optional. A plain JSON Schema (draft-07 subset) body is also accepted.
+`pipelineRef.databaseId` is the **workflow's** database and `pipelineDatabaseId` the pipeline's; both accept `GLOBAL`. `templateId` is optional. A pipeline rule's `inputFiles` selects the asset files the execution receives: `{"mode": "matching"}` (the default) lists the asset's files and applies the workflow's, the pipeline's and the rule's own `filter` globs — a single-input workflow must be left with exactly one file; `{"mode": "wholeAsset"}` sends the asset root where the workflow allows it; `{"mode": "explicit", "keys": ["/path/file.glb"]}` sends the listed asset-relative files. `compliance-output.json` is optional for the pipeline: without it the checks can read only `execution_success` and `processing_duration_seconds`. Only `vams-rules-v1` bodies are accepted; any other body is rejected with `schemaBody must be a vams-rules-v1 document`.
 
 ```bash
 vamscli compliance schema create -n cad-quality --schema-file cad-quality.json
@@ -333,7 +333,7 @@ vamscli compliance state -d my-database -a my-asset
 vamscli compliance state -d my-database --json-output
 ```
 
-`complianceState` is one of `compliant`, `non_compliant`, `pending_evaluation`, `quarantined` or `unknown`. An asset with no binding is reported as `unknown` rather than as an error. The database overview carries a per-state `summary` and `totalAssets` covering every tracked asset, and one page of their records as `assets`, each with its `assetName`; only assets with a compliance record are counted. The response carries a `NextToken` when more records exist; pass it back as `--starting-token`. `--max-items` and `--starting-token` are rejected with `-a`, because the single-asset route is not paged.
+`complianceState` is one of `compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception` or `unknown`. An asset with no binding is reported as `unknown` rather than as an error. The database overview carries a per-state `summary` and `totalAssets` covering every tracked asset, and one page of their records as `assets`, each with its `assetName`; only assets with a compliance record are counted. The response carries a `NextToken` when more records exist; pass it back as `--starting-token`. `--max-items` and `--starting-token` are rejected with `-a`, because the single-asset route is not paged.
 
 ---
 
@@ -417,7 +417,7 @@ The next evaluation can quarantine the asset again; use `quarantine exception` t
 
 ## compliance quarantine exception
 
-Grant a quarantined asset an exception. The asset returns to `compliant` with the exception, its justification and the granting user recorded on its compliance record and in the audit trail.
+Grant a quarantined asset an exception. The asset moves to the `exception` state with the justification, the granting user and the schema name and version the exception was granted against recorded on its compliance record and in the audit trail. The exception holds until it is revoked or superseded by an evaluation against another schema or version; meanwhile re-evaluations record their violations but never re-quarantine the asset.
 
 ```bash
 vamscli compliance quarantine exception [OPTIONS]
@@ -436,6 +436,26 @@ vamscli compliance quarantine exception -d my-database -a my-asset --reason "Leg
 
 ---
 
+## compliance quarantine revoke-exception
+
+Revoke an asset's active exception. The asset returns to the state of its last evaluation — back into quarantine, with its quarantine reason restored and its subscribers notified, when that evaluation failed a `quarantine`-level rule; `pending_evaluation` when it has no recorded evaluation. The revocation is recorded as `exception_revoked`. An asset without an active exception is refused.
+
+```bash
+vamscli compliance quarantine revoke-exception [OPTIONS]
+```
+
+| Option                | Type | Required | Description              |
+| --------------------- | ---- | -------- | ------------------------ |
+| `-d`, `--database-id` | TEXT | Yes      | Database ID              |
+| `-a`, `--asset-id`    | TEXT | Yes      | Asset ID                 |
+| `--json-output`       | FLAG | No       | Output raw JSON response |
+
+```bash
+vamscli compliance quarantine revoke-exception -d my-database -a my-asset
+```
+
+---
+
 ## Cascade Commands
 
 A cascade re-evaluates the dependents of a changed asset. By default it waits in `pending_approval` for `cascade approve` or `cascade reject`, and expires after the approval timeout.
@@ -444,7 +464,7 @@ A cascade re-evaluates the dependents of a changed asset. By default it waits in
 
 ## compliance cascade list
 
-List cascades awaiting approval. Cascades in any other state are read individually with `cascade get`.
+List cascades awaiting approval, each with the `databaseId` and `assetId` of the asset that triggered it. Only cascades whose trigger asset's database the caller may read are listed. Cascades in any other state are read individually with `cascade get`.
 
 ```bash
 vamscli compliance cascade list [OPTIONS]

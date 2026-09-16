@@ -524,26 +524,26 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 
 ### Compliance routes
 
-| Route                                                     | Methods          | Tier 2 Object Type     | Tier 2 Fields          |
-| --------------------------------------------------------- | ---------------- | ---------------------- | ---------------------- |
-| `/compliance/schemas`                                     | GET, POST        | `complianceSchema`     | `complianceSchemaName` |
-| `/compliance/schemas/{schemaName}`                        | GET, PUT, DELETE | `complianceSchema`     | `complianceSchemaName` |
-| `/compliance/sweep/{schemaName}`                          | POST             | `complianceSchema`     | `complianceSchemaName` |
-| `/compliance/bind/{databaseId}`                           | GET, PUT, DELETE | `complianceSchema`     | `complianceSchemaName` |
-| `/compliance/bind/{databaseId}/{assetId}`                 | PUT, DELETE      | `complianceSchema`     | `complianceSchemaName` |
-| `/compliance/evaluate/{databaseId}/{assetId}`             | POST             | `complianceEvaluation` | `databaseId`           |
-| `/compliance/evaluations/{databaseId}/{assetId}`          | GET              | `complianceEvaluation` | `databaseId`           |
-| `/compliance/state/{databaseId}/{assetId}`                | GET              | `complianceEvaluation` | `databaseId`           |
-| `/compliance/state/{databaseId}`                          | GET              | `complianceEvaluation` | `databaseId`           |
-| `/compliance/quarantine`                                  | GET              | `complianceEvaluation` | `complianceState`      |
-| `/compliance/quarantine/{databaseId}/{assetId}/release`   | POST             | `complianceEvaluation` | `complianceState`      |
-| `/compliance/quarantine/{databaseId}/{assetId}/exception` | POST             | `complianceEvaluation` | `complianceState`      |
-| `/compliance/cascades`                                    | GET, POST        | `complianceCascade`    | `cascadeId`            |
-| `/compliance/cascades/{cascadeId}`                        | GET              | `complianceCascade`    | `cascadeId`            |
-| `/compliance/cascades/{cascadeId}/approve`                | POST             | `complianceCascade`    | `cascadeId`            |
-| `/compliance/cascades/{cascadeId}/reject`                 | POST             | `complianceCascade`    | `cascadeId`            |
-| `/compliance/audit/{databaseId}/{assetId}`                | GET              | `complianceEvaluation` | `databaseId`           |
-| `/compliance/audit`                                       | GET              | `complianceEvaluation` | `databaseId`           |
+| Route                                                     | Methods          | Tier 2 Object Type                                                      | Tier 2 Fields                        |
+| --------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------- | ------------------------------------ |
+| `/compliance/schemas`                                     | GET, POST        | `complianceSchema`                                                      | `complianceSchemaName`               |
+| `/compliance/schemas/{schemaName}`                        | GET, PUT, DELETE | `complianceSchema`                                                      | `complianceSchemaName`               |
+| `/compliance/sweep/{schemaName}`                          | POST             | `complianceSchema` + `complianceEvaluation` (per bound database)        | `complianceSchemaName`, `databaseId` |
+| `/compliance/bind/{databaseId}`                           | GET, PUT, DELETE | `complianceSchema` + `database`                                         | `complianceSchemaName`, `databaseId` |
+| `/compliance/bind/{databaseId}/{assetId}`                 | PUT, DELETE      | `complianceSchema` + `asset`                                            | `complianceSchemaName`, `databaseId` |
+| `/compliance/evaluate/{databaseId}/{assetId}`             | POST             | `complianceEvaluation`                                                  | `databaseId`                         |
+| `/compliance/evaluations/{databaseId}/{assetId}`          | GET              | `complianceEvaluation`                                                  | `databaseId`                         |
+| `/compliance/state/{databaseId}/{assetId}`                | GET              | `complianceEvaluation`                                                  | `databaseId`                         |
+| `/compliance/state/{databaseId}`                          | GET              | `complianceEvaluation`                                                  | `databaseId`                         |
+| `/compliance/quarantine`                                  | GET              | `complianceEvaluation`                                                  | `complianceState`                    |
+| `/compliance/quarantine/{databaseId}/{assetId}/release`   | POST             | `complianceEvaluation`                                                  | `complianceState`                    |
+| `/compliance/quarantine/{databaseId}/{assetId}/exception` | POST, DELETE     | `complianceEvaluation`                                                  | `complianceState`                    |
+| `/compliance/cascades`                                    | GET, POST        | `complianceCascade` + `complianceEvaluation` (trigger asset's database) | `cascadeId`, `databaseId`            |
+| `/compliance/cascades/{cascadeId}`                        | GET              | `complianceCascade` + `complianceEvaluation`                            | `cascadeId`, `databaseId`            |
+| `/compliance/cascades/{cascadeId}/approve`                | POST             | `complianceCascade` + `complianceEvaluation`                            | `cascadeId`, `databaseId`            |
+| `/compliance/cascades/{cascadeId}/reject`                 | POST             | `complianceCascade` + `complianceEvaluation`                            | `cascadeId`, `databaseId`            |
+| `/compliance/audit/{databaseId}/{assetId}`                | GET              | `complianceEvaluation`                                                  | `databaseId`                         |
+| `/compliance/audit`                                       | GET              | `complianceEvaluation`                                                  | `databaseId`                         |
 
 ## Performance considerations
 

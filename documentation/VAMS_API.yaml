@@ -9144,7 +9144,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         post:
             summary: "Register a compliance schema."
-            description: "Registers a compliance schema body under a name. Registering a name that already exists writes the next version of that schema. The body is validated as `vams-rules-v1` when it declares that format, otherwise as a JSON Schema draft-07 subset; only `vams-rules-v1` schemas are evaluated."
+            description: "Registers a compliance schema body under a name. Registering a name that already exists writes the next version of that schema. The body must be a `vams-rules-v1` document (`schemaFormat` plus `rules`); any other body is rejected with `schemaBody must be a vams-rules-v1 document`."
             requestBody:
                 required: true
                 content:
@@ -9218,7 +9218,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         put:
             summary: "Update a compliance schema."
-            description: "Writes the next version of a compliance schema. Fields omitted from the request carry over from the latest version. A system schema is only updated by the system user."
+            description: "Writes the next version of a compliance schema. Fields omitted from the request carry over from the latest version; a replacement `schemaBody` must be a `vams-rules-v1` document. A system schema is only updated by the system user. An exception granted against the previous version is superseded by the next evaluation."
             parameters:
                 - name: schemaName
                   in: path
@@ -9512,7 +9512,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}/{assetId}:
         post:
             summary: "Evaluate an asset."
-            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none. Metadata and relationship rules complete in the request; a pipeline rule launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes."
+            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata and relationship rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined."
             parameters:
                 - name: databaseId
                   in: path
@@ -9814,7 +9814,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/quarantine/{databaseId}/{assetId}/exception:
         post:
             summary: "Grant an exception to a quarantined asset."
-            description: "Sets a quarantined asset to `compliant`, records the exception (reason, grantor, time) on its compliance record, and writes an `exception_granted` audit entry."
+            description: "Moves a quarantined asset to the `exception` state, records the exception (reason, grantor, time, and the bound schema's name and current version as `exceptionSchemaName` / `exceptionSchemaVersion`) on its compliance record, clears `quarantineReason`, and writes an `exception_granted` audit entry. While the exception is active, a re-evaluation against that schema version records its violations on the evaluation (`exceptionApplied`) but leaves the asset in `exception`; an evaluation against another schema or a newer version supersedes it (`exception_superseded`) and applies the verdict normally."
             parameters:
                 - name: databaseId
                   in: path
@@ -9861,10 +9861,53 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
             security:
                 - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Revoke an asset's active exception."
+            description: "Clears the exception fields and returns the asset to the state its last evaluation's verdict maps to — `quarantined` again, with `quarantineReason` restored and the asset's subscribers notified, when that verdict was quarantined — or to `pending_evaluation` when the asset has no recorded evaluation. Writes an `exception_revoked` audit entry. The request carries no body."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: path
+                  description: "Asset identifier."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Exception revoked.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/revokeExceptionResponse"
+                "400":
+                    description: Invalid parameters, the asset has no compliance record, or no exception is active.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
     /compliance/cascades:
         get:
             summary: "List pending cascades."
-            description: "Returns every cascade in the `pending_approval` state that the caller may read, newest first."
+            description: "Returns every cascade in the `pending_approval` state that the caller may read, newest first. A row is listed only when the caller may read both the cascade and the compliance evaluations of the trigger asset's database; each row carries `databaseId` / `assetId` naming the trigger asset beside `triggeredByDatabaseId` / `triggeredByAssetId`."
             responses:
                 "200":
                     description: Pending cascades retrieved successfully.
@@ -10057,7 +10100,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/audit:
         get:
             summary: "Query the compliance audit trail."
-            description: "Returns audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it every event type is read in turn. Entries are filtered to the databases the caller may read."
+            description: "Returns audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it every event type is read in turn. Entries are filtered to those whose database the caller may read (an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId`), so a page may be empty while `NextToken` is present."
             parameters:
                 - name: eventType
                   in: query
@@ -10659,6 +10702,16 @@ components:
                     type: string
                     default: ""
                     description: "Comma-delimited list of allowed file extensions (e.g., 'jpg,png,pdf'). Empty string allows all extensions."
+                complianceSchemaName:
+                    type: string
+                    nullable: true
+                    readOnly: true
+                    description: "Compliance schema bound to the database, written by PUT /compliance/bind/{databaseId}; null when the database has no binding."
+                complianceAutoEval:
+                    type: boolean
+                    nullable: true
+                    readOnly: true
+                    description: "Whether the database's assets are evaluated automatically when created or updated, as set on the binding; null when the database has no binding."
             required:
                 - databaseId
                 - description
@@ -15634,8 +15687,7 @@ components:
                     type: string
                     description: "Human-readable description of the schema."
                 schemaBody:
-                    type: object
-                    description: "Schema definition: a `vams-rules-v1` document (see `vamsRulesV1Schema`) or a JSON Schema draft-07 subset. Only `vams-rules-v1` schemas are evaluated."
+                    $ref: "#/components/schemas/vamsRulesV1Schema"
                 version:
                     type: integer
                     description: "Version number of this row; every registration or update writes the next version."
@@ -15678,7 +15730,7 @@ components:
 
         compliancePipelineRule:
             type: object
-            description: "Runs a VAMS workflow and compares the measurements one of its pipelines writes to `compliance-output.json` against tolerances."
+            description: "Runs a VAMS workflow against a selection of the asset's files and compares the measurements one of its pipelines reports against tolerances. The pipeline reports measurements by writing `compliance-output.json`; when it writes none, only the derived `execution_success` and `processing_duration_seconds` measurements are available to the checks."
             properties:
                 ruleType:
                     type: string
@@ -15687,6 +15739,8 @@ components:
                     $ref: "#/components/schemas/complianceEnforcementLevel"
                 pipelineRef:
                     $ref: "#/components/schemas/compliancePipelineRef"
+                inputFiles:
+                    $ref: "#/components/schemas/compliancePipelineInputFiles"
                 inputParameters:
                     type: object
                     description: "Values handed to the pipeline as template tag values."
@@ -15701,6 +15755,30 @@ components:
                 - enforcement
                 - pipelineRef
                 - checks
+
+        compliancePipelineInputFiles:
+            type: object
+            description: "Which of the asset's files the workflow execution receives. Defaults to `{\"mode\": \"matching\"}`. `matching` lists the asset's current files, applies the workflow's and then each pipeline's effective input-file filters, and finally the rule's own `filter` globs as an allow list, sorted by key. `wholeAsset` sends the asset root (`/`) and is accepted only by a workflow that allows whole-asset selection. `explicit` sends the listed asset-relative `keys`, every one of which must exist among the asset's files. The workflow's input-file arity is honoured: a single-input workflow needs the selection to resolve to exactly one file, a multi-input workflow receives every match (at least one), and a workflow that takes no input files receives none. A selection that cannot be satisfied is recorded as that rule's `error` result with a generic message and no file names."
+            properties:
+                mode:
+                    type: string
+                    enum: [matching, wholeAsset, explicit]
+                    default: matching
+                filter:
+                    type: array
+                    description: "Glob patterns (1-256 characters each, at most 32) applied to the asset-relative file keys as an allow list. Accepted only with `matching`."
+                    maxItems: 32
+                    items:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                keys:
+                    type: array
+                    description: "Asset-relative file keys, each starting with `/`. Required with `explicit` and refused with any other mode; 1-64 entries."
+                    minItems: 1
+                    maxItems: 64
+                    items:
+                        type: string
 
         compliancePipelineRef:
             type: object
@@ -15877,8 +15955,7 @@ components:
                     type: string
                     description: "Name of the schema (3-63 characters; letters, digits, hyphens, underscores)."
                 schemaBody:
-                    type: object
-                    description: "Schema definition: a `vams-rules-v1` document (see `vamsRulesV1Schema`) or a JSON Schema draft-07 subset."
+                    $ref: "#/components/schemas/vamsRulesV1Schema"
                 description:
                     type: string
                     description: "Human-readable description."
@@ -15899,8 +15976,7 @@ components:
             description: "Every field is optional; an omitted field carries over from the latest version."
             properties:
                 schemaBody:
-                    type: object
-                    description: "Replacement schema definition."
+                    $ref: "#/components/schemas/vamsRulesV1Schema"
                 description:
                     type: string
                     description: "Replacement description."
@@ -16119,7 +16195,8 @@ components:
                     enum: [compliant, non_compliant, quarantined, pending_pipeline, error]
                 complianceState:
                     type: string
-                    enum: [compliant, non_compliant, quarantined, pending_evaluation, unknown]
+                    enum: [compliant, non_compliant, quarantined, exception, pending_evaluation, unknown]
+                    description: "The asset state the verdict maps to. `exception` when the verdict failed while a quarantine exception against the schema evaluated is active: the asset stays released."
                 ruleResults:
                     type: array
                     description: "Results of the rules that completed in the request."
@@ -16201,6 +16278,9 @@ components:
                 ruleResults:
                     type: string
                     description: "JSON-encoded list of rule results (see `complianceRuleResult`)."
+                exceptionApplied:
+                    type: boolean
+                    description: "`true` when the evaluation ran while a quarantine exception against this schema version was active: the violations are recorded as computed, but the asset state stayed released (`exception` on a failing verdict, never `quarantined`)."
                 pipelineRulesPending:
                     type: string
                     description: "JSON-encoded pipeline rules awaiting their workflow execution. Present while `status` is `pending_pipeline`."
@@ -16261,7 +16341,8 @@ components:
                     type: string
                 complianceState:
                     type: string
-                    enum: [compliant, non_compliant, pending_evaluation, quarantined, unknown]
+                    enum: [compliant, non_compliant, pending_evaluation, quarantined, exception, unknown]
+                    description: "`exception` is an asset whose latest evaluation failed while a quarantine exception was active: released, never quarantined, with the violations kept on the evaluation."
                 schemaName:
                     type: string
                     nullable: true
@@ -16283,9 +16364,10 @@ components:
                 quarantineReason:
                     type: string
                     nullable: true
-                    description: "Messages of the rules that failed, present while the asset is quarantined."
+                    description: "Messages of the rules that failed, present while the asset is quarantined; cleared when an exception is granted."
                 exceptionGranted:
                     type: boolean
+                    description: "`true` while an exception is active. Revoking or superseding the exception sets it to `false` and clears the other exception fields."
                 exceptionReason:
                     type: string
                 exceptionGrantedBy:
@@ -16293,6 +16375,12 @@ components:
                 exceptionGrantedAt:
                     type: string
                     format: date-time
+                exceptionSchemaName:
+                    type: string
+                    description: "Schema the exception was granted against (the asset's bound schema at the time)."
+                exceptionSchemaVersion:
+                    type: integer
+                    description: "`internalVersion` of that schema when the exception was granted. An evaluation against another schema name or a newer version supersedes the exception."
                 assetName:
                     type: string
                     description: "Display name of the asset. Present on the database overview and the quarantine listing."
@@ -16321,6 +16409,9 @@ components:
                             type: integer
                         quarantined:
                             type: integer
+                        exception:
+                            type: integer
+                            description: "Assets released under an active quarantine exception."
                         unknown:
                             type: integer
                 assets:
@@ -16342,7 +16433,7 @@ components:
             properties:
                 quarantinedAssets:
                     type: array
-                    description: "One page of quarantined assets, filtered to the databases the caller may read; may be empty while `NextToken` is present."
+                    description: "One page of assets in state `quarantined` (an asset released under an exception is not listed), filtered to the databases the caller may read; may be empty while `NextToken` is present."
                     items:
                         $ref: "#/components/schemas/complianceState"
                 NextToken:
@@ -16376,10 +16467,34 @@ components:
                     type: string
                 grantedBy:
                     type: string
+                complianceState:
+                    type: string
+                    enum: [exception]
             required:
                 - message
                 - reason
                 - grantedBy
+                - complianceState
+
+        revokeExceptionResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    enum: ["Exception revoked"]
+                databaseId:
+                    type: string
+                assetId:
+                    type: string
+                complianceState:
+                    type: string
+                    enum: [compliant, non_compliant, quarantined, pending_evaluation, unknown]
+                    description: "The state the asset returned to: its last evaluation's verdict, or `pending_evaluation` when it has no recorded evaluation."
+            required:
+                - message
+                - databaseId
+                - assetId
+                - complianceState
 
         complianceMessageResponse:
             type: object
@@ -16402,6 +16517,12 @@ components:
                     type: string
                 triggeredByAssetId:
                     type: string
+                databaseId:
+                    type: string
+                    description: "Database of the trigger asset (a copy of `triggeredByDatabaseId`). Present on the rows of the pending-cascade listing."
+                assetId:
+                    type: string
+                    description: "The trigger asset (a copy of `triggeredByAssetId`). Present on the rows of the pending-cascade listing."
                 triggerReason:
                     type: string
                 createdAt:
@@ -16550,6 +16671,8 @@ components:
                         - compliance_check
                         - quarantine_released
                         - exception_granted
+                        - exception_revoked
+                        - exception_superseded
                         - schema_bound_to_database
                         - schema_unbound_from_database
                         - schema_bound_to_asset

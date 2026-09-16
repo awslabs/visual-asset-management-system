@@ -513,7 +513,8 @@ def test_no_read_tool_calls_a_mutating_apiclient_method():
         "complete_",
         # The compliance write verbs: none deletes stored data, but every one of them changes state
         # or starts compute, and a read-section placement would reach them with both gates off.
-        "bind_", "unbind_", "evaluate_", "sweep_", "release_", "grant_", "approve_", "reject_",
+        "bind_", "unbind_", "evaluate_", "sweep_", "release_", "grant_", "revoke_", "approve_",
+        "reject_",
     )
 
     offenders = []

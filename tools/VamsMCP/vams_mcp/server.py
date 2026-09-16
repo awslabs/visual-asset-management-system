@@ -1509,8 +1509,10 @@ def get_compliance_schema(schema_name: str) -> Dict[str, Any]:
     A vams-rules-v1 body is `{"schemaFormat": "vams-rules-v1", "rules": {<ruleName>: {ruleType,
     enforcement, ...}}}`; a pipeline rule's `pipelineRef` names the workflow it executes
     (databaseId — the WORKFLOW's database — and workflowId) and the pipeline whose measurements its
-    checks read (pipelineDatabaseId, pipelineId, optional templateId). An optional `extends` names a
-    parent schema whose rules are inherited.
+    checks read (pipelineDatabaseId, pipelineId, optional templateId), and its `inputFiles`
+    (`mode` matching / wholeAsset / explicit, with `filter` globs or explicit `keys`) selects
+    which of the asset's files the execution receives. An optional `extends` names a parent
+    schema whose rules are inherited.
     """
     return CLIENT.api.get_compliance_schema(schema_name)
 
@@ -1544,12 +1546,16 @@ def get_compliance_bindings(
 def get_asset_compliance_state(database_id: str, asset_id: str) -> Dict[str, Any]:
     """Read one asset's compliance record.
 
-    `complianceState` is one of compliant, non_compliant, pending_evaluation, quarantined or
-    unknown; `schemaName` / `schemaSource` (database or asset) say which binding governs it. A
-    quarantined record carries `quarantineReason`; a released-with-exception record carries
-    `exceptionGranted`, `exceptionReason` and `exceptionGrantedBy`. An asset that is not tracked
-    answers state `unknown` with a null schemaName rather than an error, so `unknown` means "no
-    schema is bound", not "the asset does not exist".
+    `complianceState` is one of compliant, non_compliant, pending_evaluation, quarantined,
+    exception or unknown; `schemaName` / `schemaSource` (database or asset) say which binding
+    governs it. A quarantined record carries `quarantineReason`. A record in state `exception`
+    holds an active quarantine exception: `exceptionGranted`, `exceptionReason`,
+    `exceptionGrantedBy`, `exceptionGrantedAt`, plus `exceptionSchemaName` /
+    `exceptionSchemaVersion` naming the schema name and version the exception is scoped to — a
+    re-evaluation against that version records its violations on the evaluation row but keeps the
+    asset released, while an evaluation against another schema or a newer version supersedes the
+    exception. An asset that is not tracked answers state `unknown` with a null schemaName rather
+    than an error, so `unknown` means "no schema is bound", not "the asset does not exist".
     """
     return CLIENT.api.get_compliance_state(database_id, asset_id)
 
@@ -1562,8 +1568,8 @@ def get_database_compliance_overview(
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Read a database's compliance overview: `totalAssets` and a per-state `summary` (compliant,
-    non_compliant, pending_evaluation, quarantined, unknown) covering EVERY tracked asset, plus
-    `assets` — ONE PAGE of their records, each with its `assetName`, in assetId order.
+    non_compliant, pending_evaluation, quarantined, exception, unknown) covering EVERY tracked
+    asset, plus `assets` — ONE PAGE of their records, each with its `assetName`, in assetId order.
 
     Only assets with a compliance record are counted — an asset in a database with no binding is
     absent, not `unknown`. The response is the route's own page, not a walk: `max_items` is the
@@ -1588,7 +1594,9 @@ def list_compliance_evaluations(
 
     Each row carries evaluationId, schemaName, evaluatedAt, the verdict / complianceState once the
     evaluation completed, ruleResults, and — for an evaluation with pipeline rules — the
-    `executionId` of the workflow execution that produced the measurements.
+    `executionId` of the workflow execution that produced the measurements. A row with
+    `exceptionApplied` true ran while a quarantine exception was active: its violations are
+    recorded as computed but the asset stayed released (state `exception`, never quarantined).
 
     The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
     and `NextToken` continues the walk — pass it back as `starting_token`. Do not conclude an asset
@@ -1617,9 +1625,11 @@ def list_quarantined_assets(
     """List the quarantined assets the caller may read, across every database (auto-paginated).
 
     Each item is the asset's compliance record (databaseId, assetId, assetName, schemaName,
-    quarantineReason, updatedAt). The route filters each page to the caller's databases AFTER
-    reading it, so a page can be empty while a token remains — the walk keeps following the token,
-    and an empty `Items` with `truncated` set does not mean nothing is quarantined.
+    quarantineReason, updatedAt). Only assets in state `quarantined` are listed — an asset released
+    under an exception (state `exception`) is not. The route filters each page to the caller's
+    databases AFTER reading it, so a page can be empty while a token remains — the walk keeps
+    following the token, and an empty `Items` with `truncated` set does not mean nothing is
+    quarantined.
 
     The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
     and `NextToken` continues the walk — pass it back as `starting_token`.
@@ -1642,10 +1652,12 @@ def list_compliance_cascades() -> Dict[str, Any]:
     """List cascades AWAITING APPROVAL, as `Items` with `count`.
 
     Only cascades in state pending_approval are listed; an executing, completed or aborted cascade
-    is read with get_compliance_cascade() by id. Each item carries cascadeId, triggeredByDatabaseId,
-    triggeredByAssetId, triggerReason, createdAt and approvalTimeoutAt (after which an unapproved
-    cascade expires). The route returns the whole list in one response and takes no paging
-    parameters.
+    is read with get_compliance_cascade() by id. Each item carries cascadeId, `databaseId` and
+    `assetId` (the trigger asset, copied from triggeredByDatabaseId / triggeredByAssetId, which are
+    present too), triggerReason, createdAt and approvalTimeoutAt (after which an unapproved cascade
+    expires). Only cascades whose trigger asset's database the caller may read are listed, so a
+    short list is a permission boundary as much as a queue length. The route returns the whole
+    list in one response and takes no paging parameters.
     """
     return _single_response_list(CLIENT.api.list_compliance_cascades(), "cascades")
 
@@ -1677,10 +1689,12 @@ def query_compliance_audit(
 
     `event_type` narrows to one kind of entry (schema_bound_to_database, schema_bound_to_asset,
     schema_unbound_from_database, schema_unbound_from_asset, schema_deleted, compliance_check,
-    quarantine_released, exception_granted, cascade_triggered, cascade_approved, ...); without it
-    every event type is read in turn and the token carries the position of that walk. `start_date`
-    / `end_date` are ISO 8601 bounds on the entry timestamp. Use get_asset_compliance_audit() for
-    one asset.
+    quarantine_released, exception_granted, exception_revoked, exception_superseded,
+    cascade_triggered, cascade_approved, ...); without it every event type is read in turn and the
+    token carries the position of that walk. `start_date` / `end_date` are ISO 8601 bounds on the
+    entry timestamp. The trail is filtered to the entries whose database the caller may read, so
+    a short page is a permission boundary as much as a quiet trail. Use
+    get_asset_compliance_audit() for one asset.
 
     The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
     and `NextToken` continues the walk — pass it back as `starting_token` (with the same filters,
@@ -2247,19 +2261,33 @@ if CONFIG.enable_writes:
     ) -> Dict[str, Any]:
         """Register a compliance schema, or a new version of one that already exists.
 
-        `schema_body` is the rule document: `{"schemaFormat": "vams-rules-v1", "rules": {<name>:
-        {ruleType, enforcement, checks, ...}}}` with ruleType one of pipeline / metadata /
-        relationship and enforcement one of quarantine / warn / inform. A pipeline rule's
-        `pipelineRef` takes databaseId (the WORKFLOW's database; GLOBAL allowed), workflowId,
-        pipelineDatabaseId (GLOBAL allowed), pipelineId and an optional templateId; a metadata rule's
-        `metadataSchemaRef` takes databaseId and schemaName; each rule needs at least one check. A
-        plain JSON Schema (draft-07 subset) body is also accepted. Read an existing schema with
+        `schema_body` MUST be a vams-rules-v1 document: `{"schemaFormat": "vams-rules-v1", "rules":
+        {<name>: {ruleType, enforcement, checks, ...}}}` with ruleType one of pipeline / metadata /
+        relationship and enforcement one of quarantine / warn / inform; any other body (a plain JSON
+        Schema, an envelope wrapping the document) is refused with `schemaBody must be a
+        vams-rules-v1 document`. A pipeline rule's `pipelineRef` takes databaseId (the WORKFLOW's
+        database; GLOBAL allowed), workflowId, pipelineDatabaseId (GLOBAL allowed), pipelineId and
+        an optional templateId; a metadata rule's `metadataSchemaRef` takes databaseId and
+        schemaName; each rule needs at least one check. Read an existing schema with
         get_compliance_schema() and copy its shape.
+
+        A pipeline rule's `inputFiles` selects which of the asset's files the workflow execution
+        receives: `{"mode": "matching", "filter": ["*.glb"]}` (the default mode) lists the asset's
+        files, applies the workflow's and the pipeline's input-file filters and then the rule's own
+        `filter` globs; `{"mode": "wholeAsset"}` sends the asset root and is accepted only by a
+        workflow that allows whole-asset selection; `{"mode": "explicit", "keys": ["/model.stl"]}`
+        sends the listed asset-relative keys, every one of which must exist. `filter` is accepted
+        only with matching and `keys` only (and required) with explicit. A workflow that takes
+        exactly one input file needs the selection to resolve to exactly one file; otherwise the
+        rule records an `error` result. A pipeline that writes no `compliance-output.json` is
+        checked on the derived `execution_success` / `processing_duration_seconds` measurements
+        only.
 
         `schema_name` is an id (3-63 characters; letters, digits, hyphens, underscores).
         `database_id` scopes the schema to one database; omitted, it is GLOBAL and any database can
         bind it. Registering an existing name writes the next version rather than failing — assets
-        keep their state until re-evaluated (sweep_compliance_schema()).
+        keep their state until re-evaluated (sweep_compliance_schema()), and an exception granted
+        against the previous version is superseded by that evaluation.
         """
         payload: Dict[str, Any] = {"schemaName": schema_name, "schemaBody": schema_body}
         if database_id:
@@ -2280,10 +2308,13 @@ if CONFIG.enable_writes:
         one is required.
 
         `schema_body` REPLACES the whole rule document rather than merging into it — read the
-        current body with get_compliance_schema() and send the complete set. `database_id` re-scopes
-        the schema (or GLOBAL). A system schema (the deployment's default) cannot be modified.
-        Assets bound to the schema keep their current state until the next evaluation or a
-        sweep_compliance_schema().
+        current body with get_compliance_schema() and send the complete set. It must be a
+        vams-rules-v1 document like create_compliance_schema() takes (a pipeline rule selects its
+        input files through `inputFiles`); any other body is refused. `database_id` re-scopes the
+        schema (or GLOBAL). A system schema (the deployment's default) cannot be modified. Assets
+        bound to the schema keep their current state until the next evaluation or a
+        sweep_compliance_schema(); that evaluation supersedes any exception granted against the
+        previous version.
         """
         payload: Dict[str, Any] = {}
         if schema_body is not None:
@@ -2351,7 +2382,11 @@ if CONFIG.enable_writes:
         `pipelineRulesPending` counts them, and the final verdict appears in
         get_asset_compliance_state() / list_compliance_evaluations() once the workflow finishes.
         Because a schema with pipeline rules launches compute, keep this tool out of `autoApprove`.
-        A quarantine-level failure quarantines the asset at once.
+        A quarantine-level failure quarantines the asset at once — unless the asset holds an active
+        exception against the schema evaluated, in which case the violations are recorded on the
+        evaluation (`exceptionApplied`) and the asset stays released in state `exception`. Naming
+        `schema_name` evaluates against that schema WITHOUT changing the asset's binding; the
+        response's `schemaName` says which schema was used.
         """
         return CLIENT.api.evaluate_asset_compliance(database_id, asset_id, schema_name=schema_name)
 
@@ -2381,17 +2416,40 @@ if CONFIG.enable_writes:
 
         The release and `reason` are written to the audit trail. Nothing prevents the next
         evaluation from quarantining the asset again — use grant_quarantine_exception() to record a
-        deliberate waiver instead. An asset that is not quarantined is refused.
+        deliberate waiver that survives re-evaluation (state `exception`) instead. An asset that is
+        not quarantined is refused.
         """
         return CLIENT.api.release_quarantine(database_id, asset_id, reason=reason)
 
     @mcp.tool()
     @tool_result
     def grant_quarantine_exception(database_id: str, asset_id: str, reason: str) -> Dict[str, Any]:
-        """Grant a quarantined asset an exception: it returns to compliant with `exceptionGranted`,
-        the required `reason` and the granting user recorded on its compliance record and in the
-        audit trail. An asset that is not quarantined is refused."""
+        """Grant a quarantined asset an exception: it moves to state `exception` (released, never
+        quarantined) with `exceptionGranted`, the required `reason` and the granting user recorded
+        on its compliance record and in the audit trail (`exception_granted`).
+
+        The exception is scoped to the asset's bound schema at its CURRENT version
+        (`exceptionSchemaName` / `exceptionSchemaVersion`): a re-evaluation against that version
+        records its violations on the evaluation row (`exceptionApplied`) but leaves the asset in
+        `exception`, while an evaluation against another schema or a newer version supersedes it
+        (audit `exception_superseded`) and applies the verdict normally. End it deliberately with
+        revoke_quarantine_exception(). An asset that is not quarantined is refused."""
         return CLIENT.api.grant_quarantine_exception(database_id, asset_id, reason)
+
+    @mcp.tool()
+    @tool_result
+    def revoke_quarantine_exception(database_id: str, asset_id: str) -> Dict[str, Any]:
+        """Revoke an asset's active quarantine exception. Returns `complianceState`, the state the
+        asset is in afterwards.
+
+        The exception fields are cleared and the asset returns to the state its LAST evaluation's
+        verdict maps to — `quarantined` again (with `quarantineReason` restored and its subscribers
+        notified) when that verdict was quarantined — or to `pending_evaluation` when it has no
+        recorded evaluation; the revocation is written to the audit trail (`exception_revoked`).
+        No reason is taken: the route carries no body. An asset without an active exception is
+        refused with `No active exception`, so check get_asset_compliance_state() first when the
+        state is uncertain."""
+        return CLIENT.api.revoke_quarantine_exception(database_id, asset_id)
 
     @mcp.tool()
     @tool_result

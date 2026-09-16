@@ -16,6 +16,7 @@ is sent as `maxItems` too.
 """
 
 import json
+import re
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -248,6 +249,16 @@ class TestComplianceRequestPathsAndMethods:
         assert calls[3]['endpoint'] == '/compliance/quarantine/my-database/my-asset/exception'
         assert calls[3]['kwargs']['json'] == {'reason': 'waived'}
 
+    def test_revoke_exception_deletes_the_exception_route_without_a_body(self):
+        # Grant and revoke share one route constant: POST grants, DELETE revokes. A DELETE carries
+        # no JSON body, so the recorder must see none.
+        client, calls = _recording_client({'message': 'Exception revoked'})
+        client.revoke_quarantine_exception('my-database', 'my-asset')
+        assert (calls[0]['method'], calls[0]['endpoint']) == (
+            'DELETE', '/compliance/quarantine/my-database/my-asset/exception')
+        assert 'json' not in calls[0]['kwargs']
+        assert 'params' not in calls[0]['kwargs']
+
     def test_quarantine_list_forwards_the_page_size_as_max_items_and_the_token(self):
         client, calls = _recording_client({'quarantinedAssets': []})
         client.list_quarantined_assets(max_items=10, starting_token='tok')
@@ -388,6 +399,21 @@ class TestComplianceErrorMapping:
             client.create_compliance_schema({'schemaName': 'x', 'schemaBody': {'rules': {}}})
         assert 'invalid ruleType' in str(raised.value)
 
+    def test_a_body_that_is_not_vams_rules_v1_is_invalid_compliance_data(self):
+        # Schema create/update accept a vams-rules-v1 document only; the handler's generic message
+        # is the one the user sees.
+        client = _client_with_transport(_ErrorResponse(400, {
+            'message': 'schemaBody must be a vams-rules-v1 document'}))
+        with pytest.raises(InvalidComplianceDataError) as raised:
+            client.create_compliance_schema({'schemaName': 'x', 'schemaBody': {'type': 'object'}})
+        assert 'vams-rules-v1' in str(raised.value)
+
+    def test_revoking_without_an_active_exception_is_invalid_compliance_data(self):
+        client = _client_with_transport(_ErrorResponse(400, {'message': 'No active exception'}))
+        with pytest.raises(InvalidComplianceDataError) as raised:
+            client.revoke_quarantine_exception('my-database', 'my-asset')
+        assert 'No active exception' in str(raised.value)
+
 
 # --- Commands -------------------------------------------------------------------
 
@@ -517,6 +543,22 @@ class TestComplianceSchemaCommands:
                 'compliance', 'schema', 'create', '-n', 'cad-quality', '--schema-file', json.dumps(SCHEMA_BODY)])
             assert result.exit_code != 0
             assert 'At least one rule is required' in result.output
+
+    def test_create_help_describes_the_body_format_and_the_input_file_selection(self, cli_runner):
+        # The help text is the CLI user's reference for the pipeline rule's inputFiles: the three
+        # modes, the single-input arity rule, and that a body other than vams-rules-v1 is rejected.
+        result = cli_runner.invoke(cli, ['compliance', 'schema', 'create', '--help'])
+        assert result.exit_code == 0
+        # Click wraps the paragraphs and may break a hyphenated token across lines.
+        text = re.sub(r'-\n\s+', '-', result.output)
+        assert 'must be a vams-rules-v1 document' in text
+        assert 'Any other body is rejected' in text
+        assert 'JSON Schema' not in text
+        for mode in ('"matching"', '"wholeAsset"', '"explicit"'):
+            assert mode in text
+        assert 'exactly one file' in text
+        assert 'compliance-output.json' in text
+        assert 'execution_success' in text
 
     def test_update_sends_only_the_options_given(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -836,19 +878,41 @@ class TestComplianceEvaluationCommands:
             mocks['api_client'].get_compliance_state.assert_called_once_with('my-database', 'my-asset')
             mocks['api_client'].get_database_compliance_state.assert_not_called()
 
+    def test_state_for_an_asset_under_an_exception_shows_its_scope(self, cli_runner,
+                                                                   generic_command_mocks):
+        # An exception is scoped to the schema name and version it was granted against; the record
+        # carries both so the reader can tell which evaluation will supersede it.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_state.return_value = {
+                'databaseId': 'my-database', 'assetId': 'my-asset', 'complianceState': 'exception',
+                'schemaName': 'cad-quality', 'schemaSource': 'database',
+                'exceptionGranted': True, 'exceptionReason': 'Legacy part',
+                'exceptionGrantedBy': 'user-1', 'exceptionGrantedAt': '2026-09-02T00:00:00+00:00',
+                'exceptionSchemaName': 'cad-quality', 'exceptionSchemaVersion': 3}
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Compliance State: exception' in result.output
+            assert 'Exception Reason: Legacy part' in result.output
+            assert 'Exception Granted At: 2026-09-02T00:00:00+00:00' in result.output
+            assert 'Exception Schema: cad-quality' in result.output
+            assert 'Exception Schema Version: 3' in result.output
+
     def test_state_for_a_database(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].get_database_compliance_state.return_value = {
-                'databaseId': 'my-database', 'totalAssets': 2,
+                'databaseId': 'my-database', 'totalAssets': 3,
                 'summary': {'compliant': 1, 'non_compliant': 0, 'pending_evaluation': 0,
-                            'quarantined': 1, 'unknown': 0},
+                            'quarantined': 1, 'exception': 1, 'unknown': 0},
                 'assets': [dict(STATE_RECORD, assetName='Bracket'),
-                           {'assetId': 'a2', 'complianceState': 'compliant', 'schemaName': 'cad-quality'}]}
+                           {'assetId': 'a2', 'complianceState': 'compliant', 'schemaName': 'cad-quality'},
+                           {'assetId': 'a3', 'complianceState': 'exception', 'schemaName': 'cad-quality'}]}
             result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database'])
             assert result.exit_code == 0
-            assert 'Tracked Assets: 2 (2 on this page)' in result.output
+            assert 'Tracked Assets: 3 (3 on this page)' in result.output
             assert 'quarantined=1' in result.output
+            assert 'exception=1' in result.output
             assert 'my-asset (Bracket): quarantined [cad-quality]' in result.output
+            assert 'a3: exception [cad-quality]' in result.output
             assert 'Next token' not in result.output
             mocks['api_client'].get_database_compliance_state.assert_called_once_with(
                 'my-database', max_items=None, starting_token=None)
@@ -923,9 +987,26 @@ class TestComplianceEvaluationCommands:
             assert result.exit_code == 0
             assert 'Found 2 evaluation(s)' in result.output
             assert 'Execution ID: exec-9' in result.output
+            assert 'Exception Applied' not in result.output
             assert 'Next token' not in result.output
             mocks['api_client'].list_compliance_evaluations.assert_called_once_with(
                 'my-database', 'my-asset', max_items=None, starting_token=None)
+
+    def test_evaluations_flag_an_evaluation_that_ran_under_an_exception(self, cli_runner,
+                                                                       generic_command_mocks):
+        # The violations are recorded as computed, but the asset stayed released: the row says so.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_evaluations.return_value = {'evaluations': [
+                {'evaluationId': 'ev-3', 'schemaName': 'cad-quality', 'verdict': 'quarantined',
+                 'complianceState': 'exception', 'exceptionApplied': True,
+                 'ruleResults': [{'ruleName': 'wall', 'enforcement': 'quarantine', 'passed': False,
+                                  'message': 'too thin'}]}]}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Verdict: quarantined' in result.output
+            assert 'Compliance State: exception' in result.output
+            assert 'Exception Applied: yes' in result.output
+            assert '✗ wall [quarantine]: too thin' in result.output
 
     def test_evaluations_forwards_the_paging_options_and_shows_the_token(self, cli_runner,
                                                                           generic_command_mocks):
@@ -1064,14 +1145,23 @@ class TestComplianceQuarantineCommands:
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].grant_quarantine_exception.return_value = {
                 'message': 'Exception granted for my-database:my-asset', 'reason': 'Legacy part',
-                'grantedBy': 'user-1'}
+                'grantedBy': 'user-1', 'complianceState': 'exception'}
             result = cli_runner.invoke(cli, [
                 'compliance', 'quarantine', 'exception', '-d', 'my-database', '-a', 'my-asset',
                 '--reason', 'Legacy part'])
             assert result.exit_code == 0
             assert 'Granted By: user-1' in result.output
+            assert 'Compliance State: exception' in result.output
             mocks['api_client'].grant_quarantine_exception.assert_called_once_with(
                 'my-database', 'my-asset', 'Legacy part')
+
+    def test_exception_help_names_the_scope_and_the_revoke_command(self, cli_runner):
+        # The help text is where a CLI user learns an exception outlives re-evaluation and how to
+        # end it; both belong there rather than only in the site docs.
+        result = cli_runner.invoke(cli, ['compliance', 'quarantine', 'exception', '--help'])
+        assert result.exit_code == 0
+        assert "'exception' state" in result.output
+        assert 'revoke-exception' in result.output
 
     def test_exception_requires_a_reason(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -1098,6 +1188,63 @@ class TestComplianceQuarantineCommands:
                 '--reason', 'x'])
             assert result.exit_code != 0
 
+    def test_revoke_exception(self, cli_runner, generic_command_mocks):
+        # Revoking returns the asset to its last verdict's state; here that verdict was quarantined.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].revoke_quarantine_exception.return_value = {
+                'message': 'Exception revoked', 'databaseId': 'my-database', 'assetId': 'my-asset',
+                'complianceState': 'quarantined'}
+            result = cli_runner.invoke(cli, [
+                'compliance', 'quarantine', 'revoke-exception', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Exception revoked' in result.output
+            assert 'Asset: my-database:my-asset' in result.output
+            assert 'Compliance State: quarantined' in result.output
+            mocks['api_client'].revoke_quarantine_exception.assert_called_once_with(
+                'my-database', 'my-asset')
+            mocks['api_client'].grant_quarantine_exception.assert_not_called()
+
+    def test_revoke_exception_takes_no_reason(self, cli_runner, generic_command_mocks):
+        # The DELETE route carries no body; a --reason option would be a knob the route ignores.
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, [
+                'compliance', 'quarantine', 'revoke-exception', '-d', 'my-database', '-a', 'my-asset',
+                '--reason', 'x'])
+            assert result.exit_code == 2
+            assert 'No such option' in result.output
+            mocks['api_client'].revoke_quarantine_exception.assert_not_called()
+
+    def test_revoke_exception_json_output(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].revoke_quarantine_exception.return_value = {
+                'message': 'Exception revoked', 'databaseId': 'my-database', 'assetId': 'my-asset',
+                'complianceState': 'pending_evaluation'}
+            result = cli_runner.invoke(cli, [
+                'compliance', 'quarantine', 'revoke-exception', '-d', 'my-database', '-a', 'my-asset',
+                '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output) == {
+                'message': 'Exception revoked', 'databaseId': 'my-database', 'assetId': 'my-asset',
+                'complianceState': 'pending_evaluation'}
+
+    def test_revoke_exception_without_an_active_exception(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].revoke_quarantine_exception.side_effect = InvalidComplianceDataError(
+                "Revoking the exception of asset 'my-asset' failed: No active exception")
+            result = cli_runner.invoke(cli, [
+                'compliance', 'quarantine', 'revoke-exception', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code != 0
+            assert 'No active exception' in result.output
+
+    def test_revoke_exception_asset_not_tracked(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].revoke_quarantine_exception.side_effect = AssetNotFoundError(
+                'Asset not found in compliance tracking')
+            result = cli_runner.invoke(cli, [
+                'compliance', 'quarantine', 'revoke-exception', '-d', 'my-database', '-a', 'gone'])
+            assert result.exit_code != 0
+            assert 'Asset Not Found' in result.output
+
 
 class TestComplianceCascadeCommands:
     def test_list(self, cli_runner, generic_command_mocks):
@@ -1107,6 +1254,20 @@ class TestComplianceCascadeCommands:
             assert result.exit_code == 0
             assert 'Cascade ID: casc-1' in result.output
             assert 'Triggered By: my-database:my-asset' in result.output
+
+    def test_list_reads_the_trigger_asset_from_the_row_ids(self, cli_runner, generic_command_mocks):
+        # A listing row names the trigger asset as databaseId / assetId beside the stored
+        # triggeredBy* attributes; the formatter reads those and falls back to triggeredBy*.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_cascades.return_value = {'cascades': [
+                dict(CASCADE_RECORD, databaseId='my-database', assetId='my-asset'),
+                {'cascadeId': 'casc-2', 'state': 'pending_approval',
+                 'databaseId': 'other-db', 'assetId': 'other-asset'}]}
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'list'])
+            assert result.exit_code == 0
+            assert 'Found 2 cascade(s)' in result.output
+            assert 'Triggered By: my-database:my-asset' in result.output
+            assert 'Triggered By: other-db:other-asset' in result.output
 
     def test_list_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:

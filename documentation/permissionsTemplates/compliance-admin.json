@@ -60,7 +60,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-compliance-evaluations",
-            "description": "Allow viewing and triggering compliance evaluations in {{DATABASE_ID}}",
+            "description": "Allow viewing and triggering compliance evaluations in {{DATABASE_ID}}, and revoking exceptions",
             "objectType": "complianceEvaluation",
             "criteriaAnd": [
                 { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
@@ -68,7 +68,8 @@
             "criteriaOr": [],
             "groupPermissions": [
                 { "action": "GET", "type": "allow" },
-                { "action": "POST", "type": "allow" }
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
             ]
         },
         {
@@ -83,24 +84,32 @@
             ]
         },
         {
-            "name": "{{ROLE_NAME}}-assets-readonly",
-            "description": "Allow read access to assets in {{DATABASE_ID}} for compliance viewing",
+            "name": "{{ROLE_NAME}}-assets-compliance-binding",
+            "description": "Allow reading assets in {{DATABASE_ID}} and binding or unbinding a compliance schema override on them",
             "objectType": "asset",
             "criteriaAnd": [
                 { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
             "criteriaOr": [],
-            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
         },
         {
-            "name": "{{ROLE_NAME}}-database-readonly",
-            "description": "Allow read access to the {{DATABASE_ID}} database entity",
+            "name": "{{ROLE_NAME}}-database-compliance-binding",
+            "description": "Allow reading the {{DATABASE_ID}} database entity and binding or unbinding its compliance schema",
             "objectType": "database",
             "criteriaAnd": [
                 { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
             "criteriaOr": [],
-            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
         }
     ]
 }

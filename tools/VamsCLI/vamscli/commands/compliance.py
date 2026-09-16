@@ -6,14 +6,17 @@ audit trail:
     compliance schema list / get / create / update / delete
     compliance bind / unbind / bindings
     compliance evaluate / sweep / state / evaluations
-    compliance quarantine list / release / exception
+    compliance quarantine list / release / exception / revoke-exception
     compliance cascade list / get / create / approve / reject
     compliance audit
 
 A schema is bound to a database (every asset in it inherits the binding) or to a single asset as an
 override. Evaluation compares an asset against its bound schema's rules; a failed quarantine-level
-rule quarantines the asset until it is released or granted an exception. A cascade re-evaluates the
-dependents of a changed asset, optionally after a human approval.
+rule quarantines the asset until it is released or granted an exception. An exception moves the
+asset to the `exception` state and is scoped to the schema name and version it was granted
+against: re-evaluation records the violations but keeps the asset released until the exception is
+revoked or an evaluation against another schema or a newer version supersedes it. A cascade
+re-evaluates the dependents of a changed asset, optionally after a human approval.
 """
 
 import json
@@ -132,7 +135,7 @@ def format_schema(schema: Dict[str, Any], include_body: bool = False) -> str:
         lines.append(f"Description: {description}")
     body = schema.get('schemaBody')
     if isinstance(body, dict):
-        lines.append(f"Format: {body.get('schemaFormat', 'json-schema')}")
+        lines.append(f"Format: {body.get('schemaFormat', 'N/A')}")
         rules = body.get('rules')
         if isinstance(rules, dict):
             lines.append(f"Rules: {', '.join(rules) if rules else 'none'}")
@@ -202,6 +205,9 @@ def format_state_record(record: Dict[str, Any]) -> str:
         ('quarantineReason', 'Quarantine Reason'),
         ('exceptionReason', 'Exception Reason'),
         ('exceptionGrantedBy', 'Exception Granted By'),
+        ('exceptionGrantedAt', 'Exception Granted At'),
+        ('exceptionSchemaName', 'Exception Schema'),
+        ('exceptionSchemaVersion', 'Exception Schema Version'),
         ('updatedAt', 'Updated'),
     ):
         if record.get(key):
@@ -244,6 +250,8 @@ def format_evaluation(result: Dict[str, Any]) -> str:
         lines.append(f"Evaluated: {result['evaluatedAt']}")
     if result.get('executionId'):
         lines.append(f"Execution ID: {result['executionId']}")
+    if result.get('exceptionApplied'):
+        lines.append("Exception Applied: yes (violations recorded; the asset stays released)")
     pending = result.get('pipelineRulesPending')
     if pending:
         lines.append(f"Pipeline Rules Pending: {pending}")
@@ -293,11 +301,14 @@ def format_quarantine_list(result: Dict[str, Any]) -> str:
 
 
 def format_cascade(cascade: Dict[str, Any]) -> str:
+    # A listing row names the trigger asset as databaseId / assetId beside the stored
+    # triggeredBy* attributes; a single cascade record carries the triggeredBy* attributes only.
+    database_id = cascade.get('databaseId') or cascade.get('triggeredByDatabaseId', 'N/A')
+    asset_id = cascade.get('assetId') or cascade.get('triggeredByAssetId', 'N/A')
     lines = [
         f"Cascade ID: {cascade.get('cascadeId', 'N/A')}",
         f"State: {cascade.get('state', 'N/A')}",
-        f"Triggered By: {cascade.get('triggeredByDatabaseId', 'N/A')}:"
-        f"{cascade.get('triggeredByAssetId', 'N/A')}",
+        f"Triggered By: {database_id}:{asset_id}",
     ]
     for key, label in (
         ('triggerReason', 'Reason'),
@@ -442,12 +453,21 @@ def create_schema(ctx: click.Context, schema_name: str, schema_file: str,
                   database_id: Optional[str], description: Optional[str], json_output: bool):
     """Register a compliance schema.
 
-    The schema body is a vams-rules-v1 document: {"schemaFormat": "vams-rules-v1", "rules": {...}}
-    where each rule has a ruleType (pipeline, metadata or relationship), an enforcement level
-    (quarantine, warn or inform) and its checks. A pipeline rule names the workflow it executes
-    and the pipeline whose measurements its checks read under pipelineRef: databaseId (the
-    workflow's database), workflowId, pipelineDatabaseId, pipelineId and an optional templateId.
-    A plain JSON Schema (draft-07 subset) body is also accepted.
+    The schema body must be a vams-rules-v1 document: {"schemaFormat": "vams-rules-v1",
+    "rules": {...}} where each rule has a ruleType (pipeline, metadata or relationship), an
+    enforcement level (quarantine, warn or inform) and its checks. Any other body is rejected.
+
+    A pipeline rule names the workflow it executes and the pipeline whose measurements its checks
+    read under pipelineRef: databaseId (the workflow's database), workflowId, pipelineDatabaseId,
+    pipelineId and an optional templateId. Its inputFiles selects which of the asset's files the
+    workflow receives: mode "matching" (the default) lists the asset's files, applies the
+    workflow's and the pipeline's input-file filters and the rule's own "filter" globs; mode
+    "wholeAsset" sends the asset root and is accepted only by a workflow that allows whole-asset
+    selection; mode "explicit" sends the listed asset-relative "keys", every one of which must
+    exist. A workflow that takes exactly one input file needs the selection to resolve to exactly
+    one file, otherwise the rule records an error. A pipeline that writes no
+    compliance-output.json is checked on the derived execution_success and
+    processing_duration_seconds measurements only.
 
     Registering a name that already exists writes a new version of that schema.
 
@@ -492,8 +512,11 @@ def update_schema(ctx: click.Context, schema_name: str, schema_file: Optional[st
     """Write a new version of a compliance schema.
 
     At least one of --schema-file, --database-id or --description must be given. The schema body
-    is replaced wholesale, not merged. Assets bound to the schema keep their state until the next
-    evaluation or a 'compliance sweep'.
+    is replaced wholesale, not merged, and must be a vams-rules-v1 document like the one
+    'compliance schema create' takes (its pipeline rules select their input files through
+    inputFiles). Assets bound to the schema keep their state until the next evaluation or a
+    'compliance sweep'; an exception granted against the previous version is superseded by that
+    evaluation.
 
     Examples:
         vamscli compliance schema update -n cad-quality --schema-file cad-quality-v2.json
@@ -695,7 +718,10 @@ def evaluate(ctx: click.Context, database_id: str, asset_id: str, schema_name: O
 
     Metadata and relationship rules are evaluated within the request and their results returned.
     Pipeline rules start a workflow execution and complete asynchronously; the result reports how
-    many are pending, and 'compliance state' shows the final verdict once they finish.
+    many are pending, and 'compliance state' shows the final verdict once they finish. Naming a
+    schema with -n evaluates against it without changing the asset's binding. While the asset
+    holds an active exception against the schema evaluated, a failing verdict is recorded on the
+    evaluation and the asset stays released in the 'exception' state.
 
     Examples:
         vamscli compliance evaluate -d my-database -a my-asset
@@ -770,11 +796,13 @@ def state(ctx: click.Context, database_id: str, asset_id: Optional[str], max_ite
           starting_token: Optional[str], json_output: bool):
     """Show compliance state: one asset's record, or a database's overview.
 
-    The database overview carries a per-state summary and totalAssets covering every tracked
-    asset, and one page of their records as assets; the response carries a NextToken when more
-    exist — pass it back as --starting-token. An asset that is not tracked is reported with state
-    'unknown'. --max-items and --starting-token apply to the overview only; the single-asset route
-    is not paged.
+    complianceState is one of compliant, non_compliant, quarantined, exception (released under an
+    active exception although the last evaluation failed), pending_evaluation or unknown. The
+    database overview carries a per-state summary (one bucket per state, including exception) and
+    totalAssets covering every tracked asset, and one page of their records as assets; the
+    response carries a NextToken when more exist — pass it back as --starting-token. An asset
+    that is not tracked is reported with state 'unknown'. --max-items and --starting-token apply
+    to the overview only; the single-asset route is not paged.
 
     Examples:
         vamscli compliance state -d my-database
@@ -921,8 +949,12 @@ def release(ctx: click.Context, database_id: str, asset_id: str, reason: Optiona
 def exception(ctx: click.Context, database_id: str, asset_id: str, reason: str, json_output: bool):
     """Grant a quarantined asset an exception.
 
-    The asset returns to the compliant state with the exception, its justification and the
-    granting user recorded on its compliance record and in the audit trail.
+    The asset moves to the 'exception' state with the justification and the granting user
+    recorded on its compliance record and in the audit trail. The exception is scoped to the
+    asset's bound schema at its current version: a re-evaluation against that version records
+    any violations on the evaluation but keeps the asset released, while an evaluation against
+    another schema or a newer version supersedes the exception. Use 'quarantine revoke-exception'
+    to end it deliberately.
 
     Examples:
         vamscli compliance quarantine exception -d my-database -a my-asset --reason "Legacy part, waived"
@@ -934,7 +966,40 @@ def exception(ctx: click.Context, database_id: str, asset_id: str, reason: str, 
         result = api_client.grant_quarantine_exception(database_id, asset_id, reason)
         output_result(result, json_output, success_message="✓ Exception granted.",
                       cli_formatter=lambda r: f"  Reason: {r.get('reason', reason)}\n"
-                                              f"  Granted By: {r.get('grantedBy', 'N/A')}")
+                                              f"  Granted By: {r.get('grantedBy', 'N/A')}\n"
+                                              f"  Compliance State: {r.get('complianceState', 'N/A')}")
+        return result
+    except _COMPLIANCE_ERRORS as e:
+        _handle_compliance_error(e, json_output)
+
+
+@quarantine.command('revoke-exception')
+@click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID')
+@click.option('-a', '--asset-id', required=True, help='[REQUIRED] Asset holding an active exception')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def revoke_exception(ctx: click.Context, database_id: str, asset_id: str, json_output: bool):
+    """Revoke an asset's active exception.
+
+    The exception fields are cleared and the asset returns to the state its last evaluation's
+    verdict maps to — quarantined again, with its subscribers notified, when that verdict was
+    quarantined — or to 'pending_evaluation' when it has no recorded evaluation. The revocation
+    is recorded in the audit trail. An asset without an active exception is refused.
+
+    Examples:
+        vamscli compliance quarantine revoke-exception -d my-database -a my-asset
+        vamscli compliance quarantine revoke-exception -d my-database -a my-asset --json-output
+    """
+    # Setup/auth already validated by decorator
+    api_client = _api(ctx)
+    output_status(f"Revoking the exception of asset '{asset_id}'...", json_output)
+    try:
+        result = api_client.revoke_quarantine_exception(database_id, asset_id)
+        output_result(result, json_output, success_message="✓ Exception revoked.",
+                      cli_formatter=lambda r: f"  Asset: {r.get('databaseId', database_id)}:"
+                                              f"{r.get('assetId', asset_id)}\n"
+                                              f"  Compliance State: {r.get('complianceState', 'N/A')}")
         return result
     except _COMPLIANCE_ERRORS as e:
         _handle_compliance_error(e, json_output)
@@ -956,6 +1021,10 @@ def cascade():
 @requires_setup_and_auth
 def list_cascades(ctx: click.Context, json_output: bool):
     """List cascades awaiting approval.
+
+    Each row carries databaseId and assetId naming the trigger asset (beside triggeredByDatabaseId
+    and triggeredByAssetId), and only cascades whose trigger asset's database the caller may read
+    are listed.
 
     Examples:
         vamscli compliance cascade list
@@ -1116,8 +1185,10 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
 
     Without --database-id/--asset-id the global trail is listed, optionally narrowed to one
     --event-type (schema_bound_to_database, schema_bound_to_asset, compliance_check,
-    quarantine_released, exception_granted, cascade_triggered, cascade_approved, ...). With both,
-    one asset's history is listed; that route has no event-type filter.
+    quarantine_released, exception_granted, exception_revoked, exception_superseded,
+    cascade_triggered, cascade_approved, ...); the listing carries only the entries whose database
+    the caller may read. With both, one asset's history is listed; that route has no event-type
+    filter.
 
     Entries are returned one page per call, most recent first. The response carries a NextToken
     when more entries exist; pass it back as --starting-token to read the next page. --limit is

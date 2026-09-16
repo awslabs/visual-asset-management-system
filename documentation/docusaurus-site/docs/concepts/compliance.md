@@ -28,12 +28,22 @@ A compliance schema is a named, versioned set of rules. Every registration or up
 
 A schema whose `isSystem` flag is set is a system schema. Only the system user can register one, write a new version of it, or delete it. The default schema seeded at deployment is a system schema.
 
-### Schema formats
+### Schema format
 
-| Format                     | Description                                                                                                                                                                                                                          |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **vams-rules-v1**          | Named rules of three types, each with an enforcement level; pipeline rules compare measurements against tolerances. The format evaluation understands.                                                                               |
-| **JSON Schema (draft-07)** | A JSON Schema subset validating asset metadata structure. A body in this format is accepted and stored, but an evaluation against it records an `error` status and leaves the asset `unknown`; write new schemas in `vams-rules-v1`. |
+A schema body is a `vams-rules-v1` document: named rules of three types, each with an enforcement level, whose pipeline rules compare measurements against tolerances. Registration and update accept only a valid `vams-rules-v1` document — an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. Any other body (a plain JSON Schema, a template file's envelope, an object without rules) is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log rather than returned.
+
+### Schema templates
+
+Four ready-to-register schemas ship in `documentation/complianceSchemaTemplates/`. Each file wraps a `vams-rules-v1` body in an envelope (`metadata`, `schemaName`, `description`, `schemaBody`); register the `schemaBody` under the `schemaName` — the envelope itself is not a schema body and is rejected as one.
+
+| Template                     | Rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `3d-model-quality`           | A `warn` metadata rule against the `GLOBAL` `defaultAsset` metadata schema (required fields, declared types, plus `polygon_count`, `coordinate_system` and `units`), and a `quarantine` pipeline rule that converts the model through the built-in 3D conversion workflow: `pipelineRef` `{"databaseId": "GLOBAL", "workflowId": "conversion-3d-basic", "pipelineDatabaseId": "GLOBAL", "pipelineId": "conversion-3d-basic", "templateId": "convert-to-glb"}`, `inputFiles` `{"mode": "matching", "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.glb", "*.xyz"]}`, with checks on `execution_success` and `processing_duration_seconds`. |
+| `data-classification`        | A `quarantine` metadata rule requiring `classification`, `handling_instructions` and `data_steward`, and an `inform` metadata rule recording `dissemination_controls` and `originating_agency`.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `engineering-asset-standard` | A `warn` metadata rule requiring `owner`, `classification` and `retention_days`, an `inform` metadata rule recording `department` and `review_date`, and a `warn` relationship rule requiring at least one `parentChild` parent.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `retention-policy`           | A `warn` metadata rule requiring `retention_days`, `disposal_method` and `data_owner`, and an `inform` metadata rule recording `last_access_review` and `next_review_date`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+
+The pipeline template's `filter` mirrors the conversion workflow's own input-file filters, and the workflow takes exactly one input file, so a model asset that holds exactly one such file converts; an asset holding several records the rule as an `error` result until the selection is narrowed (a tighter `filter`, or `explicit` keys).
 
 ### The vams-rules-v1 format
 
@@ -75,7 +85,7 @@ A schema names a parent in `extends` and inherits every rule of the parent. A ru
 
 #### Pipeline rules
 
-A pipeline rule names a workflow and the pipeline within that workflow whose output the checks read:
+A pipeline rule names a workflow, the pipeline within that workflow whose output the checks read, and which of the asset's files the execution receives:
 
 ```json
 {
@@ -88,6 +98,7 @@ A pipeline rule names a workflow and the pipeline within that workflow whose out
         "pipelineId": "coord-validate",
         "templateId": "coord-validate-osgb36"
     },
+    "inputFiles": { "mode": "matching", "filter": ["*.las", "*.laz"] },
     "inputParameters": { "expected_crs": "EPSG:27700" },
     "checks": [
         {
@@ -106,11 +117,28 @@ A pipeline rule names a workflow and the pipeline within that workflow whose out
 | `pipelineRef.pipelineDatabaseId` | Database of the pipeline (`GLOBAL` accepted)                                                                                           |
 | `pipelineRef.pipelineId`         | The pipeline within the workflow whose measurements the checks read; the execution request keys the template and tag values by this id |
 | `pipelineRef.templateId`         | Optional. The pipeline template to run; when omitted the pipeline's default template is used                                           |
+| `inputFiles`                     | Optional. Which of the asset's files the execution receives — see [Input files](#input-files); defaults to `{"mode": "matching"}`      |
 | `inputParameters`                | Optional. Values handed to the pipeline as its template tag values                                                                     |
-| `checks[].outputField`           | Key of the `measurements` object in the pipeline's output file                                                                         |
+| `checks[].outputField`           | Key of the `measurements` object in the pipeline's output file, or one of the two derived measurements                                 |
 | `checks[].tolerance`             | The comparison — see [Tolerance operators](#tolerance-operators)                                                                       |
 
-The evaluation launches one workflow execution per pipeline rule through the standard execute-workflow request: the asset is the single input, `pipelineExecutionParameters` carries the template and tag values under the `pipelineId`, and the trigger type is `manual`. The execution runs as the system user and is listed with the workflow's other executions. The evaluation records the `executionId` of each execution and stays `pending_pipeline` (asset state `pending_evaluation`) until every execution has completed. A rule whose workflow or pipeline does not exist, or whose execution cannot be launched, fails at once. Each execution is launched with the evaluation's id as its `executionGroupId`, so the executions of one evaluation form one group and their audit entries and completion events name the evaluation.
+The evaluation launches one workflow execution per pipeline rule through the standard execute-workflow request: the selected files are the inputs, `pipelineExecutionParameters` carries the template and tag values under the `pipelineId`, and the trigger type is `manual`. The execution runs as the system user and is listed with the workflow's other executions. The evaluation records the `executionId` of each execution and stays `pending_pipeline` (asset state `pending_evaluation`) until every execution has completed. A rule whose workflow or pipeline does not exist, whose input selection cannot be satisfied, or whose execution cannot be launched, fails at once. Each execution is launched with the evaluation's id as its `executionGroupId`, so the executions of one evaluation form one group and their audit entries and completion events name the evaluation.
+
+#### Input files
+
+A workflow declares how many input files it takes (`inputFileArity`: one, several or none), whether it accepts the whole asset, and which file names it accepts (`inputFileFilters`); each of its pipelines can narrow those through its own configuration and the chosen template. `inputFiles` selects the asset files the rule hands to that contract, in one of three modes:
+
+| Mode         | Selection                                                                                                                                                                                                                     | Fields                                                     |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `matching`   | The default. The asset's current files are listed, the workflow's input-file filters are applied, then each pipeline's effective filters, then the rule's own `filter` globs as an allow list; the matches are sorted by key. | `filter` — optional glob list (up to 32, 1-256 characters) |
+| `wholeAsset` | The asset root (`/`) is sent. Accepted only when the workflow permits whole-asset selection.                                                                                                                                  | —                                                          |
+| `explicit`   | The listed asset-relative keys are sent. Every key must exist among the asset's files.                                                                                                                                        | `keys` — required (1-64 keys, each starting with `/`)      |
+
+The workflow's arity is honoured after the selection is made: a single-input workflow needs the selection to resolve to exactly one file, a multi-input workflow receives every match and needs at least one, and a workflow that takes no input files receives none. A selection that cannot be satisfied — a whole-asset selection the workflow refuses, a `matching` or `explicit` selection that does not resolve to the number of files the workflow takes, or an `explicit` key the asset does not have — is recorded as that rule's result with `passed: false` and an `error` message that names the condition but no file names or filters. The rule's enforcement level then applies to the verdict as for any other failed rule. `filter` is accepted only with `matching`, and `keys` only — and always — with `explicit`; a schema violating either is rejected at registration.
+
+:::tip[Matching one file of many]
+The built-in conversion workflows take exactly one input file. When an asset holds several files the workflow accepts, narrow the rule's `filter` (for example `["*.glb"]`) or name the file with `explicit` keys so the selection resolves to one.
+:::
 
 #### Pipeline output contract
 
@@ -137,14 +165,14 @@ A pipeline that backs a compliance rule reports its measurements by writing one 
 | `errors`           | array   | Error messages when `status` is `error`                                |
 | `pipelineMetadata` | object  | Optional free-form information about the run                           |
 
-A workflow that writes no compliance output file can still back a pipeline rule. Two measurements are derived for every execution and used when the file is absent:
+`compliance-output.json` is optional. A workflow that writes none can still back a pipeline rule: two measurements are derived for every execution, and when the file is absent they are the only measurements the rule's checks can read — a check on any other `outputField` fails because the field is missing.
 
 | Measurement                   | Value                                                                          |
 | ----------------------------- | ------------------------------------------------------------------------------ |
 | `execution_success`           | `1.0` when the execution succeeded, `0.0` otherwise                            |
 | `processing_duration_seconds` | Wall-clock duration of the execution, from its start and completion timestamps |
 
-A rule can therefore require that an existing workflow succeeds and finishes within a time budget without any change to its pipelines.
+A rule can therefore require that an existing workflow succeeds and finishes within a time budget without any change to its pipelines; the shipped `3d-model-quality` template does exactly that against the built-in 3D conversion workflow.
 
 #### Workflow completion
 
@@ -182,26 +210,27 @@ The database editor's **Compliance Schema** field binds a schema to the database
 
 Every asset with a compliance record has a compliance state:
 
-| State                | Meaning                                                                             | Indicator |
-| -------------------- | ----------------------------------------------------------------------------------- | --------- |
-| `unknown`            | No evaluation has produced a verdict (also the answer for an asset with no record)  | —         |
-| `pending_evaluation` | The asset is bound but not yet evaluated, or a pipeline rule's execution is awaited | Blue      |
-| `compliant`          | Every rule passed, or only `inform`-level rules failed                              | Green     |
-| `non_compliant`      | A `warn`-level rule failed and no `quarantine`-level rule did                       | Yellow    |
-| `quarantined`        | A `quarantine`-level rule failed                                                    | Red       |
+| State                | Meaning                                                                                                             | Indicator |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------- | --------- |
+| `unknown`            | No evaluation has produced a verdict (also the answer for an asset with no record)                                  | —         |
+| `pending_evaluation` | The asset is bound but not yet evaluated, or a pipeline rule's execution is awaited                                 | Blue      |
+| `compliant`          | Every rule passed, or only `inform`-level rules failed                                                              | Green     |
+| `non_compliant`      | A `warn`-level rule failed and no `quarantine`-level rule did                                                       | Yellow    |
+| `quarantined`        | A `quarantine`-level rule failed                                                                                    | Red       |
+| `exception`          | A rule failed while an [exception](#exceptions) is active: the asset stays released and the violations are recorded | Info      |
 
 ## Evaluation
 
 An evaluation checks one asset against one schema and produces a verdict. Evaluations start in four ways:
 
 1. **Automatically** — the compliance trigger subscribes to the asset indexer's Amazon SNS topic and evaluates an asset of a database with `complianceAutoEval` on when the asset is created or updated. An asset without a record is registered under the database binding first. A file written by a workflow execution (object metadata `vams-changesource` of `workflowExecution`) does not trigger an evaluation, and a change to an asset whose evaluation is still awaiting its pipeline rules is coalesced into that evaluation when the evaluation began after the change.
-2. **On demand** — the **Evaluate Now** action on the asset's Compliance tab, or `POST /compliance/evaluate/{databaseId}/{assetId}`.
+2. **On demand** — the **Evaluate Now** action on the asset's Compliance tab, or `POST /compliance/evaluate/{databaseId}/{assetId}`. A request that names a `schemaName` evaluates against that schema without changing the asset's binding; the evaluation record carries the schema used.
 3. **Sweep** — the **Sweep** action on the Compliance Schemas page, or `POST /compliance/sweep/{schemaName}`, evaluates every asset bound to the schema (200 per call).
 4. **Cascade** — an approved cascade evaluates the downstream assets of a parent in dependency order.
 
 An evaluation resolves the schema (merging inherited rules), runs the metadata and relationship rules against the asset's metadata and links, launches a workflow execution for each pipeline rule, and writes an evaluation record, the asset's compliance state and a `compliance_check` audit entry. With no pipeline rules the verdict is final at once; otherwise the evaluation stays `pending_pipeline` until the [workflow completion](#workflow-completion) events arrive.
 
-The verdict follows the highest-severity failure: any `quarantine`-level failure → `quarantined`; otherwise any `warn`-level failure → `non_compliant`; otherwise `compliant`. Each rule's outcome is kept on the evaluation record as a rule result (`ruleName`, `ruleType`, `enforcement`, `passed`, `message`, and for pipeline rules the `measured` and `expected` values), and the messages of the failed rules as `violations`.
+The verdict follows the highest-severity failure: any `quarantine`-level failure → `quarantined`; otherwise any `warn`-level failure → `non_compliant`; otherwise `compliant`. While the asset holds an active [exception](#exceptions) against the schema version evaluated, a failing verdict maps to the `exception` state instead. Each rule's outcome is kept on the evaluation record as a rule result (`ruleName`, `ruleType`, `enforcement`, `passed`, `message`, and for pipeline rules the `measured` and `expected` values), and the messages of the failed rules as `violations`.
 
 ## Quarantine
 
@@ -211,7 +240,17 @@ A quarantined asset leaves quarantine in three ways:
 
 -   **Re-evaluation** — an evaluation in which every `quarantine`-level rule passes moves the asset to the state its verdict maps to; a return to `compliant` records a `quarantine_released` audit entry.
 -   **Release** — sets the asset to `compliant` without recording an exception. The next failing evaluation quarantines it again.
--   **Exception** — sets the asset to `compliant` and records the exception on its compliance record and in the audit trail with the reason and the user who granted it, documenting why the asset remains available despite the failure.
+-   **Exception** — moves the asset to the `exception` state and records the exception on its compliance record and in the audit trail with the reason and the user who granted it, documenting why the asset remains available despite the failure. An exception outlives re-evaluation; see [Exceptions](#exceptions).
+
+### Exceptions
+
+An exception is scoped to the schema the asset was bound to when it was granted, at that schema's version at the time: the compliance record stores them as `exceptionSchemaName` and `exceptionSchemaVersion`, beside `exceptionGranted`, `exceptionReason`, `exceptionGrantedBy` and `exceptionGrantedAt`. Granting an exception requires the asset to be `quarantined`; it moves the asset to `exception` and clears `quarantineReason`. The exception then holds until it is revoked or superseded:
+
+-   **Re-evaluation against the same schema version** records the rule results and violations on the evaluation as computed and marks the evaluation `exceptionApplied`. The asset becomes `compliant` when the verdict is compliant and `exception` when any rule fails — it is never quarantined or marked `non_compliant`, no quarantine notification is sent, and the exception fields are retained. While pipeline rules are awaited the asset is `pending_evaluation` as for any evaluation.
+-   **Superseding** — an evaluation against a different schema name, or against a newer version of the same schema (any registration or update writes one), clears the exception, records an `exception_superseded` audit entry and applies its verdict normally.
+-   **Revoking** — `DELETE /compliance/quarantine/{databaseId}/{assetId}/exception`, the **Revoke exception** action on the asset's Compliance tab, or `vamscli compliance quarantine revoke-exception` clears the exception and returns the asset to the state its last evaluation's verdict maps to: quarantined again, with `quarantineReason` restored and its subscribers notified, when that verdict was quarantined; `pending_evaluation` when the asset has no recorded evaluation. An `exception_revoked` audit entry is written. Revoking takes no reason.
+
+An asset in the `exception` state is not listed on the Quarantine page, and the download guard (`app.compliance.quarantineBlocksDownload`) never applies to it; the database overview counts it in the `exception` bucket of its summary.
 
 ## Cascades
 
@@ -230,7 +269,7 @@ A pending cascade records an `approvalTimeoutAt` timestamp 24 hours after its cr
 
 ## Audit trail
 
-Every compliance action writes an entry to the compliance audit table: evaluations (`compliance_check`), quarantine releases and exceptions, schema bindings and unbindings at both levels, schema deletions, and cascade creation, approval, rejection and completion. An entry carries the actor, the affected `databaseId` and `assetId`, JSON-encoded details, and — where the action changed an asset's state — the previous and new compliance state. The trail is queried per asset or across the deployment, filtered by event type and time window; see [Compliance API — Event types](../api/compliance.md#event-types).
+Every compliance action writes an entry to the compliance audit table: evaluations (`compliance_check`), quarantine releases, exceptions granted, revoked and superseded, schema bindings and unbindings at both levels, schema deletions, and cascade creation, approval, rejection and completion. An entry carries the actor, the affected `databaseId` and `assetId`, JSON-encoded details, and — where the action changed an asset's state — the previous and new compliance state. The trail is queried per asset or across the deployment, filtered by event type and time window; the deployment-wide listing returns only the entries whose database the caller may read. See [Compliance API — Event types](../api/compliance.md#event-types).
 
 ## API endpoints
 
@@ -256,6 +295,7 @@ All compliance endpoints are under the `/compliance` prefix. The [Compliance API
 | GET    | `/compliance/quarantine`                                  | List quarantined assets                      |
 | POST   | `/compliance/quarantine/{databaseId}/{assetId}/release`   | Release an asset from quarantine             |
 | POST   | `/compliance/quarantine/{databaseId}/{assetId}/exception` | Grant an exception to a quarantined asset    |
+| DELETE | `/compliance/quarantine/{databaseId}/{assetId}/exception` | Revoke an active exception                   |
 | GET    | `/compliance/cascades`                                    | List pending cascades                        |
 | POST   | `/compliance/cascades`                                    | Create a cascade                             |
 | GET    | `/compliance/cascades/{cascadeId}`                        | Get a cascade                                |

@@ -6637,8 +6637,9 @@ class APIClient:
             schema_data: Schema definition:
                 - schemaName: Schema name (required; ID-pattern, 3-63 characters)
                 - schemaBody: The schema document (required) — a vams-rules-v1 document
-                  ({"schemaFormat": "vams-rules-v1", "rules": {...}}) or a JSON Schema
-                  (draft-07 subset)
+                  ({"schemaFormat": "vams-rules-v1", "rules": {...}}); any other body is
+                  rejected. A pipeline rule's `inputFiles` selects which of the asset's files the
+                  workflow receives (mode matching, wholeAsset or explicit)
                 - databaseId: Database the schema is scoped to, or 'GLOBAL' (defaults to GLOBAL)
                 - description: Free text
 
@@ -6797,10 +6798,13 @@ class APIClient:
             schema_name: Schema to evaluate against; defaults to the asset's bound schema
 
         Returns:
-            API response data. For a vams-rules-v1 schema the metadata and relationship rules run
-            synchronously: {message, evaluationId, schemaName, verdict, complianceState,
-            ruleResults, pipelineRulesPending}. For a JSON Schema body a pending evaluation is
-            recorded: {message, evaluationId, schemaName}.
+            API response data: {message, evaluationId, schemaName, verdict, complianceState,
+            ruleResults, pipelineRulesPending}. The metadata and relationship rules run
+            synchronously; each pipeline rule launches a workflow execution and is counted in
+            pipelineRulesPending. While the asset holds an active exception against the schema
+            evaluated, a failing verdict leaves complianceState `exception` rather than
+            quarantining the asset. Naming a schema evaluates against it without changing the
+            asset's binding.
 
         Raises:
             AssetNotFoundError: When the asset does not exist
@@ -6852,8 +6856,12 @@ class APIClient:
 
         Returns:
             API response data: the compliance record (databaseId, assetId, complianceState,
-            schemaName, schemaSource, lastEvaluationId, ...). An asset that is not tracked answers
-            complianceState "unknown" with a null schemaName rather than a 404.
+            schemaName, schemaSource, lastEvaluationId, ...). complianceState is one of compliant,
+            non_compliant, quarantined, exception, pending_evaluation or unknown; an asset in the
+            `exception` state carries the exception fields (exceptionGranted, exceptionReason,
+            exceptionGrantedBy, exceptionGrantedAt, exceptionSchemaName, exceptionSchemaVersion).
+            An asset that is not tracked answers complianceState "unknown" with a null schemaName
+            rather than a 404.
         """
         endpoint = API_COMPLIANCE_STATE_ASSET.format(databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
@@ -6872,7 +6880,7 @@ class APIClient:
 
         Returns:
             API response data: {databaseId, totalAssets, summary: {compliant, non_compliant,
-            pending_evaluation, quarantined, unknown}, assets: [records with assetName],
+            pending_evaluation, quarantined, exception, unknown}, assets: [records with assetName],
             "NextToken"?: str}. `totalAssets` and `summary` cover every tracked asset; `assets` is
             one page of them in assetId order.
 
@@ -6935,11 +6943,15 @@ class APIClient:
         Grant a quarantined asset an exception using the
         /compliance/quarantine/{databaseId}/{assetId}/exception POST endpoint.
 
+        The asset moves to the `exception` state. The exception is scoped to the asset's bound
+        schema at its current version and holds until it is revoked or an evaluation against a
+        different schema or a newer version supersedes it.
+
         Args:
             reason: Required justification, recorded on the asset and in the audit trail
 
         Returns:
-            API response data: {message, reason, grantedBy}
+            API response data: {message, reason, grantedBy, complianceState}
 
         Raises:
             AssetNotFoundError: When the asset is not tracked for compliance
@@ -6951,6 +6963,27 @@ class APIClient:
             'POST', endpoint, f"Granting an exception for asset '{asset_id}'",
             body={'reason': reason})
 
+    def revoke_quarantine_exception(self, database_id: str, asset_id: str) -> Dict[str, Any]:
+        """
+        Revoke an asset's active exception using the
+        /compliance/quarantine/{databaseId}/{assetId}/exception DELETE endpoint.
+
+        The exception fields are cleared and the asset returns to the state its last evaluation's
+        verdict maps to — quarantined again when that verdict was quarantined — or to
+        `pending_evaluation` when it has no recorded evaluation.
+
+        Returns:
+            API response data: {message, databaseId, assetId, complianceState}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset has no active exception
+        """
+        endpoint = API_COMPLIANCE_QUARANTINE_EXCEPTION.format(
+            databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'DELETE', endpoint, f"Revoking the exception of asset '{asset_id}'")
+
     # ---- Cascades -----------------------------------------------------
 
     def list_compliance_cascades(self) -> Dict[str, Any]:
@@ -6958,8 +6991,10 @@ class APIClient:
         List cascades awaiting approval using the /compliance/cascades GET endpoint.
 
         Returns:
-            API response data: {"cascades": [...]} — pending_approval cascades only. The route
-            returns the whole list and takes no paging parameters.
+            API response data: {"cascades": [...]} — pending_approval cascades only, each row
+            carrying `databaseId` / `assetId` (the trigger asset) beside `triggeredByDatabaseId` /
+            `triggeredByAssetId`. The route returns the whole list and takes no paging parameters;
+            a row is listed only when the caller may read the trigger asset's database.
         """
         return self._compliance_request(
             'GET', API_COMPLIANCE_CASCADES, "Failed to list compliance cascades")
@@ -7072,8 +7107,9 @@ class APIClient:
 
         Args:
             event_type: Only entries of this type (schema_bound_to_database, compliance_check,
-                quarantine_released, exception_granted, cascade_triggered, ...). Without it the
-                handler reads every event type in turn.
+                quarantine_released, exception_granted, exception_revoked, exception_superseded,
+                cascade_triggered, ...). Without it the handler reads every event type in turn.
+                Entries are filtered to the databases the caller may read.
             start_date / end_date: ISO 8601 bounds on the entry timestamp
             max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
                 omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. Sent as

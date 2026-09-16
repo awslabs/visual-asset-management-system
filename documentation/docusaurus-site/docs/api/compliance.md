@@ -5,7 +5,7 @@ The Compliance API registers compliance schemas, binds them to databases and ass
 All compliance endpoints live under the `/compliance` prefix. Identifiers follow the VAMS conventions: a `databaseId` or `schemaName` is 3-63 characters of letters, digits, hyphens and underscores (`GLOBAL` is accepted wherever a database is named), and an `assetId` follows the asset identifier rules.
 
 :::info[Authorization]
-All compliance endpoints require a valid credential in the `Authorization` header and are subject to two-tier authorization: API-level access to the `/compliance/*` route is checked first, followed by object-level Casbin enforcement on one of three object types. Schema, binding and sweep operations are enforced on a `complianceSchema` object (`complianceSchemaName`); evaluation, state, quarantine and audit operations on a `complianceEvaluation` object (`databaseId`, `complianceState`); cascade operations on a `complianceCascade` object (`cascadeId`). Operations that reach into a database or asset are additionally enforced on that target: binding, unbinding and reading a database's bindings on the `database` object, binding and unbinding an asset override on the `asset` object, a sweep on the `complianceEvaluation` object of each bound database (assets in databases the caller may not evaluate are skipped and counted), and creating, approving, rejecting or reading a cascade on the `complianceEvaluation` object of the triggering asset's database. The object action mirrors the HTTP method. Listings return only the items the caller may `GET`.
+All compliance endpoints require a valid credential in the `Authorization` header and are subject to two-tier authorization: API-level access to the `/compliance/*` route is checked first, followed by object-level Casbin enforcement on one of three object types. Schema, binding and sweep operations are enforced on a `complianceSchema` object (`complianceSchemaName`); evaluation, state, quarantine and audit operations on a `complianceEvaluation` object (`databaseId`, `complianceState`); cascade operations on a `complianceCascade` object (`cascadeId`). Operations that reach into a database or asset are additionally enforced on that target: binding, unbinding and reading a database's bindings on the `database` object, binding and unbinding an asset override on the `asset` object, a sweep on the `complianceEvaluation` object of each bound database (assets in databases the caller may not evaluate are skipped and counted), and creating, approving, rejecting or reading a cascade on the `complianceEvaluation` object of the triggering asset's database. The object action mirrors the HTTP method. Listings return only the items the caller may `GET`: the global audit trail and the pending-cascade listing return only rows whose database the caller may read, so a page can be empty while `NextToken` is present.
 :::
 
 :::note[Error responses]
@@ -71,13 +71,13 @@ POST /compliance/schemas
 
 ### Request body
 
-| Field         | Type    | Required | Description                                                                                                                                                                      |
-| ------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaName`  | string  | Yes      | Schema name (3-63 chars, alphanumeric, hyphens, underscores)                                                                                                                     |
-| `schemaBody`  | object  | Yes      | The schema definition. A body whose `schemaFormat` is `vams-rules-v1` is validated as a rule set; any other object is validated as a JSON Schema draft-07 subset (see the note). |
-| `description` | string  | No       | Human-readable description (up to 1024 characters)                                                                                                                               |
-| `databaseId`  | string  | No       | Database to scope the schema to (default `GLOBAL`). A database-scoped schema can only be bound within that database.                                                             |
-| `isSystem`    | boolean | No       | Marks a system schema. Honoured only when the caller is the system user; any other caller's value is ignored.                                                                    |
+| Field         | Type    | Required | Description                                                                                                                                                                                                                                       |
+| ------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaName`  | string  | Yes      | Schema name (3-63 chars, alphanumeric, hyphens, underscores)                                                                                                                                                                                      |
+| `schemaBody`  | object  | Yes      | The schema definition: a `vams-rules-v1` document (`schemaFormat` and `rules`) as described in [Compliance — The vams-rules-v1 format](../concepts/compliance.md#the-vams-rules-v1-format). Any other body is rejected with `400` (see the note). |
+| `description` | string  | No       | Human-readable description (up to 1024 characters)                                                                                                                                                                                                |
+| `databaseId`  | string  | No       | Database to scope the schema to (default `GLOBAL`). A database-scoped schema can only be bound within that database.                                                                                                                              |
+| `isSystem`    | boolean | No       | Marks a system schema. Honoured only when the caller is the system user; any other caller's value is ignored.                                                                                                                                     |
 
 ```json
 {
@@ -93,14 +93,36 @@ POST /compliance/schemas
                 "checks": [
                     { "name": "required_fields", "validateRequired": true, "validateTypes": true }
                 ]
+            },
+            "converts-to-glb": {
+                "ruleType": "pipeline",
+                "enforcement": "quarantine",
+                "pipelineRef": {
+                    "databaseId": "GLOBAL",
+                    "workflowId": "conversion-3d-basic",
+                    "pipelineDatabaseId": "GLOBAL",
+                    "pipelineId": "conversion-3d-basic",
+                    "templateId": "convert-to-glb"
+                },
+                "inputFiles": {
+                    "mode": "matching",
+                    "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.glb", "*.xyz"]
+                },
+                "checks": [
+                    {
+                        "name": "conversion-succeeds",
+                        "outputField": "execution_success",
+                        "tolerance": { "operator": "eq", "value": 1 }
+                    }
+                ]
             }
         }
     }
 }
 ```
 
-:::note[Only vams-rules-v1 schemas are evaluated]
-A JSON Schema draft-07 body is accepted and stored, but an evaluation against it records an `error` status with the message `Schema is not vams-rules-v1 format` and leaves the asset in the `unknown` state. Write new schemas in the `vams-rules-v1` format described in [Compliance](../concepts/compliance.md#compliance-schemas).
+:::note[Only vams-rules-v1 documents are accepted]
+`schemaBody` must be a `vams-rules-v1` document: an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. A plain JSON Schema, a template file's envelope (`metadata`, `schemaName`, `schemaBody`) or any other object is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log. A pipeline rule's `inputFiles` selects which of the asset's files the workflow receives (`matching`, `wholeAsset` or `explicit`); the modes and the arity rule are described in [Pipeline rules](../concepts/compliance.md#pipeline-rules).
 :::
 
 ### Response
@@ -116,11 +138,11 @@ A JSON Schema draft-07 body is accepted and stored, but an evaluation against it
 
 ### Error responses
 
-| Status | Description                                                                |
-| ------ | -------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, invalid schema body, or the scoping database is absent |
-| `403`  | Not authorized                                                             |
-| `500`  | Internal server error                                                      |
+| Status | Description                                                                                                |
+| ------ | ---------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, or the scoping database is absent |
+| `403`  | Not authorized                                                                                             |
+| `500`  | Internal server error                                                                                      |
 
 ---
 
@@ -154,7 +176,7 @@ Same shape as an entry of [List compliance schemas](#list-compliance-schemas).
 
 ## Update a compliance schema
 
-Writes the next version of a schema. Every body field is optional; a field that is omitted carries over from the latest version, so a request may change only the description. The new body is validated the same way as on registration.
+Writes the next version of a schema. Every body field is optional; a field that is omitted carries over from the latest version, so a request may change only the description. A replacement `schemaBody` is validated the same way as on registration and must be a `vams-rules-v1` document. Assets bound to the schema keep their state until their next evaluation, and that evaluation supersedes any exception granted against the previous version.
 
 ```
 PUT /compliance/schemas/{schemaName}
@@ -162,11 +184,11 @@ PUT /compliance/schemas/{schemaName}
 
 ### Request body
 
-| Field         | Type   | Required | Description                             |
-| ------------- | ------ | -------- | --------------------------------------- |
-| `schemaBody`  | object | No       | Replacement schema definition           |
-| `description` | string | No       | Replacement description                 |
-| `databaseId`  | string | No       | Replacement database scope, or `GLOBAL` |
+| Field         | Type   | Required | Description                                                |
+| ------------- | ------ | -------- | ---------------------------------------------------------- |
+| `schemaBody`  | object | No       | Replacement schema definition (a `vams-rules-v1` document) |
+| `description` | string | No       | Replacement description                                    |
+| `databaseId`  | string | No       | Replacement database scope, or `GLOBAL`                    |
 
 A system schema (`isSystem: true`) is updated or deleted only by the system user; any other caller receives `400`.
 
@@ -417,7 +439,9 @@ DELETE /compliance/bind/{databaseId}/{assetId}
 
 ## Evaluate an asset
 
-Evaluates an asset against the named schema, or against its bound schema when the body names none. Metadata and relationship rules complete within the request. Each pipeline rule launches a workflow execution and the evaluation stays `pending_pipeline` (asset state `pending_evaluation`) until the execution completes — see [Pipeline rules](../concepts/compliance.md#pipeline-rules). When the asset has children linked by `parentChild` asset links, a cascade awaiting approval is opened after the evaluation.
+Evaluates an asset against the named schema, or against its bound schema when the body names none. Naming a schema evaluates against it without changing the asset's binding; the evaluation record carries the `schemaName` used. Metadata and relationship rules complete within the request. Each pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and the evaluation stays `pending_pipeline` (asset state `pending_evaluation`) until the execution completes — see [Pipeline rules](../concepts/compliance.md#pipeline-rules). When the asset has children linked by `parentChild` asset links, a cascade awaiting approval is opened after the evaluation.
+
+While the asset holds an active exception against the schema version evaluated, the rule results and violations are recorded on the evaluation as computed, the evaluation carries `exceptionApplied: true`, and a failing verdict leaves the asset in the `exception` state rather than quarantining it; an evaluation against another schema or a newer version supersedes the exception and applies its verdict normally (see [Grant an exception](#grant-an-exception-to-a-quarantined-asset)).
 
 ```
 POST /compliance/evaluate/{databaseId}/{assetId}
@@ -425,9 +449,9 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 
 ### Request body
 
-| Field        | Type   | Required | Description                                              |
-| ------------ | ------ | -------- | -------------------------------------------------------- |
-| `schemaName` | string | No       | Schema to evaluate against; defaults to the bound schema |
+| Field        | Type   | Required | Description                                                                             |
+| ------------ | ------ | -------- | --------------------------------------------------------------------------------------- |
+| `schemaName` | string | No       | Schema to evaluate against; defaults to the bound schema. The binding is left unchanged |
 
 ### Response
 
@@ -453,7 +477,7 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 }
 ```
 
-`verdict` is one of `compliant`, `non_compliant`, `quarantined`, `pending_pipeline` or `error`; `complianceState` is the asset state the verdict maps to. `ruleResults` holds the rules that completed in the request, and `pipelineRulesPending` counts the pipeline rules whose execution is awaited.
+`verdict` is one of `compliant`, `non_compliant`, `quarantined`, `pending_pipeline` or `error`; `complianceState` is the asset state the verdict maps to — `exception` when the verdict failed while an exception is active. `ruleResults` holds the rules that completed in the request, and `pipelineRulesPending` counts the pipeline rules whose execution is awaited.
 
 ### Error responses
 
@@ -539,6 +563,7 @@ GET /compliance/evaluations/{databaseId}/{assetId}
             "verdict": "compliant",
             "violations": [],
             "ruleResults": "[{\"ruleName\": \"required-metadata\", \"ruleType\": \"metadata\", \"enforcement\": \"quarantine\", \"passed\": true}]",
+            "exceptionApplied": false,
             "pipelineExecutions": [
                 {
                     "ruleName": "coord-accuracy",
@@ -556,7 +581,7 @@ GET /compliance/evaluations/{databaseId}/{assetId}
 }
 ```
 
-`status` is `completed`, `pending_pipeline`, `error` or `failed`. `ruleResults` is a JSON-encoded list of rule results; `pipelineExecutions`, `executionId` and `pipelineRuleName` are present on evaluations that launched a workflow execution, and `executionId` is the value the workflow completion event is correlated by. `NextToken` is absent on the last page.
+`status` is `completed`, `pending_pipeline`, `error` or `failed`. `ruleResults` is a JSON-encoded list of rule results; `exceptionApplied` is `true` on an evaluation that ran while an exception against its schema version was active (the violations are recorded, the asset stayed released); `pipelineExecutions`, `executionId` and `pipelineRuleName` are present on evaluations that launched a workflow execution, and `executionId` is the value the workflow completion event is correlated by. `NextToken` is absent on the last page.
 
 ### Error responses
 
@@ -592,7 +617,7 @@ GET /compliance/state/{databaseId}/{assetId}
 }
 ```
 
-An asset with no compliance record is reported with `complianceState` `unknown` and `null` for `schemaName` and `schemaSource`. An asset released by exception carries `exceptionGranted`, `exceptionReason`, `exceptionGrantedBy` and `exceptionGrantedAt`; the rule failures behind a quarantine are summarised in `quarantineReason` while the asset is quarantined and listed in full on the last evaluation's `violations` (see [List the evaluations of an asset](#list-the-evaluations-of-an-asset)).
+`complianceState` is one of `compliant`, `non_compliant`, `quarantined`, `exception`, `pending_evaluation` or `unknown`. An asset with no compliance record is reported with `complianceState` `unknown` and `null` for `schemaName` and `schemaSource`. An asset holding an active exception is in state `exception` and carries `exceptionGranted: true`, `exceptionReason`, `exceptionGrantedBy`, `exceptionGrantedAt`, and `exceptionSchemaName` / `exceptionSchemaVersion` — the schema name and version the exception is scoped to; revoking or superseding the exception sets `exceptionGranted` to `false` and clears the other exception fields. The rule failures behind a quarantine are summarised in `quarantineReason` while the asset is quarantined and listed in full on the last evaluation's `violations` (see [List the evaluations of an asset](#list-the-evaluations-of-an-asset)).
 
 ### Error responses
 
@@ -630,6 +655,7 @@ GET /compliance/state/{databaseId}
         "non_compliant": 0,
         "pending_evaluation": 0,
         "quarantined": 1,
+        "exception": 0,
         "unknown": 0
     },
     "assets": [
@@ -647,7 +673,7 @@ GET /compliance/state/{databaseId}
 }
 ```
 
-`totalAssets` and `summary` cover every tracked asset of the database regardless of the page. `assets` is one page of their records in `assetId` order — each a compliance record as returned by [Get the compliance state of an asset](#get-the-compliance-state-of-an-asset), plus the asset's display name as `assetName` — and `NextToken` is absent on the last page.
+`totalAssets` and `summary` cover every tracked asset of the database regardless of the page; `summary` holds one bucket per state (`compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception`, `unknown`). `assets` is one page of their records in `assetId` order — each a compliance record as returned by [Get the compliance state of an asset](#get-the-compliance-state-of-an-asset), plus the asset's display name as `assetName` — and `NextToken` is absent on the last page.
 
 ### Error responses
 
@@ -661,7 +687,7 @@ GET /compliance/state/{databaseId}
 
 ## List quarantined assets
 
-Retrieves one page of quarantined assets across databases, each with its `assetName`. The page is filtered to the databases the caller may read after it is read, so a page can be empty while `NextToken` is present — keep following the token until none is returned.
+Retrieves one page of assets in the `quarantined` state across databases, each with its `assetName`; an asset released under an exception (state `exception`) is not listed. The page is filtered to the databases the caller may read after it is read, so a page can be empty while `NextToken` is present — keep following the token until none is returned.
 
 ```
 GET /compliance/quarantine
@@ -739,7 +765,9 @@ POST /compliance/quarantine/{databaseId}/{assetId}/release
 
 ## Grant an exception to a quarantined asset
 
-Sets a quarantined asset to `compliant`, records the exception on its compliance record (`exceptionGranted`, `exceptionReason`, `exceptionGrantedBy`, `exceptionGrantedAt`) and writes an `exception_granted` audit entry.
+Moves a quarantined asset to the `exception` state, records the exception on its compliance record (`exceptionGranted`, `exceptionReason`, `exceptionGrantedBy`, `exceptionGrantedAt`, and the bound schema's name and current version as `exceptionSchemaName` / `exceptionSchemaVersion`), clears `quarantineReason`, and writes an `exception_granted` audit entry.
+
+The exception is scoped to that schema name and version and holds until it is revoked or superseded. A re-evaluation against the same schema version records its violations on the evaluation (`exceptionApplied: true`) and leaves the asset in `exception` on a failing verdict (`compliant` on a passing one); an evaluation against another schema or a newer version of the schema supersedes the exception — the exception fields are cleared, an `exception_superseded` audit entry is written and the verdict applies normally.
 
 ```
 POST /compliance/quarantine/{databaseId}/{assetId}/exception
@@ -757,7 +785,8 @@ POST /compliance/quarantine/{databaseId}/{assetId}/exception
 {
     "message": "Exception granted for survey-project:x1a2b3c4-scan-0043",
     "reason": "Legacy capture; accuracy waived by the survey lead",
-    "grantedBy": "user@example.com"
+    "grantedBy": "user@example.com",
+    "complianceState": "exception"
 }
 ```
 
@@ -771,9 +800,38 @@ POST /compliance/quarantine/{databaseId}/{assetId}/exception
 
 ---
 
+## Revoke an exception
+
+Ends an asset's active exception. The exception fields are cleared and the asset returns to the state its last evaluation's verdict maps to — `quarantined` again, with `quarantineReason` restored and the asset's subscribers notified, when that verdict was quarantined — or to `pending_evaluation` when the asset has no recorded evaluation. An `exception_revoked` audit entry is written. The request carries no body.
+
+```
+DELETE /compliance/quarantine/{databaseId}/{assetId}/exception
+```
+
+### Response
+
+```json
+{
+    "message": "Exception revoked",
+    "databaseId": "survey-project",
+    "assetId": "x1a2b3c4-scan-0043",
+    "complianceState": "quarantined"
+}
+```
+
+### Error responses
+
+| Status | Description                                                                       |
+| ------ | --------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the asset has no compliance record, or no exception is active |
+| `403`  | Not authorized                                                                    |
+| `500`  | Internal server error                                                             |
+
+---
+
 ## List pending cascades
 
-Retrieves every cascade in the `pending_approval` state that the caller may read, newest first.
+Retrieves every cascade in the `pending_approval` state that the caller may read, newest first. A row is listed only when the caller may read both the cascade and the compliance evaluations of the trigger asset's database.
 
 ```
 GET /compliance/cascades
@@ -789,6 +847,8 @@ GET /compliance/cascades
             "state": "pending_approval",
             "triggeredByDatabaseId": "survey-project",
             "triggeredByAssetId": "x1a2b3c4-control-0001",
+            "databaseId": "survey-project",
+            "assetId": "x1a2b3c4-control-0001",
             "triggerReason": "Parent asset updated; downstream re-evaluation needed",
             "createdAt": "2026-03-15T10:31:12+00:00",
             "actor": "SYSTEM_USER",
@@ -801,7 +861,7 @@ GET /compliance/cascades
 }
 ```
 
-The listing is not paged.
+The listing is not paged. Each row carries `databaseId` and `assetId` naming the trigger asset, copies of `triggeredByDatabaseId` and `triggeredByAssetId`.
 
 ### Error responses
 
@@ -963,7 +1023,7 @@ POST /compliance/cascades/{cascadeId}/reject
 
 ## Query the compliance audit trail
 
-Retrieves audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it the entries of every event type are read in turn, and the continuation token carries the position of that walk. Entries are filtered to the databases the caller may read.
+Retrieves audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it the entries of every event type are read in turn, and the continuation token carries the position of that walk. Entries are filtered to those whose database the caller may read — an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId` — so a page can be empty while `NextToken` is present.
 
 ```
 GET /compliance/audit
@@ -1008,21 +1068,23 @@ GET /compliance/audit
 
 ### Event types
 
-| Event type                     | Written when                                                              |
-| ------------------------------ | ------------------------------------------------------------------------- |
-| `compliance_check`             | An asset is evaluated                                                     |
-| `quarantine_released`          | A quarantined asset is released, by request or by a passing re-evaluation |
-| `exception_granted`            | An exception is granted to a quarantined asset                            |
-| `schema_bound_to_database`     | A schema is bound to a database                                           |
-| `schema_unbound_from_database` | A database binding is removed                                             |
-| `schema_bound_to_asset`        | A schema is bound to an asset as an override                              |
-| `schema_unbound_from_asset`    | An asset override is removed                                              |
-| `schema_deleted`               | A schema is deleted                                                       |
-| `cascade_triggered`            | A cascade is created through the API                                      |
-| `cascade_auto_triggered`       | A cascade is opened after the evaluation of an asset that has children    |
-| `cascade_approved`             | A pending cascade is approved                                             |
-| `cascade_rejected`             | A pending cascade is rejected                                             |
-| `cascade_completed`            | A cascade finishes evaluating its downstream assets                       |
+| Event type                     | Written when                                                                              |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| `compliance_check`             | An asset is evaluated                                                                     |
+| `quarantine_released`          | A quarantined asset is released, by request or by a passing re-evaluation                 |
+| `exception_granted`            | An exception is granted to a quarantined asset                                            |
+| `exception_revoked`            | An active exception is revoked; the asset returns to its last verdict's state             |
+| `exception_superseded`         | An evaluation against another schema or a newer schema version clears an active exception |
+| `schema_bound_to_database`     | A schema is bound to a database                                                           |
+| `schema_unbound_from_database` | A database binding is removed                                                             |
+| `schema_bound_to_asset`        | A schema is bound to an asset as an override                                              |
+| `schema_unbound_from_asset`    | An asset override is removed                                                              |
+| `schema_deleted`               | A schema is deleted                                                                       |
+| `cascade_triggered`            | A cascade is created through the API                                                      |
+| `cascade_auto_triggered`       | A cascade is opened after the evaluation of an asset that has children                    |
+| `cascade_approved`             | A pending cascade is approved                                                             |
+| `cascade_rejected`             | A pending cascade is rejected                                                             |
+| `cascade_completed`            | A cascade finishes evaluating its downstream assets                                       |
 
 ### Error responses
 

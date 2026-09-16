@@ -439,6 +439,8 @@ async def test_compliance_mutating_tools_are_gated_off_by_default():
         "evaluate_asset_compliance",
         "sweep_compliance_schema",
         "release_quarantine",
+        "grant_quarantine_exception",
+        "revoke_quarantine_exception",
         "approve_compliance_cascade",
         "delete_compliance_schema",
     ):
@@ -543,6 +545,40 @@ def test_quarantine_tools_forward_the_reason(gated):
     client.api.grant_quarantine_exception.assert_called_once_with("db1", "a1", "waived")
 
 
+def test_revoke_quarantine_exception_calls_the_delete_method_with_the_ids_only(gated):
+    """The DELETE route carries no body, so the tool takes no reason and forwards exactly the two
+    ids; the response (with the state the asset returned to) is passed through untouched."""
+    srv, client = gated
+    client.api.revoke_quarantine_exception.return_value = {
+        "message": "Exception revoked", "databaseId": "db1", "assetId": "a1",
+        "complianceState": "quarantined"}
+    result = srv.revoke_quarantine_exception("db1", "a1")
+    client.api.revoke_quarantine_exception.assert_called_once_with("db1", "a1")
+    client.api.grant_quarantine_exception.assert_not_called()
+    assert result["complianceState"] == "quarantined"
+
+
+def test_revoke_quarantine_exception_takes_no_reason_parameter(gated):
+    srv, _ = gated
+    assert list(inspect.signature(srv.revoke_quarantine_exception).parameters) == [
+        "database_id", "asset_id"]
+
+
+@pytest.mark.asyncio
+async def test_revoke_quarantine_exception_is_registered_with_writes_on(gated):
+    srv, _ = gated
+    names = {tool.name for tool in await srv.mcp.list_tools()}
+    assert "revoke_quarantine_exception" in names
+
+
+def test_revoke_quarantine_exception_surfaces_the_no_active_exception_refusal(gated):
+    srv, client = gated
+    client.api.revoke_quarantine_exception.side_effect = ValueError(
+        "Revoking the exception of asset 'a1' failed: No active exception")
+    result = srv.revoke_quarantine_exception("db1", "a1")
+    assert "No active exception" in result["error"]
+
+
 def test_create_compliance_cascade_defaults_to_requiring_approval(gated):
     srv, client = gated
     srv.create_compliance_cascade("db1", "a1")
@@ -634,6 +670,66 @@ def test_get_asset_compliance_state_docstring_explains_unknown():
     assert "not \"the asset does not exist\"" in docstring
 
 
+@pytest.mark.parametrize(
+    "tool",
+    ["get_asset_compliance_state", "get_database_compliance_overview", "list_compliance_evaluations",
+     "evaluate_asset_compliance", "grant_quarantine_exception", "revoke_quarantine_exception"],
+)
+def test_every_docstring_that_enumerates_states_names_the_exception_state(tool):
+    """An agent reading the state list from a docstring must find `exception` there, or it reports
+    a released-under-exception asset as an unknown state."""
+    assert "exception" in _docstring_of(tool)
+
+
+def test_exception_docstrings_describe_the_scope_and_the_lifecycle():
+    """The exception is scoped to a schema name + version and outlives re-evaluation; the grant and
+    revoke docstrings are where an agent learns what ends it."""
+    grant = _docstring_of("grant_quarantine_exception")
+    assert "exceptionSchemaName" in grant and "exceptionSchemaVersion" in grant
+    assert "supersede" in grant
+    assert "revoke_quarantine_exception()" in grant
+    assert "returns to compliant" not in grant
+    revoke = _docstring_of("revoke_quarantine_exception")
+    assert "LAST evaluation" in revoke or "last evaluation" in revoke.lower()
+    assert "pending_evaluation" in revoke
+    assert "No active exception" in revoke
+    assert "exception_revoked" in revoke
+    evaluations = _docstring_of("list_compliance_evaluations")
+    assert "exceptionApplied" in evaluations
+    overview = _docstring_of("get_database_compliance_overview")
+    assert "exception, unknown" in overview
+
+
+def test_schema_write_docstrings_require_vams_rules_v1_and_describe_input_files():
+    """Schema create/update accept a vams-rules-v1 document only, and a pipeline rule's input
+    selection is the part of the body an agent cannot infer from an example alone."""
+    create = _docstring_of("create_compliance_schema")
+    assert "MUST be a vams-rules-v1 document" in create
+    assert "schemaBody must be a vams-rules-v1 document" in create
+    assert "also accepted" not in create
+    for mode in ('"mode": "matching"', '"mode": "wholeAsset"', '"mode": "explicit"'):
+        assert mode in create
+    assert "exactly one file" in create
+    assert "compliance-output.json" in create
+    assert "execution_success" in create
+    update = _docstring_of("update_compliance_schema")
+    assert "vams-rules-v1" in update
+    assert "inputFiles" in update
+
+
+def test_audit_docstring_names_the_exception_events_and_the_permission_filter():
+    docstring = _docstring_of("query_compliance_audit")
+    assert "exception_revoked" in docstring
+    assert "exception_superseded" in docstring
+    assert "may read" in docstring
+
+
+def test_cascade_list_docstring_names_the_row_ids():
+    docstring = _docstring_of("list_compliance_cascades")
+    assert "`databaseId`" in docstring and "`assetId`" in docstring
+    assert "triggeredByDatabaseId" in docstring
+
+
 def test_readme_lists_every_compliance_read_tool():
     from pathlib import Path
 
@@ -647,3 +743,15 @@ def test_readme_lists_every_compliance_read_tool():
         "get_compliance_cascade", "query_compliance_audit", "get_asset_compliance_audit",
     ):
         assert f"`{tool}`" in readme, f"{tool} is missing from the README tool list"
+
+
+def test_readme_documents_the_exception_tools_and_the_exception_state():
+    """The README tool list is the only place the write tools' semantics are documented outside the
+    docstrings; the revoke tool and the `exception` state must be there."""
+    from pathlib import Path
+
+    import vams_mcp
+
+    readme = (Path(vams_mcp.__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    assert "`revoke_quarantine_exception`" in readme
+    assert "`exception`" in readme
