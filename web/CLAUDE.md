@@ -104,7 +104,9 @@ web/
                               #   (pure pipelineRef fields/validation + rule-draft round-trip);
                               #   ReasonModal.tsx (Cloudscape modal collecting a mandatory reason:
                               #   reject cascade, grant quarantine exception); complianceStateBadge.tsx
-                              #   (shared compliance-state -> StatusIndicator map; `exception` renders as info)
+                              #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
+                              #   `exception` renders as info/blue; EvaluationErrorIndicator flags a
+                              #   record whose lastEvaluationStatus is `error`)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.

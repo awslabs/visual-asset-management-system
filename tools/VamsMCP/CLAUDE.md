@@ -188,8 +188,10 @@ asymmetry other callers rely on):
     `maxItems`/`startingToken`/`NextToken` pages driven by `paginate()` with that
     field as `items_key`; the database overview and bindings reads return the
     route's own page (`summary`, `totalAssets`, `assetOverrideCount` describe the
-    full set) with `max_items`/`starting_token` forwarded and `NextToken` passed
-    through.
+    full set; `summary.error` is an overlay count of assets whose last evaluation
+    errored, not a state) with `max_items`/`starting_token` forwarded and `NextToken`
+    passed through. Schema records carry a top-level `schemaFormat`
+    (`vams-rules-v1` | `legacy`).
 
     **A page can name its page size something other than `pageSize`.** The compliance
     evaluation history, audit trails and quarantine listing page on `maxItems` +
