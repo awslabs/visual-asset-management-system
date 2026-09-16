@@ -707,11 +707,14 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
-        attachFunctionToApi(this, complianceQuarantineService, {
-            routePath: "/compliance/quarantine/{databaseId}/{assetId}/exception",
-            method: apigateway.HttpMethod.POST,
-            registry: registry,
-        });
+        // Exception: grant (POST) + revoke (DELETE).
+        for (const method of [apigateway.HttpMethod.POST, apigateway.HttpMethod.DELETE]) {
+            attachFunctionToApi(this, complianceQuarantineService, {
+                routePath: "/compliance/quarantine/{databaseId}/{assetId}/exception",
+                method,
+                registry: registry,
+            });
+        }
 
         // The cascade executor runs a cascade out of band; the cascade API invokes it asynchronously
         // and returns 202. The executor has no API route.

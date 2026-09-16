@@ -55,8 +55,10 @@ function grantPublishToAssetTopics(fun: lambda.Function, config: Config.Config):
 
 /**
  * Tables the evaluation engine (common/compliance/evaluationEngine.py) reads while evaluating an
- * asset, shared by every Lambda that runs it. The compliance tables the engine writes are granted
- * per builder, since the read/write split differs between them.
+ * asset, shared by every Lambda that runs it: asset metadata and links, the metadata schema a rule
+ * references, the workflow, pipeline and pipeline-template rows a pipeline rule launches with, and
+ * the asset buckets. The compliance tables the engine writes are granted per builder, since the
+ * read/write split differs between them.
  */
 function grantEvaluationEngineReads(fun: lambda.Function, storageResources: storageResources) {
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
@@ -64,6 +66,8 @@ function grantEvaluationEngineReads(fun: lambda.Function, storageResources: stor
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.metadataSchemaStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.pipelineTemplatesStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     grantReadPermissionsToAllAssetBuckets(fun);
 }
@@ -97,6 +101,8 @@ export function buildComplianceSchemaServiceFunction(
     });
     storageResources.dynamo.complianceSchemaStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    // Schema create, new-version and delete each record a compliance audit entry.
+    storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -185,8 +191,6 @@ export function buildComplianceEvaluateServiceFunction(
     storageResources.dynamo.complianceEvaluationStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceCascadeStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
     grantEvaluationEngineReads(fun, storageResources);
     executeWorkflowFunction.grantInvoke(fun);
     grantPublishToAssetTopics(fun, config);
@@ -228,8 +232,14 @@ export function buildComplianceQuarantineServiceFunction(
     });
     storageResources.dynamo.complianceAssetStateStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
+    // An exception is scoped to the bound schema's current internalVersion, and revoking one
+    // restores the state of the asset's last evaluation.
+    storageResources.dynamo.complianceSchemaStorageTable.grantReadData(fun);
+    storageResources.dynamo.complianceEvaluationStorageTable.grantReadData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // Revoking an exception can re-quarantine the asset, which notifies its subscribers.
+    grantPublishToAssetTopics(fun, config);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -421,7 +431,6 @@ export function buildComplianceTriggerFunction(
     storageResources.dynamo.complianceCascadeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceSchemaStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
     grantEvaluationEngineReads(fun, storageResources);
     executeWorkflowFunction.grantInvoke(fun);
     grantPublishToAssetTopics(fun, config);
@@ -479,13 +488,12 @@ export function buildComplianceWorkflowCallbackFunction(
     storageResources.dynamo.complianceEvaluationStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAssetStateStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
+    // Finalizing a verdict compares an active exception against the schema's current version.
+    storageResources.dynamo.complianceSchemaStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
     grantReadPermissionsToAllAssetBuckets(fun);
     grantPublishToAssetTopics(fun, config);
