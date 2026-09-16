@@ -11,6 +11,7 @@ workflow execution's outputs last changed, and the coalescing of a change into a
 awaiting its pipeline rules."""
 
 import json
+from datetime import timezone
 from unittest.mock import MagicMock, patch
 
 import boto3
@@ -54,11 +55,13 @@ def _sns_event(*messages):
 
 
 def _stream_message(event_name="MODIFY", database_id=DB, asset_id=ASSET, created_at=None,
-                    change_source=None, workflow_execution_id=None):
+                    change_source=None, workflow_execution_id=None, change_at=None):
     new_image = {"databaseId": {"S": database_id}, "assetId": {"S": asset_id}}
     if change_source is not None:
         new_image["lastChangeSource"] = {"S": change_source}
-        new_image["lastChangeAt"] = {"S": "2026-03-01T12:00:00+00:00"}
+        new_image["lastChangeAt"] = {"S": change_at or "2026-03-01T12:00:00+00:00"}
+    elif change_at is not None:
+        new_image["lastChangeAt"] = {"S": change_at}
     if workflow_execution_id is not None:
         new_image["lastChangeWorkflowExecutionId"] = {"S": workflow_execution_id}
     dynamodb_data = {
@@ -652,3 +655,95 @@ class TestChangesCoalesceIntoAPendingEvaluation:
                      asset_rows=ASSET_ROWS, evaluation_rows=_pending_rows())
         mocks["run_evaluation"].assert_not_called()
         assert mocks["get_evaluation"].call_count == 1
+
+
+# The instant an upload landed (S3 `eventTime` on the file path, the asset row's `lastChangeAt` on the
+# stream path) and the state row of an asset whose last evaluation started at a chosen offset from it.
+CHANGE_TIME_S3 = "2026-03-01T12:00:00.000Z"
+CHANGE_TIME_ROW = "2026-03-01T12:00:00+00:00"
+
+
+def _evaluated_record(seconds_after_change, status="completed"):
+    return {"schemaName": SCHEMA, "complianceState": "compliant", "lastEvaluationId": "eval-prev",
+            "lastEvaluatedAt": f"2026-03-01T12:00:{seconds_after_change:02d}+00:00",
+            "lastEvaluationStatus": status}
+
+
+@pytest.mark.unit
+class TestOneUploadIsEvaluatedOnce:
+    """An upload reaches the trigger twice — the asset row's stream image (its provenance stamp) and
+    the file indexer's S3 record, one message per object — so both paths skip a change the asset's
+    last evaluation already covers: an evaluation that started at least the skew margin after the
+    change read the changed inputs."""
+
+    def test_the_file_record_of_an_upload_the_stream_path_already_evaluated_is_skipped(self):
+        first = _run(_sns_event(_stream_message(change_source="upload", change_at=CHANGE_TIME_ROW)),
+                     database_item=AUTO_EVAL_DB, compliance_record={"schemaName": SCHEMA},
+                     asset_rows=ASSET_ROWS)
+        first["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+        second = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/model.obj",
+                                                                 event_time=CHANGE_TIME_S3))),
+                      database_item=AUTO_EVAL_DB, compliance_record=_evaluated_record(4),
+                      asset_rows=ASSET_ROWS)
+        second["run_evaluation"].assert_not_called()
+        assert any("already covered" in m and "eval-prev" in m for m in _info_messages(second))
+
+    def test_one_message_per_object_of_a_three_file_upload_evaluates_nothing_after_the_covering_run(self):
+        messages = [indexer_message(s3_event_record(f"{ASSET}/{name}", event_time=CHANGE_TIME_S3))
+                    for name in ("one.stl", "two.stl", "three.stl")]
+        mocks = _run(_sns_event(*messages), database_item=AUTO_EVAL_DB,
+                     compliance_record=_evaluated_record(3), asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_a_file_that_landed_after_the_last_evaluation_started_is_evaluated(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/late.stl",
+                                                                event_time="2026-03-01T12:00:09.000Z"))),
+                     database_item=AUTO_EVAL_DB, compliance_record=_evaluated_record(4),
+                     asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_an_evaluation_that_started_within_the_skew_margin_does_not_cover_the_change(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/model.stl",
+                                                                event_time=CHANGE_TIME_S3))),
+                     database_item=AUTO_EVAL_DB, compliance_record=_evaluated_record(1),
+                     asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    @pytest.mark.parametrize("status", ["completed", "pending_pipeline", "error"])
+    def test_the_stream_path_skips_a_covered_change_whatever_the_last_evaluation_status(self, status):
+        mocks = _run(_sns_event(_stream_message(change_source="upload", change_at=CHANGE_TIME_ROW)),
+                     database_item=AUTO_EVAL_DB, compliance_record=_evaluated_record(5, status),
+                     asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_not_called()
+        mocks["get_evaluation"].assert_not_called()
+
+    def test_an_insert_without_a_change_time_is_evaluated(self):
+        mocks = _run(_sns_event(_stream_message(event_name="INSERT")), database_item=AUTO_EVAL_DB,
+                     compliance_record=_evaluated_record(30), asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_an_unparseable_event_time_is_evaluated(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/model.stl",
+                                                                event_time="not-a-time"))),
+                     database_item=AUTO_EVAL_DB, compliance_record=_evaluated_record(30),
+                     asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_an_asset_never_evaluated_is_evaluated(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/model.stl",
+                                                                event_time=CHANGE_TIME_S3))),
+                     database_item=AUTO_EVAL_DB, compliance_record={"schemaName": SCHEMA},
+                     asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    @pytest.mark.parametrize("value,expected_hour", [
+        ("2026-03-01T12:00:00.000Z", 12), ("2026-03-01T12:00:00+00:00", 12),
+        ("2026-03-01T14:00:00+02:00", 12)])
+    def test_the_event_time_parser_reads_both_spellings_as_utc(self, value, expected_hour):
+        parsed = trigger.parse_event_time(value)
+        assert parsed.tzinfo is not None
+        assert parsed.astimezone(timezone.utc).hour == expected_hour
+
+    @pytest.mark.parametrize("value", [None, "", "not-a-time", 12])
+    def test_the_event_time_parser_returns_none_for_anything_it_cannot_read(self, value):
+        assert trigger.parse_event_time(value) is None

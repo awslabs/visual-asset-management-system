@@ -62,9 +62,17 @@ SCHEMA_SOURCE_ASSET = "asset"
 CASCADE_STATE_PENDING_APPROVAL = "pending_approval"
 CASCADE_STATE_INDEX = "StateIndex"
 
-# The asset-row attribute `uploadFile` writes with the source of the last change (`upload` or
-# `workflowExecution`); a stream image carries it in DynamoDB's typed form.
+# The asset-row attributes `uploadFile` writes with the source and instant of the last change
+# (`upload` or `workflowExecution`); a stream image carries them in DynamoDB's typed form.
 LAST_CHANGE_SOURCE_ATTRIBUTE = "lastChangeSource"
+LAST_CHANGE_AT_ATTRIBUTE = "lastChangeAt"
+
+# An evaluation covers every change that landed before it started, so a change older than the asset's
+# last evaluation start by at least this margin is not evaluated again. The change time comes from the
+# S3 or upload Lambda clock and the evaluation start from the trigger's clock; the margin keeps clock
+# skew from marking an evaluation as covering a change it in fact started before. A duplicate
+# evaluation is the safe failure, a missed one is not, so the margin errs toward evaluating.
+EVALUATION_COVERS_CHANGE_MARGIN = timedelta(seconds=2)
 
 # A cascade awaiting approval expires after this many hours.
 CASCADE_APPROVAL_TIMEOUT_HOURS = 24
@@ -136,13 +144,41 @@ def _process_stream_record(message):
                     "skipping compliance evaluation")
         return
 
-    _process_compliance_event(database_id, asset_id)
+    _process_compliance_event(database_id, asset_id,
+                              change_time=parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE)))
+
+
+def _image_string(new_image, attribute):
+    """A string attribute of a stream image (DynamoDB's typed form), or "" when absent."""
+    value = new_image.get(attribute)
+    return value.get("S", "") or "" if isinstance(value, dict) else ""
 
 
 def _image_change_source(new_image):
     """The `lastChangeSource` a stream image carries, or "" when the row records none."""
-    value = new_image.get(LAST_CHANGE_SOURCE_ATTRIBUTE)
-    return value.get("S", "") or "" if isinstance(value, dict) else ""
+    return _image_string(new_image, LAST_CHANGE_SOURCE_ATTRIBUTE)
+
+
+def parse_event_time(value):
+    """An S3 `eventTime` (`Z` suffix) or a stored ISO-8601 instant (`+00:00`) as an aware datetime;
+    None when absent or unparseable, which the callers read as "evaluate"."""
+    return engine.parse_timestamp(value)
+
+
+def change_covered_by_last_evaluation(compliance_record, change_time):
+    """Whether the asset's last evaluation started after the change and so already covers it.
+
+    True only when both instants are known and the evaluation's start (`lastEvaluatedAt`) is at
+    least EVALUATION_COVERS_CHANGE_MARGIN after the change; an unknown change time or an asset
+    never evaluated is never covered. Any `lastEvaluationStatus` counts, because the inputs were
+    read after the change either way. A file that lands after a covering evaluation started is a
+    new change and yields a second evaluation."""
+    if change_time is None:
+        return False
+    last_evaluated_at = parse_event_time(compliance_record.get("lastEvaluatedAt"))
+    if last_evaluated_at is None:
+        return False
+    return last_evaluated_at >= change_time + EVALUATION_COVERS_CHANGE_MARGIN
 
 
 def _process_file_event(message):
@@ -162,6 +198,7 @@ def _process_file_event(message):
     for s3_record in s3_records:
         s3_info = s3_record.get("s3") or {}
         object_key = (s3_info.get("object") or {}).get("key", "")
+        change_time = parse_event_time(s3_record.get("eventTime"))
 
         asset_id = _extract_asset_id_from_key(object_key, prefix)
         if not asset_id:
@@ -184,7 +221,7 @@ def _process_file_event(message):
         if asset_key in evaluated:
             continue
         evaluated.add(asset_key)
-        _process_compliance_event(database_id, asset_id)
+        _process_compliance_event(database_id, asset_id, change_time=change_time)
 
 
 def object_change_source(s3_info, message):
@@ -253,11 +290,15 @@ def _database_item(database_id):
     return database_table.get_item(Key={"databaseId": database_id}).get("Item")
 
 
-def _process_compliance_event(database_id, asset_id):
+def _process_compliance_event(database_id, asset_id, change_time=None):
     """Evaluate an asset when its database has auto-evaluation on and it has a bound schema.
 
-    An asset whose state row points at an evaluation still awaiting its pipeline rules is not
-    evaluated again: the in-flight evaluation covers the change."""
+    `change_time` is the instant of the change that raised the event (the asset row's
+    `lastChangeAt` on the stream path, the S3 record's `eventTime` on the file path). A change the
+    asset's last evaluation already covers is not evaluated again, so one upload reaches one
+    evaluation whichever of the two paths reports it first and however many files it carries;
+    neither is an asset whose state row points at an evaluation still awaiting its pipeline rules,
+    since the in-flight evaluation covers the change."""
     db_item = _database_item(database_id)
     if not db_item or db_item.get("complianceAutoEval") is not True:
         logger.info(f"Database {database_id} does not have complianceAutoEval enabled, skipping")
@@ -274,6 +315,13 @@ def _process_compliance_event(database_id, asset_id):
     schema_name = compliance_record.get("schemaName")
     if not schema_name:
         logger.info(f"Asset {database_id}:{asset_id} has no schema assigned")
+        return
+
+    if change_covered_by_last_evaluation(compliance_record, change_time):
+        logger.info(f"Asset {database_id}:{asset_id} changed at {change_time.isoformat()} and its "
+                    f"evaluation {compliance_record.get('lastEvaluationId')} started at "
+                    f"{compliance_record.get('lastEvaluatedAt')}, after the change; the change is "
+                    "already covered")
         return
 
     if covered_by_pending_evaluation(compliance_record):
