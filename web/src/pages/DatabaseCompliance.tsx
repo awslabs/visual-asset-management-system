@@ -25,15 +25,10 @@ import {
     DatabaseComplianceOverview,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
-
-const stateIndicatorMap: Record<string, { type: string; label: string }> = {
-    unknown: { type: "stopped", label: "Unknown" },
-    pending_evaluation: { type: "in-progress", label: "Pending Evaluation" },
-    compliant: { type: "success", label: "Compliant" },
-    non_compliant: { type: "warning", label: "Non-Compliant" },
-    quarantined: { type: "error", label: "Quarantined" },
-    pending_parent_resolution: { type: "warning", label: "Pending Parent Resolution" },
-};
+import {
+    COMPLIANCE_STATE_INDICATORS,
+    ComplianceStateBadge,
+} from "../components/compliance/complianceStateBadge";
 
 const DatabaseCompliancePage: React.FC = () => {
     const { databaseId } = useParams();
@@ -193,7 +188,7 @@ const DatabaseCompliancePage: React.FC = () => {
                     </Header>
                 }
             >
-                <ColumnLayout columns={6} variant="text-grid">
+                <ColumnLayout columns={7} minColumnWidth={130} variant="text-grid">
                     <div>
                         <Box variant="awsui-key-label">Tracked {Synonyms.Assets}</Box>
                         <Box variant="awsui-value-large">{totalTracked}</Box>
@@ -201,13 +196,15 @@ const DatabaseCompliancePage: React.FC = () => {
                     <div>
                         <Box variant="awsui-key-label">Compliant</Box>
                         <Box variant="awsui-value-large">
-                            <StatusIndicator type="success">{compliantCount}</StatusIndicator>
+                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.compliant.type}>
+                                {compliantCount}
+                            </StatusIndicator>
                         </Box>
                     </div>
                     <div>
                         <Box variant="awsui-key-label">Non-Compliant</Box>
                         <Box variant="awsui-value-large">
-                            <StatusIndicator type="warning">
+                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.non_compliant.type}>
                                 {summary?.non_compliant || 0}
                             </StatusIndicator>
                         </Box>
@@ -215,15 +212,25 @@ const DatabaseCompliancePage: React.FC = () => {
                     <div>
                         <Box variant="awsui-key-label">Quarantined</Box>
                         <Box variant="awsui-value-large">
-                            <StatusIndicator type="error">
+                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.quarantined.type}>
                                 {summary?.quarantined || 0}
+                            </StatusIndicator>
+                        </Box>
+                    </div>
+                    <div>
+                        <Box variant="awsui-key-label">Exception</Box>
+                        <Box variant="awsui-value-large">
+                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.exception.type}>
+                                {summary?.exception || 0}
                             </StatusIndicator>
                         </Box>
                     </div>
                     <div>
                         <Box variant="awsui-key-label">Pending</Box>
                         <Box variant="awsui-value-large">
-                            <StatusIndicator type="in-progress">
+                            <StatusIndicator
+                                type={COMPLIANCE_STATE_INDICATORS.pending_evaluation.type}
+                            >
                                 {summary?.pending_evaluation || 0}
                             </StatusIndicator>
                         </Box>
@@ -294,16 +301,9 @@ const DatabaseCompliancePage: React.FC = () => {
                         {
                             id: "complianceState",
                             header: "State",
-                            cell: (item: any) => {
-                                const indicator =
-                                    stateIndicatorMap[item.complianceState] ||
-                                    stateIndicatorMap.unknown;
-                                return (
-                                    <StatusIndicator type={indicator.type as any}>
-                                        {indicator.label}
-                                    </StatusIndicator>
-                                );
-                            },
+                            cell: (item: any) => (
+                                <ComplianceStateBadge state={item.complianceState} />
+                            ),
                             sortingField: "complianceState",
                         },
                         {

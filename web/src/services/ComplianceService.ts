@@ -40,10 +40,36 @@ export interface CompliancePipelineCheck {
     tolerance: ComplianceTolerance;
 }
 
+/**
+ * How a pipeline rule selects the asset files handed to the workflow at launch.
+ * `matching` (the default) lists the asset's files and keeps those passing the workflow's and
+ * pipeline's own input filters plus the rule's `filter` globs; `wholeAsset` sends the asset root
+ * (only where the workflow permits it); `explicit` sends exactly the listed asset-relative keys.
+ */
+export type CompliancePipelineInputFilesMode = "matching" | "wholeAsset" | "explicit";
+
+export interface CompliancePipelineInputFiles {
+    mode: CompliancePipelineInputFilesMode;
+    /** Glob allow list applied after the workflow's and pipeline's filters (`matching` only). */
+    filter?: string[];
+    /** Asset-relative `/path` keys (`explicit` only, at least one). */
+    keys?: string[];
+}
+
+export const PIPELINE_INPUT_FILES_MODES: CompliancePipelineInputFilesMode[] = [
+    "matching",
+    "wholeAsset",
+    "explicit",
+];
+
+export const DEFAULT_PIPELINE_INPUT_FILES: CompliancePipelineInputFiles = { mode: "matching" };
+
 export interface CompliancePipelineRule {
     ruleType: "pipeline";
     enforcement: ComplianceEnforcementLevel;
     pipelineRef: CompliancePipelineRef;
+    /** Absent means `{ mode: "matching" }`. */
+    inputFiles?: CompliancePipelineInputFiles;
     inputParameters?: Record<string, any>;
     checks: CompliancePipelineCheck[];
 }
@@ -97,21 +123,38 @@ export interface ComplianceSchema {
     updatedAt?: string;
 }
 
+/**
+ * States of an asset's compliance record. `exception` is a quarantine verdict the asset is
+ * released from by a granted exception; it holds until the exception is revoked or superseded.
+ */
+export type ComplianceStateValue =
+    | "unknown"
+    | "pending_evaluation"
+    | "compliant"
+    | "non_compliant"
+    | "quarantined"
+    | "exception"
+    | "pending_parent_resolution";
+
 export interface ComplianceState {
     databaseId: string;
     assetId: string;
-    complianceState:
-        | "unknown"
-        | "pending_evaluation"
-        | "compliant"
-        | "non_compliant"
-        | "quarantined"
-        | "pending_parent_resolution";
+    complianceState: ComplianceStateValue;
     schemaName?: string;
     lastEvaluationAt?: string;
+    lastEvaluatedAt?: string;
     lastEvaluationId?: string;
     schemaSource?: string;
     updatedAt?: string;
+    quarantineReason?: string | null;
+    /** Exception fields are set while an exception is active on the record. */
+    exceptionGranted?: boolean;
+    exceptionReason?: string;
+    exceptionGrantedBy?: string;
+    exceptionGrantedAt?: string;
+    /** The schema and its version the exception was granted against. */
+    exceptionSchemaName?: string;
+    exceptionSchemaVersion?: number;
 }
 
 export type ComplianceEvaluationVerdict =
@@ -134,6 +177,8 @@ export interface EvaluationRecord {
     /** Workflow execution a pipeline rule launched; set once the execution has started. */
     executionId?: string;
     pipelineRuleName?: string;
+    /** The verdict was computed while an exception held the asset released from quarantine. */
+    exceptionApplied?: boolean;
 }
 
 export type CascadeState = "pending_approval" | "executing" | "completed" | "aborted" | "rejected";
@@ -143,6 +188,9 @@ export interface CascadeRecord {
     state: CascadeState;
     triggeredByDatabaseId: string;
     triggeredByAssetId: string;
+    /** The trigger asset as the listing carries it; the same ids as `triggeredBy*`. */
+    databaseId?: string;
+    assetId?: string;
     triggerReason?: string;
     actor?: string;
     requireApproval: boolean;
@@ -387,6 +435,7 @@ export interface DatabaseComplianceOverview {
         non_compliant: number;
         pending_evaluation: number;
         quarantined: number;
+        exception: number;
         unknown: number;
     };
     assets: DatabaseComplianceAsset[];
@@ -419,11 +468,6 @@ export const fetchDatabaseComplianceOverview = async (
 
 export interface QuarantinedAsset extends ComplianceState {
     assetName?: string;
-    quarantineReason?: string | null;
-    exceptionGranted?: boolean;
-    exceptionReason?: string;
-    exceptionGrantedBy?: string;
-    exceptionGrantedAt?: string;
 }
 
 export interface PagedQuarantinedAssets {
@@ -501,6 +545,46 @@ export const grantException = async (
     } catch (error: any) {
         console.log("grantException error:", error);
         return [false, error?.message || "Failed to grant exception"];
+    }
+};
+
+/** Response of the exception revoke route; `complianceState` is the state the asset returned to. */
+export interface ExceptionRevokedResponse {
+    message: string;
+    databaseId: string;
+    assetId: string;
+    complianceState: ComplianceStateValue;
+}
+
+/**
+ * Revokes the active exception of an asset. The asset returns to the state of its last
+ * evaluation (re-quarantined when that verdict was quarantined). The backend answers 400 when
+ * no exception is active, which surfaces as the failed tuple's message.
+ */
+export const revokeException = async (
+    databaseId: string,
+    assetId: string
+): Promise<[boolean, ExceptionRevokedResponse | string]> => {
+    try {
+        const response = await apiClient.del(
+            `compliance/quarantine/${databaseId}/${assetId}/exception`,
+            {}
+        );
+        if (responseErrored(response)) {
+            return [false, response.message];
+        }
+        return [
+            true,
+            {
+                message: response.message || "Exception revoked",
+                databaseId: response.databaseId || databaseId,
+                assetId: response.assetId || assetId,
+                complianceState: response.complianceState,
+            },
+        ];
+    } catch (error: any) {
+        console.log("revokeException error:", error);
+        return [false, error?.message || "Failed to revoke exception"];
     }
 };
 

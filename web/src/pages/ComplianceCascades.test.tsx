@@ -9,6 +9,8 @@ import userEvent from "@testing-library/user-event";
 import ComplianceCascades, {
     CASCADE_POLL_INTERVAL_MS,
     cascadeProgress,
+    cascadeTriggerAssetId,
+    cascadeTriggerDatabaseId,
 } from "./ComplianceCascades";
 import { REASON_REQUIRED_MESSAGE } from "../components/compliance/ReasonModal";
 
@@ -146,6 +148,48 @@ describe("ComplianceCascades", () => {
     it("labels the refresh control", async () => {
         render(<ComplianceCascades />);
         expect(await screen.findByRole("button", { name: "Refresh cascades" })).toBeInTheDocument();
+    });
+
+    it("shows the trigger asset from the listing's databaseId/assetId", async () => {
+        service().fetchCascades.mockResolvedValue([
+            true,
+            [
+                {
+                    ...pendingCascade(),
+                    databaseId: "listing-db",
+                    assetId: "listing-asset",
+                },
+            ],
+        ]);
+
+        render(<ComplianceCascades />);
+        expect(await screen.findByText("listing-db")).toBeInTheDocument();
+        expect(screen.getByText("listing-asset")).toBeInTheDocument();
+        expect(screen.queryByText("db1")).not.toBeInTheDocument();
+    });
+
+    it("falls back to the triggeredBy ids when the row carries no databaseId/assetId", async () => {
+        render(<ComplianceCascades />);
+        expect(await screen.findByText("db1")).toBeInTheDocument();
+        expect(screen.getByText("asset-1")).toBeInTheDocument();
+    });
+});
+
+describe("cascade trigger ids", () => {
+    const base = {
+        cascadeId: "c",
+        state: "executing" as const,
+        triggeredByDatabaseId: "db1",
+        triggeredByAssetId: "a1",
+        requireApproval: true,
+        createdAt: "2026-01-01T00:00:00Z",
+    };
+
+    it("prefers the listing ids and falls back to the triggeredBy ids", () => {
+        expect(cascadeTriggerDatabaseId(base)).toBe("db1");
+        expect(cascadeTriggerAssetId(base)).toBe("a1");
+        expect(cascadeTriggerDatabaseId({ ...base, databaseId: "db2", assetId: "a2" })).toBe("db2");
+        expect(cascadeTriggerAssetId({ ...base, databaseId: "db2", assetId: "a2" })).toBe("a2");
     });
 });
 

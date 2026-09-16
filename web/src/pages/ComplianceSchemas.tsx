@@ -35,17 +35,15 @@ const SCHEMA_TEMPLATES: Record<
     { label: string; description: string; body: Record<string, any> }
 > = {
     blank: {
-        label: "Blank schema",
-        description: "Start from scratch with an empty object schema",
+        label: "Blank rule set",
+        description: "An empty vams-rules-v1 rule set to build from scratch",
         body: {
-            type: "object",
-            required: [],
-            properties: {},
-            additionalProperties: true,
+            schemaFormat: "vams-rules-v1",
+            rules: {},
         },
     },
     pipelineRules: {
-        label: "Pipeline and metadata rules (vams-rules-v1)",
+        label: "Pipeline and metadata rules",
         description:
             "Runs a workflow and checks its output against tolerances; also validates metadata",
         body: {
@@ -72,7 +70,7 @@ const SCHEMA_TEMPLATES: Record<
                 "required-metadata": {
                     ruleType: "metadata",
                     enforcement: "warn",
-                    metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "asset-metadata" },
+                    metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "defaultAsset" },
                     checks: [
                         {
                             name: "required-fields-present",
@@ -86,140 +84,222 @@ const SCHEMA_TEMPLATES: Record<
     },
     engineering: {
         label: "Engineering Asset Standard",
-        description: "Requires name, owner, classification, and retention",
+        description: "Owner, classification and retention metadata plus a parent assembly",
         body: {
-            type: "object",
-            required: ["name", "owner", "classification", "retention_days"],
-            properties: {
-                name: {
-                    type: "string",
-                    minLength: 1,
-                    maxLength: 256,
-                    description: "Asset name or identifier",
+            schemaFormat: "vams-rules-v1",
+            rules: {
+                "ownership-and-lifecycle": {
+                    ruleType: "metadata",
+                    enforcement: "warn",
+                    metadataSchemaRef: {
+                        databaseId: "GLOBAL",
+                        schemaName: "defaultAsset",
+                    },
+                    checks: [
+                        {
+                            name: "baseline-fields-present",
+                            description:
+                                "The default asset metadata schema's required fields are present and typed as declared, and the asset names its owner, classification level and retention period.",
+                            validateRequired: true,
+                            validateTypes: true,
+                            additionalRequiredFields: ["owner", "classification", "retention_days"],
+                        },
+                    ],
                 },
-                owner: { type: "string", description: "Owner email address" },
-                classification: {
-                    type: "string",
-                    enum: ["public", "internal", "confidential", "restricted"],
-                    description: "Data classification level",
+                "review-schedule": {
+                    ruleType: "metadata",
+                    enforcement: "inform",
+                    metadataSchemaRef: {
+                        databaseId: "GLOBAL",
+                        schemaName: "defaultAsset",
+                    },
+                    checks: [
+                        {
+                            name: "review-fields-present",
+                            description:
+                                "The owning department and the next scheduled review date are recorded.",
+                            additionalRequiredFields: ["department", "review_date"],
+                        },
+                    ],
                 },
-                retention_days: {
-                    type: "integer",
-                    minimum: 1,
-                    maximum: 3650,
-                    description: "Retention period in days",
+                "assembly-membership": {
+                    ruleType: "relationship",
+                    enforcement: "warn",
+                    checks: [
+                        {
+                            name: "has-parent-assembly",
+                            description: "The asset belongs to at least one parent assembly.",
+                            direction: "parents",
+                            relationshipType: "parentChild",
+                            minCount: 1,
+                        },
+                    ],
                 },
-                department: { type: "string", description: "Owning department or team" },
-                version: { type: "string", description: "Asset version string" },
             },
-            additionalProperties: true,
         },
     },
     classification: {
         label: "Data Classification",
-        description: "Security classification with handling instructions",
+        description: "Security classification with handling instructions and a data steward",
         body: {
-            type: "object",
-            required: ["classification", "handling_instructions", "data_steward"],
-            properties: {
-                classification: {
-                    type: "string",
-                    enum: ["unclassified", "cui", "confidential", "secret", "top_secret"],
-                    description: "Security classification level",
+            schemaFormat: "vams-rules-v1",
+            rules: {
+                "classification-labels": {
+                    ruleType: "metadata",
+                    enforcement: "quarantine",
+                    metadataSchemaRef: {
+                        databaseId: "GLOBAL",
+                        schemaName: "defaultAsset",
+                    },
+                    checks: [
+                        {
+                            name: "classification-fields-present",
+                            description:
+                                "The asset carries a security classification level, handling instructions and an accountable data steward.",
+                            validateRequired: true,
+                            validateTypes: true,
+                            additionalRequiredFields: [
+                                "classification",
+                                "handling_instructions",
+                                "data_steward",
+                            ],
+                        },
+                    ],
                 },
-                handling_instructions: {
-                    type: "string",
-                    minLength: 10,
-                    maxLength: 2000,
-                    description: "Handling instructions",
-                },
-                data_steward: { type: "string", description: "Data steward email" },
-                dissemination_controls: {
-                    type: "array",
-                    items: { type: "string", enum: ["noforn", "relto", "orcon", "propin", "fouo"] },
-                    description: "Dissemination control markings",
+                "dissemination-markings": {
+                    ruleType: "metadata",
+                    enforcement: "inform",
+                    metadataSchemaRef: {
+                        databaseId: "GLOBAL",
+                        schemaName: "defaultAsset",
+                    },
+                    checks: [
+                        {
+                            name: "dissemination-controls-recorded",
+                            description:
+                                "Dissemination control markings and the originating agency are recorded.",
+                            additionalRequiredFields: [
+                                "dissemination_controls",
+                                "originating_agency",
+                            ],
+                        },
+                    ],
                 },
             },
-            additionalProperties: false,
         },
     },
     model3d: {
         label: "3D Model Quality",
-        description: "Polygon budgets, coordinate system, and units",
+        description: "Geometry metadata and a conversion through the built-in 3D pipeline",
         body: {
-            type: "object",
-            required: ["polygon_count", "coordinate_system", "units"],
-            properties: {
-                polygon_count: {
-                    type: "integer",
-                    minimum: 1,
-                    maximum: 50000000,
-                    description: "Total polygon count",
+            schemaFormat: "vams-rules-v1",
+            rules: {
+                "model-metadata": {
+                    ruleType: "metadata",
+                    enforcement: "warn",
+                    metadataSchemaRef: {
+                        databaseId: "GLOBAL",
+                        schemaName: "defaultAsset",
+                    },
+                    checks: [
+                        {
+                            name: "geometry-fields-present",
+                            description:
+                                "The default asset metadata schema's required fields are present and typed as declared, and the model documents its polygon count, coordinate reference system and unit of measurement.",
+                            validateRequired: true,
+                            validateTypes: true,
+                            additionalRequiredFields: [
+                                "polygon_count",
+                                "coordinate_system",
+                                "units",
+                            ],
+                        },
+                    ],
                 },
-                coordinate_system: {
-                    type: "string",
-                    enum: ["wgs84", "utm", "local", "enu", "ecef"],
-                    description: "Coordinate reference system",
-                },
-                units: {
-                    type: "string",
-                    enum: ["meters", "centimeters", "millimeters", "feet", "inches"],
-                    description: "Measurement units",
-                },
-                lod_levels: {
-                    type: "integer",
-                    minimum: 1,
-                    maximum: 10,
-                    description: "Number of LOD variants",
-                },
-                texture_resolution_max: {
-                    type: "integer",
-                    minimum: 64,
-                    maximum: 16384,
-                    description: "Max texture resolution in px",
-                },
-                has_collision_mesh: {
-                    type: "boolean",
-                    description: "Whether collision mesh is included",
+                "converts-to-glb": {
+                    ruleType: "pipeline",
+                    enforcement: "quarantine",
+                    pipelineRef: {
+                        databaseId: "GLOBAL",
+                        workflowId: "conversion-3d-basic",
+                        pipelineDatabaseId: "GLOBAL",
+                        pipelineId: "conversion-3d-basic",
+                        templateId: "convert-to-glb",
+                    },
+                    inputFiles: {
+                        mode: "matching",
+                        filter: ["*.stl", "*.obj", "*.ply", "*.gltf", "*.glb", "*.xyz"],
+                    },
+                    checks: [
+                        {
+                            name: "conversion-succeeds",
+                            description:
+                                "The model file converts to GLB. The pipeline writes no compliance-output document, so the check reads the execution's own success measurement.",
+                            outputField: "execution_success",
+                            tolerance: {
+                                operator: "eq",
+                                value: 1,
+                            },
+                        },
+                        {
+                            name: "conversion-duration",
+                            description: "The conversion completes within ten minutes.",
+                            outputField: "processing_duration_seconds",
+                            tolerance: {
+                                operator: "lte",
+                                value: 600,
+                            },
+                        },
+                    ],
                 },
             },
-            additionalProperties: true,
         },
     },
     retention: {
         label: "Retention Policy",
-        description: "Lifecycle management with disposal method and legal hold",
+        description: "Retention period, disposal method and data owner metadata",
         body: {
-            type: "object",
-            required: ["retention_days", "disposal_method", "data_owner"],
-            properties: {
-                retention_days: {
-                    type: "integer",
-                    minimum: 30,
-                    maximum: 36500,
-                    description: "Minimum retention in days",
+            schemaFormat: "vams-rules-v1",
+            rules: {
+                "retention-terms": {
+                    ruleType: "metadata",
+                    enforcement: "warn",
+                    metadataSchemaRef: {
+                        databaseId: "GLOBAL",
+                        schemaName: "defaultAsset",
+                    },
+                    checks: [
+                        {
+                            name: "retention-fields-present",
+                            description:
+                                "The asset states its retention period, the disposal method that applies once it expires, and the owner accountable for retention compliance.",
+                            validateRequired: true,
+                            validateTypes: true,
+                            additionalRequiredFields: [
+                                "retention_days",
+                                "disposal_method",
+                                "data_owner",
+                            ],
+                        },
+                    ],
                 },
-                disposal_method: {
-                    type: "string",
-                    enum: ["delete", "archive", "anonymize", "transfer"],
-                    description: "Disposal method after retention expires",
-                },
-                data_owner: { type: "string", description: "Accountable person or team email" },
-                legal_hold: {
-                    type: "boolean",
-                    description: "Under legal hold (prevents disposal)",
-                },
-                regulation: {
-                    type: "string",
-                    description: "Applicable regulation (e.g., GDPR, HIPAA)",
-                },
-                archive_tier: {
-                    type: "string",
-                    enum: ["hot", "warm", "cold", "glacier"],
-                    description: "Storage tier",
+                "review-cadence": {
+                    ruleType: "metadata",
+                    enforcement: "inform",
+                    metadataSchemaRef: {
+                        databaseId: "GLOBAL",
+                        schemaName: "defaultAsset",
+                    },
+                    checks: [
+                        {
+                            name: "review-dates-recorded",
+                            description:
+                                "The last access review and the next scheduled retention review are recorded.",
+                            additionalRequiredFields: ["last_access_review", "next_review_date"],
+                        },
+                    ],
                 },
             },
-            additionalProperties: true,
         },
     },
 };
@@ -502,7 +582,7 @@ export default function ComplianceSchemas() {
                         </FormField>
                         <FormField
                             label="Schema Body"
-                            description="Either a vams-rules-v1 rule set (pipeline, metadata and relationship rules that are evaluated) or a JSON Schema that asset metadata must conform to. Use the JSON editor for full control or the Visual Builder for guided editing."
+                            description="A vams-rules-v1 rule set: pipeline, metadata and relationship rules with an enforcement level each. Use the JSON editor for full control or the Visual Builder for guided editing."
                         >
                             <ComplianceSchemaEditor value={formBody} onChange={setFormBody} />
                         </FormField>

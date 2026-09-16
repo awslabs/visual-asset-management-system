@@ -46,6 +46,13 @@ interface TrackedCascade {
 
 const shortId = (cascadeId: string) => `${cascadeId.substring(0, 8)}...`;
 
+/** The trigger asset's database: the listing's `databaseId`, else the row's `triggeredBy*` id. */
+export const cascadeTriggerDatabaseId = (record: CascadeRecord): string =>
+    record.databaseId || record.triggeredByDatabaseId || "";
+
+export const cascadeTriggerAssetId = (record: CascadeRecord): string =>
+    record.assetId || record.triggeredByAssetId || "";
+
 /** "n of total" nodes evaluated, read from the row's JSON node map. */
 export const cascadeProgress = (record: CascadeRecord | null): string | null => {
     if (!record?.nodes) return null;
@@ -289,15 +296,15 @@ const ComplianceCascades: React.FC = () => {
                         sortingField: "state",
                     },
                     {
-                        id: "triggeredByDatabaseId",
+                        id: "databaseId",
                         header: `Trigger ${Synonyms.Database}`,
-                        cell: (item) => item.triggeredByDatabaseId || "-",
+                        cell: (item) => cascadeTriggerDatabaseId(item) || "-",
                         sortingField: "triggeredByDatabaseId",
                     },
                     {
-                        id: "triggeredByAssetId",
+                        id: "assetId",
                         header: `Trigger ${Synonyms.Asset}`,
-                        cell: (item) => item.triggeredByAssetId || "-",
+                        cell: (item) => cascadeTriggerAssetId(item) || "-",
                         sortingField: "triggeredByAssetId",
                     },
                     {

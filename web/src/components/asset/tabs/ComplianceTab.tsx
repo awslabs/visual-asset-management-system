@@ -5,18 +5,18 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import {
-    Box,
-    Button,
-    Container,
-    Header,
-    Link,
-    Pagination,
-    SpaceBetween,
-    StatusIndicator,
-    Table,
-    Alert,
-} from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import ColumnLayout from "@cloudscape-design/components/column-layout";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
+import Link from "@cloudscape-design/components/link";
+import Modal from "@cloudscape-design/components/modal";
+import Pagination from "@cloudscape-design/components/pagination";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
+import Table from "@cloudscape-design/components/table";
 import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
 import {
     EXECUTION_DETAILS_API_ROUTE,
@@ -28,11 +28,13 @@ import {
     evaluateAssetCompliance,
     releaseFromQuarantine,
     grantException,
+    revokeException,
     ComplianceState,
     EvaluationRecord,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../../../services/ComplianceService";
 import ReasonModal from "../../compliance/ReasonModal";
+import { ComplianceStateBadge } from "../../compliance/complianceStateBadge";
 import Synonyms from "../../../synonyms";
 
 interface ComplianceTabProps {
@@ -47,15 +49,6 @@ const COMPLIANCE_EVALUATE_API_ROUTE = "/compliance/evaluate/{databaseId}/{assetI
 const COMPLIANCE_RELEASE_API_ROUTE = "/compliance/quarantine/{databaseId}/{assetId}/release";
 const COMPLIANCE_EXCEPTION_API_ROUTE = "/compliance/quarantine/{databaseId}/{assetId}/exception";
 
-const stateIndicatorMap: Record<string, { type: string; label: string }> = {
-    unknown: { type: "stopped", label: "Unknown" },
-    pending_evaluation: { type: "in-progress", label: "Pending Evaluation" },
-    compliant: { type: "success", label: "Compliant" },
-    non_compliant: { type: "warning", label: "Non-Compliant" },
-    quarantined: { type: "error", label: "Quarantined" },
-    pending_parent_resolution: { type: "warning", label: "Pending Parent Resolution" },
-};
-
 const verdictIndicatorMap: Record<string, { type: string; label: string }> = {
     compliant: { type: "success", label: "Compliant" },
     non_compliant: { type: "warning", label: "Non-Compliant" },
@@ -64,6 +57,8 @@ const verdictIndicatorMap: Record<string, { type: string; label: string }> = {
     error: { type: "error", label: "Error" },
 };
 
+const formatTimestamp = (value?: string) => (value ? new Date(value).toLocaleString() : "-");
+
 export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetId, isActive }) => {
     const navigate = useNavigate();
     const { can: canCallRoute, loading: routesLoading } = useAllowedRoutes();
@@ -71,6 +66,7 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
     const canEvaluate = canCallRoute("POST", COMPLIANCE_EVALUATE_API_ROUTE);
     const canRelease = canCallRoute("POST", COMPLIANCE_RELEASE_API_ROUTE);
     const canGrantException = canCallRoute("POST", COMPLIANCE_EXCEPTION_API_ROUTE);
+    const canRevokeException = canCallRoute("DELETE", COMPLIANCE_EXCEPTION_API_ROUTE);
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
 
     const [complianceState, setComplianceState] = useState<ComplianceState | null>(null);
@@ -81,6 +77,8 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
     const [actionMessage, setActionMessage] = useState<string | null>(null);
     const [exceptionModalVisible, setExceptionModalVisible] = useState(false);
     const [granting, setGranting] = useState(false);
+    const [revokeModalVisible, setRevokeModalVisible] = useState(false);
+    const [revoking, setRevoking] = useState(false);
 
     // Server-side token paging of the evaluation history: tokens[i] is the startingToken that
     // fetches page i (tokens[0] is undefined).
@@ -188,6 +186,21 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
         }
     };
 
+    const handleRevokeException = async () => {
+        setRevoking(true);
+        setActionMessage(null);
+        setError(null);
+        const [success, result] = await revokeException(databaseId, assetId);
+        setRevoking(false);
+        setRevokeModalVisible(false);
+        if (success && typeof result !== "string") {
+            setActionMessage(result.message);
+            await loadComplianceData();
+        } else {
+            setError(typeof result === "string" ? result : "Failed to revoke exception");
+        }
+    };
+
     if (!routesLoading && !canViewCompliance) {
         return (
             <Box padding="l">
@@ -199,9 +212,8 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
         );
     }
 
-    const indicator = complianceState
-        ? stateIndicatorMap[complianceState.complianceState] || stateIndicatorMap.unknown
-        : stateIndicatorMap.unknown;
+    const exceptionActive = !!complianceState?.exceptionGranted;
+    const lastEvaluated = complianceState?.lastEvaluatedAt || complianceState?.lastEvaluationAt;
 
     return (
         <SpaceBetween size="l">
@@ -230,6 +242,11 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                                             Grant Exception
                                         </Button>
                                     )}
+                                {exceptionActive && canRevokeException && (
+                                    <Button onClick={() => setRevokeModalVisible(true)}>
+                                        Revoke exception
+                                    </Button>
+                                )}
                                 {canEvaluate && (
                                     <Button
                                         variant="primary"
@@ -249,9 +266,7 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                 <SpaceBetween size="m">
                     <div>
                         <Box variant="awsui-key-label">Current State</Box>
-                        <StatusIndicator type={indicator.type as any}>
-                            {indicator.label}
-                        </StatusIndicator>
+                        <ComplianceStateBadge state={complianceState?.complianceState} />
                     </div>
                     {complianceState?.schemaName && (
                         <div>
@@ -259,11 +274,50 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                             <div>{complianceState.schemaName}</div>
                         </div>
                     )}
-                    {complianceState?.lastEvaluationAt && (
+                    {lastEvaluated && (
                         <div>
                             <Box variant="awsui-key-label">Last Evaluated</Box>
-                            <div>{new Date(complianceState.lastEvaluationAt).toLocaleString()}</div>
+                            <div>{formatTimestamp(lastEvaluated)}</div>
                         </div>
+                    )}
+                    {exceptionActive && (
+                        <Container
+                            header={
+                                <Header
+                                    variant="h3"
+                                    description={`This ${Synonyms.asset} stays released from quarantine while the exception holds. It ends when it is revoked or when the schema it was granted against changes.`}
+                                >
+                                    Active exception
+                                </Header>
+                            }
+                        >
+                            <ColumnLayout columns={2} variant="text-grid">
+                                <div>
+                                    <Box variant="awsui-key-label">Reason</Box>
+                                    <div>{complianceState?.exceptionReason || "-"}</div>
+                                </div>
+                                <div>
+                                    <Box variant="awsui-key-label">Granted by</Box>
+                                    <div>{complianceState?.exceptionGrantedBy || "-"}</div>
+                                </div>
+                                <div>
+                                    <Box variant="awsui-key-label">Granted at</Box>
+                                    <div>
+                                        {formatTimestamp(complianceState?.exceptionGrantedAt)}
+                                    </div>
+                                </div>
+                                <div>
+                                    <Box variant="awsui-key-label">Schema</Box>
+                                    <div>
+                                        {complianceState?.exceptionSchemaName
+                                            ? complianceState.exceptionSchemaVersion !== undefined
+                                                ? `${complianceState.exceptionSchemaName} (version ${complianceState.exceptionSchemaVersion})`
+                                                : complianceState.exceptionSchemaName
+                                            : "-"}
+                                    </div>
+                                </div>
+                            </ColumnLayout>
+                        </Container>
                     )}
                 </SpaceBetween>
             </Container>
@@ -317,9 +371,16 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                                     verdictIndicatorMap[item.verdict || item.result] ||
                                     verdictIndicatorMap.error;
                                 return (
-                                    <StatusIndicator type={verdict.type as any}>
-                                        {verdict.label}
-                                    </StatusIndicator>
+                                    <SpaceBetween direction="horizontal" size="xs">
+                                        <StatusIndicator type={verdict.type as any}>
+                                            {verdict.label}
+                                        </StatusIndicator>
+                                        {item.exceptionApplied && (
+                                            <StatusIndicator type="info">
+                                                Exception applied
+                                            </StatusIndicator>
+                                        )}
+                                    </SpaceBetween>
                                 );
                             },
                         },
@@ -363,6 +424,37 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                 onConfirm={handleException}
                 onDismiss={() => setExceptionModalVisible(false)}
             />
+
+            <Modal
+                visible={revokeModalVisible}
+                onDismiss={() => setRevokeModalVisible(false)}
+                header="Revoke compliance exception"
+                closeAriaLabel="Close dialog"
+                footer={
+                    <Box float="right">
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <Button
+                                variant="link"
+                                onClick={() => setRevokeModalVisible(false)}
+                                disabled={revoking}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                variant="primary"
+                                onClick={handleRevokeException}
+                                loading={revoking}
+                            >
+                                Revoke
+                            </Button>
+                        </SpaceBetween>
+                    </Box>
+                }
+            >
+                The {Synonyms.asset} returns to the state of its last evaluation. When that
+                evaluation quarantined it, it is quarantined again. The revocation is recorded in
+                the compliance audit log.
+            </Modal>
         </SpaceBetween>
     );
 };

@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ComplianceTab } from "./ComplianceTab";
 import * as permissions from "../../../features/orchestration/permissions/useAllowedRoutes";
@@ -26,6 +26,7 @@ jest.mock("../../../services/ComplianceService", () => ({
     evaluateAssetCompliance: jest.fn(),
     releaseFromQuarantine: jest.fn(),
     grantException: jest.fn(),
+    revokeException: jest.fn(),
 }));
 
 const service = () =>
@@ -115,5 +116,119 @@ describe("ComplianceTab", () => {
             );
         });
         expect(await screen.findByText("Exception granted")).toBeInTheDocument();
+    });
+});
+
+describe("ComplianceTab exception state", () => {
+    const exceptionState = {
+        databaseId: "db1",
+        assetId: "asset-1",
+        complianceState: "exception",
+        schemaName: "std",
+        lastEvaluatedAt: "2026-02-01T10:00:00Z",
+        exceptionGranted: true,
+        exceptionReason: "Accepted legacy scan",
+        exceptionGrantedBy: "reviewer",
+        exceptionGrantedAt: "2026-02-02T09:30:00Z",
+        exceptionSchemaName: "std",
+        exceptionSchemaVersion: 3,
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (permissions.useAllowedRoutes as jest.Mock).mockReturnValue({
+            can: () => true,
+            loading: false,
+        });
+        service().fetchComplianceState.mockResolvedValue([true, exceptionState]);
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            {
+                evaluations: [{ ...evaluation("ev-1", "std"), exceptionApplied: true }],
+                nextToken: undefined,
+            },
+        ]);
+    });
+
+    it("renders the exception badge and details, and marks evaluations it applied to", async () => {
+        renderTab();
+
+        expect(await screen.findByText("Exception")).toBeInTheDocument();
+        expect(screen.getByText("Active exception")).toBeInTheDocument();
+        expect(screen.getByText("Accepted legacy scan")).toBeInTheDocument();
+        expect(screen.getByText("reviewer")).toBeInTheDocument();
+        expect(
+            screen.getByText(new Date("2026-02-02T09:30:00Z").toLocaleString())
+        ).toBeInTheDocument();
+        expect(screen.getByText("std (version 3)")).toBeInTheDocument();
+        expect(
+            screen.getByText(new Date("2026-02-01T10:00:00Z").toLocaleString())
+        ).toBeInTheDocument();
+        expect(screen.getByText("Exception applied")).toBeInTheDocument();
+        // Quarantine-only actions stay hidden while the asset is released.
+        expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Grant Exception" })).not.toBeInTheDocument();
+    });
+
+    it("revokes the exception after confirmation and reloads the state", async () => {
+        service().revokeException.mockResolvedValue([
+            true,
+            {
+                message: "Exception revoked",
+                databaseId: "db1",
+                assetId: "asset-1",
+                complianceState: "quarantined",
+            },
+        ]);
+
+        renderTab();
+        await userEvent.click(await screen.findByRole("button", { name: "Revoke exception" }));
+
+        const dialog = screen.getByRole("dialog", { name: "Revoke compliance exception" });
+        expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+        expect(service().revokeException).not.toHaveBeenCalled();
+
+        await userEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
+
+        await waitFor(() => {
+            expect(service().revokeException).toHaveBeenCalledWith("db1", "asset-1");
+        });
+        expect(await screen.findByText("Exception revoked")).toBeInTheDocument();
+        expect(service().fetchComplianceState).toHaveBeenCalledTimes(2);
+    });
+
+    it("cancelling the confirmation revokes nothing", async () => {
+        renderTab();
+        await userEvent.click(await screen.findByRole("button", { name: "Revoke exception" }));
+        const dialog = screen.getByRole("dialog", { name: "Revoke compliance exception" });
+        await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+        expect(service().revokeException).not.toHaveBeenCalled();
+        // Cloudscape keeps a dismissed modal mounted and marks it hidden.
+        await waitFor(() => {
+            expect(dialog.className).toMatch(/awsui_hidden/);
+        });
+    });
+
+    it("surfaces the backend refusal when no exception is active", async () => {
+        service().revokeException.mockResolvedValue([false, "No exception is active"]);
+
+        renderTab();
+        await userEvent.click(await screen.findByRole("button", { name: "Revoke exception" }));
+        const dialog = screen.getByRole("dialog", { name: "Revoke compliance exception" });
+        await userEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
+
+        expect(await screen.findByText("No exception is active")).toBeInTheDocument();
+    });
+
+    it("hides the revoke action without the DELETE route", async () => {
+        (permissions.useAllowedRoutes as jest.Mock).mockReturnValue({
+            can: (method: string) => method !== "DELETE",
+            loading: false,
+        });
+
+        renderTab();
+        await screen.findByText("Active exception");
+        expect(screen.queryByRole("button", { name: "Revoke exception" })).not.toBeInTheDocument();
     });
 });

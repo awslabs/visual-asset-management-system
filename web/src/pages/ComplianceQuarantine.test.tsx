@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ComplianceQuarantine from "./ComplianceQuarantine";
 import { COMPLIANCE_LISTING_PAGE_SIZE } from "../services/ComplianceService";
@@ -118,5 +118,25 @@ describe("ComplianceQuarantine", () => {
         expect(
             await screen.findByRole("button", { name: /Refresh quarantined/ })
         ).toBeInTheDocument();
+    });
+
+    it("renders each row's state through the shared badge", async () => {
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            {
+                quarantinedAssets: [
+                    quarantined("asset-1"),
+                    { ...quarantined("asset-2"), complianceState: "exception" },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceQuarantine />);
+        await screen.findByText("Name of asset-1");
+        const rowOf = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+        expect(within(rowOf("Name of asset-1")).getByText("Quarantined")).toBeInTheDocument();
+        // The badge shares its label with the row's "Exception" action button.
+        expect(within(rowOf("Name of asset-1")).getAllByText("Exception")).toHaveLength(1);
+        expect(within(rowOf("Name of asset-2")).getAllByText("Exception")).toHaveLength(2);
     });
 });

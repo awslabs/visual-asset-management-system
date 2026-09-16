@@ -9,7 +9,6 @@ import Button from "@cloudscape-design/components/button";
 import Header from "@cloudscape-design/components/header";
 import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
 import Link from "@cloudscape-design/components/link";
@@ -22,6 +21,7 @@ import {
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
 import ReasonModal from "../components/compliance/ReasonModal";
+import { ComplianceStateBadge } from "../components/compliance/complianceStateBadge";
 
 const ComplianceQuarantine: React.FC = () => {
     const [items, setItems] = useState<QuarantinedAsset[]>([]);
@@ -211,14 +211,10 @@ const ComplianceQuarantine: React.FC = () => {
                         cell: (item) => item.quarantineReason || "-",
                     },
                     {
-                        id: "exceptionGranted",
-                        header: "Exception",
-                        cell: (item) =>
-                            item.exceptionGranted ? (
-                                <StatusIndicator type="warning">Granted</StatusIndicator>
-                            ) : (
-                                <StatusIndicator type="stopped">None</StatusIndicator>
-                            ),
+                        id: "complianceState",
+                        header: "State",
+                        cell: (item) => <ComplianceStateBadge state={item.complianceState} />,
+                        sortingField: "complianceState",
                     },
                     {
                         id: "updatedAt",

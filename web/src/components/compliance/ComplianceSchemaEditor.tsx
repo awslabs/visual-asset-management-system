@@ -30,17 +30,30 @@ import Button from "@cloudscape-design/components/button";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 import Header from "@cloudscape-design/components/header";
 import Alert from "@cloudscape-design/components/alert";
+import RadioGroup from "@cloudscape-design/components/radio-group";
+import AttributeEditor from "@cloudscape-design/components/attribute-editor";
 import type { editor } from "monaco-editor";
-import { CompliancePipelineRef, VAMS_RULES_V1_FORMAT } from "../../services/ComplianceService";
+import {
+    CompliancePipelineInputFilesMode,
+    CompliancePipelineRef,
+    PIPELINE_INPUT_FILES_MODES,
+    VAMS_RULES_V1_FORMAT,
+} from "../../services/ComplianceService";
 import {
     COMPLIANCE_ID_PATTERN,
     ENFORCEMENT_OPTIONS,
+    INPUT_FILES_MAX_FILTERS,
+    INPUT_FILES_MAX_FILTER_LENGTH,
+    INPUT_FILES_MAX_KEYS,
+    INPUT_FILES_MODE_OPTIONS,
+    InputFilesDraft,
     PIPELINE_REF_FIELDS,
     RulesDraft,
     bodyFromRulesDraft,
     isVamsRulesBody,
     newPipelineRuleDraft,
     rulesDraftFromBody,
+    validateInputFiles,
     validatePipelineRef,
 } from "./complianceSchemaRules";
 
@@ -72,6 +85,50 @@ const PIPELINE_REF_META_SCHEMA = {
     additionalProperties: false,
 };
 
+const INPUT_FILES_META_SCHEMA = {
+    type: "object",
+    required: ["mode"],
+    description:
+        "Which of the asset's files the workflow receives when the rule runs. Absent means matching.",
+    properties: {
+        mode: {
+            type: "string",
+            enum: PIPELINE_INPUT_FILES_MODES,
+            description:
+                "matching: the asset's files passing the workflow's, the pipeline's and this rule's filters; wholeAsset: the asset root, where the workflow allows it; explicit: exactly the listed keys.",
+        },
+        filter: {
+            type: "array",
+            maxItems: INPUT_FILES_MAX_FILTERS,
+            items: { type: "string", minLength: 1, maxLength: INPUT_FILES_MAX_FILTER_LENGTH },
+            description:
+                "Glob allow list applied after the workflow's and pipeline's own input filters (matching only). A single-input workflow must end with exactly one file.",
+        },
+        keys: {
+            type: "array",
+            minItems: 1,
+            maxItems: INPUT_FILES_MAX_KEYS,
+            items: { type: "string", pattern: "^/.+" },
+            description: "Asset-relative file paths beginning with / (explicit only).",
+        },
+    },
+    additionalProperties: false,
+    allOf: [
+        {
+            if: { required: ["mode"], properties: { mode: { const: "matching" } } },
+            then: { not: { required: ["keys"] } },
+        },
+        {
+            if: { required: ["mode"], properties: { mode: { const: "wholeAsset" } } },
+            then: { not: { anyOf: [{ required: ["keys"] }, { required: ["filter"] }] } },
+        },
+        {
+            if: { required: ["mode"], properties: { mode: { const: "explicit" } } },
+            then: { required: ["keys"], not: { required: ["filter"] } },
+        },
+    ],
+};
+
 const TOLERANCE_META_SCHEMA = {
     type: "object",
     required: ["operator"],
@@ -100,6 +157,7 @@ const RULE_META_SCHEMA = {
             description: "What a failed check does to the asset.",
         },
         pipelineRef: PIPELINE_REF_META_SCHEMA,
+        inputFiles: INPUT_FILES_META_SCHEMA,
         inputParameters: {
             type: "object",
             description: "Parameters handed to the workflow execution (pipeline rules).",
@@ -212,7 +270,8 @@ const JSON_SCHEMA_META_SCHEMA = {
 
 /**
  * Meta-schema Monaco validates the body against. A body carrying `schemaFormat` is a
- * vams-rules-v1 rule set; any other body is a JSON Schema (draft-07 subset).
+ * vams-rules-v1 rule set, the only format the API registers; the JSON Schema branch keeps
+ * an existing legacy body readable in the JSON view.
  */
 const COMPLIANCE_META_SCHEMA = {
     uri: "http://vams/compliance-schema",
@@ -266,6 +325,64 @@ const cardStyle: React.CSSProperties = {
     borderRadius: "8px",
 };
 
+interface StringListEditorProps {
+    items: string[];
+    onChange: (items: string[]) => void;
+    /** Label of every entry's field, e.g. "Glob pattern"; also names the entries to screen readers. */
+    itemLabel: string;
+    addButtonText: string;
+    placeholder: string;
+    empty: string;
+    max: number;
+    disabled?: boolean;
+}
+
+/** One text field per entry with add and remove controls, for a rule's globs or file paths. */
+function StringListEditor({
+    items,
+    onChange,
+    itemLabel,
+    addButtonText,
+    placeholder,
+    empty,
+    max,
+    disabled = false,
+}: StringListEditorProps) {
+    const lower = itemLabel.toLowerCase();
+    return (
+        <AttributeEditor<string>
+            items={items}
+            addButtonText={addButtonText}
+            addButtonVariant="inline-link"
+            removeButtonText="Remove"
+            removeButtonAriaLabel={(item) => `Remove ${lower} ${item || "(empty)"}`}
+            disableAddButton={disabled || items.length >= max}
+            isItemRemovable={() => !disabled}
+            empty={empty}
+            onAddButtonClick={() => onChange([...items, ""])}
+            onRemoveButtonClick={({ detail }) =>
+                onChange(items.filter((_, i) => i !== detail.itemIndex))
+            }
+            definition={[
+                {
+                    label: itemLabel,
+                    control: (item, index) => (
+                        <Input
+                            value={item}
+                            ariaLabel={`${itemLabel} ${index + 1}`}
+                            placeholder={placeholder}
+                            disabled={disabled}
+                            onChange={({ detail }) =>
+                                onChange(items.map((v, i) => (i === index ? detail.value : v)))
+                            }
+                        />
+                    ),
+                },
+            ]}
+        />
+    );
+}
+
 interface ComplianceSchemaEditorProps {
     value: string;
     onChange: (value: string) => void;
@@ -307,28 +424,9 @@ export default function ComplianceSchemaEditor({
                 return;
             }
 
-            const props: PropertyDef[] = [];
-            const requiredList: string[] = parsed.required || [];
-
-            if (parsed.properties) {
-                for (const [name, def] of Object.entries(parsed.properties)) {
-                    const d = def as any;
-                    props.push({
-                        name,
-                        type: d.type || "string",
-                        description: d.description || "",
-                        required: requiredList.includes(name),
-                        enumValues: d.enum ? d.enum.join(", ") : "",
-                        minimum: d.minimum !== undefined ? String(d.minimum) : "",
-                        maximum: d.maximum !== undefined ? String(d.maximum) : "",
-                        minLength: d.minLength !== undefined ? String(d.minLength) : "",
-                        maxLength: d.maxLength !== undefined ? String(d.maxLength) : "",
-                    });
-                }
-            }
-            setProperties(props);
-            setAdditionalProperties(parsed.additionalProperties !== false);
-            setBuilderMode("properties");
+            // The API accepts only vams-rules-v1 bodies, so any other document opens as an empty rule set.
+            setRulesDraft(rulesDraftFromBody({ schemaFormat: VAMS_RULES_V1_FORMAT, rules: {} }));
+            setBuilderMode("rules");
         } catch {
             // Don't sync on invalid JSON
         }
@@ -432,6 +530,11 @@ export default function ComplianceSchemaEditor({
         updateRule(index, { pipelineRef: { ...rule.pipelineRef, [key]: val } });
     };
 
+    const updateInputFiles = (index: number, patch: Partial<InputFilesDraft>) => {
+        const rule = rulesDraft.rules[index];
+        updateRule(index, { inputFiles: { ...rule.inputFiles, ...patch } });
+    };
+
     const addPipelineRule = () => {
         const names = rulesDraft.rules.map((r) => r.name);
         applyRulesDraft({
@@ -456,11 +559,81 @@ export default function ComplianceSchemaEditor({
     const errorCount = markers.filter((m) => m.severity === 8).length;
     const warningCount = markers.filter((m) => m.severity === 4).length;
 
+    const renderInputFiles = (idx: number, inputFiles: InputFilesDraft) => {
+        const errors = validateInputFiles(inputFiles);
+        return (
+            <SpaceBetween size="s">
+                <FormField
+                    label="Input files"
+                    description="Which of the asset's files the workflow receives when the rule runs."
+                    errorText={errors.mode}
+                    stretch
+                >
+                    <RadioGroup
+                        value={inputFiles.mode}
+                        onChange={({ detail }) =>
+                            updateInputFiles(idx, {
+                                mode: detail.value as CompliancePipelineInputFilesMode,
+                            })
+                        }
+                        items={INPUT_FILES_MODE_OPTIONS.map((option) => ({
+                            value: option.value,
+                            label: option.label,
+                            description: option.description,
+                            disabled: readOnly,
+                        }))}
+                        ariaRequired
+                    />
+                </FormField>
+                {inputFiles.mode === "matching" && (
+                    <FormField
+                        label="File globs (optional)"
+                        description="Applied after the workflow's and the pipeline's own input filters. A single-input workflow must be left with exactly one matching file."
+                        constraintText={`Up to ${INPUT_FILES_MAX_FILTERS} globs.`}
+                        errorText={errors.filter}
+                        stretch
+                    >
+                        <StringListEditor
+                            items={inputFiles.filter}
+                            onChange={(filter) => updateInputFiles(idx, { filter })}
+                            itemLabel="Glob pattern"
+                            addButtonText="Add glob"
+                            placeholder="*.glb"
+                            empty="No globs: every file the workflow and pipeline filters accept is a candidate."
+                            max={INPUT_FILES_MAX_FILTERS}
+                            disabled={readOnly}
+                        />
+                    </FormField>
+                )}
+                {inputFiles.mode === "explicit" && (
+                    <FormField
+                        label="File paths"
+                        description="Asset-relative paths beginning with /; each must exist on the asset when the rule runs."
+                        constraintText={`At least one and up to ${INPUT_FILES_MAX_KEYS} paths.`}
+                        errorText={errors.keys}
+                        stretch
+                    >
+                        <StringListEditor
+                            items={inputFiles.keys}
+                            onChange={(keys) => updateInputFiles(idx, { keys })}
+                            itemLabel="File path"
+                            addButtonText="Add file path"
+                            placeholder="/models/part.stl"
+                            empty="No file paths listed."
+                            max={INPUT_FILES_MAX_KEYS}
+                            disabled={readOnly}
+                        />
+                    </FormField>
+                )}
+            </SpaceBetween>
+        );
+    };
+
     const renderRulesBuilder = () => (
         <SpaceBetween size="m">
             <Header
                 variant="h3"
-                description="Rules of a vams-rules-v1 schema. A pipeline rule runs a workflow and compares its output against tolerances; checks and input parameters are edited in the JSON Editor tab and kept as they are."
+                description="Rules of a vams-rules-v1 schema. A pipeline rule runs a workflow on the input files it selects and compares the output against tolerances; checks and input parameters are edited in the JSON Editor tab and kept as they are."
                 actions={
                     <Button onClick={addPipelineRule} disabled={readOnly}>
                         Add pipeline rule
@@ -538,7 +711,7 @@ export default function ComplianceSchemaEditor({
                                     />
                                 </FormField>
                             </ColumnLayout>
-                            {rule.ruleType === "pipeline" ? (
+                            {rule.ruleType === "pipeline" && (
                                 <ColumnLayout columns={2}>
                                     {PIPELINE_REF_FIELDS.map((field) => (
                                         <FormField
@@ -557,7 +730,9 @@ export default function ComplianceSchemaEditor({
                                         </FormField>
                                     ))}
                                 </ColumnLayout>
-                            ) : (
+                            )}
+                            {rule.ruleType === "pipeline" && renderInputFiles(idx, rule.inputFiles)}
+                            {rule.ruleType !== "pipeline" && (
                                 <Box color="text-body-secondary" fontSize="body-s">
                                     The checks of a {rule.ruleType} rule are edited in the JSON
                                     Editor tab.

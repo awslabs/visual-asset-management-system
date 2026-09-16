@@ -18,10 +18,42 @@ import {
     fetchQuarantinedAssets,
     fetchDatabaseComplianceOverview,
     getDatabaseBindings,
+    revokeException,
 } from "./ComplianceService";
 
 const post = apiClient.post as jest.Mock;
 const get = apiClient.get as jest.Mock;
+const del = apiClient.del as jest.Mock;
+
+describe("quarantine exceptions", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("revokeException DELETEs the exception route and returns the restored state", async () => {
+        del.mockResolvedValue({
+            message: "Exception revoked",
+            databaseId: "db1",
+            assetId: "a1",
+            complianceState: "quarantined",
+        });
+        const result = await revokeException("db1", "a1");
+        expect(del).toHaveBeenCalledWith("compliance/quarantine/db1/a1/exception", {});
+        expect(result).toEqual([
+            true,
+            {
+                message: "Exception revoked",
+                databaseId: "db1",
+                assetId: "a1",
+                complianceState: "quarantined",
+            },
+        ]);
+    });
+
+    it("revokeException surfaces the 400 of a record without an active exception", async () => {
+        del.mockRejectedValue(new Error("No exception is active"));
+        const result = await revokeException("db1", "a1");
+        expect(result).toEqual([false, "No exception is active"]);
+    });
+});
 
 describe("cascade approve/reject reasons", () => {
     beforeEach(() => jest.clearAllMocks());
@@ -135,7 +167,7 @@ describe("paged listings", () => {
         get.mockResolvedValue({
             databaseId: "db1",
             totalAssets: 120,
-            summary: { compliant: 100, non_compliant: 20 },
+            summary: { compliant: 100, non_compliant: 18, exception: 2 },
             assets: [{ assetId: "a1" }],
             NextToken: "tok-2",
         });
@@ -148,7 +180,7 @@ describe("paged listings", () => {
             {
                 databaseId: "db1",
                 totalAssets: 120,
-                summary: { compliant: 100, non_compliant: 20 },
+                summary: { compliant: 100, non_compliant: 18, exception: 2 },
                 assets: [{ assetId: "a1" }],
                 nextToken: "tok-2",
             },

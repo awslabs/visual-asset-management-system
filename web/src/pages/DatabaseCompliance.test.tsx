@@ -30,9 +30,10 @@ const overviewPage = (assetName: string, nextToken?: string) => ({
     totalAssets: 120,
     summary: {
         compliant: 100,
-        non_compliant: 15,
+        non_compliant: 11,
         pending_evaluation: 3,
         quarantined: 2,
+        exception: 4,
         unknown: 0,
     },
     assets: [
@@ -41,6 +42,13 @@ const overviewPage = (assetName: string, nextToken?: string) => ({
             assetId: `id-${assetName}`,
             assetName,
             complianceState: "compliant",
+            schemaName: "std",
+        },
+        {
+            databaseId: "db1",
+            assetId: `id-${assetName}-excepted`,
+            assetName: `${assetName}-excepted`,
+            complianceState: "exception",
             schemaName: "std",
         },
     ],
@@ -69,8 +77,8 @@ describe("DatabaseCompliance asset-state paging", () => {
 
         // The summary is the whole database; the table counter is the page against that total.
         expect(screen.getByText("120")).toBeInTheDocument();
-        expect(screen.getByText("(1 of 120)")).toBeInTheDocument();
-        expect(screen.getByText(/Showing 1 of 120 tracked/)).toBeInTheDocument();
+        expect(screen.getByText("(2 of 120)")).toBeInTheDocument();
+        expect(screen.getByText(/Showing 2 of 120 tracked/)).toBeInTheDocument();
         expect(service().fetchDatabaseComplianceOverview.mock.calls[0]).toEqual([
             "db1",
             { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken: undefined },
@@ -85,5 +93,17 @@ describe("DatabaseCompliance asset-state paging", () => {
             startingToken: "tok-2",
         });
         expect(screen.getByText("Schema: std")).toBeInTheDocument();
+    });
+
+    it("shows the exception bucket in the summary and the exception badge in the table", async () => {
+        service().fetchDatabaseComplianceOverview.mockResolvedValue([true, overviewPage("asset")]);
+
+        render(<DatabaseCompliancePage />);
+        await screen.findByText("asset-excepted");
+
+        // The tile label and the row badge both read "Exception"; the count sits beside the tile.
+        expect(screen.getAllByText("Exception")).toHaveLength(2);
+        expect(screen.getByText("4")).toBeInTheDocument();
+        expect(screen.getAllByText("Compliant")).toHaveLength(2);
     });
 });
