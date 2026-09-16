@@ -355,13 +355,28 @@ def resolve_schema_inheritance(
 
 # --- Evaluation result models ---
 
+# Statuses of a rule result. `evaluated` is a rule whose checks ran (and passed or failed);
+# `error` is a rule the tooling could not evaluate at all — a pipeline rule whose input selection
+# the workflow does not accept, matches no single file or names a file the asset lacks, or whose
+# workflow execution could not be started. Whether an `error` result bears on the verdict is decided
+# by `common.compliance.evaluationEngine.TOOLING_FAILURES_APPLY_ENFORCEMENT`.
+RULE_STATUS_EVALUATED = "evaluated"
+RULE_STATUS_ERROR = "error"
+RULE_STATUSES = (RULE_STATUS_EVALUATED, RULE_STATUS_ERROR)
+
 
 class RuleResult(BaseModel, extra='ignore'):
-    """Result of evaluating a single compliance rule."""
+    """Result of evaluating a single compliance rule.
+
+    `status` is `evaluated` (the checks ran; `passed` is their outcome) or `error` (the rule could
+    not be evaluated; `passed` is False and `message` says why). A stored result without a status
+    reads as `evaluated`.
+    """
     ruleName: str
     ruleType: str
     enforcement: str
     passed: bool
+    status: str = Field(RULE_STATUS_EVALUATED, regex="^(" + "|".join(RULE_STATUSES) + ")$")
     message: Optional[str] = None
     measured: Optional[Dict[str, Any]] = None
     expected: Optional[Dict[str, Any]] = None
@@ -379,7 +394,9 @@ class EvaluationVerdict(str, Enum):
 def determine_verdict(rule_results: List[RuleResult]) -> EvaluationVerdict:
     """Determine the final compliance verdict from rule results.
 
-    Precedence: quarantine > warn > inform.
+    Precedence: quarantine > warn > inform. Every result given counts: the caller decides which
+    results bear on the verdict (`common.compliance.evaluationEngine.determine_verdict` leaves out
+    `status: error` results unless `TOOLING_FAILURES_APPLY_ENFORCEMENT` is set).
     """
     has_quarantine_failure = False
     has_warn_failure = False

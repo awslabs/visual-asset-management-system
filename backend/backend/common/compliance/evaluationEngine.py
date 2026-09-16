@@ -10,6 +10,7 @@ measurements). DynamoDB / S3 / Lambda access lives in
 """
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from customLogging.logger import safeLogger
@@ -22,15 +23,38 @@ from models.compliance import (
     RelationshipCheck,
     RelationshipRule,
     RuleResult,
+    RULE_STATUS_ERROR,
+    RULE_STATUS_EVALUATED,
     RULE_TYPE_MODELS,
     Tolerance,
     ToleranceOperator,
+    determine_verdict as verdict_of_results,
     resolve_schema_inheritance,
 )
 
 logger = safeLogger(service_name="ComplianceEvaluationEngine")
 
 VAMS_RULES_V1 = "vams-rules-v1"
+# The `schemaFormat` the schema listing reports for a stored body that does not declare
+# vams-rules-v1 (a JSON-Schema row from before the format existed). Such a schema cannot be
+# evaluated, updated or bound; it can only be inspected and deleted.
+SCHEMA_FORMAT_LEGACY = "legacy"
+
+TOOLING_FAILURES_APPLY_ENFORCEMENT = False
+"""Whether a `status: error` rule result counts against the asset.
+
+A pipeline rule errors — rather than fails — when the tooling could not evaluate it: its input
+selection is not accepted by the workflow, did not match exactly one file or names a file the asset
+does not have, or its workflow execution could not be started. These are schema-author or platform
+mistakes, not properties of the asset.
+
+    False (default): errored results are left out of `determine_verdict` and `violations`; an
+        evaluation whose every rule errored has verdict `error` and leaves the asset state unchanged.
+    True: an errored result is treated as a failed rule and its enforcement applies (a `quarantine`
+        rule that cannot run quarantines the asset).
+
+The switch is read at call time, so flipping this one line changes the behaviour everywhere.
+"""
 
 # Compliance states stored on the asset-state table.
 STATE_COMPLIANT = "compliant"
@@ -108,6 +132,12 @@ def parse_schema_body(raw: Any) -> Optional[Dict[str, Any]]:
 def is_vams_rules_schema(schema_body: Optional[Dict[str, Any]]) -> bool:
     """True when the body declares the vams-rules-v1 format."""
     return bool(schema_body) and schema_body.get("schemaFormat") == VAMS_RULES_V1
+
+
+def schema_format(schema_body: Any) -> str:
+    """The format a stored schema body is in: `vams-rules-v1` when it declares that format,
+    `SCHEMA_FORMAT_LEGACY` for anything else (a JSON-Schema body, an unparseable one)."""
+    return VAMS_RULES_V1 if is_vams_rules_schema(parse_schema_body(schema_body)) else SCHEMA_FORMAT_LEGACY
 
 
 def resolve_rules(
@@ -404,19 +434,31 @@ def evaluate_pipeline_rule(
 
 
 def failed_pipeline_rule_results(
-    pipeline_rules: Dict[str, PipelineRule], message: str,
+    pipeline_rules: Dict[str, PipelineRule], message: str, status: str = RULE_STATUS_EVALUATED,
 ) -> List[RuleResult]:
-    """Every pipeline rule marked failed with one message (execution failed / no output)."""
+    """Every pipeline rule marked not passed with one message. `status` is `evaluated` for a rule
+    whose execution ran and failed (execution failed / pipeline reported an error) and
+    `RULE_STATUS_ERROR` for a rule the tooling could not evaluate (input selection refused, launch
+    not started)."""
     return [
         RuleResult(
             ruleName=rule_name,
             ruleType="pipeline",
             enforcement=rule.enforcement.value,
             passed=False,
+            status=status,
             message=message,
         )
         for rule_name, rule in pipeline_rules.items()
     ]
+
+
+def errored_pipeline_rule_results(
+    pipeline_rules: Dict[str, PipelineRule], message: str,
+) -> List[RuleResult]:
+    """Every pipeline rule marked `status: error` with one message: the rule could not be
+    evaluated, so `TOOLING_FAILURES_APPLY_ENFORCEMENT` decides whether it counts against the asset."""
+    return failed_pipeline_rule_results(pipeline_rules, message, status=RULE_STATUS_ERROR)
 
 
 def parse_compliance_output(text: Any) -> Optional[Dict[str, Any]]:
@@ -440,8 +482,6 @@ def default_pipeline_measurements(
     """Measurements available for every execution, used when a pipeline writes no
     compliance-output document: `execution_success` (1.0 / 0.0) and, when both timestamps
     parse, `processing_duration_seconds`."""
-    from datetime import datetime
-
     measurements: Dict[str, Any] = {
         "execution_success": 1.0 if execution_status == "SUCCEEDED" else 0.0,
     }
@@ -575,13 +615,96 @@ def exception_state(verdict: EvaluationVerdict) -> str:
 
 
 def violations(rule_results: List[RuleResult]) -> List[str]:
-    """Messages of the rules that did not pass."""
-    return [r.message for r in rule_results if not r.passed and r.message]
+    """Messages of the verdict-bearing rules that did not pass."""
+    return [r.message for r in verdict_results(rule_results) if not r.passed and r.message]
 
 
 def failed_rule_names(rule_results: List[RuleResult]) -> List[str]:
-    """Names of the rules that did not pass."""
-    return [r.ruleName for r in rule_results if not r.passed]
+    """Names of the verdict-bearing rules that did not pass."""
+    return [r.ruleName for r in verdict_results(rule_results) if not r.passed]
+
+
+# --- Rule errors and the verdict ---
+
+
+def is_errored(result: RuleResult) -> bool:
+    """Whether a rule result records a rule the tooling could not evaluate."""
+    return result.status == RULE_STATUS_ERROR
+
+
+def errored_rule_names(rule_results: List[RuleResult]) -> List[str]:
+    """Names of the rules that could not be evaluated (`status: error`), in result order."""
+    return [r.ruleName for r in rule_results if is_errored(r)]
+
+
+def verdict_results(rule_results: List[RuleResult]) -> List[RuleResult]:
+    """The results that bear on the verdict: every result while
+    `TOOLING_FAILURES_APPLY_ENFORCEMENT` is set, otherwise the evaluated ones only."""
+    if TOOLING_FAILURES_APPLY_ENFORCEMENT:
+        return list(rule_results)
+    return [r for r in rule_results if not is_errored(r)]
+
+
+def no_verdict(rule_results: List[RuleResult]) -> bool:
+    """Whether the results yield no verdict: at least one rule errored and no verdict-bearing result
+    remains. Never true while `TOOLING_FAILURES_APPLY_ENFORCEMENT` is set (every result then bears
+    on the verdict); an evaluation with no results at all is a compliant verdict, not an error."""
+    return bool(errored_rule_names(rule_results)) and not verdict_results(rule_results)
+
+
+def determine_verdict(rule_results: List[RuleResult]) -> EvaluationVerdict:
+    """The verdict of a completed evaluation: `error` when the results yield none (`no_verdict`),
+    otherwise the enforcement precedence of the verdict-bearing results."""
+    if no_verdict(rule_results):
+        return EvaluationVerdict.error
+    return verdict_of_results(verdict_results(rule_results))
+
+
+def evaluation_status_for(verdict: EvaluationVerdict) -> str:
+    """The evaluation-row `status` a verdict records: `pending_pipeline` while pipeline rules run,
+    `error` when the results yield no verdict, `completed` otherwise. The same value is written to
+    the asset-state row as `lastEvaluationStatus`."""
+    if verdict == EvaluationVerdict.pending_pipeline:
+        return EVALUATION_STATUS_PENDING_PIPELINE
+    if verdict == EvaluationVerdict.error:
+        return EVALUATION_STATUS_ERROR
+    return EVALUATION_STATUS_COMPLETED
+
+
+# --- Evaluation ordering against the asset-state row ---
+
+
+def parse_timestamp(value: Any) -> Optional[datetime]:
+    """An ISO-8601 timestamp (the store's `isoformat()` output, a trailing `Z` accepted) as an aware
+    datetime; None when absent or unparseable. A naive value is read as UTC."""
+    if value is None or value == "":
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def evaluation_owns_state_row(state_row: Optional[Dict[str, Any]], evaluation_id: str,
+                              evaluated_at: Any) -> bool:
+    """Whether an evaluation may write the asset-state row: it is the row's `lastEvaluationId`, or
+    it began (`evaluated_at`) after the row's `lastEvaluatedAt`, or the row records no evaluation
+    yet. An evaluation older than the row's last one — a synchronous evaluation that lost the race,
+    a pipeline-rule callback landing after a newer evaluation — does not own the row, so its outcome
+    never replaces a newer one. An unparseable timestamp on either side is compared as text."""
+    row = state_row or {}
+    if not row.get("lastEvaluationId") or row.get("lastEvaluationId") == evaluation_id:
+        return True
+    last = row.get("lastEvaluatedAt")
+    if not last:
+        return True
+    this_time, last_time = parse_timestamp(evaluated_at), parse_timestamp(last)
+    if this_time is not None and last_time is not None:
+        return this_time > last_time
+    return str(evaluated_at) > str(last)
 
 
 def rule_results_from_json(text: Any) -> List[RuleResult]:

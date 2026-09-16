@@ -376,3 +376,37 @@ class TestCorrelation:
         assert json.loads(audit["details"]) == {"verdict": "compliant",
                                                 "pipelineExecutionStatus": "SUCCEEDED",
                                                 "phase": "pipeline_callback"}
+
+
+@pytest.mark.unit
+class TestFinalizeOrdering:
+    """The callback finalizes its evaluation row whatever the asset-state row says, but writes the
+    state row only while its evaluation still owns it."""
+
+    def test_a_callback_landing_after_a_newer_evaluation_leaves_the_state_row_alone(self):
+        harness = Callback(evaluation=dict(_pending_evaluation(),
+                                           evaluatedAt="2026-01-01T00:00:00+00:00"))
+        harness.state.get_item.return_value = {"Item": {
+            "complianceState": "quarantined", "lastEvaluationId": "eval-2",
+            "lastEvaluatedAt": "2026-01-01T00:00:30+00:00", "lastEvaluationStatus": "completed"}}
+        outcome = json.loads(harness.run(completion_event("SUCCEEDED"))["body"])
+        assert outcome["finalized"] is True
+        assert outcome["verdict"] == "compliant"
+        assert harness.evaluation_rows.rows["eval-1"]["status"] == "completed"
+        harness.state.update_item.assert_not_called()
+        harness.audit.put_item.assert_not_called()
+
+    def test_the_rows_own_evaluation_writes_its_start_as_the_last_evaluated_at(self):
+        harness = Callback(evaluation=dict(_pending_evaluation(),
+                                           evaluatedAt="2026-01-01T00:00:00+00:00"))
+        harness.state.get_item.return_value = {"Item": {
+            "complianceState": "pending_evaluation", "lastEvaluationId": "eval-1",
+            "lastEvaluatedAt": "2026-01-01T00:00:00+00:00",
+            "lastEvaluationStatus": "pending_pipeline"}}
+        harness.run(completion_event("SUCCEEDED"))
+        state = update_values(harness.state)[0]
+        assert state["complianceState"] == "compliant"
+        assert state["lastEvaluationId"] == "eval-1"
+        assert state["lastEvaluatedAt"] == "2026-01-01T00:00:00+00:00"
+        assert state["lastEvaluationStatus"] == "completed"
+        assert harness.evaluation_rows.rows["eval-1"]["hasRuleErrors"] is False

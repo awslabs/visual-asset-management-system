@@ -67,6 +67,7 @@ AUDIT_EVENT_TYPES = (
     "cascade_completed",
     "exception_revoked",
     "exception_superseded",
+    "evaluation_error",
 )
 
 try:

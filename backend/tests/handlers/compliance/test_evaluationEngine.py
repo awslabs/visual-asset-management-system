@@ -431,3 +431,125 @@ class TestSchemaResolution:
         assert engine.is_vams_rules_schema(self.PARENT) is True
         assert engine.is_vams_rules_schema({"type": "object"}) is False
         assert engine.is_vams_rules_schema(None) is False
+
+
+@pytest.mark.unit
+class TestRuleErrorsAndTheVerdict:
+    """A `status: error` result is a rule the tooling could not evaluate. With
+    `TOOLING_FAILURES_APPLY_ENFORCEMENT` off (the default) it bears on nothing but the row's error
+    fields; on, it is a failed rule whose enforcement applies."""
+
+    def _result(self, name, enforcement="quarantine", passed=True, status="evaluated", message=None):
+        return RuleResult(ruleName=name, ruleType="pipeline", enforcement=enforcement, passed=passed,
+                          status=status, message=message)
+
+    def _error(self, name, enforcement="quarantine", message="Pipeline execution could not be started"):
+        return self._result(name, enforcement, passed=False, status="error", message=message)
+
+    def test_the_switch_defaults_to_off(self):
+        assert engine.TOOLING_FAILURES_APPLY_ENFORCEMENT is False
+
+    def test_a_result_reads_as_evaluated_unless_it_says_error(self):
+        assert RuleResult(ruleName="a", ruleType="metadata", enforcement="warn", passed=True).status == "evaluated"
+        assert engine.is_errored(self._error("a")) is True
+        assert engine.is_errored(self._result("a", passed=False)) is False
+        with pytest.raises(ValueError):
+            RuleResult(ruleName="a", ruleType="metadata", enforcement="warn", passed=True, status="odd")
+
+    def test_a_stored_result_without_a_status_reads_as_evaluated_and_one_with_error_keeps_it(self):
+        stored = json.dumps([
+            {"ruleName": "a", "ruleType": "metadata", "enforcement": "warn", "passed": True},
+            {"ruleName": "b", "ruleType": "pipeline", "enforcement": "warn", "passed": False,
+             "status": "error"},
+        ])
+        restored = engine.rule_results_from_json(stored)
+        assert [r.status for r in restored] == ["evaluated", "error"]
+        assert engine.errored_rule_names(restored) == ["b"]
+
+    def test_errored_pipeline_rule_results_carry_the_error_status_and_a_failed_execution_does_not(self):
+        rules = {"p": _pipeline_rule()}
+        errored = engine.errored_pipeline_rule_results(rules, "Pipeline execution could not be started")
+        assert [(r.ruleName, r.passed, r.status, r.message) for r in errored] == [
+            ("p", False, "error", "Pipeline execution could not be started")]
+        failed = engine.evaluate_pipeline_rules(rules, "FAILED", None)
+        assert [(r.passed, r.status) for r in failed] == [(False, "evaluated")]
+        reported = engine.evaluate_pipeline_rules(
+            rules, "SUCCEEDED", {"complianceOutput": True, "status": "error"})
+        assert [(r.passed, r.status) for r in reported] == [(False, "evaluated")]
+
+    def test_an_errored_result_is_left_out_of_the_verdict_and_the_violations(self):
+        results = [self._result("ok"), self._error("broken", message="x"),
+                   self._result("warned", "warn", passed=False, message="w")]
+        assert engine.verdict_results(results) == [results[0], results[2]]
+        assert engine.determine_verdict(results) == EvaluationVerdict.non_compliant
+        assert engine.violations(results) == ["w"]
+        assert engine.failed_rule_names(results) == ["warned"]
+        assert engine.errored_rule_names(results) == ["broken"]
+        assert engine.no_verdict(results) is False
+
+    def test_every_rule_errored_is_the_error_verdict(self):
+        results = [self._error("a"), self._error("b", "warn")]
+        assert engine.no_verdict(results) is True
+        assert engine.determine_verdict(results) == EvaluationVerdict.error
+        assert engine.violations(results) == []
+        assert engine.evaluation_status_for(engine.determine_verdict(results)) == "error"
+
+    def test_no_results_at_all_is_compliant_not_an_error(self):
+        assert engine.no_verdict([]) is False
+        assert engine.determine_verdict([]) == EvaluationVerdict.compliant
+
+    def test_with_the_switch_on_an_errored_result_is_a_failed_rule(self, monkeypatch):
+        monkeypatch.setattr(engine, "TOOLING_FAILURES_APPLY_ENFORCEMENT", True)
+        results = [self._result("ok"), self._error("broken", message="x")]
+        assert engine.verdict_results(results) == results
+        assert engine.determine_verdict(results) == EvaluationVerdict.quarantined
+        assert engine.violations(results) == ["x"]
+        assert engine.failed_rule_names(results) == ["broken"]
+        assert engine.no_verdict([self._error("a")]) is False
+        assert engine.determine_verdict([self._error("a", "inform")]) == EvaluationVerdict.compliant
+        # The error is still recorded as such; only its bearing on the verdict changes.
+        assert engine.errored_rule_names(results) == ["broken"]
+
+    def test_the_models_verdict_takes_every_result_it_is_given(self):
+        assert determine_verdict([self._error("a")]) == EvaluationVerdict.quarantined
+
+    @pytest.mark.parametrize("verdict,status", [
+        (EvaluationVerdict.pending_pipeline, "pending_pipeline"),
+        (EvaluationVerdict.error, "error"),
+        (EvaluationVerdict.compliant, "completed"),
+        (EvaluationVerdict.non_compliant, "completed"),
+        (EvaluationVerdict.quarantined, "completed"),
+    ])
+    def test_evaluation_status_for(self, verdict, status):
+        assert engine.evaluation_status_for(verdict) == status
+
+
+@pytest.mark.unit
+class TestSchemaFormat:
+
+    def test_a_vams_rules_body_and_anything_else(self):
+        body = {"schemaFormat": "vams-rules-v1", "rules": {}}
+        assert engine.schema_format(body) == "vams-rules-v1"
+        assert engine.schema_format(json.dumps(body)) == "vams-rules-v1"
+        assert engine.schema_format({"type": "object"}) == engine.SCHEMA_FORMAT_LEGACY
+        assert engine.schema_format(json.dumps({"type": "object"})) == "legacy"
+        assert engine.schema_format("not json") == "legacy"
+        assert engine.schema_format(None) == "legacy"
+        assert engine.schema_format({"schemaFormat": "other", "rules": {}}) == "legacy"
+
+
+@pytest.mark.unit
+class TestTimestamps:
+
+    @pytest.mark.parametrize("value", [
+        "2026-03-01T12:00:00+00:00", "2026-03-01T12:00:00.000Z", "2026-03-01T13:00:00+01:00",
+        "2026-03-01T12:00:00",
+    ])
+    def test_the_same_instant_parses_from_every_spelling_the_store_and_events_use(self, value):
+        parsed = engine.parse_timestamp(value)
+        assert parsed is not None
+        assert parsed.timestamp() == engine.parse_timestamp("2026-03-01T12:00:00+00:00").timestamp()
+
+    @pytest.mark.parametrize("value", [None, "", "not a time", 7, "2026-13-01T00:00:00"])
+    def test_anything_else_is_none(self, value):
+        assert engine.parse_timestamp(value) is None

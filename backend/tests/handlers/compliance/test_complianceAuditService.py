@@ -170,9 +170,14 @@ class TestAuditEventTypeRegistry:
             "exception_superseded", "schema_bound_to_database", "schema_unbound_from_database",
             "schema_bound_to_asset", "schema_unbound_from_asset", "schema_deleted",
             "cascade_triggered", "cascade_auto_triggered", "cascade_approved", "cascade_rejected",
-            "cascade_completed",
+            "cascade_completed", "evaluation_error",
         }
-        assert len(svc.AUDIT_EVENT_TYPES) == len(set(svc.AUDIT_EVENT_TYPES)) == 15
+        assert len(svc.AUDIT_EVENT_TYPES) == len(set(svc.AUDIT_EVENT_TYPES)) == 16
+
+    def test_the_stores_evaluation_error_type_is_the_registered_one(self):
+        from handlers.compliance import complianceEvaluationStore as store
+        assert store.AUDIT_EVALUATION_ERROR in svc.AUDIT_EVENT_TYPES
+        assert store.AUDIT_EXCEPTION_SUPERSEDED in svc.AUDIT_EVENT_TYPES
 
 
 @pytest.mark.unit

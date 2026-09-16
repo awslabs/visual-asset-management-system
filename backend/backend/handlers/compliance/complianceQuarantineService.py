@@ -400,6 +400,9 @@ def revoke_exception(event, database_id, asset_id):
     previous_state = item.get("complianceState")
     last_evaluation_id = item.get("lastEvaluationId") or None
     evaluation = store.get_evaluation(last_evaluation_id) if last_evaluation_id else None
+    if evaluation is not None and evaluation.get("verdict") not in store.VERDICT_BEARING:
+        # An error or still-pending last evaluation decides no state; fall back to the newest one that did.
+        evaluation = store.latest_verdict_evaluation(database_id, asset_id)
 
     if evaluation:
         new_state = engine.verdict_to_state(_verdict_of(evaluation))

@@ -148,16 +148,38 @@ class TestRouteDispatch:
         response, _ = _run(
             rest_event("GET", STATE_DB_PATH, DB_PARAMS),
             state_rows=[{"assetId": "a", "complianceState": "compliant"},
-                        {"assetId": "b", "complianceState": "quarantined"},
+                        {"assetId": "b", "complianceState": "quarantined",
+                         "lastEvaluationStatus": "completed"},
                         {"assetId": "c", "complianceState": "weird"},
                         {"assetId": "d", "complianceState": "exception"}])
         assert response["statusCode"] == 200
         body = body_of(response)
         assert body["totalAssets"] == 4
         assert body["summary"] == {"compliant": 1, "non_compliant": 0, "pending_evaluation": 0,
-                                   "quarantined": 1, "exception": 1, "unknown": 1}
+                                   "quarantined": 1, "exception": 1, "unknown": 1, "error": 0}
         assert all(a["assetName"] == "Turbine" for a in body["assets"])
         assert "NextToken" not in body
+
+    def test_the_overview_error_bucket_overlays_the_state_buckets(self):
+        """`error` counts rows whose latest evaluation errored; each such row also sits in its state
+        bucket, so the state buckets alone still sum to the total."""
+        response, _ = _run(
+            rest_event("GET", STATE_DB_PATH, DB_PARAMS),
+            state_rows=[{"assetId": "a", "complianceState": "compliant",
+                         "lastEvaluationStatus": "error"},
+                        {"assetId": "b", "complianceState": "quarantined",
+                         "lastEvaluationStatus": "error"},
+                        {"assetId": "c", "complianceState": "pending_evaluation",
+                         "lastEvaluationStatus": "pending_pipeline"},
+                        {"assetId": "d", "lastEvaluationStatus": "error"}])
+        body = body_of(response)
+        summary = body["summary"]
+        assert summary["error"] == 3
+        assert summary["compliant"] == 1 and summary["quarantined"] == 1
+        assert summary["pending_evaluation"] == 1 and summary["unknown"] == 1
+        state_buckets = {k: v for k, v in summary.items() if k != svc.OVERVIEW_ERROR_BUCKET}
+        assert sum(state_buckets.values()) == body["totalAssets"] == 4
+        assert svc.OVERVIEW_ERROR_BUCKET == "error"
 
     @pytest.mark.parametrize("method,path", [
         ("GET", EVALUATE_PATH), ("GET", SWEEP_PATH), ("POST", EVALUATIONS_PATH),
@@ -364,6 +386,65 @@ class TestEvaluateFlow:
         assert body["verdict"] == "pending_pipeline"
         assert body["pipelineRulesPending"] == 1
 
+    def test_the_response_carries_the_schema_version_the_exception_flag_and_the_error_flag(self):
+        result = dict(EVALUATION_RESULT, schemaVersion=3, exceptionApplied=True, hasRuleErrors=True,
+                      errorRules=["residual-bound"], verdict="quarantined", complianceState="exception")
+        response, _ = _run(rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={}),
+                           compliance_record={"schemaName": SCHEMA}, evaluation_result=result)
+        assert response["statusCode"] == 200
+        body = body_of(response)
+        assert body["schemaVersion"] == 3
+        assert body["exceptionApplied"] is True
+        assert body["hasRuleErrors"] is True
+        assert body["verdict"] == "quarantined"
+        assert body["complianceState"] == "exception"
+        assert set(body) == {"message", "evaluationId", "schemaName", "schemaVersion", "verdict",
+                             "complianceState", "exceptionApplied", "hasRuleErrors", "ruleResults",
+                             "pipelineRulesPending"}
+
+    def test_the_flags_default_to_false_and_the_version_to_null(self):
+        response, _ = _run(rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={}),
+                           compliance_record={"schemaName": SCHEMA})
+        body = body_of(response)
+        assert body["schemaVersion"] is None
+        assert body["exceptionApplied"] is False
+        assert body["hasRuleErrors"] is False
+
+    def test_an_evaluation_whose_every_rule_errored_is_reported_and_opens_no_cascade(self):
+        """The evaluation ran (200) but reached no verdict: the caller sees the errored rules and the
+        unchanged state, and the downstream cascade is not opened."""
+        result = {"evaluationId": "e", "verdict": "error", "complianceState": "compliant",
+                  "ruleResults": [{"ruleName": "r", "ruleType": "pipeline", "enforcement": "quarantine",
+                                   "passed": False, "status": "error",
+                                   "message": "Pipeline execution could not be started"}],
+                  "pipelineRulesPending": 0, "schemaVersion": 1, "exceptionApplied": False,
+                  "hasRuleErrors": True, "errorRules": ["r"]}
+        response, mocks = _run(rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={}),
+                               compliance_record={"schemaName": SCHEMA}, evaluation_result=result)
+        assert response["statusCode"] == 200
+        body = body_of(response)
+        assert body["verdict"] == "error"
+        assert body["complianceState"] == "compliant"
+        assert body["hasRuleErrors"] is True
+        assert body["ruleResults"][0]["status"] == "error"
+        mocks["cascade"].assert_not_called()
+
+    def test_a_sweep_opens_no_cascade_for_an_errored_evaluation(self):
+        result = dict(EVALUATION_RESULT, verdict="error", hasRuleErrors=True)
+        response, mocks = _run(
+            rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), schema_item=schema_row(),
+            state_rows=[{"databaseId": DB, "assetId": "a"}], evaluation_result=result)
+        assert response["statusCode"] == 200
+        assert body_of(response)["assetsTriggered"][0]["verdict"] == "error"
+        mocks["cascade"].assert_not_called()
+
+    def test_the_asset_state_row_is_returned_whole_including_its_evaluation_status(self):
+        row = {"databaseId": DB, "assetId": ASSET, "complianceState": "compliant",
+               "schemaName": SCHEMA, "lastEvaluationId": "e1",
+               "lastEvaluatedAt": "2026-01-01T00:00:00+00:00", "lastEvaluationStatus": "error"}
+        response, _ = _run(rest_event("GET", STATE_ASSET_PATH, ASSET_PARAMS), compliance_record=row)
+        assert body_of(response) == row
+
 
 @pytest.mark.unit
 class TestSweep:
@@ -503,7 +584,7 @@ class TestOverviewPaging:
             for i, state in zip((3, 0, 4, 1, 2), ("compliant", "quarantined", "compliant",
                                                   "non_compliant", "pending_evaluation"))]
     SUMMARY = {"compliant": 2, "non_compliant": 1, "pending_evaluation": 1, "quarantined": 1,
-               "exception": 0, "unknown": 0}
+               "exception": 0, "unknown": 0, "error": 0}
 
     def _page(self, query_params):
         response, mocks = _run(rest_event("GET", STATE_DB_PATH, DB_PARAMS, query_params=query_params),

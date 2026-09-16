@@ -3,10 +3,12 @@
 
 """complianceEvaluationStore: one evaluation end to end against mock tables -- synchronous rules,
 the pipeline-rule launch through the execute-workflow Lambda (input files resolved from the asset's
-S3 listing against the workflow / pipeline / template config, request body per
-ExecuteWorkflowRequestV2Model, `manual` trigger, SYSTEM_USER cross-call), the records it writes,
-the binding it leaves alone, the quarantine-exception semantics, and the completion path the
-workflow callback drives."""
+S3 listing against the workflow / pipeline / template config, files a workflow execution wrote left
+out, request body per ExecuteWorkflowRequestV2Model, `manual` trigger, SYSTEM_USER cross-call), the
+records it writes, the binding it leaves alone, rule errors (tooling failures that bear no verdict
+unless the engine switch says so), the quarantine-exception semantics, the ordering rule that keeps an
+older evaluation from overwriting a newer one's state, and the completion path the workflow callback
+drives."""
 
 import json
 from decimal import Decimal
@@ -267,7 +269,8 @@ class TestSynchronousEvaluation:
         assert "schemaName" not in state
         assert "schemaSource" not in state
         assert set(state) == {"complianceState", "lastEvaluationId", "lastEvaluatedAt",
-                              "updatedAt", "quarantineReason"}
+                              "lastEvaluationStatus", "updatedAt", "quarantineReason"}
+        assert state["lastEvaluationStatus"] == "completed"
         assert put_items(tables.audit)[0]["schemaName"] == "adhoc-schema"
 
     def test_a_failed_audit_write_does_not_fail_the_evaluation(self):
@@ -327,22 +330,48 @@ class TestSynchronousEvaluation:
         assert "units" in metadata_result["message"]
 
     def test_a_missing_schema_records_an_error_evaluation(self):
-        tables = Tables()
+        """The evaluation row is `error`; the asset-state row gains the evaluation pointers and
+        `lastEvaluationStatus: error` but keeps its state; an `evaluation_error` entry is audited."""
+        tables = Tables(previous_row={"complianceState": "compliant", "schemaName": SCHEMA})
         tables.schema.query.return_value = {"Items": []}
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert result["verdict"] == "error"
         assert result["error"] == "Schema not found"
-        assert result["complianceState"] == "unknown"
+        assert result["complianceState"] == "compliant"
+        assert result["hasRuleErrors"] is False
         parents, _ = tables.evaluation_records()
         assert parents[0]["status"] == "error"
         assert parents[0]["errorMessage"] == "Schema not found"
-        tables.state.update_item.assert_not_called()
-        tables.audit.put_item.assert_not_called()
+        state = update_values(tables.state)[0]
+        assert state["lastEvaluationId"] == parents[0]["evaluationId"]
+        assert state["lastEvaluatedAt"] == parents[0]["evaluatedAt"]
+        assert state["lastEvaluationStatus"] == "error"
+        assert set(state) == {"lastEvaluationId", "lastEvaluatedAt", "lastEvaluationStatus",
+                              "updatedAt"}
+        assert tables.audit_events() == ["evaluation_error"]
+        audit = put_items(tables.audit)[0]
+        assert audit["evaluationId"] == parents[0]["evaluationId"]
+        assert audit["schemaName"] == SCHEMA
+        assert json.loads(audit["details"]) == {"ruleNames": [], "errorMessage": "Schema not found"}
+
+    def test_an_untracked_asset_whose_schema_is_missing_reads_as_unknown(self):
+        """No state row yet: the pointers are written on a row whose state is `unknown` — what a
+        missing row reads as — so the record an error evaluation creates is a well-formed one."""
+        tables = Tables()
+        tables.schema.query.return_value = {"Items": []}
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        assert result["complianceState"] == "unknown"
+        state = update_values(tables.state)[0]
+        assert state["lastEvaluationStatus"] == "error"
+        assert state["complianceState"] == "unknown"
+        assert "schemaName" not in state
 
     def test_a_legacy_json_schema_records_an_error_evaluation(self):
         tables = Tables(schema_body={"type": "object"})
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert result["error"] == "Schema is not vams-rules-v1 format"
+        assert tables.audit_events() == ["evaluation_error"]
+        assert update_values(tables.state)[0]["lastEvaluationStatus"] == "error"
 
     def test_asset_metadata_is_read_from_the_asset_root_composite_key_to_exhaustion(self):
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY)
@@ -450,11 +479,16 @@ class TestPipelineRuleLaunch:
     @pytest.mark.parametrize("scenario", ["workflow-missing", "pipeline-missing", "template-missing",
                                           "refused", "no-execution-id", "unconfigured",
                                           "invoke-raises"])
-    def test_a_launch_that_fails_marks_the_rule_failed_and_completes_synchronously(self, scenario):
+    def test_a_launch_that_fails_records_the_rule_as_errored_and_completes_synchronously(
+            self, scenario):
+        """A launch that could not start is a `status: error` result the verdict leaves out: the
+        other rules pass, so the evaluation is compliant with `hasRuleErrors`, and an
+        `evaluation_error` entry names the rule."""
         body = RULES_SCHEMA_BODY
         if scenario == "template-missing":
             rule = _rule(pipelineRef=dict(PIPELINE_RULE.pipelineRef.dict(), templateId="tmpl-1"))
-            body = dict(RULES_SCHEMA_BODY, rules={"residual-bound": rule.dict()})
+            body = dict(RULES_SCHEMA_BODY, rules=dict(RULES_SCHEMA_BODY["rules"],
+                                                      **{"residual-bound": rule.dict()}))
         tables = Tables(schema_body=body, workflow_exists=scenario != "workflow-missing",
                         pipeline_exists=scenario != "pipeline-missing",
                         template_exists=scenario != "template-missing")
@@ -467,15 +501,51 @@ class TestPipelineRuleLaunch:
         function_name = "" if scenario == "unconfigured" else "execute-workflow-fn"
 
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, function_name=function_name)
-        assert result["verdict"] == "quarantined"
+        assert result["verdict"] == "compliant"
+        assert result["complianceState"] == "compliant"
         assert result["pipelineRulesPending"] == 0
+        assert result["hasRuleErrors"] is True
+        assert result["errorRules"] == ["residual-bound"]
         pipeline_result = next(r for r in result["ruleResults"] if r["ruleName"] == "residual-bound")
         assert pipeline_result["passed"] is False
+        assert pipeline_result["status"] == "error"
         assert pipeline_result["message"] == "Pipeline execution could not be started"
         parents, tracking = tables.evaluation_records()
         assert tracking == []
-        assert parents[0]["status"] == "completed"
-        assert "pipelineRulesPending" not in parents[0]
+        record = parents[0]
+        assert record["status"] == "completed"
+        assert record["verdict"] == "compliant"
+        assert record["violations"] == []
+        assert record["hasRuleErrors"] is True
+        assert record["errorRules"] == ["residual-bound"]
+        assert "pipelineRulesPending" not in record
+        state = update_values(tables.state)[0]
+        assert state["complianceState"] == "compliant"
+        assert state["lastEvaluationStatus"] == "completed"
+        assert tables.audit_events() == ["evaluation_error", "compliance_check"]
+        error_audit = put_items(tables.audit)[0]
+        assert json.loads(error_audit["details"]) == {"ruleNames": ["residual-bound"],
+                                                      "verdict": "compliant"}
+        assert error_audit["evaluationId"] == record["evaluationId"]
+
+    def test_with_the_enforcement_switch_on_a_launch_failure_applies_the_rules_enforcement(self):
+        """`TOOLING_FAILURES_APPLY_ENFORCEMENT = True` restores the enforcement path: the errored
+        quarantine rule quarantines the asset and its message is a violation."""
+        tables = Tables(workflow_exists=False)
+        with patch.object(store.engine, "TOOLING_FAILURES_APPLY_ENFORCEMENT", True):
+            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        assert result["verdict"] == "quarantined"
+        assert result["complianceState"] == "quarantined"
+        assert result["hasRuleErrors"] is True
+        pipeline_result = next(r for r in result["ruleResults"] if r["ruleName"] == "residual-bound")
+        assert pipeline_result["status"] == "error"
+        parents, _ = tables.evaluation_records()
+        assert parents[0]["violations"] == ["Pipeline execution could not be started"]
+        assert parents[0]["hasRuleErrors"] is True
+        state = update_values(tables.state)[0]
+        assert state["complianceState"] == "quarantined"
+        assert state["quarantineReason"] == "Pipeline execution could not be started"
+        assert tables.audit_events() == ["evaluation_error", "compliance_check"]
 
     @pytest.mark.parametrize("asset_files,message", [
         ((), store.INPUT_SELECTION_NOT_ONE_FILE),
@@ -486,16 +556,88 @@ class TestPipelineRuleLaunch:
         tables = Tables(asset_files=asset_files)
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         tables.lambda_client.invoke.assert_not_called()
-        assert result["verdict"] == "quarantined"
+        assert result["verdict"] == "compliant"
+        assert result["hasRuleErrors"] is True
         pipeline_result = next(r for r in result["ruleResults"] if r["ruleName"] == "residual-bound")
         assert pipeline_result["passed"] is False
+        assert pipeline_result["status"] == "error"
         assert pipeline_result["message"] == message
         for key in asset_files:
             assert key not in pipeline_result["message"]
         parents, tracking = tables.evaluation_records()
         assert tracking == []
         assert parents[0]["status"] == "completed"
-        assert parents[0]["violations"] == [message]
+        assert parents[0]["violations"] == []
+        assert parents[0]["errorRules"] == ["residual-bound"]
+
+    def test_an_evaluation_whose_every_rule_errored_has_no_verdict_and_leaves_the_state_alone(
+            self, notifications_aws):
+        """Only the pipeline rule, and its selection matches nothing: verdict `error`, evaluation
+        `status: error`, the asset keeps its state (and its quarantine reason), the row's evaluation
+        pointers carry `lastEvaluationStatus: error`, and the audit trail has the `evaluation_error`
+        entry alone — no `compliance_check`, no notification."""
+        body = dict(RULES_SCHEMA_BODY, rules={"residual-bound": PIPELINE_RULE.dict()})
+        tables = Tables(schema_body=body, asset_files=(), previous_row={
+            "complianceState": "quarantined", "quarantineReason": "earlier",
+            "lastEvaluationId": "eval-0", "lastEvaluatedAt": "2025-01-01T00:00:00+00:00"})
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "error"
+        assert result["complianceState"] == "quarantined"
+        assert result["hasRuleErrors"] is True
+        assert result["errorRules"] == ["residual-bound"]
+        assert result["exceptionApplied"] is False
+        assert "error" not in result
+        parents, _ = tables.evaluation_records()
+        record = parents[0]
+        assert record["status"] == "error"
+        assert record["verdict"] == "error"
+        assert record["errorMessage"] == store.ALL_RULES_ERRORED_MESSAGE
+        assert record["violations"] == []
+        assert record["hasRuleErrors"] is True
+        assert record["completedAt"] == record["evaluatedAt"]
+        assert json.loads(record["ruleResults"])[0]["status"] == "error"
+        state = update_values(tables.state)[0]
+        assert set(state) == {"lastEvaluationId", "lastEvaluatedAt", "lastEvaluationStatus",
+                              "updatedAt"}
+        assert state["lastEvaluationId"] == record["evaluationId"]
+        assert state["lastEvaluationStatus"] == "error"
+        assert tables.audit_events() == ["evaluation_error"]
+        assert json.loads(put_items(tables.audit)[0]["details"]) == {
+            "ruleNames": ["residual-bound"], "verdict": "error"}
+        notifications_aws.sns_client.publish.assert_not_called()
+
+    def test_an_all_errored_evaluation_neither_applies_nor_supersedes_an_exception(self):
+        body = dict(RULES_SCHEMA_BODY, rules={"residual-bound": PIPELINE_RULE.dict()})
+        tables = Tables(schema_body=body, asset_files=(),
+                        previous_row=_exception_row(schema_name="other-schema"))
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "error"
+        assert result["complianceState"] == "exception"
+        state = update_values(tables.state)[0]
+        assert not set(state) & set(store.engine.EXCEPTION_FIELDS)
+        assert "complianceState" not in state
+        assert tables.audit_events() == ["evaluation_error"]
+
+    def test_a_pending_evaluation_records_its_launch_errors_and_the_pending_status(self):
+        """Two pipeline rules, one launched, one refused: the evaluation is pending with the errored
+        rule already on the row, and the asset-state row says `pending_pipeline`."""
+        body = dict(RULES_SCHEMA_BODY, rules={
+            "residual-bound": PIPELINE_RULE.dict(), "other": OTHER_RULE.dict()})
+        tables = Tables(schema_body=body)
+        tables.pipeline.get_item.side_effect = lambda **kw: (
+            {"Item": {"pipelineId": "pipe-1"}} if kw["Key"]["pipelineId"] == "pipe-1" else {})
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        assert result["verdict"] == "pending_pipeline"
+        assert result["pipelineRulesPending"] == 1
+        assert result["hasRuleErrors"] is True
+        assert result["errorRules"] == ["other"]
+        parents, _ = tables.evaluation_records()
+        assert parents[0]["status"] == "pending_pipeline"
+        assert parents[0]["errorRules"] == ["other"]
+        state = update_values(tables.state)[0]
+        assert state["complianceState"] == "pending_evaluation"
+        assert state["lastEvaluationStatus"] == "pending_pipeline"
+        assert tables.audit_events() == ["evaluation_error", "compliance_check"]
 
     def test_a_whole_asset_selection_the_workflow_refuses_is_the_rules_error(self):
         rule = _rule(inputFiles={"mode": "wholeAsset"})
@@ -517,6 +659,81 @@ class TestPipelineRuleLaunch:
         assert result["pipelineRulesPending"] == 2
         assert tables.s3_client.get_paginator.return_value.paginate.call_count == 1
         assert tables.asset.get_item.call_count == 1
+        # One HEAD per surviving file for the whole evaluation, not one per rule.
+        assert tables.s3_client.head_object.call_count == 1
+
+    def test_a_file_a_workflow_execution_wrote_is_left_out_of_a_matching_selection(self):
+        """The pipeline's own `.glb` output sits beside the `.stl` source; both pass the filters, so
+        only the provenance read (a HEAD on each survivor) keeps the selection to the source."""
+        tables = Tables(asset_files=("/model.stl", "/model.glb"),
+                        pipeline_config={"inputFileArity": "one",
+                                         "inputFileFilters": {"allow": MODEL_EXTENSIONS}})
+        _script_provenance(tables, {"/model.glb": "workflowExecution", "/model.stl": "upload"})
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        assert result["verdict"] == "pending_pipeline"
+        launch_body = json.loads(json.loads(tables.lambda_client.invoke.call_args.kwargs["Payload"])["body"])
+        assert launch_body["inputFiles"] == _inputs("/model.stl")
+        head_calls = tables.s3_client.head_object.call_args_list
+        assert head_calls
+        heads = sorted(c.kwargs["Key"] for c in head_calls)
+        assert heads == [ASSET_PREFIX + "model.glb", ASSET_PREFIX + "model.stl"]
+        assert all(c.kwargs["Bucket"] == BUCKET_NAME for c in head_calls)
+
+    def test_provenance_is_read_only_for_the_files_that_survive_the_filter_chain(self):
+        tables = Tables(asset_files=("/model.stl", "/notes.txt", "/model.glb"),
+                        pipeline_config={"inputFileArity": "one",
+                                         "inputFileFilters": {"allow": MODEL_EXTENSIONS}})
+        _script_provenance(tables, {"/model.glb": "workflowExecution"})
+        tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        heads = sorted(c.kwargs["Key"] for c in tables.s3_client.head_object.call_args_list)
+        assert heads == [ASSET_PREFIX + "model.glb", ASSET_PREFIX + "model.stl"]
+
+    def test_a_file_whose_provenance_cannot_be_read_stays_selected(self):
+        tables = Tables(asset_files=("/model.stl", "/model.glb"),
+                        pipeline_config={"inputFileArity": "one",
+                                         "inputFileFilters": {"allow": MODEL_EXTENSIONS}})
+        tables.s3_client.head_object.side_effect = RuntimeError("AccessDenied")
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        tables.lambda_client.invoke.assert_not_called()
+        pipeline_result = next(r for r in result["ruleResults"] if r["ruleName"] == "residual-bound")
+        assert pipeline_result["message"] == store.INPUT_SELECTION_NOT_ONE_FILE
+        assert tables.s3_client.head_object.call_count == 2
+
+    def test_an_explicit_selection_sends_a_workflow_written_file_as_given_without_a_head(self):
+        rule = _rule(inputFiles={"mode": "explicit", "keys": ["/model.glb"]})
+        body = dict(RULES_SCHEMA_BODY, rules={"residual-bound": rule.dict()})
+        tables = Tables(schema_body=body, asset_files=("/model.stl", "/model.glb"),
+                        pipeline_config={"inputFileArity": "one",
+                                         "inputFileFilters": {"allow": MODEL_EXTENSIONS}})
+        _script_provenance(tables, {"/model.glb": "workflowExecution"})
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        assert result["verdict"] == "pending_pipeline"
+        launch_body = json.loads(json.loads(tables.lambda_client.invoke.call_args.kwargs["Payload"])["body"])
+        assert launch_body["inputFiles"] == _inputs("/model.glb")
+        tables.s3_client.head_object.assert_not_called()
+
+    def test_the_object_change_source_read_is_a_head_on_the_current_version(self):
+        tables = Tables()
+        _script_provenance(tables, {"/model.stl": "workflowExecution"})
+        assert tables.run(store.object_change_source, BUCKET_NAME, ASSET_PREFIX + "model.stl") == \
+            "workflowExecution"
+        assert tables.s3_client.head_object.call_args.kwargs == {
+            "Bucket": BUCKET_NAME, "Key": ASSET_PREFIX + "model.stl"}
+        tables.s3_client.head_object.side_effect = None
+        tables.s3_client.head_object.return_value = {"Metadata": {}}
+        assert tables.run(store.object_change_source, BUCKET_NAME, "k") == ""
+        tables.s3_client.head_object.return_value = {}
+        assert tables.run(store.object_change_source, BUCKET_NAME, "k") == ""
+
+
+def _script_provenance(tables, sources):
+    """Script `head_object` on the tables' S3 client to answer `vams-changesource` per asset-relative
+    key (`sources`); a key not named carries no provenance."""
+    def head_object(Bucket, Key, **_):
+        relative = "/" + Key[len(ASSET_PREFIX):] if Key.startswith(ASSET_PREFIX) else Key
+        source = sources.get(relative)
+        return {"Metadata": {"vams-changesource": source} if source else {}}
+    tables.s3_client.head_object.side_effect = head_object
 
 
 def _workflow(arity=None, whole_asset=None, allow=None, exclude=None):
@@ -651,6 +868,69 @@ class TestPipelineInputSelection:
         assert inputs is None
         assert error == store.INPUT_SELECTION_REFUSED
         listing.assert_called_once_with()
+
+    # --- workflow-written files ---
+
+    def _resolve_with_provenance(self, rule, files, sources, **kwargs):
+        provenance = MagicMock(name="file_change_source",
+                               side_effect=lambda key: sources.get(key, ""))
+        listing = MagicMock(name="asset_file_keys", return_value=files)
+        inputs, error = store.resolve_pipeline_rule_inputs(
+            rule, DB, ASSET, kwargs.get("workflow", BARE_WORKFLOW),
+            kwargs.get("pipeline", CONVERSION_PIPELINE), kwargs.get("template"), listing,
+            provenance)
+        return inputs, error, provenance
+
+    def test_matching_leaves_out_a_file_a_workflow_execution_wrote(self):
+        inputs, error, provenance = self._resolve_with_provenance(
+            PIPELINE_RULE, ["/model.stl", "/model.glb"], {"/model.glb": "workflowExecution"})
+        assert error is None
+        assert inputs == _inputs("/model.stl")
+        assert {c.args[0] for c in provenance.call_args_list} == {"/model.stl", "/model.glb"}
+
+    @pytest.mark.parametrize("source", ["upload", "direct", ""], ids=["upload", "direct", "unknown"])
+    def test_matching_keeps_a_file_of_any_other_or_unreadable_provenance(self, source):
+        inputs, error, _ = self._resolve_with_provenance(
+            PIPELINE_RULE, ["/model.stl"], {"/model.stl": source})
+        assert error is None
+        assert inputs == _inputs("/model.stl")
+
+    def test_provenance_is_read_for_the_survivors_of_the_filter_chain_only(self):
+        rule = _rule(inputFiles={"mode": "matching", "filter": ["*.stl"]})
+        inputs, error, provenance = self._resolve_with_provenance(
+            rule, ["/model.stl", "/notes.txt", "/model.glb", "/x.obj"], {})
+        assert error is None
+        assert inputs == _inputs("/model.stl")
+        assert [c.args[0] for c in provenance.call_args_list] == ["/model.stl"]
+
+    def test_leaving_out_every_match_is_the_not_one_file_refusal(self):
+        inputs, error, _ = self._resolve_with_provenance(
+            PIPELINE_RULE, ["/model.glb"], {"/model.glb": "workflowExecution"})
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_NOT_ONE_FILE
+
+    def test_explicit_keys_are_sent_as_given_whatever_their_provenance(self):
+        rule = _rule(inputFiles={"mode": "explicit", "keys": ["/model.glb"]})
+        inputs, error, provenance = self._resolve_with_provenance(
+            rule, ["/model.stl", "/model.glb"], {"/model.glb": "workflowExecution"})
+        assert error is None
+        assert inputs == _inputs("/model.glb")
+        provenance.assert_not_called()
+
+    def test_whole_asset_reads_no_provenance(self):
+        rule = _rule(inputFiles={"mode": "wholeAsset"})
+        inputs, error, provenance = self._resolve_with_provenance(
+            rule, ["/model.glb"], {"/model.glb": "workflowExecution"},
+            workflow=_workflow(arity="one", whole_asset=True),
+            pipeline=_pipeline(arity="one", whole_asset=True))
+        assert error is None
+        assert inputs == _inputs("/")
+        provenance.assert_not_called()
+
+    def test_without_a_provenance_reader_the_filter_chain_alone_decides(self):
+        inputs, error, _ = self._resolve(PIPELINE_RULE, ["/model.stl", "/model.glb"])
+        assert inputs is None
+        assert error == store.INPUT_SELECTION_NOT_ONE_FILE
 
     # --- wholeAsset ---
 
@@ -1235,6 +1515,150 @@ class TestCompletePipelineRule:
         tables.run(store.complete_pipeline_rule, _pending_evaluation(), "residual-bound",
                    "SUCCEEDED", self.OUTPUT, None, None)
         assert tables.audit_events() == ["compliance_check", "quarantine_released"]
+
+    def test_the_finalized_state_row_points_at_the_evaluation_and_its_start(self):
+        """`lastEvaluatedAt` is the evaluation's `evaluatedAt` — the instant its inputs were read —
+        not the callback's time; `lastEvaluationStatus` is `completed`."""
+        tables = self._tables(previous_row={
+            "complianceState": "pending_evaluation", "lastEvaluationId": "eval-1",
+            "lastEvaluatedAt": "2026-01-01T00:00:00+00:00", "lastEvaluationStatus": "pending_pipeline"})
+        tables.run(store.complete_pipeline_rule, _pending_evaluation(), "residual-bound",
+                   "SUCCEEDED", self.OUTPUT, None, None)
+        state = update_values(tables.state)[0]
+        assert state["lastEvaluationId"] == "eval-1"
+        assert state["lastEvaluatedAt"] == "2026-01-01T00:00:00+00:00"
+        assert state["lastEvaluationStatus"] == "completed"
+        assert state["complianceState"] == "compliant"
+        assert state["updatedAt"] != state["lastEvaluatedAt"]
+        finalized = tables.evaluation_rows.rows["eval-1"]
+        assert finalized["hasRuleErrors"] is False
+        assert "errorRules" not in finalized
+
+    def test_a_callback_landing_after_a_newer_evaluation_finalizes_its_row_only(self):
+        """A synchronous evaluation begun after eval-1 already owns the asset-state row: the
+        callback completes eval-1's evaluation row and leaves the row, the audit trail and the
+        notification alone."""
+        tables = self._tables(previous_row={
+            "complianceState": "quarantined", "quarantineReason": "newer verdict",
+            "lastEvaluationId": "eval-2", "lastEvaluatedAt": "2026-01-01T00:00:30+00:00",
+            "lastEvaluationStatus": "completed"})
+        outcome = tables.run(store.complete_pipeline_rule, _pending_evaluation(), "residual-bound",
+                             "SUCCEEDED", self.OUTPUT, None, None)
+        assert outcome["finalized"] is True
+        assert outcome["verdict"] == "compliant"
+        finalized = tables.evaluation_rows.rows["eval-1"]
+        assert finalized["status"] == "completed"
+        assert finalized["verdict"] == "compliant"
+        tables.state.update_item.assert_not_called()
+        tables.audit.put_item.assert_not_called()
+
+    def test_a_callback_newer_than_the_rows_evaluation_writes_the_state(self):
+        tables = self._tables(previous_row={
+            "complianceState": "compliant", "lastEvaluationId": "eval-0",
+            "lastEvaluatedAt": "2025-12-31T23:59:59+00:00", "lastEvaluationStatus": "completed"})
+        outcome = tables.run(store.complete_pipeline_rule, _pending_evaluation(), "residual-bound",
+                             "SUCCEEDED", dict(self.OUTPUT, measurements={"residual": 5}), None, None)
+        assert outcome["complianceState"] == "quarantined"
+        state = update_values(tables.state)[0]
+        assert state["lastEvaluationId"] == "eval-1"
+        assert state["complianceState"] == "quarantined"
+        assert tables.audit_events() == ["compliance_check"]
+
+    def test_the_rows_own_evaluation_always_writes_the_state(self):
+        """The row already points at eval-1 (written when its pipeline rule launched); the row's
+        `lastEvaluatedAt` being later than eval-1's start does not stop eval-1 from finalizing it."""
+        tables = self._tables(previous_row={
+            "complianceState": "pending_evaluation", "lastEvaluationId": "eval-1",
+            "lastEvaluatedAt": "2026-01-01T00:05:00+00:00"})
+        outcome = tables.run(store.complete_pipeline_rule, _pending_evaluation(), "residual-bound",
+                             "SUCCEEDED", self.OUTPUT, None, None)
+        assert outcome["complianceState"] == "compliant"
+        assert update_values(tables.state)[0]["complianceState"] == "compliant"
+
+    def test_a_row_without_an_evaluation_yet_is_written(self):
+        tables = self._tables(previous_row={"complianceState": "pending_evaluation",
+                                            "schemaName": SCHEMA})
+        tables.run(store.complete_pipeline_rule, _pending_evaluation(), "residual-bound",
+                   "SUCCEEDED", self.OUTPUT, None, None)
+        assert update_values(tables.state)[0]["complianceState"] == "compliant"
+
+
+@pytest.mark.unit
+class TestEvaluationOrdering:
+    """`run_evaluation` follows the same rule as the callback: a synchronous evaluation that began
+    before the row's last evaluation records itself on its own row only."""
+
+    OLD = "2026-01-01T00:00:00+00:00"
+    NEWER = "2026-01-01T00:00:10+00:00"
+
+    def test_an_evaluation_older_than_the_rows_last_one_does_not_overwrite_it(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row={
+            "complianceState": "compliant", "lastEvaluationId": "eval-newer",
+            "lastEvaluatedAt": self.NEWER, "lastEvaluationStatus": "completed"})
+        with patch(f"{STORE}.now_iso", return_value=self.OLD):
+            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "quarantined"
+        parents, _ = tables.evaluation_records()
+        assert parents[0]["status"] == "completed"
+        assert parents[0]["verdict"] == "quarantined"
+        assert parents[0]["evaluatedAt"] == self.OLD
+        tables.state.update_item.assert_not_called()
+        tables.audit.put_item.assert_not_called()
+
+    def test_an_evaluation_newer_than_the_rows_last_one_writes_the_state(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row={
+            "complianceState": "compliant", "lastEvaluationId": "eval-older",
+            "lastEvaluatedAt": self.OLD, "lastEvaluationStatus": "completed"})
+        with patch(f"{STORE}.now_iso", return_value=self.NEWER):
+            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["complianceState"] == "quarantined"
+        state = update_values(tables.state)[0]
+        assert state["complianceState"] == "quarantined"
+        assert state["lastEvaluatedAt"] == self.NEWER
+        assert state["lastEvaluationStatus"] == "completed"
+
+    def test_an_older_all_errored_evaluation_leaves_the_pointers_alone_too(self):
+        body = dict(RULES_SCHEMA_BODY, rules={"residual-bound": PIPELINE_RULE.dict()})
+        tables = Tables(schema_body=body, asset_files=(), previous_row={
+            "complianceState": "compliant", "lastEvaluationId": "eval-newer",
+            "lastEvaluatedAt": self.NEWER})
+        with patch(f"{STORE}.now_iso", return_value=self.OLD):
+            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        assert result["verdict"] == "error"
+        tables.state.update_item.assert_not_called()
+        # The error is about the evaluation, not the asset's state, so it is still audited.
+        assert tables.audit_events() == ["evaluation_error"]
+
+    def test_an_older_missing_schema_evaluation_leaves_the_pointers_alone(self):
+        tables = Tables(previous_row={"complianceState": "compliant",
+                                      "lastEvaluationId": "eval-newer", "lastEvaluatedAt": self.NEWER})
+        tables.schema.query.return_value = {"Items": []}
+        with patch(f"{STORE}.now_iso", return_value=self.OLD):
+            tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        tables.state.update_item.assert_not_called()
+        assert tables.audit_events() == ["evaluation_error"]
+
+    @pytest.mark.parametrize("row,evaluation_id,evaluated_at,owns", [
+        ({}, "e", "2026-01-01T00:00:00+00:00", True),
+        ({"lastEvaluationId": "e"}, "e", "2026-01-01T00:00:00+00:00", True),
+        ({"lastEvaluationId": "e", "lastEvaluatedAt": "2026-01-01T00:00:05+00:00"}, "e",
+         "2026-01-01T00:00:00+00:00", True),
+        ({"lastEvaluationId": "other"}, "e", "2026-01-01T00:00:00+00:00", True),
+        ({"lastEvaluationId": "other", "lastEvaluatedAt": "2026-01-01T00:00:00+00:00"}, "e",
+         "2026-01-01T00:00:00.500000+00:00", True),
+        ({"lastEvaluationId": "other", "lastEvaluatedAt": "2026-01-01T00:00:00.500000+00:00"}, "e",
+         "2026-01-01T00:00:00+00:00", False),
+        ({"lastEvaluationId": "other", "lastEvaluatedAt": "2026-01-01T00:00:00+00:00"}, "e",
+         "2026-01-01T00:00:00+00:00", False),
+        ({"lastEvaluationId": "other", "lastEvaluatedAt": "2026-01-01T00:00:00Z"}, "e",
+         "2026-01-01T01:00:00+01:00", False),
+        ({"lastEvaluationId": "other", "lastEvaluatedAt": "garbage"}, "e", "z", True),
+        ({"lastEvaluationId": "other", "lastEvaluatedAt": "garbage"}, "e", "a", False),
+    ], ids=["no-row", "own-id", "own-id-later-row", "other-id-no-time", "newer", "older",
+            "same-instant", "same-instant-other-offset", "unparseable-text-newer",
+            "unparseable-text-older"])
+    def test_the_ownership_predicate(self, row, evaluation_id, evaluated_at, owns):
+        assert store.engine.evaluation_owns_state_row(row, evaluation_id, evaluated_at) is owns
 
 
 @pytest.mark.unit

@@ -45,7 +45,11 @@ from models.common import (
     validation_error,
     validation_error_message,
 )
-from models.compliance import EvaluateAssetRequestModel, SweepSchemaRequestModel
+from models.compliance import (
+    EvaluateAssetRequestModel,
+    EvaluationVerdict,
+    SweepSchemaRequestModel,
+)
 
 logger = safeLogger(service_name="ComplianceEvaluateService")
 
@@ -64,6 +68,9 @@ MAX_EVALUATIONS_PAGE_SIZE = 200
 DEFAULT_OVERVIEW_PAGE_SIZE = 100
 MAX_OVERVIEW_PAGE_SIZE = 500
 INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
+# The overview `summary` key counting assets whose latest evaluation errored (`lastEvaluationStatus`
+# of `error`) — an overlay on the state buckets, not a compliance state.
+OVERVIEW_ERROR_BUCKET = "error"
 
 # Bound on the assets one sweep evaluates synchronously inside the API Lambda timeout; a schema
 # bound to more assets sweeps the first MAX_SWEEP_ASSETS and reports the remainder.
@@ -221,17 +228,22 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
         "message": "Evaluation completed",
         "evaluationId": result.get("evaluationId"),
         "schemaName": schema_name,
+        "schemaVersion": result.get("schemaVersion"),
         "verdict": result.get("verdict"),
         "complianceState": result.get("complianceState"),
+        "exceptionApplied": bool(result.get("exceptionApplied", False)),
+        "hasRuleErrors": bool(result.get("hasRuleErrors", False)),
         "ruleResults": result.get("ruleResults", []),
         "pipelineRulesPending": result.get("pipelineRulesPending", 0),
     })
 
 
 def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
-    """One evaluation plus the downstream cascade check; shared by evaluate and sweep."""
+    """One evaluation plus the downstream cascade check; shared by evaluate and sweep. An evaluation
+    that could not run, or whose every rule errored (verdict `error`), changes no asset state and so
+    opens no cascade."""
     result = store.run_evaluation(database_id, asset_id, schema_name, actor)
-    if not result.get("error"):
+    if not result.get("error") and result.get("verdict") != EvaluationVerdict.error.value:
         check_and_trigger_cascade(database_id, asset_id)
     return result
 
@@ -356,7 +368,14 @@ def get_compliance_state(event, database_id, asset_id):
 def get_database_compliance_overview(event, database_id, query_params):
     """Per-state counts over every asset-state row of a database, plus one page of the rows (assetId
     order) with asset names. The counts cover the whole database; `NextToken` is present while more
-    rows remain."""
+    rows remain.
+
+    `summary` has one bucket per compliance state (each row counted in exactly one; a row with an
+    unrecognized state counts as `unknown`) plus an `error` overlay: the number of rows whose
+    `lastEvaluationStatus` is `error` — assets whose latest evaluation could not run or could not
+    evaluate any rule. `error` is not a state, so an asset in it is also counted in its state bucket
+    and the state buckets alone sum to `totalAssets`.
+    """
     (valid, message) = validate({
         "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
     })
@@ -383,9 +402,13 @@ def get_database_compliance_overview(event, database_id, query_params):
         engine.STATE_EXCEPTION: 0,
         engine.STATE_UNKNOWN: 0,
     }
+    evaluation_errors = 0
     for item in items:
         state = item.get("complianceState", engine.STATE_UNKNOWN)
         summary[state if state in summary else engine.STATE_UNKNOWN] += 1
+        if item.get("lastEvaluationStatus") == engine.EVALUATION_STATUS_ERROR:
+            evaluation_errors += 1
+    summary[OVERVIEW_ERROR_BUCKET] = evaluation_errors
 
     items.sort(key=lambda item: item.get("assetId", ""))
     page = items[offset:offset + page_size]

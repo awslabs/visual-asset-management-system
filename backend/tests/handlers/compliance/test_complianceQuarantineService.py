@@ -54,7 +54,8 @@ def _evaluation(verdict, violations=("owner missing",)):
 
 
 def _run(event, tokens=(USER,), api=True, obj=True, compliance_record=None, quarantined_rows=None,
-         last_evaluated_key=None, casbin=None, state_table=None, schema_item=None, evaluation=None):
+         last_evaluated_key=None, casbin=None, state_table=None, schema_item=None, evaluation=None,
+         latest_verdict_evaluation=None):
     if state_table is None:
         state_table = MagicMock(name="asset_state_table")
         page = {"Items": list(quarantined_rows or [])}
@@ -71,13 +72,16 @@ def _run(event, tokens=(USER,), api=True, obj=True, compliance_record=None, quar
             patch(f"{STORE}.get_compliance_record", return_value=compliance_record), \
             patch(f"{STORE}.load_schema_item", return_value=schema_item) as load_schema, \
             patch(f"{STORE}.get_evaluation", return_value=evaluation) as get_evaluation, \
+            patch(f"{STORE}.latest_verdict_evaluation",
+                  return_value=latest_verdict_evaluation) as latest_verdict, \
             patch(f"{STORE}.update_asset_state") as update_state, \
             patch(f"{STORE}.write_audit") as write_audit, \
             patch(f"{NOTIFICATIONS}.notify_quarantine") as notify:
         response = svc.lambda_handler(event, MagicMock())
     return response, {"state": state_table, "asset": asset_table, "update_state": update_state,
                       "audit": write_audit, "casbin": casbin, "load_schema": load_schema,
-                      "get_evaluation": get_evaluation, "notify": notify}
+                      "get_evaluation": get_evaluation, "latest_verdict": latest_verdict,
+                      "notify": notify}
 
 
 @pytest.mark.unit
@@ -429,12 +433,34 @@ class TestRevokeException:
 
     @pytest.mark.parametrize("verdict,state", [
         ("compliant", "compliant"), ("non_compliant", "non_compliant"),
-        ("pending_pipeline", "pending_evaluation"), ("error", "unknown"),
-        ("not-a-verdict", "unknown"),
     ])
     def test_any_other_last_verdict_maps_to_its_state_without_a_quarantine(self, verdict, state):
         response, mocks = _run(rest_event("DELETE", EXCEPTION_PATH, ASSET_PARAMS),
                                compliance_record=EXCEPTED, evaluation=_evaluation(verdict))
+        assert body_of(response)["complianceState"] == state
+        mocks["latest_verdict"].assert_not_called()
+        updates = mocks["update_state"].call_args.args[2]
+        assert updates["complianceState"] == state
+        assert updates["quarantineReason"] is None
+        assert updates["exceptionGranted"] is False
+        assert mocks["audit"].call_args.kwargs["new_state"] == state
+        mocks["notify"].assert_not_called()
+
+    @pytest.mark.parametrize("verdict", ["pending_pipeline", "error", "not-a-verdict"])
+    def test_a_last_evaluation_without_a_verdict_falls_back_to_the_newest_one_that_has_one(self, verdict):
+        response, mocks = _run(rest_event("DELETE", EXCEPTION_PATH, ASSET_PARAMS),
+                               compliance_record=EXCEPTED, evaluation=_evaluation(verdict),
+                               latest_verdict_evaluation=_evaluation("quarantined"))
+        assert body_of(response)["complianceState"] == "quarantined"
+        mocks["latest_verdict"].assert_called_once_with(DB, ASSET)
+        assert mocks["update_state"].call_args.args[2]["complianceState"] == "quarantined"
+        mocks["notify"].assert_called_once()
+
+    @pytest.mark.parametrize("verdict", ["pending_pipeline", "error", "not-a-verdict"])
+    def test_a_last_evaluation_without_a_verdict_and_no_earlier_verdict_returns_to_pending(self, verdict):
+        response, mocks = _run(rest_event("DELETE", EXCEPTION_PATH, ASSET_PARAMS),
+                               compliance_record=EXCEPTED, evaluation=_evaluation(verdict))
+        state = "pending_evaluation"
         assert body_of(response)["complianceState"] == state
         updates = mocks["update_state"].call_args.args[2]
         assert updates["complianceState"] == state

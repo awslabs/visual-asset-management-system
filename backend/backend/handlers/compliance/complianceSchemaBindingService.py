@@ -18,6 +18,9 @@ override falls the asset back to the database schema (or removes its row when th
 Every path is authorized against two objects: the compliance schema being bound (or currently
 bound), and the target — the `database` row for database paths, the `asset` row for asset paths —
 so schema permissions alone never reach a database or asset the caller may not touch.
+
+Only a schema whose body is a vams-rules-v1 document can be bound (both paths); a `legacy` row —
+one the schema listing reports with `schemaFormat: legacy` — is refused with LEGACY_SCHEMA_MESSAGE.
 """
 
 import base64
@@ -31,6 +34,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_BIND_ASSET, API_COMPLIANCE_BIND_DATABASE
+from common.compliance import evaluationEngine as engine
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -62,6 +66,9 @@ ASSET_OBJECT_TYPE = "asset"
 SCHEMA_SOURCE_DATABASE = "database"
 SCHEMA_SOURCE_ASSET = "asset"
 STATE_PENDING_EVALUATION = "pending_evaluation"
+# The one client-visible message for a bind that names a schema whose stored body is not a
+# vams-rules-v1 document (a `legacy` row in the schema listing). It names no schema.
+LEGACY_SCHEMA_MESSAGE = "Schema body must be a vams-rules-v1 document"
 
 # Page bounds for the asset-override listing. The full set is read (its count is reported), then
 # offset-sliced to one page in assetId order; the token carries the offset of the next page.
@@ -281,14 +288,9 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
     if not _enforce_database(db_item, database_id, "PUT"):
         return authorization_error()
 
-    visible, exists = _schema_visibility(request.schemaName, database_id)
-    if not exists:
-        return general_error(body={"message": "Schema not found"}, event=event)
-    if not visible:
-        return general_error(body={
-            "message": "Schema is not available for this database. Only GLOBAL or "
-                       "database-scoped schemas can be assigned.",
-        }, event=event)
+    refused = _schema_bindable(event, request.schemaName, database_id)
+    if refused is not None:
+        return refused
 
     if not db_item:
         return general_error(body={"message": "Database not found"}, event=event)
@@ -394,14 +396,9 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
     if not _enforce_asset(asset_item, database_id, asset_id, "PUT"):
         return authorization_error()
 
-    visible, exists = _schema_visibility(request.schemaName, database_id)
-    if not exists:
-        return general_error(body={"message": "Schema not found"}, event=event)
-    if not visible:
-        return general_error(body={
-            "message": "Schema is not available for this database. Only GLOBAL or "
-                       "database-scoped schemas can be assigned.",
-        }, event=event)
+    refused = _schema_bindable(event, request.schemaName, database_id)
+    if refused is not None:
+        return refused
 
     if not asset_item:
         return general_error(body={"message": "Asset not found"}, event=event)
@@ -598,8 +595,9 @@ def _remove_database_compliance_records(database_id):
 
 
 def _schema_visibility(schema_name, database_id):
-    """(visible, exists): whether the schema's latest version exists, and whether it is GLOBAL
-    or scoped to `database_id`."""
+    """(visible, exists, is_vams_rules): whether the schema's latest version exists, whether it is
+    GLOBAL or scoped to `database_id`, and whether its body is a vams-rules-v1 document (a legacy
+    body cannot be evaluated, so it cannot be bound)."""
     response = schema_table.query(
         KeyConditionExpression=Key("schemaName").eq(schema_name),
         ScanIndexForward=False,
@@ -607,6 +605,24 @@ def _schema_visibility(schema_name, database_id):
     )
     items = response.get("Items", [])
     if not items:
-        return False, False
+        return False, False, False
     schema_db_id = items[0].get("databaseId", GLOBAL_DATABASE_ID)
-    return schema_db_id in (GLOBAL_DATABASE_ID, database_id), True
+    is_vams_rules = engine.schema_format(items[0].get("schemaBody")) == engine.VAMS_RULES_V1
+    return schema_db_id in (GLOBAL_DATABASE_ID, database_id), True, is_vams_rules
+
+
+def _schema_bindable(event, schema_name, database_id):
+    """The 400 that refuses binding `schema_name` in `database_id` — absent, scoped to another
+    database, or not a vams-rules-v1 document — or None when it may be bound."""
+    visible, exists, is_vams_rules = _schema_visibility(schema_name, database_id)
+    if not exists:
+        return general_error(body={"message": "Schema not found"}, event=event)
+    if not visible:
+        return general_error(body={
+            "message": "Schema is not available for this database. Only GLOBAL or "
+                       "database-scoped schemas can be assigned.",
+        }, event=event)
+    if not is_vams_rules:
+        logger.info(f"Schema '{schema_name}' is not a vams-rules-v1 document; binding refused")
+        return general_error(body={"message": LEGACY_SCHEMA_MESSAGE}, event=event)
+    return None

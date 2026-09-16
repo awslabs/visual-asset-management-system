@@ -89,6 +89,29 @@ class TestRouteDispatch:
         assert response["statusCode"] == 200
         assert body_of(response)["version"] == 3
         assert body_of(response)["schemaBody"] == RULES_SCHEMA_BODY
+        assert body_of(response)["schemaFormat"] == "vams-rules-v1"
+
+    def test_a_legacy_row_is_listed_and_fetched_with_its_format(self):
+        """A stored JSON-Schema body is reported as `legacy` at the top level of the record (its
+        body is returned as stored), so an operator can find and delete it."""
+        legacy = schema_row(schema_name="old-json", body={"type": "object", "properties": {}})
+        response, _ = _run(rest_event("GET", "/compliance/schemas"),
+                           schema_rows=[schema_row(), legacy])
+        formats = {s["schemaName"]: s["schemaFormat"] for s in body_of(response)["schemas"]}
+        assert formats == {SCHEMA: "vams-rules-v1", "old-json": "legacy"}
+        response, _ = _run(
+            rest_event("GET", "/compliance/schemas/old-json", {"schemaName": "old-json"}),
+            schema_rows=[legacy])
+        body = body_of(response)
+        assert body["schemaFormat"] == "legacy"
+        assert body["schemaBody"] == {"type": "object", "properties": {}}
+
+    def test_a_row_whose_body_is_not_json_is_legacy_and_returned_as_stored(self):
+        row = dict(schema_row(), schemaBody="not json")
+        normalized = svc.normalize_schema_item(row)
+        assert normalized["schemaFormat"] == "legacy"
+        assert normalized["schemaBody"] == "not json"
+        assert svc.engine.SCHEMA_FORMAT_LEGACY == "legacy"
 
     def test_put_by_name_writes_the_next_version(self):
         response, tables = _run(

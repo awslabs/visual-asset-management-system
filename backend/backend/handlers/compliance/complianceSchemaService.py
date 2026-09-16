@@ -10,6 +10,8 @@
 - DELETE /compliance/schemas/{schemaName}  — delete an unbound schema (every version)
 
 Schema table (PK schemaName, SK internalVersion; GSI DatabaseIdIndex on databaseId/schemaName).
+Every schema record the GET routes return carries a top-level `schemaFormat` (`vams-rules-v1` |
+`legacy`) derived from the stored body.
 """
 
 import json
@@ -227,7 +229,13 @@ def _parse_body(event):
 #######################
 
 def normalize_schema_item(item):
-    """A schema row in its API response shape."""
+    """A schema row in its API response shape.
+
+    `schemaFormat` is derived from the stored body: `vams-rules-v1` when the body declares that
+    format, `legacy` for a row written before the format existed (a JSON-Schema body). A legacy
+    schema cannot be evaluated, updated or bound — it is listed so an operator can find and delete
+    it.
+    """
     schema_body = item.get("schemaBody", "{}")
     if isinstance(schema_body, str):
         try:
@@ -238,6 +246,7 @@ def normalize_schema_item(item):
         "schemaName": item.get("schemaName"),
         "databaseId": item.get("databaseId", GLOBAL_DATABASE_ID),
         "description": item.get("description", ""),
+        "schemaFormat": engine.schema_format(schema_body),
         "schemaBody": schema_body,
         "version": int(item.get("internalVersion", 1)),
         "createdAt": item.get("registeredAt"),

@@ -403,6 +403,44 @@ class TestDatabaseBinding:
         assert body_of(response)["message"] == "Database not found"
         tables["database"].update_item.assert_not_called()
 
+    @pytest.mark.parametrize("body", [
+        {"type": "object", "properties": {"secret<p>": {}}},
+        {"rules": {"r": {"ruleType": "metadata"}}},
+        {"schemaFormat": "other", "rules": {}},
+    ], ids=["json-schema", "rules-without-format", "other-format"])
+    def test_binding_a_legacy_schema_to_a_database_is_refused(self, body):
+        """A stored body that is not a vams-rules-v1 document cannot be evaluated, so it cannot be
+        bound; the message is the one the schema service gives such a body, and echoes nothing."""
+        response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
+                                schema_rows=[schema_row(body=body)],
+                                database_item={"databaseId": DB})
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Schema body must be a vams-rules-v1 document"
+        assert "secret<p>" not in response["body"]
+        _assert_nothing_written(tables)
+
+    def test_binding_a_schema_whose_stored_body_is_not_json_is_refused(self):
+        row = dict(schema_row(), schemaBody="not json")
+        response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
+                                schema_rows=[row], database_item={"databaseId": DB})
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == svc.LEGACY_SCHEMA_MESSAGE
+        _assert_nothing_written(tables)
+
+    def test_the_legacy_message_names_no_schema_and_no_request_field(self):
+        """Rule 11: a fixed sentence about the stored body; the bind request has no `schemaBody`."""
+        assert svc.LEGACY_SCHEMA_MESSAGE == "Schema body must be a vams-rules-v1 document"
+        assert SCHEMA not in svc.LEGACY_SCHEMA_MESSAGE
+
+    def test_the_format_check_reads_the_latest_version_only(self):
+        """The one query the visibility check already makes answers the format too."""
+        response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
+                                database_item={"databaseId": DB})
+        assert response["statusCode"] == 200
+        assert tables["schema"].query.call_count == 1
+        query = tables["schema"].query.call_args.kwargs
+        assert query["ScanIndexForward"] is False and query["Limit"] == 1
+
     def test_unbinding_removes_inherited_rows_and_keeps_overrides(self):
         response, tables = _run(
             rest_event("DELETE", DB_PATH, DB_PARAMS),
@@ -456,6 +494,21 @@ class TestAssetBinding:
         assert response["statusCode"] == 400
         assert body_of(response)["message"] == "Asset not found"
         tables["update_state"].assert_not_called()
+
+    def test_binding_a_legacy_schema_to_an_asset_is_refused(self):
+        response, tables = _run(
+            rest_event("PUT", ASSET_PATH, ASSET_PARAMS, body=BIND_BODY),
+            schema_rows=[schema_row(body={"type": "object", "properties": {"secret<p>": {}}})],
+            compliance_record={"schemaName": "previous", "schemaSource": "database"})
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Schema body must be a vams-rules-v1 document"
+        assert "secret<p>" not in response["body"]
+        _assert_nothing_written(tables)
+
+    def test_a_missing_legacy_schema_is_reported_as_missing_before_its_format(self):
+        response, _ = _run(rest_event("PUT", ASSET_PATH, ASSET_PARAMS, body=BIND_BODY),
+                           schema_rows=[])
+        assert body_of(response)["message"] == "Schema not found"
 
     def test_removing_an_override_falls_back_to_the_database_schema(self):
         response, tables = _run(
