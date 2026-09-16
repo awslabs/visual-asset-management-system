@@ -65,6 +65,8 @@ AUDIT_EVENT_TYPES = (
     "cascade_approved",
     "cascade_rejected",
     "cascade_completed",
+    "exception_revoked",
+    "exception_superseded",
 )
 
 try:
@@ -132,14 +134,22 @@ def handle_get_request(event):
 # Authorization helpers
 #######################
 
+def _evaluation_object(database_id):
+    """The compliance evaluation object of a database, as the list filter and the single-resource
+    check enforce it. An audit entry with no databaseId maps to the empty-database object, so such
+    entries are listed only for a caller allowed to GET that object."""
+    return {
+        "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
+        "databaseId": database_id or "",
+        "complianceState": "",
+    }
+
+
 def _enforce(database_id, action):
     """Tier-2 check on a compliance evaluation object. Fails closed on an empty token list."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
-    return CasbinEnforcer(claims_and_roles).enforce({
-        "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
-        "databaseId": database_id or "",
-    }, action)
+    return CasbinEnforcer(claims_and_roles).enforce(_evaluation_object(database_id), action)
 
 
 #######################
@@ -292,10 +302,8 @@ def query_audit(event, params):
         response = audit_table.query(**query_kwargs)
         for item in response.get("Items", []):
             # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-            if casbin_enforcer and casbin_enforcer.enforce({
-                "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
-                "databaseId": item.get("databaseId", ""),
-            }, "GET"):
+            if casbin_enforcer and casbin_enforcer.enforce(
+                    _evaluation_object(item.get("databaseId")), "GET"):
                 entries.append(item)
         if "LastEvaluatedKey" in response:
             next_token = _encode_token({"partition": partition, "key": response["LastEvaluatedKey"]})

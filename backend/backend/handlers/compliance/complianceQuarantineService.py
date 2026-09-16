@@ -3,13 +3,20 @@
 
 """Compliance Quarantine Service handler.
 
-- GET  /compliance/quarantine                                   — list quarantined assets (paged)
-- POST /compliance/quarantine/{databaseId}/{assetId}/release    — release an asset
-- POST /compliance/quarantine/{databaseId}/{assetId}/exception  — grant an exception
+- GET    /compliance/quarantine                                   — list quarantined assets (paged)
+- POST   /compliance/quarantine/{databaseId}/{assetId}/release    — release an asset
+- POST   /compliance/quarantine/{databaseId}/{assetId}/exception  — grant an exception
+- DELETE /compliance/quarantine/{databaseId}/{assetId}/exception  — revoke an exception
 
 Quarantined assets are the asset-state rows with complianceState "quarantined". The listing
 reads one page of them through the ComplianceStateIndex GSI (complianceState, databaseId) and
 returns a Base64 NextToken wrapping the index's LastEvaluatedKey while more rows remain.
+
+An exception moves a quarantined asset to the "exception" state and is scoped to the schema name
+and version it was granted against (`exceptionSchemaName`, `exceptionSchemaVersion`): the
+evaluation store keeps the asset out of quarantine while both still match and clears the
+exception once a different schema or a newer version is evaluated. Revoking clears the exception
+fields and returns the asset to the state of its last evaluation.
 """
 
 import base64
@@ -41,13 +48,21 @@ from models.common import (
     validation_error,
     validation_error_message,
 )
-from models.compliance import GrantExceptionRequestModel, ReleaseQuarantineRequestModel
+from models.compliance import (
+    EvaluationVerdict,
+    GrantExceptionRequestModel,
+    ReleaseQuarantineRequestModel,
+)
 
 logger = safeLogger(service_name="ComplianceQuarantineService")
 
 claims_and_roles = {}
 
 COMPLIANCE_EVALUATION_OBJECT_TYPE = "complianceEvaluation"
+
+# Bound on the quarantine reason kept on the asset-state row (the failed rules' messages).
+MAX_QUARANTINE_REASON_LENGTH = 1024
+DEFAULT_QUARANTINE_REASON = "Compliance evaluation failed"
 
 # The GSI the listing pages: PK complianceState, SK databaseId, projection ALL. A page token is the
 # index's LastEvaluatedKey, which carries the index keys plus the table keys.
@@ -89,6 +104,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return handle_get_request(event)
         elif method == "POST":
             return handle_post_request(event)
+        elif method == "DELETE":
+            return handle_delete_request(event)
         else:
             return validation_error(body={"message": "Method not allowed"}, event=event)
 
@@ -126,6 +143,14 @@ def handle_post_request(event):
         request = parse(_parse_body(event), model=GrantExceptionRequestModel)
         return grant_exception(event, path_params.get("databaseId"),
                                path_params.get("assetId"), request)
+    return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def handle_delete_request(event):
+    path = event["requestContext"]["http"]["path"]
+    path_params = event.get("pathParameters", {}) or {}
+    if API_COMPLIANCE_QUARANTINE_EXCEPTION.matches(path):
+        return revoke_exception(event, path_params.get("databaseId"), path_params.get("assetId"))
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -297,7 +322,8 @@ def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineR
 
 
 def grant_exception(event, database_id, asset_id, request: GrantExceptionRequestModel):
-    """Grant an exception for a quarantined asset (state becomes compliant; exception recorded)."""
+    """Grant an exception for a quarantined asset: the state becomes `exception`, the quarantine
+    reason is cleared, and the grant is scoped to the asset's bound schema at its current version."""
     (valid, message) = _validate_database_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -316,13 +342,18 @@ def grant_exception(event, database_id, asset_id, request: GrantExceptionRequest
 
     actor = claims_and_roles["tokens"][0]
     now = datetime.now(timezone.utc).isoformat()
+    schema_name = item.get("schemaName") or None
+    schema_version = _current_schema_version(schema_name)
 
     store.update_asset_state(database_id, asset_id, {
-        "complianceState": engine.STATE_COMPLIANT,
+        "complianceState": engine.STATE_EXCEPTION,
         "exceptionGranted": True,
         "exceptionReason": request.reason,
         "exceptionGrantedBy": actor,
         "exceptionGrantedAt": now,
+        "exceptionSchemaName": schema_name,
+        "exceptionSchemaVersion": schema_version,
+        "quarantineReason": None,
         "updatedAt": now,
     })
 
@@ -330,13 +361,118 @@ def grant_exception(event, database_id, asset_id, request: GrantExceptionRequest
         database_id, asset_id,
         event_type="exception_granted",
         actor=actor,
-        details={"reason": request.reason},
+        schema_name=schema_name,
+        details={"reason": request.reason, "schemaVersion": schema_version},
         previous_state=engine.STATE_QUARANTINED,
-        new_state=engine.STATE_COMPLIANT,
+        new_state=engine.STATE_EXCEPTION,
     )
 
     return success(body={
         "message": f"Exception granted for {database_id}:{asset_id}",
         "reason": request.reason,
         "grantedBy": actor,
+        "complianceState": engine.STATE_EXCEPTION,
     })
+
+
+def revoke_exception(event, database_id, asset_id):
+    """Revoke an active exception. The exception fields are cleared and the asset returns to the
+    state its last evaluation's verdict maps to — re-quarantined, with the quarantine reason and
+    the subscriber notification, when that verdict was quarantined — or to `pending_evaluation`
+    when the asset has no recorded evaluation."""
+    (valid, message) = _validate_database_and_asset(database_id, asset_id)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not _enforce(database_id, "DELETE", compliance_state=engine.STATE_EXCEPTION):
+        return authorization_error()
+
+    item = store.get_compliance_record(database_id, asset_id)
+    if not item:
+        return general_error(body={"message": "Asset not found in compliance tracking"}, event=event)
+    if item.get("exceptionGranted") is not True:
+        return general_error(body={"message": "No active exception"}, event=event)
+
+    actor = claims_and_roles["tokens"][0]
+    now = datetime.now(timezone.utc).isoformat()
+    previous_state = item.get("complianceState")
+    last_evaluation_id = item.get("lastEvaluationId") or None
+    evaluation = store.get_evaluation(last_evaluation_id) if last_evaluation_id else None
+
+    if evaluation:
+        new_state = engine.verdict_to_state(_verdict_of(evaluation))
+        rule_results = engine.rule_results_from_json(evaluation.get("ruleResults", "[]"))
+    else:
+        new_state = engine.STATE_PENDING_EVALUATION
+        rule_results = []
+    schema_name = (evaluation or {}).get("schemaName") or item.get("schemaName") or ""
+
+    updates = {
+        "complianceState": new_state,
+        "quarantineReason": None,
+        "updatedAt": now,
+        **engine.cleared_exception_fields(),
+    }
+    if new_state == engine.STATE_QUARANTINED:
+        updates["quarantineReason"] = _quarantine_reason(rule_results)
+    store.update_asset_state(database_id, asset_id, updates)
+
+    store.write_audit(
+        database_id, asset_id,
+        event_type="exception_revoked",
+        actor=actor,
+        schema_name=item.get("exceptionSchemaName") or None,
+        evaluation_id=last_evaluation_id,
+        details={"exceptionSchemaVersion": engine.schema_version_number(
+            item.get("exceptionSchemaVersion"))},
+        previous_state=previous_state,
+        new_state=new_state,
+    )
+
+    if new_state == engine.STATE_QUARANTINED:
+        _notify_quarantine(database_id, asset_id, schema_name,
+                           engine.failed_rule_names(rule_results))
+
+    return success(body={
+        "message": "Exception revoked",
+        "databaseId": database_id,
+        "assetId": asset_id,
+        "complianceState": new_state,
+    })
+
+
+def _current_schema_version(schema_name):
+    """The current `internalVersion` of a schema, or None when the asset has no bound schema or the
+    schema no longer exists."""
+    if not schema_name:
+        return None
+    latest = store.load_schema_item(schema_name)
+    if not latest:
+        return None
+    return engine.schema_version_number(latest.get("internalVersion", 1))
+
+
+def _verdict_of(evaluation):
+    """The verdict recorded on an evaluation row; an unrecognized value reads as `error`."""
+    try:
+        return EvaluationVerdict(evaluation.get("verdict"))
+    except ValueError:
+        return EvaluationVerdict.error
+
+
+def _quarantine_reason(rule_results):
+    """The failed rules' messages kept on the asset-state row while the asset is quarantined."""
+    reason = "; ".join(engine.violations(rule_results)) or DEFAULT_QUARANTINE_REASON
+    return reason[:MAX_QUARANTINE_REASON_LENGTH]
+
+
+def _notify_quarantine(database_id, asset_id, schema_name, failed_rules):
+    """Tell the asset's subscribers about a quarantine; a notification failure is logged and does not
+    undo the state change it reports."""
+    try:
+        from handlers.compliance.complianceNotifications import notify_quarantine
+        notify_quarantine(database_id, asset_id, schema_name, failed_rules)
+    except Exception as e:
+        logger.exception(f"Failed sending quarantine notification: {e}")

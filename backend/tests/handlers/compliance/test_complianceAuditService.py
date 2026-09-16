@@ -118,22 +118,61 @@ class TestAuthorization:
                 patch(f"{MOD}.audit_table", table):
             svc.lambda_handler(rest_event("GET", ASSET_PATH, ASSET_PARAMS), MagicMock())
         instance.enforce.assert_called_once_with(
-            {"object__type": "complianceEvaluation", "databaseId": DB}, "GET")
+            {"object__type": "complianceEvaluation", "databaseId": DB, "complianceState": ""}, "GET")
+
+    def _list_with(self, instance, rows, query=None):
+        """Run the global listing; `query` None narrows the walk to one partition, {} walks them all."""
+        if query is None:
+            query = {"eventType": "compliance_check"}
+        table = MagicMock()
+        table.query.side_effect = lambda **kw: {"Items": list(rows)}
+        with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
+                patch(f"{MOD}.audit_table", table):
+            response = svc.lambda_handler(rest_event("GET", LIST_PATH, query_params=query), MagicMock())
+        return response, table
 
     def test_the_listing_filters_entries_by_their_database(self):
         instance = enforcer()
         instance.enforce.side_effect = lambda obj, act: obj["databaseId"] == DB
-        table = MagicMock()
-        table.query.side_effect = lambda **kw: {"Items": [_entry(database_id=DB),
-                                                          _entry(database_id="other")]}
-        with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
-                patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
-                patch(f"{MOD}.audit_table", table):
-            response = svc.lambda_handler(
-                rest_event("GET", LIST_PATH, query_params={"eventType": "compliance_check"}),
-                MagicMock())
+        response, _ = self._list_with(instance, [_entry(database_id=DB), _entry(database_id="other")])
         entries = body_of(response)["entries"]
         assert [e["databaseId"] for e in entries] == [DB]
+        assert "other" not in response["body"]
+        assert instance.enforce.call_args_list[1].args == (
+            {"object__type": "complianceEvaluation", "databaseId": "other", "complianceState": ""},
+            "GET")
+
+    def test_a_denied_enforcer_yields_an_empty_listing_across_the_whole_walk(self):
+        rows = [_entry(database_id=DB), _entry(database_id="other")]
+        response, table = self._list_with(enforcer(obj=False), rows, query={})
+        assert response["statusCode"] == 200
+        assert body_of(response)["entries"] == []
+        # Every partition was read and every row was refused: nothing leaks and nothing is skipped.
+        assert table.query.call_count == len(svc.AUDIT_EVENT_TYPES)
+
+    def test_an_entry_without_a_database_is_listed_only_for_the_empty_database_object(self):
+        orphan = {k: v for k, v in _entry().items() if k != "databaseId"}
+        instance = enforcer()
+        instance.enforce.side_effect = lambda obj, act: obj["databaseId"] == ""
+        response, _ = self._list_with(instance, [orphan, _entry(database_id=DB)])
+        assert [e["entryId"] for e in body_of(response)["entries"]] == [orphan["entryId"]]
+        assert instance.enforce.call_args_list[0].args == (
+            {"object__type": "complianceEvaluation", "databaseId": "", "complianceState": ""}, "GET")
+
+
+@pytest.mark.unit
+class TestAuditEventTypeRegistry:
+
+    def test_every_event_type_the_compliance_handlers_write_is_walked(self):
+        assert set(svc.AUDIT_EVENT_TYPES) >= {
+            "compliance_check", "quarantine_released", "exception_granted", "exception_revoked",
+            "exception_superseded", "schema_bound_to_database", "schema_unbound_from_database",
+            "schema_bound_to_asset", "schema_unbound_from_asset", "schema_deleted",
+            "cascade_triggered", "cascade_auto_triggered", "cascade_approved", "cascade_rejected",
+            "cascade_completed",
+        }
+        assert len(svc.AUDIT_EVENT_TYPES) == len(set(svc.AUDIT_EVENT_TYPES)) == 15
 
 
 @pytest.mark.unit
@@ -312,7 +351,13 @@ class TestCrossAssetListing:
             "partition": svc.AUDIT_EVENT_TYPES[1], "key": None}
 
     def test_the_walk_fills_a_page_across_partitions(self):
-        counts = iter([1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        # One entry in the first partition (compliance_check), one in the third (exception_granted),
+        # none in any other: the counts are positional over the registry, whatever its length.
+        types = list(svc.AUDIT_EVENT_TYPES)
+        per_partition = [0] * len(types)
+        per_partition[types.index("compliance_check")] = 1
+        per_partition[types.index("exception_granted")] = 1
+        counts = iter(per_partition)
 
         def pages(**kwargs):
             return {"Items": [_entry(kwargs["KeyConditionExpression"]._values[1])]

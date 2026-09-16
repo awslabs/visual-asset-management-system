@@ -268,6 +268,65 @@ class TestAuthorization:
         assert response["statusCode"] == 200
         assert body_of(response)["cascades"] == []
 
+    def test_the_listing_enforces_the_cascade_object_and_the_trigger_database(self):
+        _, mocks = _run(rest_event("GET", LIST_PATH), pending_rows=[PENDING])
+        assert [c.args for c in mocks["enforcer"].enforce.call_args_list] == [
+            (CASCADE_OBJECT, "GET"),
+            (EVALUATION_OBJECT, "GET"),
+        ]
+
+    @pytest.mark.parametrize("cascade,evaluation", [(True, False), (False, True)],
+                             ids=["trigger-database-denied", "cascade-object-denied"])
+    def test_a_row_denied_on_either_object_is_left_out(self, cascade, evaluation):
+        response, _ = _run(rest_event("GET", LIST_PATH), pending_rows=[PENDING],
+                           instance=_enforcer_by_object(cascade=cascade, evaluation=evaluation))
+        assert response["statusCode"] == 200
+        assert body_of(response)["cascades"] == []
+        assert CASCADE_ID not in response["body"]
+
+    def test_the_listing_keeps_only_the_rows_whose_trigger_database_the_caller_may_get(self):
+        instance = enforcer()
+        instance.enforce.side_effect = lambda obj, action: (
+            obj["object__type"] == "complianceCascade" or obj["databaseId"] == DB)
+        hidden = dict(PENDING, cascadeId="5b1e2c3d-0000-4000-8000-000000000002",
+                      triggeredByDatabaseId="hidden-db", triggeredByAssetId="theirs")
+        response, _ = _run(rest_event("GET", LIST_PATH), pending_rows=[PENDING, hidden],
+                           instance=instance)
+        rows = body_of(response)["cascades"]
+        assert [r["cascadeId"] for r in rows] == [CASCADE_ID]
+        assert "hidden-db" not in response["body"]
+        assert "theirs" not in response["body"]
+
+    def test_the_listing_function_yields_an_empty_list_on_an_empty_token_list(self):
+        # Append-on-allow: reached with no identity, no row passes and Casbin is never constructed.
+        spy = _EnforcerSpy()
+        cascade_table = MagicMock(name="cascade_table")
+        cascade_table.query.return_value = {"Items": [dict(PENDING)]}
+        with patch(f"{MOD}.claims_and_roles", {"tokens": [], "roles": []}), \
+                patch(f"{MOD}.CasbinEnforcer", spy.factory), \
+                patch(f"{MOD}.cascade_table", cascade_table):
+            response = svc.list_pending_cascades(rest_event("GET", LIST_PATH))
+        assert response["statusCode"] == 200
+        assert body_of(response)["cascades"] == []
+        assert spy.constructions == []
+
+
+@pytest.mark.unit
+class TestListingRows:
+
+    def test_each_row_carries_the_trigger_asset_as_database_id_and_asset_id(self):
+        response, _ = _run(rest_event("GET", LIST_PATH), pending_rows=[PENDING])
+        row = body_of(response)["cascades"][0]
+        assert row["databaseId"] == DB and row["assetId"] == ASSET
+        assert row["triggeredByDatabaseId"] == DB and row["triggeredByAssetId"] == ASSET
+        assert row["cascadeId"] == CASCADE_ID and row["state"] == "pending_approval"
+
+    def test_a_row_missing_its_trigger_attributes_carries_empty_strings(self):
+        bare = {"cascadeId": CASCADE_ID, "state": "pending_approval"}
+        response, _ = _run(rest_event("GET", LIST_PATH), pending_rows=[bare])
+        row = body_of(response)["cascades"][0]
+        assert row["databaseId"] == "" and row["assetId"] == ""
+
 
 @pytest.mark.unit
 class TestValidation:

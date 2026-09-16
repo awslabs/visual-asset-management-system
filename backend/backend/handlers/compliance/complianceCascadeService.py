@@ -180,17 +180,22 @@ def _enforce_cascade(cascade_id, action):
     return CasbinEnforcer(claims_and_roles).enforce(_cascade_object(cascade_id), action)
 
 
+def _evaluation_object(database_id, compliance_state=""):
+    return {
+        "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
+        "databaseId": database_id,
+        "complianceState": compliance_state or "",
+    }
+
+
 def _enforce_evaluation(database_id, action, compliance_state=""):
     """Tier-2 check on the compliance evaluation object of the cascade's trigger database: a cascade
     evaluates that database's downstream assets, so the caller must be allowed to evaluate there.
     Fails closed on an empty token list."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
-    return CasbinEnforcer(claims_and_roles).enforce({
-        "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
-        "databaseId": database_id,
-        "complianceState": compliance_state or "",
-    }, action)
+    return CasbinEnforcer(claims_and_roles).enforce(
+        _evaluation_object(database_id, compliance_state), action)
 
 
 def _validate_cascade_id(cascade_id):
@@ -428,7 +433,13 @@ def get_cascade(event, cascade_id):
 
 
 def list_pending_cascades(event):
-    """Every cascade awaiting approval the caller may GET (StateIndex GSI, newest first)."""
+    """Every cascade awaiting approval the caller may GET (StateIndex GSI, newest first).
+
+    A row is listed only when the caller may GET both the cascade object and the compliance
+    evaluation object of the trigger asset's database — the same pair every single-cascade route
+    enforces. Each row carries `databaseId` / `assetId` (the trigger asset) beside the
+    `triggeredBy*` attributes it is stored with.
+    """
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
     rows = query_all_items(
@@ -440,6 +451,18 @@ def list_pending_cascades(event):
     allowed = []
     for item in rows:
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-        if casbin_enforcer and casbin_enforcer.enforce(_cascade_object(item.get("cascadeId")), "GET"):
-            allowed.append(item)
+        if casbin_enforcer and casbin_enforcer.enforce(_cascade_object(item.get("cascadeId")), "GET") \
+                and casbin_enforcer.enforce(
+                    _evaluation_object(item.get("triggeredByDatabaseId", "")), "GET"):
+            allowed.append(_cascade_row(item))
     return success(body={"cascades": allowed})
+
+
+def _cascade_row(item):
+    """A cascade row for the listing: the stored attributes plus `databaseId` / `assetId` naming the
+    trigger asset."""
+    return {
+        **item,
+        "databaseId": item.get("triggeredByDatabaseId", ""),
+        "assetId": item.get("triggeredByAssetId", ""),
+    }

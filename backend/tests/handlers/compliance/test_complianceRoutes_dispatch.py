@@ -76,6 +76,8 @@ DISPATCH = {
         complianceQuarantineService, "release_quarantine"),
     (api_routes.API_COMPLIANCE_QUARANTINE_EXCEPTION, "POST"): (
         complianceQuarantineService, "grant_exception"),
+    (api_routes.API_COMPLIANCE_QUARANTINE_EXCEPTION, "DELETE"): (
+        complianceQuarantineService, "revoke_exception"),
     (api_routes.API_COMPLIANCE_CASCADES, "GET"): (complianceCascadeService, "list_pending_cascades"),
     (api_routes.API_COMPLIANCE_CASCADES, "POST"): (complianceCascadeService, "create_cascade"),
     (api_routes.API_COMPLIANCE_CASCADE_BY_ID, "GET"): (complianceCascadeService, "get_cascade"),
@@ -132,7 +134,7 @@ class TestTheDispatchTableMatchesTheRegistry:
                           for method in route.methods}
         assert set(DISPATCH) == registry_pairs
         assert len(api_routes.COMPLIANCE_ROUTES) == 18
-        assert len(registry_pairs) == 25
+        assert len(registry_pairs) == 26
 
     def test_every_route_is_served_by_one_handler(self):
         handlers_by_route = {}

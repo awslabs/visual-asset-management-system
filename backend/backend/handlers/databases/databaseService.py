@@ -134,6 +134,8 @@ def get_database(database_id, show_deleted=False, claims_and_roles=None):
                     baseAssetsPrefix=base_assets_prefix,
                     restrictMetadataOutsideSchemas=database.get('restrictMetadataOutsideSchemas', False),
                     restrictFileUploadsToExtensions=database.get('restrictFileUploadsToExtensions', ''),
+                    complianceSchemaName=database.get('complianceSchemaName'),
+                    complianceAutoEval=database.get('complianceAutoEval'),
                 )
             
         return None
@@ -219,6 +221,8 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
                         baseAssetsPrefix=base_assets_prefix,
                         restrictMetadataOutsideSchemas=deserialized_document.get('restrictMetadataOutsideSchemas', False),
                         restrictFileUploadsToExtensions=deserialized_document.get('restrictFileUploadsToExtensions', ''),
+                        complianceSchemaName=deserialized_document.get('complianceSchemaName'),
+                        complianceAutoEval=deserialized_document.get('complianceAutoEval'),
                     )
                     items.append(database_model)
 

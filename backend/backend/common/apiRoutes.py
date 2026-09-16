@@ -575,13 +575,14 @@ API_COMPLIANCE_STATE_ASSET = ApiRoute(
     "/compliance/state/{databaseId}/{assetId}", (GET,), "compliance"
 )
 API_COMPLIANCE_STATE_DATABASE = ApiRoute("/compliance/state/{databaseId}", (GET,), "compliance")
-# Quarantine: listing plus the release / exception actions on one quarantined asset.
+# Quarantine: listing plus the release action on one quarantined asset, and the exception on one
+# asset: POST grants it (the asset must be quarantined), DELETE revokes an active exception.
 API_COMPLIANCE_QUARANTINE = ApiRoute("/compliance/quarantine", (GET,), "compliance")
 API_COMPLIANCE_QUARANTINE_RELEASE = ApiRoute(
     "/compliance/quarantine/{databaseId}/{assetId}/release", (POST,), "compliance"
 )
 API_COMPLIANCE_QUARANTINE_EXCEPTION = ApiRoute(
-    "/compliance/quarantine/{databaseId}/{assetId}/exception", (POST,), "compliance"
+    "/compliance/quarantine/{databaseId}/{assetId}/exception", (POST, DELETE), "compliance"
 )
 # Cascades: collection GET (list) + POST (create); single cascade GET; approve / reject actions.
 API_COMPLIANCE_CASCADES = ApiRoute("/compliance/cascades", (GET, POST), "compliance")
