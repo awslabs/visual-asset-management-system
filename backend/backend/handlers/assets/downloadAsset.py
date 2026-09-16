@@ -517,7 +517,11 @@ def download_asset_preview(databaseId, assetId, request_model):
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
-        
+
+    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
+    # already passed authorization, so a denied caller never reaches this read.
+    check_quarantine_block(databaseId, assetId)
+
     # Get preview location
     preview_location = asset.get('previewLocation')
     if not preview_location:

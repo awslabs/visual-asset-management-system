@@ -7,7 +7,7 @@ downloadAsset always evaluated the block after its Casbin checks; what changes i
 is the shared ``common.compliance.quarantineGuard`` rather than a handler-local copy with its own
 table bootstrap. These tests pin that binding and the ordering it must keep: a denied caller gets
 403 with no state-table read, an authorized caller on a quarantined asset gets 400 with the shared
-message and no presigned URL.
+message and no presigned URL. Both download types (`assetFile` and `assetPreview`) pass the guard.
 """
 
 import importlib.util
@@ -75,7 +75,10 @@ def _load():
     return module
 
 
-def _event():
+def _event(download_type="assetFile"):
+    body = {"downloadType": download_type}
+    if download_type == "assetFile":
+        body["key"] = "/model.glb"
     return {
         "path": f"/database/{_DB}/assets/{_ASSET}/download",
         "httpMethod": "POST",
@@ -83,11 +86,11 @@ def _event():
         "pathParameters": {"databaseId": _DB, "assetId": _ASSET},
         "queryStringParameters": None,
         "headers": {},
-        "body": json.dumps({"downloadType": "assetFile", "key": "/model.glb"}),
+        "body": json.dumps(body),
     }
 
 
-def _wire(m, tokens=("test-user",), api_allowed=True, object_allowed=True):
+def _wire(m, tokens=("test-user",), api_allowed=True, object_allowed=True, distributable=True):
     from common.auth.apiEvent import normalize_event
 
     def _claims(event):
@@ -100,13 +103,15 @@ def _wire(m, tokens=("test-user",), api_allowed=True, object_allowed=True):
     enforcer.return_value.enforce.return_value = object_allowed
     m.CasbinEnforcer = enforcer
     m.get_asset_details = MagicMock(return_value={
-        "databaseId": _DB, "assetId": _ASSET, "isDistributable": True,
+        "databaseId": _DB, "assetId": _ASSET, "isDistributable": distributable,
         "bucketId": "bucket-1", "assetLocation": {"Key": f"{_ASSET}/"},
+        "previewLocation": {"Key": f"{_ASSET}/preview.png"},
     })
     m.get_default_bucket_details = MagicMock(return_value={
         "bucketId": "bucket-1", "bucketName": "test-bucket", "baseAssetsPrefix": "",
     })
     m.validateUnallowedFileExtensionAndContentType = MagicMock(return_value=True)
+    m.validateS3AssetExtensionsAndContentType = MagicMock(return_value=True)
     m.log_file_download = MagicMock()
     m.log_file_download_bulk = MagicMock()
     m.s3 = MagicMock()
@@ -216,3 +221,67 @@ class TestDownloadQuarantineBlockAfterAuthorization:
 
         assert response["statusCode"] == 200
         table.get_item.assert_not_called()
+
+
+@pytest.mark.unit
+class TestPreviewDownloadQuarantineBlock:
+    """`downloadType: assetPreview` mints a presigned URL for the asset's preview object through the
+    same guard as the file download, after authorization and after the distributable check."""
+
+    def test_authorized_caller_on_quarantined_asset_preview_gets_400_and_no_presigned_url(self):
+        m = _load()
+        s3, enforcer = _wire(m)
+        table = _state_table(_quarantined())
+
+        with _guard_enabled(table):
+            response = m.lambda_handler(_event("assetPreview"), MagicMock())
+
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"])["message"].endswith(guard.QUARANTINE_BLOCK_MESSAGE)
+        assert _SIGNED_URL not in response["body"]
+        table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
+        enforcer.return_value.enforce.assert_called_once()
+        s3.generate_presigned_url.assert_not_called()
+        m.log_file_download.assert_not_called()
+
+    def test_non_quarantined_asset_preview_is_signed_after_one_guard_read(self):
+        m = _load()
+        s3, _enforcer = _wire(m)
+        table = _state_table({"databaseId": _DB, "assetId": _ASSET, "complianceState": "compliant"})
+
+        with _guard_enabled(table):
+            response = m.lambda_handler(_event("assetPreview"), MagicMock())
+
+        assert response["statusCode"] == 200, response
+        body = json.loads(response["body"])
+        assert body["downloadUrl"] == _SIGNED_URL
+        assert body["downloadType"] == "assetPreview"
+        table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
+        s3.generate_presigned_url.assert_called_once()
+        m.log_file_download.assert_called_once()
+
+    def test_tier2_denied_caller_gets_403_and_the_state_table_is_never_read(self):
+        m = _load()
+        s3, _enforcer = _wire(m, object_allowed=False)
+        table = _state_table(_quarantined())
+
+        with _guard_enabled(table):
+            response = m.lambda_handler(_event("assetPreview"), MagicMock())
+
+        assert response["statusCode"] == 403
+        assert "quarantin" not in response["body"].lower()
+        table.get_item.assert_not_called()
+        s3.generate_presigned_url.assert_not_called()
+
+    def test_non_distributable_asset_preview_is_refused_before_the_guard_reads(self):
+        m = _load()
+        s3, _enforcer = _wire(m, distributable=False)
+        table = _state_table(_quarantined())
+
+        with _guard_enabled(table):
+            response = m.lambda_handler(_event("assetPreview"), MagicMock())
+
+        assert response["statusCode"] == 400
+        assert "not distributable" in json.loads(response["body"])["message"]
+        table.get_item.assert_not_called()
+        s3.generate_presigned_url.assert_not_called()
