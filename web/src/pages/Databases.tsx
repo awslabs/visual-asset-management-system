@@ -17,6 +17,11 @@ import { MetadataContainer } from "../components/metadataV2/MetadataContainer";
 import { featuresEnabled } from "../common/constants/featuresEnabled";
 import DatabaseMapThumbnail from "../components/search/SearchResults/DatabaseMapThumbnail";
 import { usePageTitle } from "../hooks/usePageTitle";
+import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
+
+// The API route the database compliance page reads; the column linking to it is shown only
+// when the caller may call it.
+const COMPLIANCE_STATE_DATABASE_API_ROUTE = "/compliance/state/{databaseId}";
 
 export default function Databases() {
     usePageTitle(Synonyms.Databases);
@@ -26,6 +31,8 @@ export default function Databases() {
     const config = appCache.getItem("config");
     const useMapView = config?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES);
     const mapStyleUrl = config?.locationServiceApiUrl;
+    const { can: canCallRoute } = useAllowedRoutes();
+    const showCompliance = canCallRoute("GET", COMPLIANCE_STATE_DATABASE_API_ROUTE);
 
     const listDefinition = useMemo(
         () =>
@@ -34,8 +41,9 @@ export default function Databases() {
                 showMapThumbnails: showMapThumbnails && useMapView,
                 MapThumbnailComponent: DatabaseMapThumbnail,
                 mapStyleUrl,
+                showCompliance,
             }),
-        [showMapThumbnails, useMapView, mapStyleUrl]
+        [showMapThumbnails, useMapView, mapStyleUrl, showCompliance]
     );
 
     const mapThumbnailToggle =

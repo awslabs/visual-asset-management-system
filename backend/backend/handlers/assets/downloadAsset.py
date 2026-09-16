@@ -26,6 +26,7 @@ from common.s3 import (
     validateUnallowedFileExtensionAndContentType,
     list_all_objects,
 )
+from common.compliance.quarantineGuard import check_quarantine_block
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
     DownloadAssetRequestModel, DownloadAssetResponseModel, DownloadAssetFileUrlModel
@@ -275,6 +276,7 @@ def normalize_s3_path(base_path, relative_path):
     # Join with a single slash
     return f"{base_path}/{relative_path}"
 
+
 #######################
 # Core Download Logic
 #######################
@@ -288,6 +290,10 @@ def get_distributable_asset_context(databaseId, assetId):
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
+
+    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
+    # already passed authorization, so a denied caller never reaches this read.
+    check_quarantine_block(databaseId, assetId)
 
     # Get asset location
     asset_location = asset.get('assetLocation')
@@ -511,7 +517,11 @@ def download_asset_preview(databaseId, assetId, request_model):
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
-        
+
+    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
+    # already passed authorization, so a denied caller never reaches this read.
+    check_quarantine_block(databaseId, assetId)
+
     # Get preview location
     preview_location = asset.get('previewLocation')
     if not preview_location:

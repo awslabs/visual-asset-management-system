@@ -54,11 +54,12 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 64 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 69 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
-  |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
+  |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
+  |     |    and the compliance routes + trigger / workflow-callback Lambdas)
   |     |                                                    -> storage, resourceNames, ApiBuilder
   |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
@@ -113,7 +114,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 46 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 51 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -163,6 +164,13 @@ interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table; // PK tagSchemaId, SK pipelineDatabaseId:pipelineId:templateId; GSI TagSchemaByTemplateGSI
         workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
+
+        // Compliance tables
+        complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
+        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list)
+        complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback)
+        complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId; GSI StateIndex
+        complianceAuditStorageTable: dynamodb.Table; // PK entryId; GSIs AssetIndex, EventTypeIndex
     };
 }
 ```
@@ -393,6 +401,8 @@ const featureEnabled = true; // BAD - should be configurable
 
 #### **Rule 2: Feature Switches Must Be Defined**
 
+New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record), nothing beyond idle storage and those no-op invocations is billed, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas and `/compliance/*` routes always deploy; the trigger and the workflow callback run per event and no-op without a binding, so no compliance behavior applies until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
+
 ```typescript
 // ✅ CORRECT - Add to vamsAppFeatures.ts
 export enum VAMS_APP_FEATURES {
@@ -568,6 +578,8 @@ Three traps, each of which passes `cdk synth` and fails later:
 Verify before deploying: a cycle is invisible to `cdk synth` and appears only at changeset creation. Synth
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
 coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`.
+
+A Lambda's DynamoDB grants follow the tables its handler (and the shared modules it imports) resolves through `ResourceKeys`; `infra/test/security/complianceLambdaTableGrants.test.ts` derives those needs from the compliance handler source and asserts the synthesized role policy covers each table (read, plus write where the module writes), so a missing grant fails the suite instead of surfacing as an `AccessDeniedException` 500 in production.
 
 ### **Dependency Management Standards**
 

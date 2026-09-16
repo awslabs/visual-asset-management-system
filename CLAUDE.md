@@ -171,7 +171,7 @@ backend API (apiRoutes.py + handler + model)
 
 1. **Any change to a `vamscli` command or `APIClient` method requires reviewing the MCP server in the same change.** Renamed methods, changed parameters, new required arguments, and changed response shapes all break MCP tools silently — the MCP tool calls the CLI method directly, so a signature change surfaces only at agent runtime.
 2. **New `APIClient` methods that agents should be able to use get a matching MCP tool** in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section (read / `enable_writes` / `enable_destructive`), plus a unit test and a README tool-list entry. See `tools/VamsMCP/CLAUDE.md`.
-3. **Response-shape changes must be checked against MCP pagination.** `VamsClient.paginate()` is driven by the list field name -- whatever field the handler returns the list under, passed as `items_key` -- and unwraps the legacy `message` envelope. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions` and `metadata`, and an earlier enumeration here omitted `metadata` while two call sites passed it. A handler that changes either one breaks the corresponding MCP tool without any error.
+3. **Response-shape changes must be checked against MCP pagination.** `VamsClient.paginate()` is driven by the list field name -- whatever field the handler returns the list under, passed as `items_key` -- and unwraps the legacy `message` envelope. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions`, `metadata` and the compliance fields `evaluations`, `entries` and `quarantinedAssets`. A handler that changes either one breaks the corresponding MCP tool without any error.
 4. **The agent skill (`tools/VamsAgentSkill/SKILL.md`) does not list commands** — it self-discovers them via `vamscli --help`, so ordinary command additions need no skill edit. Update it only when a _structural_ rule changes: entity creation/deletion ordering, identifier semantics, permission scoping, or a new mutating category.
 5. **Any change to a CLI command name, subcommand, option/flag, or `--json-output` response shape requires validating the external connectors in the same change.** Unlike the MCP server, the connectors are **not** Python importers of `APIClient` — they build argument strings and parse JSON keys, so nothing at build or import time catches a drift. A renamed flag surfaces as a non-zero CLI exit at connector runtime; a renamed or removed JSON key surfaces as a silently blank field, which is worse. Both must be checked:
 
@@ -323,7 +323,7 @@ VAMS uses a custom Lambda authorizer for all API Gateway endpoints. Never use bu
 
 ### **Rule 6: Feature Switches Must Be Defined**
 
-New features must have a feature switch in `vamsAppFeatures.ts` and be gated by config in the core stack. Never deploy features unconditionally.
+New features must have a feature switch in `vamsAppFeatures.ts` and be gated by config in the core stack. Never deploy features unconditionally, with one accepted carve-out: a feature that is **inert until an operator configures it at runtime** — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record), nothing beyond idle storage and those no-op invocations is billed, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas and `/compliance/*` routes always deploy; the trigger and the workflow callback run per event and no-op without a binding, so no compliance behavior applies until a schema is bound to a database or asset. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
 
 ### **Rule 7: All CLI API Endpoints in Constants**
 
@@ -706,7 +706,7 @@ Comments and documentation must be **commensurate with the surrounding material*
 5. **Hardcoding DynamoDB table names** -- always resolve via `common.resourceNames`
 6. **Creating Lambda without CDK Nag suppression review** -- all resources must pass checks
 7. **Adding API routes without corresponding handler** -- causes 500 errors
-8. **Deploying features without feature switches** -- breaks conditional deployment
+8. **Deploying features without feature switches** -- breaks conditional deployment (the only exception is the inert-until-configured carve-out in Rule 6)
 9. **Using `HttpUserPoolAuthorizer`** -- must use custom Lambda authorizer
 10. **Skipping config validation in `getConfig()`** -- leads to silent deployment failures
 11. **Over-documenting or narrating changes in comments** -- match surrounding comment density; never reference "upgrades", "new in vX", or the prompting change request in source comments (see Comment & Documentation Style)

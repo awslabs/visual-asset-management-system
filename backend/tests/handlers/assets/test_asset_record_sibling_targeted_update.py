@@ -152,7 +152,10 @@ class TestLargeFileCompletionWrite:
         _run_file_processing(table, _asset())
 
         assert table.put_item_calls == []
-        assert table.updated_attributes == [{'assetType': 'folder'}]
+        written = table.updated_attributes
+        assert len(written) == 1
+        assert written[0]['assetType'] == 'folder'
+        assert set(written[0]) == {'assetType', 'lastChangeSource', 'lastChangeAt', 'lastUploadAt'}
 
     def test_completion_still_records_the_determined_asset_type(self):
         """POSITIVE CONTROL: the attribute the completion owns is still written."""
@@ -192,8 +195,10 @@ class TestLargeFilePreviewCompletionWrite:
         _run_preview_processing(table, _asset())
 
         assert table.put_item_calls == []
-        assert table.updated_attributes == [
-            {'previewLocation': {'Key': 'previews/asset-1/thumb.png'}}]
+        written = table.updated_attributes
+        assert len(written) == 1
+        assert written[0]['previewLocation'] == {'Key': 'previews/asset-1/thumb.png'}
+        assert set(written[0]) == {'previewLocation', 'lastChangeSource', 'lastChangeAt', 'lastUploadAt'}
 
     def test_preview_completion_still_sets_the_preview_location(self):
         """POSITIVE CONTROL: the attribute the preview completion owns is still written."""

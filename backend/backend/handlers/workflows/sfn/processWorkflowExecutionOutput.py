@@ -85,6 +85,10 @@ try:
     # the ASL event, so it applies to executions of workflows that were not redeployed
     # with a newer ASL. Optional: empty string disables CloudWatch log retrieval.
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
+    # Orchestration bus + event source prefix for the workflow.execution.completed event (optional:
+    # the event is skipped when the bus ARN is unset).
+    orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
+    orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -94,14 +98,31 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 # on a too-small pool (botocore defaults to 10).
 s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
                    max_pool_connections=MAX_PARALLEL_S3_WORKERS)
+# The events client publishes a best-effort completion event; bound its connect/read timeouts so an
+# unreachable events endpoint fails fast rather than holding the end-state lambda.
+events_retry_config = Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})
 
 s3c = boto3.client('s3', config=s3_config)
 s3r = boto3.resource('s3', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 client = boto3.client('lambda', config=retry_config)
 logs_client = boto3.client('logs', config=retry_config)
+events_client = boto3.client('events', config=events_retry_config)
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
+
+
+def emit_workflow_execution_completed(workflow_execution_id, workflow_database_id, workflow_id,
+                                      execution_status, started_at, completed_at,
+                                      execution_group_id=""):
+    """This lambda's `workflow.execution.completed` announcement: the shared emitter bound to the
+    events client and bus configuration resolved at import. Best-effort — skipped (logged) when no
+    bus is configured, and a publish failure is logged rather than failing the terminal-status write
+    that precedes it."""
+    return eo.emit_workflow_execution_completed(
+        events_client, orchestration_bus_arn, orchestration_event_source_prefix,
+        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
+        started_at, completed_at, execution_group_id=execution_group_id)
 
 
 def _lambda_metadata_service(payload):
@@ -896,17 +917,27 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         values[":er"] = execution_error
     condition = eo.not_terminal_condition(values)
     try:
-        main_table.update_item(
+        response = main_table.update_item(
             Key={"workflowExecutionId": workflow_execution_id,
                  "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
             UpdateExpression=expression,
             ConditionExpression=condition,
             ExpressionAttributeValues=values,
+            ReturnValues="ALL_NEW",
         )
     except Exception as e:
         if not eo.is_conditional_check_failure(e):
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
+        return
+
+    # The terminal status is now stored, so announce it. Only the writer that won the terminal guard
+    # emits, so a run finished by the error handler is announced once, by that handler.
+    attributes = (response or {}).get("Attributes") or {}
+    emit_workflow_execution_completed(
+        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
+        started_at=attributes.get("executionStartDate", ""), completed_at=stop_date,
+        execution_group_id=attributes.get("executionGroupId", ""))
 
 
 def _terminal_status(output_failures):

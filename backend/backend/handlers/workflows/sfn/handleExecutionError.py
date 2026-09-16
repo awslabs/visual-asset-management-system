@@ -14,7 +14,8 @@ tables to a failed terminal state so a failure never leaves stale RUNNING rows:
     execution id the job carries as a reserved parameter, because a job sitting queued with no
     worker emits no status event to register from;
   - the V2 main row -> FAILED with a stop date, the specific executionError (from the caught
-    Step Functions Error/Cause), and the full CloudWatch executionLog;
+    Step Functions Error/Cause), and the full CloudWatch executionLog, followed by a
+    `workflow.execution.completed` event on the orchestration bus (when one is configured);
   - every non-terminal PipelineExecutions row -> FAILED with a stop date;
   - a per-pipeline logs row for the failing pipeline when identifiable.
 
@@ -37,10 +38,14 @@ from common.workflows import executionOutputs as eo
 logger = safeLogger(service="HandleExecutionError")
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+# The events client publishes a best-effort completion event; bound its connect/read timeouts so an
+# unreachable events endpoint fails fast rather than holding the error handler.
+events_retry_config = Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})
 logs_client = boto3.client('logs', config=retry_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 sfn_client = boto3.client('stepfunctions', config=retry_config)
 batch_client = boto3.client('batch', config=retry_config)
+events_client = boto3.client('events', config=events_retry_config)
 # Used only to cancel a registered Deadline Cloud farm job while reconciling a failed run. Built
 # inside try/except and left None on failure: the execution type is accepted only in the commercial
 # partition, so a partition where the service does not resolve must not lose the whole reconciliation
@@ -59,11 +64,27 @@ try:
     # DEFINITION rather than on any execution row.
     pipeline_table = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
+    # Orchestration bus + event source prefix for the workflow.execution.completed event (optional:
+    # the event is skipped when the bus ARN is unset).
+    orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
+    orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 FAILED_STATUS = "FAILED"
+
+
+def emit_workflow_execution_completed(workflow_execution_id, workflow_database_id, workflow_id,
+                                      execution_status, started_at, completed_at,
+                                      execution_group_id=""):
+    """This lambda's `workflow.execution.completed` announcement: the shared emitter bound to the
+    events client and bus configuration resolved at import. Best-effort — skipped (logged) when no
+    bus is configured, and a publish failure is logged rather than failing the reconciliation."""
+    return eo.emit_workflow_execution_completed(
+        events_client, orchestration_bus_arn, orchestration_event_source_prefix,
+        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
+        started_at, completed_at, execution_group_id=execution_group_id)
 
 # executionError and executionLog land on the same main-row item, so they share the item's
 # free-form text budget: the error message keeps a small reserved slice and the log takes the
@@ -210,18 +231,31 @@ def reconcile_failed_execution(body, error_info):
     except Exception as e:
         logger.exception(f"Error writing failing-pipeline log rows (continuing): {e}")
 
-    # 3) Finalize the main row FAILED (unless already terminal) with error + log.
+    # 3) Finalize the main row FAILED (unless already terminal) with error + log, then announce the
+    #    terminal status on the orchestration bus. The status read here and the finalize write are
+    #    separate calls, so the end-state lambda can finish the run in between; the write carries the
+    #    terminal guard and reports whether it landed, and only a FAILED status that landed is
+    #    announced — the writer that finished the run first has already announced its status.
     try:
         main_table = dynamodb.Table(workflow_execution_database_v2)
         existing = main_table.query(
             KeyConditionExpression=Key('workflowExecutionId').eq(execution_id), ScanIndexForward=False)
         rows = existing.get('Items', [])
-        current_status = rows[0].get('executionStatus', '') if rows else ''
+        main_row = rows[0] if rows else {}
+        current_status = main_row.get('executionStatus', '') if rows else ''
         if current_status not in eo.TERMINAL_STATUSES:
-            eo.finalize_main_row(
+            finalized = eo.finalize_main_row(
                 dynamodb, workflow_execution_database_v2, execution_id,
                 workflow_database_id, workflow_id, FAILED_STATUS, now,
                 execution_log=execution_log, execution_error=error_message)
+            if finalized:
+                emit_workflow_execution_completed(
+                    execution_id, workflow_database_id, workflow_id, FAILED_STATUS,
+                    started_at=main_row.get('executionStartDate', ''), completed_at=now,
+                    execution_group_id=main_row.get('executionGroupId', ''))
+            else:
+                logger.info(f"Execution {execution_id} was finished by another writer; the FAILED "
+                            "completion event is not published")
     except Exception as e:
         logger.exception(f"Error finalizing main execution row (continuing): {e}")
 

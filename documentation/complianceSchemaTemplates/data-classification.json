@@ -1,0 +1,50 @@
+{
+    "metadata": {
+        "name": "Data Classification Schema",
+        "description": "Enforces data classification labeling and handling instructions on assets. Suitable for environments with regulatory requirements around data sensitivity.",
+        "version": "2.0.0"
+    },
+    "schemaName": "data-classification",
+    "description": "Enforces classification labeling and handling instructions for regulated data environments.",
+    "schemaBody": {
+        "schemaFormat": "vams-rules-v1",
+        "rules": {
+            "classification-labels": {
+                "ruleType": "metadata",
+                "enforcement": "quarantine",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
+                },
+                "checks": [
+                    {
+                        "name": "classification-fields-present",
+                        "description": "The asset carries a security classification level, handling instructions and an accountable data steward.",
+                        "validateRequired": true,
+                        "validateTypes": true,
+                        "additionalRequiredFields": [
+                            "classification",
+                            "handling_instructions",
+                            "data_steward"
+                        ]
+                    }
+                ]
+            },
+            "dissemination-markings": {
+                "ruleType": "metadata",
+                "enforcement": "inform",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
+                },
+                "checks": [
+                    {
+                        "name": "dissemination-controls-recorded",
+                        "description": "Dissemination control markings and the originating agency are recorded.",
+                        "additionalRequiredFields": ["dissemination_controls", "originating_agency"]
+                    }
+                ]
+            }
+        }
+    }
+}

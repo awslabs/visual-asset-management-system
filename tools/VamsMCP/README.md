@@ -100,7 +100,18 @@ secrets** — just the command:
                 "list_asset_comments",
                 "list_asset_version_comments",
                 "get_comment",
-                "check_subscription"
+                "check_subscription",
+                "list_compliance_schemas",
+                "get_compliance_schema",
+                "get_compliance_bindings",
+                "get_asset_compliance_state",
+                "get_database_compliance_overview",
+                "list_compliance_evaluations",
+                "list_quarantined_assets",
+                "list_compliance_cascades",
+                "get_compliance_cascade",
+                "query_compliance_audit",
+                "get_asset_compliance_audit"
             ]
         }
     }
@@ -135,6 +146,50 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 Comments, subscriptions, and API keys: `list_asset_comments`,
 `list_asset_version_comments`, `get_comment`, `list_subscriptions`,
 `check_subscription`, `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys`.
+
+Compliance: `list_compliance_schemas`, `get_compliance_schema`,
+`get_compliance_bindings`, `get_asset_compliance_state`,
+`get_database_compliance_overview`, `list_compliance_evaluations`,
+`list_quarantined_assets`, `list_compliance_cascades`, `get_compliance_cascade`,
+`query_compliance_audit`, `get_asset_compliance_audit`.
+
+A compliance schema is a rule set (`vams-rules-v1`: pipeline, metadata and
+relationship rules, each enforced at quarantine / warn / inform) bound to a
+database, or to one asset as an override; `get_compliance_bindings` shows both
+for a database. Each schema record carries `schemaFormat` — `vams-rules-v1`, or
+`legacy` for a row whose body is not such a document; a legacy schema cannot be
+bound, updated or evaluated and is listed only so it can be found and deleted.
+`get_asset_compliance_state` answers `unknown` for an asset with
+no binding rather than an error, and reports `exception` for an asset released
+under an active quarantine exception (scoped to `exceptionSchemaName` /
+`exceptionSchemaVersion`); its `lastEvaluationStatus` is `error` when the last
+evaluation produced no verdict, in which case `complianceState` is the state the
+asset held before it. `get_database_compliance_overview` counts only assets
+that have a compliance record, with an `exception` bucket in its `summary` and an
+`error` count that overlays the state buckets (assets whose last evaluation
+errored) rather than adding to them.
+`list_compliance_schemas` and `list_compliance_cascades` (pending approval only;
+each row carries `databaseId` / `assetId` of the trigger asset, and an
+automatically opened cascade is not duplicated while one for the same parent is
+pending) return their whole
+list in one response under `Items` and take no paging parameters.
+`list_compliance_evaluations`, `list_quarantined_assets`, `query_compliance_audit`
+and `get_asset_compliance_audit` are real pages (`max_items`, `starting_token`,
+`NextToken`), auto-paginated and marked `truncated` when a bound stopped the walk;
+the evaluation rows carry the `executionId` of the workflow execution behind a
+pipeline rule, `exceptionApplied` when the evaluation ran under an exception, and
+`hasRuleErrors` / `errorRules` when a rule's tooling failed — such a rule result
+has `status` `error`, is not a verdict, and its enforcement did not apply (an
+`evaluation_error` audit entry names the rules) —
+and a quarantine page is filtered to the caller's databases after it is read, so
+the walk follows an empty page's token (the global audit trail and the cascade
+listing return only rows whose database the caller may read, too).
+`get_database_compliance_overview` and `get_compliance_bindings` take
+`max_items` / `starting_token` too but return the route's own page: `summary` /
+`totalAssets` and `assetOverrideCount` describe the full set while `assets` /
+`assetOverrides` are one page, with `NextToken` when more exist. `event_type`
+exists on the global audit trail only — the per-asset route ignores it, so the
+tool does not offer it.
 
 The two comment listings take `max_items` and `page_size` but **no**
 `starting_token`: the routes apply those bounds and then discard the pagination
@@ -276,7 +331,12 @@ AWS compute and can incur cost. `abort_execution` irreversibly STOPS running
 compute and, with `group_id`, fans out across every active execution in that group.
 Keep all three out of `autoApprove`, and confirm a group abort with the user first.
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
-execution's group membership rather than selecting a group to re-run.
+execution's group membership rather than selecting a group to re-run. The
+compliance tools that evaluate assets start compute the same way — a pipeline
+rule runs one workflow execution per evaluated asset — so `evaluate_asset_compliance`,
+`sweep_compliance_schema` (every asset bound to the schema), `create_compliance_cascade`
+(starts at once with `require_approval=False`) and `approve_compliance_cascade`
+(starts the run) stay out of `autoApprove` as well.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
@@ -331,6 +391,57 @@ that window keeps working until it expires, a key refused within it stays refuse
 for the same time after re-enabling, and a disabled key not in use is refused on
 its next call.
 
+Compliance: `create_compliance_schema`, `update_compliance_schema`,
+`bind_compliance_schema`, `unbind_compliance_schema`, `evaluate_asset_compliance`,
+`sweep_compliance_schema`, `release_quarantine`, `grant_quarantine_exception`,
+`revoke_quarantine_exception`, `create_compliance_cascade`,
+`approve_compliance_cascade`, `reject_compliance_cascade`.
+
+`create_compliance_schema` takes the rule document as `schema_body`, which must be
+a `vams-rules-v1` document (`{"schemaFormat": "vams-rules-v1", "rules": {...}}`;
+any other body is refused). A pipeline rule's `pipelineRef` names the workflow's
+`databaseId` + `workflowId` and the pipeline's `pipelineDatabaseId` + `pipelineId`,
+with an optional `templateId`, and its `inputFiles` selects the asset files the
+execution receives: `mode` `matching` (the default; the asset's files that pass the
+workflow's and pipeline's input-file filters, narrowed by the rule's `filter` globs),
+`wholeAsset` (the asset root, only where the workflow allows it) or `explicit` (the
+listed `keys`, which must all exist). A workflow that takes exactly one input file
+needs the selection to resolve to exactly one file, otherwise the rule records an
+`error` result — a non-verdict `status` `error` whose enforcement does not apply;
+files a workflow execution wrote are never selected, so a filter names source
+formats only. A pipeline that writes no `compliance-output.json` is checked on the derived
+`execution_success` / `processing_duration_seconds` measurements only. Registering an
+existing name writes the next version, and `update_compliance_schema` replaces the
+body wholesale rather than merging. `bind_compliance_schema` binds a database (or,
+with `asset_id`, one asset as an override); only a GLOBAL schema or one scoped to
+that database can be bound, a `legacy` schema is refused, and `auto_eval` is sent on
+the database binding only because the asset route does not read it.
+`unbind_compliance_schema` on a database
+deletes the compliance record of every asset that inherited the binding
+(`removedComplianceRecords`) — evaluation history and the audit trail stay.
+`evaluate_asset_compliance` with `schema_name` evaluates against that schema without
+changing the asset's binding; its response carries `schemaVersion`,
+`exceptionApplied` and `hasRuleErrors`, and when every rule errored the asset's
+state is left unchanged with `lastEvaluationStatus` `error`. `sweep_compliance_schema` returns `assetsTriggered` plus
+`skipped` (bound assets the caller may not evaluate, counted but never listed) and
+`assetsRemaining` (beyond the per-call cap). `release_quarantine` returns an asset to
+compliant until its next evaluation; `grant_quarantine_exception` records a
+deliberate waiver with its required `reason` and moves the asset to state
+`exception`, scoped to its bound schema at its current version — a re-evaluation
+against that version records the violations (`exceptionApplied`) but keeps the asset
+released, while an evaluation against another schema or a newer version supersedes
+the exception. `revoke_quarantine_exception` (no reason; the route carries no body)
+clears it and returns the asset to its last verdict's state — quarantined again when
+that verdict was quarantined, `pending_evaluation` when it has no recorded
+evaluation — and is refused when no exception is active. A cascade waits in
+`pending_approval` unless created with `require_approval=False`; the cascade an
+evaluation opens automatically is not duplicated while one for the same parent is
+pending, but `create_compliance_cascade` always opens a new one.
+`approve_compliance_cascade` (and a create without approval) returns at once with
+`state` `executing` and no `result` — the run continues in the background, so poll
+`get_compliance_cascade` until `state` is `completed` or `aborted` (`abortReason`)
+— and `reject_compliance_cascade` aborts it.
+
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 
 `archive_asset`, `unarchive_asset`, `delete_asset`, `delete_database`.
@@ -367,6 +478,11 @@ API keys: `delete_api_key`, `delete_user_api_key`. Both are permanent and lock
 out every client still presenting the key at once; `update_api_key` /
 `update_user_api_key` with `is_active=False` revokes the same access reversibly
 and is the better first move.
+
+Compliance: `delete_compliance_schema`. Permanent — every version of the schema is
+removed and there is no archived state. The API refuses to delete a schema that a
+database or asset is still bound to, so `unbind_compliance_schema` first; the
+deletion is written to the audit trail as `schema_deleted`.
 
 ## Security notes
 

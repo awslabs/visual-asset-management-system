@@ -26,6 +26,8 @@ Stores the primary record for each asset within a database.
 
 **Common Attributes:** `assetName`, `assetType`, `description`, `isDistributable`, `tags`, `assetLocation`, `previewLocation`, `bucketId`, `createdAt`, `updatedAt`
 
+**Change provenance:** every upload completion writes `lastChangeSource` (`upload`, or `workflowExecution` when a workflow execution wrote the files back), `lastChangeWorkflowExecutionId` (that execution's id; absent for an upload) and `lastChangeAt`; a user upload's completion also writes `lastUploadAt`, which a workflow execution's write leaves as it is. The compliance trigger reads them from the table's stream image and the row to tell a pipeline rule's own output apart from a user change and to judge an uploaded object against the upload that completed it.
+
 ### Database Storage Table
 
 Stores database (collection) records.
@@ -446,6 +448,33 @@ only one of them pins a version:
 `preview`), `relativeFilePath`, `s3Bucket`, `s3Key`, `s3VersionId`, size and content type; `Output*Metadata`
 and `Output*Results` records carry metadata written back to the asset and results text from a results-only
 run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
+
+### Compliance Tables
+
+Compliance deploys unconditionally. Schemas are versioned (`internalVersion`); asset state records a bound
+asset's latest verdict; evaluations are per run; cascades gate downstream re-evaluation on approval; the
+audit table is the compliance event trail.
+
+| Table                            | Partition Key  | Sort Key          |
+| -------------------------------- | -------------- | ----------------- |
+| ComplianceSchemaStorageTable     | `schemaName`   | `internalVersion` |
+| ComplianceAssetStateStorageTable | `databaseId`   | `assetId`         |
+| ComplianceEvaluationStorageTable | `evaluationId` | --                |
+| ComplianceCascadeStorageTable    | `cascadeId`    | --                |
+| ComplianceAuditStorageTable      | `entryId`      | --                |
+
+**Global Secondary Indexes:**
+
+| Table                            | GSI Name               | Partition Key        | Sort Key          | Purpose                                                                                       |
+| -------------------------------- | ---------------------- | -------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
+| ComplianceSchemaStorageTable     | `DatabaseIdIndex`      | `databaseId`         | `schemaName`      | List a database's schemas                                                                     |
+| ComplianceAssetStateStorageTable | `SchemaNameIndex`      | `schemaName`         | `complianceState` | List a schema's assets by state (sweep, schema-deletion check)                                |
+| ComplianceAssetStateStorageTable | `ComplianceStateIndex` | `complianceState`    | `databaseId`      | Cross-database list of assets in one state, paged (quarantine list)                           |
+| ComplianceEvaluationStorageTable | `AssetIndex`           | `databaseId:assetId` | `evaluatedAt`     | An asset's evaluations, newest first                                                          |
+| ComplianceEvaluationStorageTable | `ExecutionIdIndex`     | `executionId`        | --                | Resolve the evaluation a pipeline-rule workflow run belongs to (workflow-completion callback) |
+| ComplianceCascadeStorageTable    | `StateIndex`           | `state`              | `createdAt`       | Pending / completed cascades by state                                                         |
+| ComplianceAuditStorageTable      | `AssetIndex`           | `databaseId:assetId` | `timestamp`       | An asset's audit trail                                                                        |
+| ComplianceAuditStorageTable      | `EventTypeIndex`       | `eventType`          | `timestamp`       | Audit entries by event type                                                                   |
 
 ### Authorization Tables
 

@@ -57,6 +57,7 @@ One folder per domain. The current domains:
 -   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
 -   `assetLinks/` — Asset relationship management
 -   `comments/` — Comment CRUD
+-   `compliance/` — Compliance (schemas, bindings, evaluation, quarantine, cascades, audit). API handlers `complianceSchemaService`, `complianceSchemaBindingService`, `complianceEvaluateService`, `complianceQuarantineService`, `complianceCascadeService`, `complianceAuditService`; event-driven `complianceTrigger` (asset indexer SNS), `complianceWorkflowCallback` (EventBridge `workflow.execution.completed`) and `complianceCascadeExecutor` (async Lambda invoke from `complianceCascadeService`, event `{"cascadeId"}`); shared `complianceEvaluationStore` (all AWS access + `run_evaluation`), `complianceNotifications`. Pure rule logic lives in `common/compliance/evaluationEngine.py`, the quarantine-blocks-download guard shared by `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset` in `common/compliance/quarantineGuard.py` (called after Tier-1 + Tier-2 authorization), models in `models/compliance.py`. Casbin object types `complianceSchema` (`complianceSchemaName`), `complianceEvaluation` (`databaseId`, `complianceState`), `complianceCascade` (`cascadeId`). Tests in `tests/handlers/compliance/`
 -   `config/` — System configuration
 -   `databases/` — Database CRUD
 -   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
@@ -942,7 +943,7 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth.
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.49 MB template and `apiBuilder2` emits 71 in ~0.29 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.49 MB template and `apiBuilder2` emits 111 in ~0.49 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 

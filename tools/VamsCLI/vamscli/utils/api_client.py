@@ -113,7 +113,15 @@ from ..constants import (
     API_WORKFLOW_EXECUTION, API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN, API_WORKFLOW_EXECUTION_PERMANENT,
-    API_AUTH_API_KEYS, API_AUTH_API_KEY
+    API_AUTH_API_KEYS, API_AUTH_API_KEY,
+    API_COMPLIANCE_SCHEMAS, API_COMPLIANCE_SCHEMA_BY_NAME,
+    API_COMPLIANCE_BIND_DATABASE, API_COMPLIANCE_BIND_ASSET,
+    API_COMPLIANCE_EVALUATE_ASSET, API_COMPLIANCE_SWEEP_SCHEMA, API_COMPLIANCE_EVALUATIONS_ASSET,
+    API_COMPLIANCE_STATE_ASSET, API_COMPLIANCE_STATE_DATABASE,
+    API_COMPLIANCE_QUARANTINE, API_COMPLIANCE_QUARANTINE_RELEASE, API_COMPLIANCE_QUARANTINE_EXCEPTION,
+    API_COMPLIANCE_CASCADES, API_COMPLIANCE_CASCADE_BY_ID,
+    API_COMPLIANCE_CASCADE_APPROVE, API_COMPLIANCE_CASCADE_REJECT,
+    API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 )
 from ..version import get_version
 from .exceptions import (
@@ -134,7 +142,8 @@ from .exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError,
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
-    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
+    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
+    ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError
 )
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
@@ -6514,3 +6523,636 @@ class APIClient:
 
         except Exception as e:
             raise APIError(f"Failed to check subscription: {e}")
+
+    # Compliance API Methods
+
+    # Every compliance handler answers a rejected request with a 400 whose `message` names the cause,
+    # and reserves 404 for a schema or cascade that does not exist. One mapper classifies the message
+    # so each method stays a single call; `action` is the verb phrase the surfaced error begins with.
+
+    @staticmethod
+    def _compliance_not_found_error(message: str):
+        """The domain exception for a "not found" message, chosen by the entity it names.
+
+        Every handler message leads with the entity word ("Schema 'x' not found", "Asset db:a not
+        found", "Database 'x' not found", "Cascade not found or not in pending_approval state"), so
+        the leading word is tried first; the contains pass is the fallback for any other wording.
+        Asset is tried before database in that pass because an asset message quotes
+        `databaseId:assetId`.
+        """
+        lowered = message.lower()
+        by_entity = (
+            ('schema', ComplianceSchemaNotFoundError),
+            ('cascade', ComplianceCascadeNotFoundError),
+            ('asset', AssetNotFoundError),
+            ('database', DatabaseNotFoundError),
+        )
+        for entity, exception_class in by_entity:
+            if lowered.startswith(entity):
+                return exception_class(message)
+        for entity, exception_class in by_entity:
+            if entity in lowered:
+                return exception_class(message)
+        return InvalidComplianceDataError(message)
+
+    def _compliance_request(self, method: str, endpoint: str, action: str,
+                            body: Optional[Dict[str, Any]] = None,
+                            params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Call a compliance route and map its errors onto the compliance exception family.
+
+        A POST or PUT always carries a JSON body, an empty object when the route takes no fields:
+        the handlers parse `event["body"]` unconditionally, so a request without one fails inside
+        the handler rather than being rejected with a message.
+
+        Raises:
+            ComplianceSchemaNotFoundError / ComplianceCascadeNotFoundError / AssetNotFoundError /
+                DatabaseNotFoundError: When the handler reports the named entity as not found
+            InvalidComplianceDataError: When the handler rejects the request (400)
+            AuthenticationError: When authentication fails
+            APIError: When the API call fails for any other reason
+        """
+        verb = {'GET': self.get, 'POST': self.post, 'PUT': self.put, 'DELETE': self.delete}[method]
+        kwargs: Dict[str, Any] = {}
+        if method in ('POST', 'PUT'):
+            kwargs['json'] = body if body is not None else {}
+        if params:
+            kwargs['params'] = params
+
+        try:
+            response = verb(endpoint, include_auth=True, raise_http_errors=True, **kwargs)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            error_message = _api_error_message(e.response, str(e))
+            if status in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {error_message}")
+            if status == 404 or (status == 400 and 'not found' in error_message.lower()):
+                raise self._compliance_not_found_error(error_message)
+            if status == 400:
+                raise InvalidComplianceDataError(f"{action} failed: {error_message}")
+            raise APIError(f"{action} failed: {error_message}")
+
+        except Exception as e:
+            raise APIError(f"{action} failed: {e}")
+
+    # ---- Schemas ------------------------------------------------------
+
+    def list_compliance_schemas(self, database_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List compliance schemas using the /compliance/schemas GET endpoint.
+
+        Args:
+            database_id: When given, only schemas scoped to this database plus GLOBAL schemas are
+                returned; otherwise every schema the caller may read.
+
+        Returns:
+            API response data: {"schemas": [...]} — the latest version of each schema. The route
+            returns the whole list in one response and takes no paging parameters.
+        """
+        params = {'databaseId': database_id} if database_id else None
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_SCHEMAS, "Failed to list compliance schemas", params=params)
+
+    def get_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
+        """
+        Get the latest version of a compliance schema using the
+        /compliance/schemas/{schemaName} GET endpoint.
+
+        Returns:
+            API response data: {schemaName, databaseId, description, schemaBody, version, createdAt}
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+        """
+        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        return self._compliance_request(
+            'GET', endpoint, f"Failed to get compliance schema '{schema_name}'")
+
+    def create_compliance_schema(self, schema_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Register a compliance schema using the /compliance/schemas POST endpoint.
+
+        Args:
+            schema_data: Schema definition:
+                - schemaName: Schema name (required; ID-pattern, 3-63 characters)
+                - schemaBody: The schema document (required) — a vams-rules-v1 document
+                  ({"schemaFormat": "vams-rules-v1", "rules": {...}}); any other body is
+                  rejected. A pipeline rule's `inputFiles` selects which of the asset's files the
+                  workflow receives (mode matching, wholeAsset or explicit)
+                - databaseId: Database the schema is scoped to, or 'GLOBAL' (defaults to GLOBAL)
+                - description: Free text
+
+        Returns:
+            API response data: {message, schemaName, databaseId, internalVersion}
+
+        Raises:
+            DatabaseNotFoundError: When the scoping database does not exist
+            InvalidComplianceDataError: When the schema body or fields are rejected
+        """
+        return self._compliance_request(
+            'POST', API_COMPLIANCE_SCHEMAS, "Compliance schema registration", body=schema_data)
+
+    def update_compliance_schema(self, schema_name: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Write a new version of a compliance schema using the /compliance/schemas/{schemaName}
+        PUT endpoint.
+
+        Args:
+            schema_name: Schema to update
+            update_data: Fields to change; any of schemaBody, description, databaseId. An omitted
+                databaseId keeps the schema's current scope.
+
+        Returns:
+            API response data: {message, schemaName, databaseId, internalVersion}
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+            InvalidComplianceDataError: When the new body is rejected, or the schema is a system
+                schema that cannot be modified
+        """
+        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        return self._compliance_request(
+            'PUT', endpoint, f"Compliance schema '{schema_name}' update", body=dict(update_data))
+
+    def delete_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
+        """
+        Remove an unbound compliance schema using the /compliance/schemas/{schemaName} DELETE
+        endpoint. Every version of the schema is removed.
+
+        Returns:
+            API response data: the standard success envelope
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+            InvalidComplianceDataError: When the schema is still bound to a database or an asset
+        """
+        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        return self._compliance_request(
+            'DELETE', endpoint, f"Compliance schema '{schema_name}' deletion")
+
+    @staticmethod
+    def _compliance_page_params(max_items: Optional[int],
+                                starting_token: Optional[str]) -> Optional[Dict[str, Any]]:
+        """`maxItems` / `startingToken` query parameters, or None when neither is set."""
+        params: Dict[str, Any] = {}
+        if max_items is not None:
+            params['maxItems'] = max_items
+        if starting_token:
+            params['startingToken'] = starting_token
+        return params or None
+
+    # ---- Bindings -----------------------------------------------------
+
+    def get_compliance_bindings(self, database_id: str, max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read a database's compliance schema binding and one page of its asset-level overrides
+        using the /compliance/bind/{databaseId} GET endpoint.
+
+        Args:
+            max_items: Overrides per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE
+                when omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {databaseId, databaseSchema, complianceAutoEval,
+            assetOverrides: [{assetId, schemaName, complianceState}] (one page),
+            assetOverrideCount (the total across every page), "NextToken"?: str}
+
+        Raises:
+            DatabaseNotFoundError: When the database does not exist
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Failed to get compliance bindings for '{database_id}'",
+            params=self._compliance_page_params(max_items, starting_token))
+
+    def bind_compliance_schema(self, database_id: str, schema_name: str,
+                               asset_id: Optional[str] = None,
+                               auto_eval: Optional[bool] = None) -> Dict[str, Any]:
+        """
+        Bind a compliance schema to a database (PUT /compliance/bind/{databaseId}) or, when
+        `asset_id` is given, to one asset as an override of the database binding
+        (PUT /compliance/bind/{databaseId}/{assetId}).
+
+        Args:
+            database_id: Database to bind, or the asset's database
+            schema_name: A GLOBAL schema or one scoped to this database
+            asset_id: Bind this asset instead of the database
+            auto_eval: Whether assets in the database are re-evaluated automatically
+                (database binding only; the asset route does not read it)
+
+        Returns:
+            API response data — database: {message, schemaName, databaseId, assetsPendingEvaluation};
+            asset: {message, databaseId, assetId, schemaName, schemaSource}
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+            DatabaseNotFoundError: When the database does not exist
+            InvalidComplianceDataError: When the schema is not visible to the database
+        """
+        body: Dict[str, Any] = {'schemaName': schema_name}
+        if asset_id:
+            endpoint = API_COMPLIANCE_BIND_ASSET.format(databaseId=database_id, assetId=asset_id)
+            action = f"Binding schema '{schema_name}' to asset '{asset_id}'"
+        else:
+            endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+            action = f"Binding schema '{schema_name}' to database '{database_id}'"
+            if auto_eval is not None:
+                body['complianceAutoEval'] = auto_eval
+        return self._compliance_request('PUT', endpoint, action, body=body)
+
+    def unbind_compliance_schema(self, database_id: str,
+                                 asset_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Remove a database's compliance schema binding (DELETE /compliance/bind/{databaseId}) or,
+        when `asset_id` is given, an asset's override so it falls back to the database binding
+        (DELETE /compliance/bind/{databaseId}/{assetId}).
+
+        Returns:
+            API response data — database: {message, databaseId, previousSchema,
+            removedComplianceRecords}; asset: {message, databaseId, assetId, fallbackSchema,
+            schemaSource}. Both routes answer 200 when there was nothing to remove.
+
+        Raises:
+            DatabaseNotFoundError: When the database does not exist
+        """
+        if asset_id:
+            endpoint = API_COMPLIANCE_BIND_ASSET.format(databaseId=database_id, assetId=asset_id)
+            action = f"Removing the schema override from asset '{asset_id}'"
+        else:
+            endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+            action = f"Removing the schema binding from database '{database_id}'"
+        return self._compliance_request('DELETE', endpoint, action)
+
+    # ---- Evaluation and state -----------------------------------------
+
+    def evaluate_asset_compliance(self, database_id: str, asset_id: str,
+                                  schema_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Evaluate an asset using the /compliance/evaluate/{databaseId}/{assetId} POST endpoint.
+
+        Args:
+            schema_name: Schema to evaluate against; defaults to the asset's bound schema
+
+        Returns:
+            API response data: {message, evaluationId, schemaName, verdict, complianceState,
+            ruleResults, pipelineRulesPending}. The metadata and relationship rules run
+            synchronously; each pipeline rule launches a workflow execution and is counted in
+            pipelineRulesPending. While the asset holds an active exception against the schema
+            evaluated, a failing verdict leaves complianceState `exception` rather than
+            quarantining the asset. Naming a schema evaluates against it without changing the
+            asset's binding.
+
+        Raises:
+            AssetNotFoundError: When the asset does not exist
+            InvalidComplianceDataError: When no schema is given and the asset has none bound
+        """
+        endpoint = API_COMPLIANCE_EVALUATE_ASSET.format(databaseId=database_id, assetId=asset_id)
+        body = {'schemaName': schema_name} if schema_name else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Evaluating asset '{asset_id}'", body=body)
+
+    def sweep_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
+        """
+        Re-evaluate every asset bound to a schema using the /compliance/sweep/{schemaName} POST
+        endpoint.
+
+        Returns:
+            API response data: {message, schemaName, assetsTriggered: [{databaseId, assetId, ...}],
+            skipped, assetsRemaining}. `skipped` counts the bound assets the caller is not
+            authorized to evaluate; they are never listed. `assetsRemaining` counts the bound assets
+            beyond the per-call cap, which a repeated sweep works through.
+        """
+        endpoint = API_COMPLIANCE_SWEEP_SCHEMA.format(schemaName=schema_name)
+        return self._compliance_request('POST', endpoint, f"Sweeping schema '{schema_name}'")
+
+    def list_compliance_evaluations(self, database_id: str, asset_id: str,
+                                    max_items: Optional[int] = None,
+                                    starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read an asset's evaluation history using the /compliance/evaluations/{databaseId}/{assetId}
+        GET endpoint.
+
+        Args:
+            max_items: Page size; the handler applies DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE when
+                omitted and clamps larger values to MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"evaluations": [...], "NextToken"?: str}, most recent first.
+        """
+        endpoint = API_COMPLIANCE_EVALUATIONS_ASSET.format(databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Failed to list evaluations for asset '{asset_id}'",
+            params=self._compliance_page_params(max_items, starting_token))
+
+    def get_compliance_state(self, database_id: str, asset_id: str) -> Dict[str, Any]:
+        """
+        Read one asset's compliance record using the /compliance/state/{databaseId}/{assetId} GET
+        endpoint.
+
+        Returns:
+            API response data: the compliance record (databaseId, assetId, complianceState,
+            schemaName, schemaSource, lastEvaluationId, ...). complianceState is one of compliant,
+            non_compliant, quarantined, exception, pending_evaluation or unknown; an asset in the
+            `exception` state carries the exception fields (exceptionGranted, exceptionReason,
+            exceptionGrantedBy, exceptionGrantedAt, exceptionSchemaName, exceptionSchemaVersion).
+            An asset that is not tracked answers complianceState "unknown" with a null schemaName
+            rather than a 404.
+        """
+        endpoint = API_COMPLIANCE_STATE_ASSET.format(databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Failed to get compliance state for asset '{asset_id}'")
+
+    def get_database_compliance_state(self, database_id: str, max_items: Optional[int] = None,
+                                      starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read a database's compliance overview using the /compliance/state/{databaseId} GET
+        endpoint.
+
+        Args:
+            max_items: Asset records per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE
+                when omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {databaseId, totalAssets, summary: {compliant, non_compliant,
+            pending_evaluation, quarantined, exception, unknown}, assets: [records with assetName],
+            "NextToken"?: str}. `totalAssets` and `summary` cover every tracked asset; `assets` is
+            one page of them in assetId order.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        endpoint = API_COMPLIANCE_STATE_DATABASE.format(databaseId=database_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Failed to get compliance state for database '{database_id}'",
+            params=self._compliance_page_params(max_items, starting_token))
+
+    # ---- Quarantine ---------------------------------------------------
+
+    def list_quarantined_assets(self, max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List quarantined assets using the /compliance/quarantine GET endpoint.
+
+        Args:
+            max_items: Records per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE when
+                omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"quarantinedAssets": [compliance records with assetName],
+            "NextToken"?: str}. The page is filtered to the databases the caller may read after it
+            is fetched, so a page can be empty while a NextToken is present.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_QUARANTINE, "Failed to list quarantined assets",
+            params=self._compliance_page_params(max_items, starting_token))
+
+    def release_quarantine(self, database_id: str, asset_id: str,
+                           reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Release an asset from quarantine using the
+        /compliance/quarantine/{databaseId}/{assetId}/release POST endpoint.
+
+        Args:
+            reason: Recorded in the audit trail; the handler supplies a default when omitted
+
+        Returns:
+            API response data: {message}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset is not quarantined
+        """
+        endpoint = API_COMPLIANCE_QUARANTINE_RELEASE.format(databaseId=database_id, assetId=asset_id)
+        body = {'reason': reason} if reason else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Releasing asset '{asset_id}' from quarantine", body=body)
+
+    def grant_quarantine_exception(self, database_id: str, asset_id: str,
+                                   reason: str) -> Dict[str, Any]:
+        """
+        Grant a quarantined asset an exception using the
+        /compliance/quarantine/{databaseId}/{assetId}/exception POST endpoint.
+
+        The asset moves to the `exception` state. The exception is scoped to the asset's bound
+        schema at its current version and holds until it is revoked or an evaluation against a
+        different schema or a newer version supersedes it.
+
+        Args:
+            reason: Required justification, recorded on the asset and in the audit trail
+
+        Returns:
+            API response data: {message, reason, grantedBy, complianceState}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset is not quarantined or the reason is missing
+        """
+        endpoint = API_COMPLIANCE_QUARANTINE_EXCEPTION.format(
+            databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'POST', endpoint, f"Granting an exception for asset '{asset_id}'",
+            body={'reason': reason})
+
+    def revoke_quarantine_exception(self, database_id: str, asset_id: str) -> Dict[str, Any]:
+        """
+        Revoke an asset's active exception using the
+        /compliance/quarantine/{databaseId}/{assetId}/exception DELETE endpoint.
+
+        The exception fields are cleared and the asset returns to the state its last evaluation's
+        verdict maps to — quarantined again when that verdict was quarantined — or to
+        `pending_evaluation` when it has no recorded evaluation.
+
+        Returns:
+            API response data: {message, databaseId, assetId, complianceState}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset has no active exception
+        """
+        endpoint = API_COMPLIANCE_QUARANTINE_EXCEPTION.format(
+            databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'DELETE', endpoint, f"Revoking the exception of asset '{asset_id}'")
+
+    # ---- Cascades -----------------------------------------------------
+
+    def list_compliance_cascades(self) -> Dict[str, Any]:
+        """
+        List cascades awaiting approval using the /compliance/cascades GET endpoint.
+
+        Returns:
+            API response data: {"cascades": [...]} — pending_approval cascades only, each row
+            carrying `databaseId` / `assetId` (the trigger asset) beside `triggeredByDatabaseId` /
+            `triggeredByAssetId`. The route returns the whole list and takes no paging parameters;
+            a row is listed only when the caller may read the trigger asset's database.
+        """
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_CASCADES, "Failed to list compliance cascades")
+
+    def get_compliance_cascade(self, cascade_id: str) -> Dict[str, Any]:
+        """
+        Read a cascade using the /compliance/cascades/{cascadeId} GET endpoint.
+
+        Returns:
+            API response data: the cascade record (cascadeId, state, triggeredByDatabaseId,
+            triggeredByAssetId, triggerReason, createdAt, approvalTimeoutAt, ...)
+
+        Raises:
+            ComplianceCascadeNotFoundError: When the cascade does not exist
+        """
+        endpoint = API_COMPLIANCE_CASCADE_BY_ID.format(cascadeId=cascade_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Failed to get compliance cascade '{cascade_id}'")
+
+    def create_compliance_cascade(self, database_id: str, asset_id: str,
+                                  reason: Optional[str] = None,
+                                  require_approval: bool = True) -> Dict[str, Any]:
+        """
+        Create a cascade for an asset's dependents using the /compliance/cascades POST endpoint.
+
+        Args:
+            database_id: Database of the asset whose change triggers the cascade
+            asset_id: The triggering asset
+            reason: Recorded as the trigger reason; the handler supplies a default when omitted
+            require_approval: When true the cascade waits in pending_approval for approve/reject;
+                when false it starts executing at once
+
+        Returns:
+            API response data: {message, cascadeId, state}. With `require_approval` the handler
+            answers 200 and `state` is pending_approval. Without it the handler writes the cascade
+            in state executing, starts the executor asynchronously and answers 202; the request
+            does not wait for the evaluations. Poll `get_compliance_cascade` until `state` is
+            completed or aborted (an aborted cascade carries `abortReason`).
+
+        Raises:
+            InvalidComplianceDataError: When the request is rejected, or the executor could not be
+                started (the cascade is then recorded as aborted)
+        """
+        body: Dict[str, Any] = {
+            'databaseId': database_id,
+            'assetId': asset_id,
+            'requireApproval': require_approval,
+        }
+        if reason:
+            body['reason'] = reason
+        return self._compliance_request(
+            'POST', API_COMPLIANCE_CASCADES, "Compliance cascade creation", body=body)
+
+    def approve_compliance_cascade(self, cascade_id: str,
+                                   reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Approve a pending cascade using the /compliance/cascades/{cascadeId}/approve POST
+        endpoint. The handler moves the cascade to executing, starts the executor asynchronously
+        and answers 202; the request does not wait for the evaluations.
+
+        Returns:
+            API response data: {message, cascadeId, state} with `state` executing. Poll
+            `get_compliance_cascade` until `state` is completed or aborted.
+
+        Raises:
+            ComplianceCascadeNotFoundError: When the cascade does not exist or is not pending
+            InvalidComplianceDataError: When the executor could not be started (the cascade is then
+                recorded as aborted)
+        """
+        endpoint = API_COMPLIANCE_CASCADE_APPROVE.format(cascadeId=cascade_id)
+        body = {'reason': reason} if reason else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Approving cascade '{cascade_id}'", body=body)
+
+    def reject_compliance_cascade(self, cascade_id: str,
+                                  reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Reject a pending cascade using the /compliance/cascades/{cascadeId}/reject POST endpoint.
+
+        Returns:
+            API response data: {message, cascadeId}
+
+        Raises:
+            ComplianceCascadeNotFoundError: When the cascade does not exist or is not pending
+        """
+        endpoint = API_COMPLIANCE_CASCADE_REJECT.format(cascadeId=cascade_id)
+        body = {'reason': reason} if reason else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Rejecting cascade '{cascade_id}'", body=body)
+
+    # ---- Audit --------------------------------------------------------
+
+    def _compliance_audit_params(self, start_date: Optional[str], end_date: Optional[str],
+                                 max_items: Optional[int],
+                                 starting_token: Optional[str]) -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
+        if start_date:
+            params['startDate'] = start_date
+        if end_date:
+            params['endDate'] = end_date
+        params.update(self._compliance_page_params(max_items, starting_token) or {})
+        return params
+
+    def query_compliance_audit(self, event_type: Optional[str] = None,
+                               start_date: Optional[str] = None, end_date: Optional[str] = None,
+                               max_items: Optional[int] = None,
+                               starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Query the compliance audit trail using the /compliance/audit GET endpoint.
+
+        Args:
+            event_type: Only entries of this type (schema_bound_to_database, compliance_check,
+                quarantine_released, exception_granted, exception_revoked, exception_superseded,
+                cascade_triggered, ...). Without it the handler reads every event type in turn.
+                Entries are filtered to the databases the caller may read.
+            start_date / end_date: ISO 8601 bounds on the entry timestamp
+            max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
+                omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. Sent as
+                `maxItems`, which the route reads ahead of its `limit` alias.
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"entries": [...], "NextToken"?: str}, most recent first.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
+        if event_type:
+            params['eventType'] = event_type
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_AUDIT, "Failed to query the compliance audit trail",
+            params=params or None)
+
+    def get_asset_compliance_audit(self, database_id: str, asset_id: str,
+                                   start_date: Optional[str] = None,
+                                   end_date: Optional[str] = None,
+                                   max_items: Optional[int] = None,
+                                   starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read one asset's compliance audit history using the
+        /compliance/audit/{databaseId}/{assetId} GET endpoint.
+
+        Args:
+            start_date / end_date: ISO 8601 bounds on the entry timestamp
+            max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
+                omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. This route has
+                no eventType filter.
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"entries": [...], "NextToken"?: str}, most recent first.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        endpoint = API_COMPLIANCE_AUDIT_ASSET.format(databaseId=database_id, assetId=asset_id)
+        params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
+        return self._compliance_request(
+            'GET', endpoint, f"Failed to read the audit history for asset '{asset_id}'",
+            params=params or None)

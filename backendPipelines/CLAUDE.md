@@ -27,6 +27,8 @@ The workflow ASL generates several S3 paths passed to each pipeline step. Pipeli
 
 **Key distinction:** `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
 
+**Compliance output:** a pipeline that backs a compliance pipeline rule reports its measurements as one `compliance-output.json` under the execution's `outputs.results` prefix (from the workflow manifest). `backendPipelines/common/compliance_output.py` (`write_compliance_output`, `build_compliance_output`) writes the document — `{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}` — whose `measurements` keys match the `outputField` of the rule's checks. The pipeline needs no evaluation id or compliance table access; the compliance workflow callback reads the file from the execution's `PipelineExecutionOutputResults` rows.
+
 **Rules for output path usage:**
 
 -   **Always pass through** all output paths from the workflow payload in `vamsExecute` lambdas. Never hardcode empty strings for output paths — the workflow's process-output step relies on finding files at these locations.

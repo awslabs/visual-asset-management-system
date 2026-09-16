@@ -214,6 +214,56 @@ except Exception as e:
 
 lambda_client = boto3.client('lambda', config=retry_config)
 
+# Orchestration bus the workflow completion event is published on when this handler finishes an
+# execution: the abort API, and the lazy Step Functions reconciles that observe a completion first.
+orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
+orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
+events_retry_config = Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})
+events_client = boto3.client('events', config=events_retry_config)
+
+
+def emit_workflow_execution_completed(workflow_execution_id, workflow_database_id, workflow_id,
+                                      execution_status, started_at, completed_at,
+                                      execution_group_id=""):
+    """This lambda's `workflow.execution.completed` announcement: the shared emitter bound to the
+    events client and bus configuration resolved at import. Best-effort — skipped (logged) when no
+    bus is configured, and a publish failure is logged rather than failing the terminal-status write
+    that precedes it."""
+    return eo.emit_workflow_execution_completed(
+        events_client, orchestration_bus_arn, orchestration_event_source_prefix,
+        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
+        started_at, completed_at, execution_group_id=execution_group_id)
+
+
+def _announce_reconciled_completion(main_row, reconciled_snapshot):
+    """Publish the completion event for a terminal status a lazy Step Functions reconcile has just
+    written onto the main row.
+
+    The reconciles poll executions the end-state lambda and the error handler did not finish — a
+    StopExecution issued outside VAMS, a failed error-handler invocation, a throttled end-state lambda —
+    so without this the run's terminal status would be recorded but never announced, and a consumer
+    waiting on the event (a compliance evaluation pending its pipeline rule) would wait forever. Called
+    only after the guarded write landed, so the announcement obeys the same exactly-once rule as the
+    other writers. `reconciled_snapshot` carries what the poll wrote; `main_row` supplies the identity
+    fields the snapshot does not (the workflow ids and the execution group), falling back to the
+    composite key when the row lacks them."""
+    status = reconciled_snapshot.get("executionStatus", "")
+    if status not in TERMINAL_STATUSES:
+        return
+    row = main_row or {}
+    workflow_database_id = row.get("workflowDatabaseId", "")
+    workflow_id = row.get("workflowId", "")
+    if not (workflow_database_id and workflow_id):
+        composite = reconciled_snapshot.get("workflowDatabaseId:workflowId", "") or ""
+        workflow_database_id, _, workflow_id = composite.partition(":")
+    emit_workflow_execution_completed(
+        reconciled_snapshot.get("workflowExecutionId", ""), workflow_database_id, workflow_id,
+        status,
+        started_at=(reconciled_snapshot.get("executionStartDate")
+                    or row.get("executionStartDate", "")),
+        completed_at=reconciled_snapshot.get("executionStopDate", ""),
+        execution_group_id=row.get("executionGroupId", ""))
+
 asset_table = dynamodb.Table(asset_storage_table_name)
 asset_file_version_history_table = (
     dynamodb.Table(asset_file_version_history_table_name)
@@ -419,10 +469,11 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
     terminal status by reading the current one first: the read and the write are separate calls, so
     another writer can finish the execution in between and a plain write would revert it. Losing that
     race is the expected outcome for the second writer, so the ConditionalCheckFailed is logged and
-    swallowed while any other write error surfaces."""
+    swallowed while any other write error surfaces. Returns True when the row was written and False
+    when there was nothing to write or the terminal guard rejected the write."""
     reconciled = {attr: main_item[attr] for attr in attributes if attr in main_item}
     if not reconciled:
-        return
+        return False
     names = {f"#a{i}": attr for i, attr in enumerate(reconciled)}
     values = {f":v{i}": main_item[attr] for i, attr in enumerate(reconciled)}
     expr = "SET " + ", ".join(f"{n} = {v}" for n, v in zip(names, values))
@@ -442,6 +493,8 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
             raise
         logger.info(f"Main execution row {main_item.get('workflowExecutionId', '')} already holds a "
                     f"terminal status; the {main_item.get('executionStatus', '')} write was skipped")
+        return False
+    return True
 
 
 def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
@@ -1122,10 +1175,16 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             # too. A sync-stamp-only write needs no guard: it touches nothing a terminal writer owns,
             # and guarding it would leave a row that somehow holds a terminal status without a stop date
             # re-polling Step Functions on every request.
-            _persist_reconciled_main_row(
+            #
+            # A terminal status this poll wrote is one no other writer recorded, so the completion event
+            # has not been published either: the reconcile that won the guard announces it.
+            written = _persist_reconciled_main_row(
                 main_table, item, LIST_RECONCILED_MAIN_ROW_ATTRIBUTES,
                 only_if_not_terminal=any(
                     attr in item for attr in COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES))
+            if written:
+                _announce_reconciled_completion(
+                    main_row_memo.get(item.get('workflowExecutionId', '')), item)
 
         def _fetch_execution_log_and_error(execution_id, main_item, describe_response):
             """For a terminal execution, return (error_text, log_text).
@@ -1899,8 +1958,15 @@ def abort_execution(event, execution_id):
         if not main_item.get('executionStopDate'):
             main_item['executionStopDate'] = now
         main_item['lastSfnSyncCheckDate'] = now
-        _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
-                                     only_if_not_terminal=True)
+        # Stopping the state machine skips its error handler, so the abort publishes the completion
+        # event itself once the ABORTED status lands.
+        if _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
+                                        only_if_not_terminal=True):
+            emit_workflow_execution_completed(
+                execution_id, main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''),
+                ABORTED_STATUS, started_at=main_item.get('executionStartDate', ''),
+                completed_at=main_item['executionStopDate'],
+                execution_group_id=main_item.get('executionGroupId', ''))
 
     logger.info(f"Aborted execution {execution_id}")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.
@@ -3399,12 +3465,17 @@ def _reconcile_main_status(execution_id, main_item):
         main_item["executionStatus"] = status or main_item.get("executionStatus", "")
         reconciled_snapshot["executionStatus"] = main_item["executionStatus"]
     try:
-        _persist_reconciled_main_row(
+        written = _persist_reconciled_main_row(
             dynamodb.Table(workflow_execution_database_v2), reconciled_snapshot,
             DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES,
             only_if_not_terminal=True)
     except Exception as e:
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
+        return
+    # A terminal status this poll wrote is one no other writer recorded, so the completion event has
+    # not been published either: the reconcile that won the guard announces it.
+    if written:
+        _announce_reconciled_completion(main_item, reconciled_snapshot)
 
 
 def _log_search_window_start(main_item):

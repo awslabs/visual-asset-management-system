@@ -13,6 +13,7 @@ import json
 from typing import Any, Dict, List, Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
+from common.validators import execution_id_pattern, iso8601_utc_pattern
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="ExecutionModels")
@@ -698,3 +699,28 @@ class ResolvedPipelineConfig(BaseModel, extra='ignore'):
     templateTags: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     customTemplateOverrideUsed: bool = False
     configFormat: Optional[str] = "json"
+
+
+# Terminal statuses a `workflow.execution.completed` event announces: the status stored on the main
+# execution row by the writer that finished the run (common.workflows.executionOutputs.TERMINAL_STATUSES).
+WORKFLOW_EXECUTION_COMPLETED_STATUS_PATTERN = r'^(SUCCEEDED|FAILED|ABORTED|TIMED_OUT)$'
+
+
+class WorkflowExecutionCompletedDetailModel(BaseModel, extra='ignore'):
+    """The `detail` of a `workflow.execution.completed` orchestration-bus event, as a consumer parses
+    it. The emitters build the detail through
+    `common.workflows.executionRecords.workflow_execution_completed_event`: identifiers and ISO-8601
+    UTC timestamps only. A main row with no recorded start date yields an empty `startedAt`, so the
+    optional fields accept the empty string as absent."""
+    executionId: str = Field(min_length=32, max_length=36, regex=execution_id_pattern)
+    status: str = Field(regex=WORKFLOW_EXECUTION_COMPLETED_STATUS_PATTERN)
+    workflowDatabaseId: Optional[str] = Field(None, max_length=256)
+    workflowId: Optional[str] = Field(None, max_length=256)
+    startedAt: Optional[str] = Field(None, regex=iso8601_utc_pattern)
+    completedAt: Optional[str] = Field(None, regex=iso8601_utc_pattern)
+    executionGroupId: Optional[str] = Field(None, max_length=64)
+
+    @validator("workflowDatabaseId", "workflowId", "startedAt", "completedAt", "executionGroupId",
+               pre=True)
+    def _empty_is_absent(cls, v):
+        return None if v == "" else v

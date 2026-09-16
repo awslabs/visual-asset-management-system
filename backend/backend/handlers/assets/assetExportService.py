@@ -22,6 +22,7 @@ from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items
 from common.validators import validate
+from common.compliance.quarantineGuard import check_quarantine_block
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -1215,6 +1216,12 @@ def process_asset_batch(
         asset["object__type"] = "asset"
         # Default deny: only authorize if enforcer exists AND grants access
         if casbin_enforcer and casbin_enforcer.enforce(asset, "GET"):
+            # Single choke point for the quarantine block: every asset whose files are about to
+            # be signed passes here once, after its Tier-2 check. A quarantined asset without a
+            # granted exception fails the whole export before any presigned GET URL is minted.
+            # An export that mints no file URLs delivers no file bytes and is not blocked.
+            if request_model.generatePresignedUrls:
+                check_quarantine_block(asset_info['databaseId'], asset_info['assetId'])
             authorized_assets[position] = (asset_info, asset)
         else:
             logger.warning(f"Permission denied for asset {asset_info['assetId']}")
