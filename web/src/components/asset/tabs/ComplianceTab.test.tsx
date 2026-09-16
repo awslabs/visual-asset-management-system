@@ -117,6 +117,71 @@ describe("ComplianceTab", () => {
         });
         expect(await screen.findByText("Exception granted")).toBeInTheDocument();
     });
+
+    it("collects the release reason in a modal and sends it", async () => {
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            { evaluations: [], nextToken: undefined },
+        ]);
+        service().releaseFromQuarantine.mockResolvedValue([true, "Released from quarantine"]);
+
+        renderTab();
+        await userEvent.click(await screen.findByRole("button", { name: "Release" }));
+
+        // Opening the dialog releases nothing; the reason is confirmed first.
+        const dialog = screen.getByRole("dialog", { name: "Release from quarantine" });
+        expect(service().releaseFromQuarantine).not.toHaveBeenCalled();
+
+        await userEvent.type(
+            within(dialog).getByLabelText("Reason for release"),
+            "Reviewed and cleared"
+        );
+        await userEvent.click(within(dialog).getByRole("button", { name: "Release asset" }));
+
+        await waitFor(() => {
+            expect(service().releaseFromQuarantine).toHaveBeenCalledWith(
+                "db1",
+                "asset-1",
+                "Reviewed and cleared"
+            );
+        });
+        expect(await screen.findByText("Released from quarantine")).toBeInTheDocument();
+        expect(service().fetchComplianceState).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the release dialog open and releases nothing without a reason", async () => {
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            { evaluations: [], nextToken: undefined },
+        ]);
+
+        renderTab();
+        await userEvent.click(await screen.findByRole("button", { name: "Release" }));
+        const dialog = screen.getByRole("dialog", { name: "Release from quarantine" });
+
+        await userEvent.click(within(dialog).getByRole("button", { name: "Release asset" }));
+
+        expect(within(dialog).getByText("A reason is required.")).toBeInTheDocument();
+        expect(service().releaseFromQuarantine).not.toHaveBeenCalled();
+        expect(dialog.className).not.toMatch(/awsui_hidden/);
+    });
+
+    it("cancelling the release dialog releases nothing", async () => {
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            { evaluations: [], nextToken: undefined },
+        ]);
+
+        renderTab();
+        await userEvent.click(await screen.findByRole("button", { name: "Release" }));
+        const dialog = screen.getByRole("dialog", { name: "Release from quarantine" });
+        await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+        expect(service().releaseFromQuarantine).not.toHaveBeenCalled();
+        await waitFor(() => {
+            expect(dialog.className).toMatch(/awsui_hidden/);
+        });
+    });
 });
 
 describe("ComplianceTab exception state", () => {

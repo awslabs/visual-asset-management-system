@@ -33,6 +33,7 @@ import Alert from "@cloudscape-design/components/alert";
 import RadioGroup from "@cloudscape-design/components/radio-group";
 import AttributeEditor from "@cloudscape-design/components/attribute-editor";
 import type { editor } from "monaco-editor";
+import Synonyms from "../../synonyms";
 import {
     CompliancePipelineInputFilesMode,
     CompliancePipelineRef,
@@ -65,12 +66,12 @@ const PIPELINE_REF_META_SCHEMA = {
     properties: {
         databaseId: {
             ...ID_STRING,
-            description: "Workflow database: the database the workflow belongs to, or GLOBAL.",
+            description: `Workflow ${Synonyms.database}: the ${Synonyms.database} the workflow belongs to, or GLOBAL.`,
         },
         workflowId: { ...ID_STRING, description: "Workflow ID: the workflow to run." },
         pipelineDatabaseId: {
             ...ID_STRING,
-            description: "Pipeline database: the database the pipeline belongs to, or GLOBAL.",
+            description: `Pipeline ${Synonyms.database}: the ${Synonyms.database} the pipeline belongs to, or GLOBAL.`,
         },
         pipelineId: {
             ...ID_STRING,
@@ -88,14 +89,12 @@ const PIPELINE_REF_META_SCHEMA = {
 const INPUT_FILES_META_SCHEMA = {
     type: "object",
     required: ["mode"],
-    description:
-        "Which of the asset's files the workflow receives when the rule runs. Absent means matching.",
+    description: `Which of the ${Synonyms.asset}'s files the workflow receives when the rule runs. Absent means matching.`,
     properties: {
         mode: {
             type: "string",
             enum: PIPELINE_INPUT_FILES_MODES,
-            description:
-                "matching: the asset's files passing the workflow's, the pipeline's and this rule's filters; wholeAsset: the asset root, where the workflow allows it; explicit: exactly the listed keys.",
+            description: `matching: the ${Synonyms.asset}'s files passing the workflow's, the pipeline's and this rule's filters; wholeAsset: the ${Synonyms.asset} root, where the workflow allows it; explicit: exactly the listed keys.`,
         },
         filter: {
             type: "array",
@@ -109,7 +108,7 @@ const INPUT_FILES_META_SCHEMA = {
             minItems: 1,
             maxItems: INPUT_FILES_MAX_KEYS,
             items: { type: "string", pattern: "^/.+" },
-            description: "Asset-relative file paths beginning with / (explicit only).",
+            description: `${Synonyms.Asset}-relative file paths beginning with / (explicit only).`,
         },
     },
     additionalProperties: false,
@@ -148,13 +147,12 @@ const RULE_META_SCHEMA = {
         ruleType: {
             type: "string",
             enum: ["pipeline", "metadata", "relationship"],
-            description:
-                "What the rule inspects: a workflow run, the metadata, or the asset links.",
+            description: `What the rule inspects: a workflow run, the metadata, or the ${Synonyms.asset} links.`,
         },
         enforcement: {
             type: "string",
             enum: ["quarantine", "warn", "inform"],
-            description: "What a failed check does to the asset.",
+            description: `What a failed check does to the ${Synonyms.asset}.`,
         },
         pipelineRef: PIPELINE_REF_META_SCHEMA,
         inputFiles: INPUT_FILES_META_SCHEMA,
@@ -565,7 +563,7 @@ export default function ComplianceSchemaEditor({
             <SpaceBetween size="s">
                 <FormField
                     label="Input files"
-                    description="Which of the asset's files the workflow receives when the rule runs."
+                    description={`Which of the ${Synonyms.asset}'s files the workflow receives when the rule runs.`}
                     errorText={errors.mode}
                     stretch
                 >
@@ -608,7 +606,7 @@ export default function ComplianceSchemaEditor({
                 {inputFiles.mode === "explicit" && (
                     <FormField
                         label="File paths"
-                        description="Asset-relative paths beginning with /; each must exist on the asset when the rule runs."
+                        description={`${Synonyms.Asset}-relative paths beginning with /; each must exist on the ${Synonyms.asset} when the rule runs.`}
                         constraintText={`At least one and up to ${INPUT_FILES_MAX_KEYS} paths.`}
                         errorText={errors.keys}
                         stretch

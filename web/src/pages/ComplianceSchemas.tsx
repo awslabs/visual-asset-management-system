@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
     Box,
     Button,
@@ -18,9 +18,10 @@ import {
     Select,
     Flashbar,
     FlashbarProps,
-    StatusIndicator,
 } from "@cloudscape-design/components";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { usePageTitle } from "../hooks/usePageTitle";
+import Synonyms from "../synonyms";
 import {
     fetchComplianceSchemas,
     createComplianceSchema,
@@ -88,7 +89,7 @@ const SCHEMA_TEMPLATES: Record<
         },
     },
     engineering: {
-        label: "Engineering Asset Standard",
+        label: `Engineering ${Synonyms.Asset} Standard`,
         description: "Owner, classification and retention metadata plus a parent assembly",
         body: {
             schemaFormat: "vams-rules-v1",
@@ -330,6 +331,8 @@ export default function ComplianceSchemas() {
     const [loading, setLoading] = useState(false);
     const [filterText, setFilterText] = useState("");
     const [flashMessages, setFlashMessages] = useState<FlashbarProps.MessageDefinition[]>([]);
+    // Sequence for flash message ids; two messages raised in the same millisecond stay distinct.
+    const flashSequence = useRef(0);
 
     // Modal state
     const [modalVisible, setModalVisible] = useState(false);
@@ -357,15 +360,17 @@ export default function ComplianceSchemas() {
     };
 
     const addFlashMessage = (type: "success" | "error" | "info", content: string) => {
+        flashSequence.current += 1;
+        const id = `flash-${flashSequence.current}`;
         setFlashMessages((prev) => [
             ...prev,
             {
                 type,
                 content,
                 dismissible: true,
-                id: Date.now().toString(),
-                onDismiss: () =>
-                    setFlashMessages((msgs) => msgs.filter((m) => m.id !== Date.now().toString())),
+                dismissLabel: "Dismiss message",
+                id,
+                onDismiss: () => setFlashMessages((msgs) => msgs.filter((m) => m.id !== id)),
             },
         ]);
     };
@@ -536,19 +541,28 @@ export default function ComplianceSchemas() {
                                 id: "actions",
                                 header: "Actions",
                                 width: 150,
-                                cell: (item) => (
-                                    <SpaceBetween direction="horizontal" size="xs">
-                                        <Button variant="link" onClick={() => openEditModal(item)}>
-                                            Edit
-                                        </Button>
-                                        <Button
-                                            variant="link"
-                                            onClick={() => handleSweep(item.schemaName)}
-                                        >
-                                            Sweep
-                                        </Button>
-                                    </SpaceBetween>
-                                ),
+                                cell: (item) => {
+                                    // A legacy schema cannot be updated or evaluated.
+                                    const legacy = complianceSchemaFormat(item) === "legacy";
+                                    return (
+                                        <SpaceBetween direction="horizontal" size="xs">
+                                            <Button
+                                                variant="link"
+                                                disabled={legacy}
+                                                onClick={() => openEditModal(item)}
+                                            >
+                                                Edit
+                                            </Button>
+                                            <Button
+                                                variant="link"
+                                                disabled={legacy}
+                                                onClick={() => handleSweep(item.schemaName)}
+                                            >
+                                                Sweep
+                                            </Button>
+                                        </SpaceBetween>
+                                    );
+                                },
                             },
                         ]}
                     />

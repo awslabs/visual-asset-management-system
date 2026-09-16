@@ -6,7 +6,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import ComplianceAuditLog from "./ComplianceAuditLog";
+import ComplianceAuditLog, { eventTypeOptions } from "./ComplianceAuditLog";
 import { COMPLIANCE_LISTING_PAGE_SIZE } from "../services/ComplianceService";
 
 jest.mock("../services/ComplianceService", () => ({
@@ -118,5 +118,70 @@ describe("ComplianceAuditLog pagination", () => {
         });
         expect(screen.getByText("Event type")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Refresh audit log" })).toBeInTheDocument();
+    });
+});
+
+describe("ComplianceAuditLog event type filter", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it("offers every event type the audit trail records", async () => {
+        const recordedEventTypes = [
+            "compliance_check",
+            "schema_bound_to_database",
+            "schema_bound_to_asset",
+            "schema_unbound_from_database",
+            "schema_unbound_from_asset",
+            "quarantine_released",
+            "exception_granted",
+            "exception_revoked",
+            "cascade_triggered",
+            "cascade_auto_triggered",
+            "cascade_approved",
+            "cascade_rejected",
+            "cascade_completed",
+        ];
+        const offered = eventTypeOptions.map((option) => option.value);
+        expect(offered[0]).toBe("");
+        expect(offered.slice(1).sort()).toEqual([...recordedEventTypes].sort());
+        // Each option carries a label distinct from its raw value.
+        eventTypeOptions.forEach((option) => {
+            expect(option.label).toBeTruthy();
+            expect(option.label).not.toBe(option.value);
+        });
+    });
+
+    it("filters on the exception revoked and cascade completion events", async () => {
+        service().fetchAuditLog.mockResolvedValue([
+            true,
+            { entries: [entry("e1", "someone")], nextToken: undefined },
+        ]);
+
+        render(<ComplianceAuditLog />);
+        await waitFor(() => {
+            expect(screen.getByText("someone")).toBeInTheDocument();
+        });
+
+        const openFilter = () =>
+            userEvent.click(
+                screen.getByRole("button", { name: /Filter audit entries by event type/ })
+            );
+
+        await openFilter();
+        await userEvent.click(await screen.findByText("Exception Revoked"));
+        await waitFor(() => {
+            expect(service().fetchAuditLog.mock.calls.at(-1)[0].eventType).toBe(
+                "exception_revoked"
+            );
+        });
+
+        await openFilter();
+        await userEvent.click(await screen.findByText("Cascade Completed"));
+        await waitFor(() => {
+            expect(service().fetchAuditLog.mock.calls.at(-1)[0].eventType).toBe(
+                "cascade_completed"
+            );
+        });
     });
 });

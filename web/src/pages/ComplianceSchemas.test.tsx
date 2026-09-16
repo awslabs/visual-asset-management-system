@@ -4,7 +4,8 @@
  */
 
 import React from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import ComplianceSchemas, { LEGACY_SCHEMA_LABEL } from "./ComplianceSchemas";
 
 jest.mock("@monaco-editor/react", () => ({
@@ -87,5 +88,58 @@ describe("ComplianceSchemas format column", () => {
         await screen.findByText("old-json-schema");
 
         expect(within(rowOf("old-json-schema")).getByText(LEGACY_SCHEMA_LABEL)).toBeInTheDocument();
+    });
+});
+
+describe("ComplianceSchemas row actions", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it("disables Edit and Sweep on a legacy row and keeps them on a rules row", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, [rulesSchema, legacySchema]]);
+
+        render(<ComplianceSchemas />);
+        await screen.findByText("old-json-schema");
+
+        const legacyRow = rowOf("old-json-schema");
+        expect(within(legacyRow).getByRole("button", { name: "Edit" })).toBeDisabled();
+        expect(within(legacyRow).getByRole("button", { name: "Sweep" })).toBeDisabled();
+
+        const rulesRow = rowOf("cad-quality");
+        expect(within(rulesRow).getByRole("button", { name: "Edit" })).toBeEnabled();
+        expect(within(rulesRow).getByRole("button", { name: "Sweep" })).toBeEnabled();
+
+        await userEvent.click(within(legacyRow).getByRole("button", { name: "Sweep" }));
+        expect(service().sweepSchema).not.toHaveBeenCalled();
+    });
+
+    it("dismissing a flash message removes only that message", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, [rulesSchema]]);
+        service()
+            .sweepSchema.mockResolvedValueOnce([true, { message: "started" }])
+            .mockResolvedValueOnce([false, "Sweep failed for that schema"]);
+
+        render(<ComplianceSchemas />);
+        await screen.findByText("cad-quality");
+
+        // Two flashes raised back to back: one success, one error.
+        const sweep = () =>
+            userEvent.click(within(rowOf("cad-quality")).getByRole("button", { name: "Sweep" }));
+        await sweep();
+        const successText = 'Sweep triggered for schema "cad-quality"';
+        expect(await screen.findByText(successText)).toBeInTheDocument();
+        await sweep();
+        expect(await screen.findByText("Sweep failed for that schema")).toBeInTheDocument();
+
+        const successFlash = screen.getByText(successText).closest("li") as HTMLElement;
+        await userEvent.click(
+            within(successFlash).getByRole("button", { name: "Dismiss message" })
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByText(successText)).not.toBeInTheDocument();
+        });
+        expect(screen.getByText("Sweep failed for that schema")).toBeInTheDocument();
     });
 });

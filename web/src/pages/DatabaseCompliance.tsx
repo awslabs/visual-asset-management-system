@@ -116,7 +116,9 @@ const DatabaseCompliancePage: React.FC = () => {
 
     const handleEvaluateAll = async () => {
         if (!databaseSchema) {
-            setError("No compliance schema bound to this database. Bind a schema first.");
+            setError(
+                `No compliance schema bound to this ${Synonyms.database}. Bind a schema first.`
+            );
             return;
         }
         setSweeping(true);

@@ -588,14 +588,19 @@ export const fetchQuarantinedAssets = async (
     }
 };
 
+/**
+ * Releases a quarantined asset. The reason, when given, is recorded on the audit entry; without
+ * one the backend records its default.
+ */
 export const releaseFromQuarantine = async (
     databaseId: string,
-    assetId: string
+    assetId: string,
+    reason?: string
 ): Promise<[boolean, string]> => {
     try {
         const response = await apiClient.post(
             `compliance/quarantine/${databaseId}/${assetId}/release`,
-            { body: {} }
+            { body: reason ? { reason } : {} }
         );
         if (
             response?.message &&

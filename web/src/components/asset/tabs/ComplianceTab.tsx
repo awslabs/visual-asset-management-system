@@ -79,6 +79,8 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
     const [evaluating, setEvaluating] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
+    const [releaseModalVisible, setReleaseModalVisible] = useState(false);
+    const [releasing, setReleasing] = useState(false);
     const [exceptionModalVisible, setExceptionModalVisible] = useState(false);
     const [granting, setGranting] = useState(false);
     const [revokeModalVisible, setRevokeModalVisible] = useState(false);
@@ -167,8 +169,13 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
         setEvaluating(false);
     };
 
-    const handleRelease = async () => {
-        const [success, message] = await releaseFromQuarantine(databaseId, assetId);
+    const handleRelease = async (reason: string) => {
+        setReleasing(true);
+        setActionMessage(null);
+        setError(null);
+        const [success, message] = await releaseFromQuarantine(databaseId, assetId, reason);
+        setReleasing(false);
+        setReleaseModalVisible(false);
         if (success) {
             setActionMessage(message);
             await loadComplianceData();
@@ -239,7 +246,11 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                         actions={
                             <SpaceBetween direction="horizontal" size="xs">
                                 {complianceState?.complianceState === "quarantined" &&
-                                    canRelease && <Button onClick={handleRelease}>Release</Button>}
+                                    canRelease && (
+                                        <Button onClick={() => setReleaseModalVisible(true)}>
+                                            Release
+                                        </Button>
+                                    )}
                                 {complianceState?.complianceState === "quarantined" &&
                                     canGrantException && (
                                         <Button onClick={() => setExceptionModalVisible(true)}>
@@ -452,6 +463,17 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                     ]}
                 />
             </Container>
+
+            <ReasonModal
+                visible={releaseModalVisible}
+                header="Release from quarantine"
+                label="Reason for release"
+                description={`Why this ${Synonyms.asset} leaves quarantine. Recorded in the compliance audit log; the next evaluation may quarantine it again.`}
+                confirmLabel={`Release ${Synonyms.asset}`}
+                loading={releasing}
+                onConfirm={handleRelease}
+                onDismiss={() => setReleaseModalVisible(false)}
+            />
 
             <ReasonModal
                 visible={exceptionModalVisible}

@@ -11,10 +11,9 @@ import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
-import Select from "@cloudscape-design/components/select";
+import Select, { SelectProps } from "@cloudscape-design/components/select";
 import FormField from "@cloudscape-design/components/form-field";
 import Link from "@cloudscape-design/components/link";
-import { SelectProps } from "@cloudscape-design/components";
 import Synonyms from "../synonyms";
 import {
     fetchAuditLog,
@@ -22,16 +21,22 @@ import {
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
 
-const eventTypeOptions: SelectProps.Option[] = [
+/** Every event type the audit trail records, in the order the filter offers them. */
+export const eventTypeOptions: SelectProps.Option[] = [
     { label: "All Events", value: "" },
     { label: "Compliance Check", value: "compliance_check" },
-    { label: "Schema Bound to Database", value: "schema_bound_to_database" },
-    { label: "Schema Bound to Asset", value: "schema_bound_to_asset" },
-    { label: "Schema Unbound from Database", value: "schema_unbound_from_database" },
-    { label: "Schema Unbound from Asset", value: "schema_unbound_from_asset" },
+    { label: `Schema Bound to ${Synonyms.Database}`, value: "schema_bound_to_database" },
+    { label: `Schema Bound to ${Synonyms.Asset}`, value: "schema_bound_to_asset" },
+    { label: `Schema Unbound from ${Synonyms.Database}`, value: "schema_unbound_from_database" },
+    { label: `Schema Unbound from ${Synonyms.Asset}`, value: "schema_unbound_from_asset" },
     { label: "Quarantine Released", value: "quarantine_released" },
     { label: "Exception Granted", value: "exception_granted" },
+    { label: "Exception Revoked", value: "exception_revoked" },
     { label: "Cascade Triggered", value: "cascade_triggered" },
+    { label: "Cascade Auto-Triggered", value: "cascade_auto_triggered" },
+    { label: "Cascade Approved", value: "cascade_approved" },
+    { label: "Cascade Rejected", value: "cascade_rejected" },
+    { label: "Cascade Completed", value: "cascade_completed" },
 ];
 
 const ComplianceAuditLog: React.FC = () => {
