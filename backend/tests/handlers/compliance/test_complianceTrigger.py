@@ -703,10 +703,12 @@ class TestOneUploadIsEvaluatedOnce:
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
 
     def test_an_evaluation_that_started_within_the_skew_margin_does_not_cover_the_change(self):
+        """An object written after the last recorded upload completion is judged against its own
+        eventTime with the skew margin, so a start one second later does not cover it."""
         mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/model.stl",
                                                                 event_time=CHANGE_TIME_S3))),
                      database_item=AUTO_EVAL_DB, compliance_record=_evaluated_record(1),
-                     asset_rows=ASSET_ROWS)
+                     asset_rows=_stamped_rows("2026-03-01T11:59:30+00:00"))
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
 
     @pytest.mark.parametrize("status", ["completed", "pending_pipeline", "error"])
@@ -747,3 +749,99 @@ class TestOneUploadIsEvaluatedOnce:
     @pytest.mark.parametrize("value", [None, "", "not-a-time", 12])
     def test_the_event_time_parser_returns_none_for_anything_it_cannot_read(self, value):
         assert trigger.parse_event_time(value) is None
+
+
+def _stamped_rows(last_change_at):
+    """The asset's row as the assetIdGSI returns it, carrying the last upload completion's stamp."""
+    return [{"databaseId": DB, "assetId": ASSET, "lastChangeAt": last_change_at}]
+
+
+def _record_evaluated_at(last_evaluated_at, status="completed"):
+    return {"schemaName": SCHEMA, "complianceState": "compliant", "lastEvaluationId": "eval-prev",
+            "lastEvaluatedAt": last_evaluated_at, "lastEvaluationStatus": status}
+
+
+# A three-file upload as the deployment records it: the objects land, the upload completion stamps the
+# asset row a tenth of a second later, the stream path evaluates within the second, and the indexer's
+# per-object messages arrive ten seconds after that.
+UPLOAD_EVENT_TIME = "2026-03-01T04:51:40.515Z"
+UPLOAD_STAMP = "2026-03-01T04:51:40.628000+00:00"
+STREAM_EVALUATION_START = "2026-03-01T04:51:41.378000+00:00"
+
+
+@pytest.mark.unit
+class TestARecordedUploadCompletionCoversItsFiles:
+    """The asset row's `lastChangeAt` is written after every object of an upload was copied, so an
+    evaluation that started at or after it has seen those files; the comparison is causal and takes
+    no skew margin. Only an object written outside a recorded completion falls back to its own
+    eventTime with the margin."""
+
+    def test_the_file_messages_of_an_upload_the_stream_evaluation_covered_are_skipped(self):
+        messages = [indexer_message(s3_event_record(f"{ASSET}/{name}", event_time=UPLOAD_EVENT_TIME))
+                    for name in ("one.stl", "two.stl", "three.stl")]
+        mocks = _run(_sns_event(*messages), database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(STREAM_EVALUATION_START),
+                     asset_rows=_stamped_rows(UPLOAD_STAMP))
+        mocks["run_evaluation"].assert_not_called()
+        assert sum("already covered" in m for m in _info_messages(mocks)) == 3
+
+    def test_the_stream_path_is_covered_by_an_evaluation_started_at_the_stamp_itself(self):
+        mocks = _run(_sns_event(_stream_message(change_source="upload", change_at=UPLOAD_STAMP)),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(UPLOAD_STAMP), asset_rows=ASSET_ROWS)
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_a_manual_evaluation_right_after_the_stamp_covers_the_file_messages(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/one.stl",
+                                                                event_time=UPLOAD_EVENT_TIME))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at("2026-03-01T04:51:41.028000+00:00"),
+                     asset_rows=_stamped_rows(UPLOAD_STAMP))
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_an_evaluation_started_before_the_stamp_does_not_cover_the_upload(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/one.stl",
+                                                                event_time=UPLOAD_EVENT_TIME))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at("2026-03-01T04:51:40.600000+00:00"),
+                     asset_rows=_stamped_rows(UPLOAD_STAMP))
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_an_object_written_after_the_last_stamp_falls_back_to_the_margin_and_evaluates(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/late.stl",
+                                                                event_time="2026-03-01T04:52:10.000Z"))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at("2026-03-01T04:52:11+00:00"),
+                     asset_rows=_stamped_rows(UPLOAD_STAMP))
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_an_object_written_after_the_last_stamp_is_covered_past_the_margin(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/late.stl",
+                                                                event_time="2026-03-01T04:52:10.000Z"))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at("2026-03-01T04:52:13+00:00"),
+                     asset_rows=_stamped_rows(UPLOAD_STAMP))
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_an_asset_row_without_a_stamp_is_judged_by_the_object_time_and_the_margin(self):
+        covered = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/one.stl",
+                                                                  event_time=UPLOAD_EVENT_TIME))),
+                       database_item=AUTO_EVAL_DB,
+                       compliance_record=_record_evaluated_at("2026-03-01T04:51:43+00:00"),
+                       asset_rows=ASSET_ROWS)
+        covered["run_evaluation"].assert_not_called()
+        not_covered = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/one.stl",
+                                                                      event_time=UPLOAD_EVENT_TIME))),
+                           database_item=AUTO_EVAL_DB,
+                           compliance_record=_record_evaluated_at(STREAM_EVALUATION_START),
+                           asset_rows=ASSET_ROWS)
+        not_covered["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_the_asset_row_is_read_once_per_message_for_database_and_stamp(self):
+        message = indexer_message(s3_event_record(f"{ASSET}/one.stl", event_time=UPLOAD_EVENT_TIME),
+                                  s3_event_record(f"{ASSET}/two.stl", event_time=UPLOAD_EVENT_TIME))
+        mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(STREAM_EVALUATION_START),
+                     asset_rows=_stamped_rows(UPLOAD_STAMP))
+        assert mocks["asset"].query.call_count == 1
+        mocks["run_evaluation"].assert_not_called()

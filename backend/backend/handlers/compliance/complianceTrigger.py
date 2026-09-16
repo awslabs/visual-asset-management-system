@@ -67,11 +67,13 @@ CASCADE_STATE_INDEX = "StateIndex"
 LAST_CHANGE_SOURCE_ATTRIBUTE = "lastChangeSource"
 LAST_CHANGE_AT_ATTRIBUTE = "lastChangeAt"
 
-# An evaluation covers every change that landed before it started, so a change older than the asset's
-# last evaluation start by at least this margin is not evaluated again. The change time comes from the
-# S3 or upload Lambda clock and the evaluation start from the trigger's clock; the margin keeps clock
-# skew from marking an evaluation as covering a change it in fact started before. A duplicate
-# evaluation is the safe failure, a missed one is not, so the margin errs toward evaluating.
+# Skew margin for the one coverage comparison whose two instants come from unrelated clocks: an S3
+# object's `eventTime` against an evaluation start, used only for an object written outside a recorded
+# upload completion. A change older than the last evaluation start by at least this margin is covered.
+# The margin keeps S3-vs-Lambda clock skew from marking an evaluation as covering a change it in fact
+# started before; a duplicate evaluation is the safe failure, a missed one is not, so it errs toward
+# evaluating. An upload whose completion the asset row records (`lastChangeAt`) needs no margin: the
+# stamp is written after every object of the upload was copied, so the ordering is causal.
 EVALUATION_COVERS_CHANGE_MARGIN = timedelta(seconds=2)
 
 # A cascade awaiting approval expires after this many hours.
@@ -144,8 +146,9 @@ def _process_stream_record(message):
                     "skipping compliance evaluation")
         return
 
-    _process_compliance_event(database_id, asset_id,
-                              change_time=parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE)))
+    _process_compliance_event(
+        database_id, asset_id,
+        completion_time=parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE)))
 
 
 def _image_string(new_image, attribute):
@@ -165,18 +168,25 @@ def parse_event_time(value):
     return engine.parse_timestamp(value)
 
 
-def change_covered_by_last_evaluation(compliance_record, change_time):
+def change_covered_by_last_evaluation(compliance_record, change_time=None, completion_time=None):
     """Whether the asset's last evaluation started after the change and so already covers it.
 
-    True only when both instants are known and the evaluation's start (`lastEvaluatedAt`) is at
-    least EVALUATION_COVERS_CHANGE_MARGIN after the change; an unknown change time or an asset
-    never evaluated is never covered. Any `lastEvaluationStatus` counts, because the inputs were
-    read after the change either way. A file that lands after a covering evaluation started is a
-    new change and yields a second evaluation."""
-    if change_time is None:
-        return False
+    `completion_time` is the asset row's `lastChangeAt`: the upload completion that stamped it ran
+    after every object of that upload was copied, so an evaluation whose start (`lastEvaluatedAt`)
+    is at or after the stamp has seen those files — the comparison is causal and needs no margin.
+    `change_time` is an S3 object's `eventTime`. An object written at or before the recorded
+    completion belongs to that upload and is judged by the stamp; an object written after it (or an
+    asset with no stamp) is judged against its own `eventTime` with EVALUATION_COVERS_CHANGE_MARGIN,
+    the two instants coming from unrelated clocks. An asset never evaluated, or a change with neither
+    instant known, is never covered. Any `lastEvaluationStatus` counts, because the inputs were read
+    after the change either way. A file that lands after a covering evaluation started is a new
+    change and yields a second evaluation."""
     last_evaluated_at = parse_event_time(compliance_record.get("lastEvaluatedAt"))
     if last_evaluated_at is None:
+        return False
+    if completion_time is not None and (change_time is None or completion_time >= change_time):
+        return last_evaluated_at >= completion_time
+    if change_time is None:
         return False
     return last_evaluated_at >= change_time + EVALUATION_COVERS_CHANGE_MARGIN
 
@@ -193,7 +203,7 @@ def _process_file_event(message):
         return
 
     prefix = message.get("ASSET_BUCKET_PREFIX", "")
-    databases_by_asset = {}
+    rows_by_asset = {}
     evaluated = set()
     for s3_record in s3_records:
         s3_info = s3_record.get("s3") or {}
@@ -210,9 +220,10 @@ def _process_file_event(message):
                         "skipping compliance evaluation")
             continue
 
-        if asset_id not in databases_by_asset:
-            databases_by_asset[asset_id] = _resolve_database_for_asset(asset_id)
-        database_id = databases_by_asset[asset_id]
+        if asset_id not in rows_by_asset:
+            rows_by_asset[asset_id] = _resolve_asset_row(asset_id)
+        asset_row = rows_by_asset[asset_id]
+        database_id = (asset_row or {}).get("databaseId") or None
         if not database_id:
             logger.info(f"Could not resolve a databaseId for asset {asset_id}")
             continue
@@ -221,7 +232,9 @@ def _process_file_event(message):
         if asset_key in evaluated:
             continue
         evaluated.add(asset_key)
-        _process_compliance_event(database_id, asset_id, change_time=change_time)
+        _process_compliance_event(
+            database_id, asset_id, change_time=change_time,
+            completion_time=parse_event_time(asset_row.get(LAST_CHANGE_AT_ATTRIBUTE)))
 
 
 def object_change_source(s3_info, message):
@@ -264,9 +277,10 @@ def _extract_asset_id_from_key(object_key, prefix):
     return parts[0] if parts and parts[0] else None
 
 
-def _resolve_database_for_asset(asset_id):
-    """The databaseId of an asset via the assetIdGSI (the first match; an asset id is unique).
-    An asset whose row sits under an archived partition resolves to None so it is not evaluated."""
+def _resolve_asset_row(asset_id):
+    """The asset's row via the assetIdGSI (the first match; an asset id is unique), carrying its
+    `databaseId` and the `lastChangeAt` of its last upload completion. An asset whose row sits under
+    an archived partition resolves to None so it is not evaluated."""
     try:
         response = asset_table.query(
             IndexName="assetIdGSI",
@@ -280,7 +294,7 @@ def _resolve_database_for_asset(asset_id):
         if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
             logger.info(f"Asset {asset_id} is archived; skipping compliance evaluation")
             return None
-        return database_id or None
+        return items[0] if database_id else None
     except Exception as e:
         logger.exception(f"Error resolving the database for asset {asset_id}: {e}")
         return None
@@ -290,13 +304,13 @@ def _database_item(database_id):
     return database_table.get_item(Key={"databaseId": database_id}).get("Item")
 
 
-def _process_compliance_event(database_id, asset_id, change_time=None):
+def _process_compliance_event(database_id, asset_id, change_time=None, completion_time=None):
     """Evaluate an asset when its database has auto-evaluation on and it has a bound schema.
 
-    `change_time` is the instant of the change that raised the event (the asset row's
-    `lastChangeAt` on the stream path, the S3 record's `eventTime` on the file path). A change the
-    asset's last evaluation already covers is not evaluated again, so one upload reaches one
-    evaluation whichever of the two paths reports it first and however many files it carries;
+    `completion_time` is the asset row's `lastChangeAt` (the stream path's own instant; read from
+    the row on the file path) and `change_time` the S3 record's `eventTime` (file path only). A
+    change the asset's last evaluation already covers is not evaluated again, so one upload reaches
+    one evaluation whichever of the two paths reports it first and however many files it carries;
     neither is an asset whose state row points at an evaluation still awaiting its pipeline rules,
     since the in-flight evaluation covers the change."""
     db_item = _database_item(database_id)
@@ -317,9 +331,10 @@ def _process_compliance_event(database_id, asset_id, change_time=None):
         logger.info(f"Asset {database_id}:{asset_id} has no schema assigned")
         return
 
-    if change_covered_by_last_evaluation(compliance_record, change_time):
-        logger.info(f"Asset {database_id}:{asset_id} changed at {change_time.isoformat()} and its "
-                    f"evaluation {compliance_record.get('lastEvaluationId')} started at "
+    if change_covered_by_last_evaluation(compliance_record, change_time, completion_time):
+        changed_at = (completion_time or change_time).isoformat()
+        logger.info(f"Asset {database_id}:{asset_id} changed at {changed_at} and its evaluation "
+                    f"{compliance_record.get('lastEvaluationId')} started at "
                     f"{compliance_record.get('lastEvaluatedAt')}, after the change; the change is "
                     "already covered")
         return
