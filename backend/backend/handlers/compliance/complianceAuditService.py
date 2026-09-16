@@ -48,6 +48,10 @@ COMPLIANCE_EVALUATION_OBJECT_TYPE = "complianceEvaluation"
 DEFAULT_AUDIT_PAGE_SIZE = 100
 MAX_AUDIT_PAGE_SIZE = 500
 INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
+# The attributes a LastEvaluatedKey of each listing's index carries (the table key plus the index
+# keys); a token missing one belongs to another listing and never reaches DynamoDB.
+ASSET_INDEX_KEY_ATTRIBUTES = ("entryId", "databaseId:assetId", "timestamp")
+EVENT_TYPE_INDEX_KEY_ATTRIBUTES = ("entryId", "eventType", "timestamp")
 
 # Every event type the compliance handlers write; the unfiltered listing reads the
 # EventTypeIndex partition of each in turn.
@@ -157,9 +161,10 @@ def _enforce(database_id, action):
 # Paging helpers
 #######################
 
-def _page_arguments(event, params):
+def _page_arguments(event, params, key_attributes=None):
     """(page_size, exclusive_start_key) from `limit` / `maxItems` and `startingToken`, or a
-    validation response when they are malformed. A token must decode to a non-empty JSON object."""
+    validation response when they are malformed. A token must decode to a non-empty JSON object;
+    with `key_attributes`, to one carrying exactly those string attributes (`_index_key`)."""
     raw_size = params.get("maxItems", params.get("limit", str(DEFAULT_AUDIT_PAGE_SIZE)))
     try:
         page_size = int(raw_size)
@@ -177,7 +182,22 @@ def _page_arguments(event, params):
         if not isinstance(exclusive_start_key, dict) or not exclusive_start_key:
             return None, None, validation_error(
                 body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+        if key_attributes is not None:
+            exclusive_start_key = _index_key(exclusive_start_key, key_attributes)
+            if exclusive_start_key is None:
+                return None, None, validation_error(
+                    body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
     return page_size, exclusive_start_key, None
+
+
+def _index_key(decoded, key_attributes):
+    """The index key a decoded token carries, or None when it is not an object holding a string
+    value for every one of `key_attributes`."""
+    if not isinstance(decoded, dict):
+        return None
+    if any(not isinstance(decoded.get(name), str) for name in key_attributes):
+        return None
+    return {name: decoded[name] for name in key_attributes}
 
 
 def _timestamp_condition(key_condition, start_date, end_date):
@@ -226,7 +246,7 @@ def get_asset_audit(event, database_id, asset_id, params):
     if not _enforce(database_id, "GET"):
         return authorization_error()
 
-    page_size, exclusive_start_key, error = _page_arguments(event, params)
+    page_size, exclusive_start_key, error = _page_arguments(event, params, ASSET_INDEX_KEY_ATTRIBUTES)
     if error:
         return error
 
@@ -278,15 +298,20 @@ def query_audit(event, params):
         partitions = list(AUDIT_EVENT_TYPES)
 
     # A token for this listing is {"partition": <eventType>, "key": <LastEvaluatedKey> | null}. A
-    # partition outside the walk (or a key that is not an object) never reaches DynamoDB.
+    # partition outside the walk, or a key that is not this index's, never reaches DynamoDB.
     if exclusive_start_key is not None:
         start_partition = exclusive_start_key.get("partition")
         start_key = exclusive_start_key.get("key")
-        if start_partition not in partitions or not (start_key is None or isinstance(start_key, dict)):
-            logger.info("Audit pagination token rejected: unknown partition or malformed key")
+        if start_key is not None:
+            start_key = _index_key(start_key, EVENT_TYPE_INDEX_KEY_ATTRIBUTES)
+            if start_key is None:
+                logger.info("Audit pagination token rejected: malformed key")
+                return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+        if start_partition not in partitions:
+            logger.info("Audit pagination token rejected: unknown partition")
             return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
         partitions = partitions[partitions.index(start_partition):]
-        exclusive_start_key = start_key or None
+        exclusive_start_key = start_key
 
     entries = []
     next_token = None

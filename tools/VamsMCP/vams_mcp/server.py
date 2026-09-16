@@ -2437,8 +2437,9 @@ if CONFIG.enable_writes:
 
         `skipped` counts the bound assets the caller is not authorized to evaluate — they are
         counted, never listed, so a sweep by a narrowly scoped caller can trigger nothing and still
-        succeed. `assetsRemaining` counts the bound assets beyond the per-call cap; call again to
-        work through them. The usual follow-up to update_compliance_schema(). Each asset is
+        succeed. Assets awaiting evaluation are evaluated first; `assetsRemaining` counts the bound
+        assets this call did not reach (its per-call cap or its time budget) — call again to work
+        through them. The usual follow-up to update_compliance_schema(). Each asset is
         evaluated as by evaluate_asset_compliance(), so a schema with pipeline rules starts one
         workflow execution per bound asset — real AWS compute, multiplied by the binding count.
         Keep this tool out of `autoApprove` and check get_compliance_bindings() for the blast

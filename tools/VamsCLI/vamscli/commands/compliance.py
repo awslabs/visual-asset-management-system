@@ -809,9 +809,10 @@ def sweep(ctx: click.Context, schema_name: str, json_output: bool):
     """Re-evaluate every asset bound to a schema.
 
     Run after 'compliance schema update' so existing assets are checked against the new version.
-    Bound assets the caller is not authorized to evaluate are counted as skipped and never listed;
-    bound assets beyond the per-call cap are counted as remaining, and a repeated sweep works
-    through them.
+    Assets awaiting evaluation are evaluated first. Bound assets the caller is not authorized to
+    evaluate are counted as skipped and never listed; bound assets a call does not reach (its
+    per-call cap or its time budget) are counted as remaining, and a repeated sweep works through
+    them.
 
     Examples:
         vamscli compliance sweep -n cad-quality

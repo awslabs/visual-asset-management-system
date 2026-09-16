@@ -16,6 +16,7 @@ the workflow callback finalizes).
 
 import base64
 import json
+import time
 
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -68,13 +69,26 @@ MAX_EVALUATIONS_PAGE_SIZE = 200
 DEFAULT_OVERVIEW_PAGE_SIZE = 100
 MAX_OVERVIEW_PAGE_SIZE = 500
 INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
+# The attributes a LastEvaluatedKey of the evaluation table's AssetIndex carries (table key plus
+# index keys); a token missing one belongs to another listing and never reaches DynamoDB.
+EVALUATION_ASSET_INDEX_KEY_ATTRIBUTES = ("evaluationId", "databaseId:assetId", "evaluatedAt")
 # The overview `summary` key counting assets whose latest evaluation errored (`lastEvaluationStatus`
 # of `error`) — an overlay on the state buckets, not a compliance state.
 OVERVIEW_ERROR_BUCKET = "error"
 
-# Bound on the assets one sweep evaluates synchronously inside the API Lambda timeout; a schema
-# bound to more assets sweeps the first MAX_SWEEP_ASSETS and reports the remainder.
+# Bound on the assets one sweep evaluates synchronously inside the API Lambda timeout. The bound
+# rows are ordered `pending_evaluation` first; a schema bound to more assets sweeps the first
+# MAX_SWEEP_ASSETS of that order and reports the remainder.
 MAX_SWEEP_ASSETS = 200
+
+# Wall-clock budget for launching a sweep's synchronous per-asset evaluations. API Gateway closes a
+# synchronous integration after 29 seconds, so the launches (each pipeline rule is an execute-workflow
+# invoke) must fit under it with room for the index reads and the response: once the budget is spent
+# the sweep launches nothing more and reports the unreached assets in `assetsRemaining`.
+SWEEP_TIME_BUDGET_SECONDS = 20
+
+# Clock for the sweep budget: monotonic, so a wall-clock adjustment cannot stretch or shrink it.
+monotonic = time.monotonic
 
 # Tables are resolved (and clients built) once by the shared store at import.
 asset_state_table = store.asset_state_table
@@ -249,8 +263,14 @@ def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
 
 
 def sweep_schema(event, schema_name):
-    """Evaluate every asset whose state row is bound to `schema_name` (SchemaNameIndex GSI) and
-    whose database the caller may evaluate; the rest are counted as `skipped` and never listed."""
+    """Evaluate the assets whose state row is bound to `schema_name` (SchemaNameIndex GSI) and whose
+    database the caller may evaluate; the rest are counted as `skipped` and never listed.
+
+    Rows in `pending_evaluation` are evaluated first, then the rest of the bound rows. One call
+    evaluates at most MAX_SWEEP_ASSETS assets and stops launching once SWEEP_TIME_BUDGET_SECONDS has
+    elapsed; `assetsRemaining` counts the bound assets this call did not reach under either bound,
+    and tells the caller to call again."""
+    started_at = monotonic()
     (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -263,21 +283,24 @@ def sweep_schema(event, schema_name):
     if store.load_schema_item(schema_name) is None:
         return general_error(body={"message": "Schema not found"}, event=event)
 
-    bound_assets = query_all_items(
-        asset_state_table,
-        IndexName="SchemaNameIndex",
-        KeyConditionExpression=Key("schemaName").eq(schema_name),
-    )
+    bound_assets = _bound_assets_pending_first(schema_name)
     actor = claims_and_roles["tokens"][0]
 
     # The evaluation object depends only on the database, so one verdict serves every asset in it.
     database_allowed = {}
     triggered = []
     skipped = 0
-    remaining = 0
+    beyond_cap = 0
+    beyond_budget = 0
+    budget_spent = False
     for asset in bound_assets:
         if len(triggered) >= MAX_SWEEP_ASSETS:
-            remaining += 1
+            beyond_cap += 1
+            continue
+        if not budget_spent and monotonic() - started_at > SWEEP_TIME_BUDGET_SECONDS:
+            budget_spent = True
+        if budget_spent:
+            beyond_budget += 1
             continue
         database_id = asset["databaseId"]
         if database_id not in database_allowed:
@@ -293,8 +316,10 @@ def sweep_schema(event, schema_name):
             "verdict": result.get("verdict"),
         })
 
+    remaining = beyond_cap + beyond_budget
     logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered, {skipped} skipped, "
-                f"{remaining} remaining")
+                f"{remaining} remaining ({beyond_cap} beyond the cap, {beyond_budget} beyond the "
+                f"time budget)")
     return success(body={
         "message": f"Sweep triggered for {len(triggered)} assets",
         "schemaName": schema_name,
@@ -302,6 +327,29 @@ def sweep_schema(event, schema_name):
         "assetsRemaining": remaining,
         "skipped": skipped,
     })
+
+
+def _bound_assets_pending_first(schema_name):
+    """The state rows bound to `schema_name`, each once: the `pending_evaluation` rows first (the GSI
+    sorts on `complianceState`, so a plain partition read would place them after every verdict-bearing
+    state), then the rest of the partition."""
+    pending = query_all_items(
+        asset_state_table,
+        IndexName="SchemaNameIndex",
+        KeyConditionExpression=(Key("schemaName").eq(schema_name)
+                                & Key("complianceState").eq(engine.STATE_PENDING_EVALUATION)),
+    )
+    seen = {_asset_key(row) for row in pending}
+    rest = [row for row in query_all_items(
+        asset_state_table,
+        IndexName="SchemaNameIndex",
+        KeyConditionExpression=Key("schemaName").eq(schema_name),
+    ) if _asset_key(row) not in seen]
+    return pending + rest
+
+
+def _asset_key(state_row):
+    return (state_row["databaseId"], state_row["assetId"])
 
 
 def get_evaluations(event, database_id, asset_id, query_params):
@@ -329,7 +377,7 @@ def get_evaluations(event, database_id, asset_id, query_params):
     }
     starting_token = query_params.get("startingToken")
     if starting_token:
-        exclusive_start_key = _decode_key_token(starting_token)
+        exclusive_start_key = _decode_key_token(starting_token, EVALUATION_ASSET_INDEX_KEY_ATTRIBUTES)
         if exclusive_start_key is None:
             return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
         query_kwargs["ExclusiveStartKey"] = exclusive_start_key
@@ -463,13 +511,19 @@ def _encode_offset_token(offset):
     return base64.b64encode(json.dumps({"offset": offset}).encode("utf-8")).decode("utf-8")
 
 
-def _decode_key_token(token):
-    """The DynamoDB key a Base64 JSON token carries, or None when the token is malformed."""
+def _decode_key_token(token, key_attributes):
+    """The index key a Base64 JSON token carries, or None when the token is malformed — not Base64
+    JSON, not an object, or missing a string value for one of `key_attributes` (a key from another
+    listing would otherwise reach DynamoDB and fail the request as an internal error)."""
     try:
         decoded = json.loads(base64.b64decode(token, validate=True).decode("utf-8"))
     except (ValueError, TypeError):
         return None
-    return decoded if isinstance(decoded, dict) and decoded else None
+    if not isinstance(decoded, dict):
+        return None
+    if any(not isinstance(decoded.get(name), str) for name in key_attributes):
+        return None
+    return {name: decoded[name] for name in key_attributes}
 
 
 def _asset_name(database_id, asset_id):

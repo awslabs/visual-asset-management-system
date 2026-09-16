@@ -213,6 +213,19 @@ class TestValidation:
         assert bad not in response["body"]
         table.query.assert_not_called()
 
+    @pytest.mark.parametrize("token", [
+        {"partition": "compliance_check", "key": None},
+        {"entryId": "e", "eventType": "compliance_check", "timestamp": "t"},
+        {"databaseId:assetId": f"{DB}:{ASSET}", "timestamp": "t"},
+        {"entryId": 1, "databaseId:assetId": f"{DB}:{ASSET}", "timestamp": "t"},
+    ], ids=["listing-token", "event-type-key", "missing-table-key", "non-string-key"])
+    def test_an_asset_history_token_from_another_listing_is_rejected_before_any_read(self, token):
+        response, table = _run(rest_event("GET", ASSET_PATH, ASSET_PARAMS,
+                                          query_params={"startingToken": _token(token)}))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Invalid pagination token"
+        table.query.assert_not_called()
+
     @pytest.mark.parametrize("path,params", [(LIST_PATH, None), (ASSET_PATH, ASSET_PARAMS)])
     @pytest.mark.parametrize("token", [_token([1]), _token("key"), _token({}), _token(None)],
                              ids=["list", "string", "empty-object", "null"])
@@ -224,17 +237,23 @@ class TestValidation:
 
     @pytest.mark.parametrize("query,token", [
         ({}, {"partition": "not-an-event-type", "key": None}),
-        ({}, {"partition": "not-an-event-type", "key": {"eventType": "x", "timestamp": "t"}}),
-        ({}, {"key": {"eventType": "compliance_check", "timestamp": "t"}}),
+        ({}, {"partition": "not-an-event-type",
+              "key": {"entryId": "e", "eventType": "x", "timestamp": "t"}}),
+        ({}, {"key": {"entryId": "e", "eventType": "compliance_check", "timestamp": "t"}}),
         ({}, {"partition": "compliance_check", "key": "not-an-object"}),
         ({}, {"partition": "compliance_check", "key": [1]}),
+        ({}, {"partition": "compliance_check", "key": {"eventType": "compliance_check", "timestamp": "t"}}),
+        ({}, {"partition": "compliance_check",
+              "key": {"entryId": "e", "databaseId:assetId": "db:a", "timestamp": "t"}}),
         ({"eventType": "compliance_check"}, {"partition": "exception_granted", "key": None}),
         ({"eventType": "compliance_check"}, {"eventType": "compliance_check", "timestamp": "t"}),
     ], ids=["unknown-partition", "unknown-partition-with-key", "no-partition", "string-key",
-            "list-key", "partition-outside-the-filter", "bare-key-under-filter"])
+            "list-key", "key-missing-the-table-key", "asset-listing-key",
+            "partition-outside-the-filter", "bare-key-under-filter"])
     def test_a_listing_token_outside_the_walk_is_rejected_before_any_read(self, query, token):
-        """A token naming a partition the walk does not contain (or lacking the partition shape)
-        never reaches ExclusiveStartKey, where DynamoDB would fail it as an internal error."""
+        """A token naming a partition the walk does not contain, lacking the partition shape, or
+        carrying a key that is not the EventTypeIndex's never reaches ExclusiveStartKey, where
+        DynamoDB would fail it as an internal error."""
         bad_partition = token.get("partition")
         response, table = _run(rest_event("GET", LIST_PATH, query_params=dict(
             query, startingToken=_token(token))))

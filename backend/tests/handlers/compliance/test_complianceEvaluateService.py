@@ -3,12 +3,15 @@
 
 """complianceEvaluateService: dispatch of its five method+path pairs, both authorization tiers,
 input validation, the evaluate / sweep flows over a patched store (a sweep evaluates only the bound
-assets whose database the caller may evaluate), and the two paged listings (evaluation history behind
-a LastEvaluatedKey token; the database overview behind an offset token over the full set)."""
+assets whose database the caller may evaluate, pending rows first, under an asset cap and a time
+budget), and the two paged listings (evaluation history behind a LastEvaluatedKey token; the
+database overview behind an offset token over the full set)."""
 
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
+from boto3.dynamodb.conditions import ConditionExpressionBuilder
 
 from backend.tests.handlers.compliance._harness import (
     ASSET, DB, SCHEMA, USER, body_of, claims_for, decode_token, encode_token, enforcer, rest_event,
@@ -40,13 +43,46 @@ EVALUATION_RESULT = {"evaluationId": "eval-1", "verdict": "compliant",
                      "complianceState": "compliant", "ruleResults": [], "pipelineRulesPending": 0}
 
 OTHER_DB = "db2"
+PENDING = "pending_evaluation"
+
+
+def _key_equalities(key_condition):
+    """The `attribute == value` pairs a boto3 key condition expresses, by attribute name."""
+    built = ConditionExpressionBuilder().build_expression(key_condition, is_key_condition=True)
+    return {built.attribute_name_placeholders[name]: built.attribute_value_placeholders[value]
+            for name, value in re.findall(r"(#n\d+) = (:v\d+)", built.condition_expression)}
+
+
+def _serve_state_rows(rows):
+    """A one-page `query` over `rows`: a key condition naming `complianceState` is answered with the
+    rows in that state, any other key condition with every row."""
+    rows = list(rows or [])
+
+    def query(**kwargs):
+        equalities = _key_equalities(kwargs["KeyConditionExpression"])
+        if "complianceState" in equalities:
+            return {"Items": [r for r in rows
+                              if r.get("complianceState") == equalities["complianceState"]]}
+        return {"Items": list(rows)}
+    return query
+
+
+def _clock(*readings):
+    """A monotonic clock that returns `readings` in turn and then repeats the last one."""
+    remaining = list(readings)
+
+    def read():
+        if len(remaining) > 1:
+            return remaining.pop(0)
+        return remaining[0]
+    return read
 
 
 def _run(event, tokens=(USER,), api=True, obj=True, asset_exists=True, compliance_record=None,
          evaluation_result=None, schema_item=None, state_rows=None, evaluation_rows=None,
          evaluation_last_key=None, casbin=None):
     state_table = MagicMock(name="asset_state_table")
-    state_table.query.return_value = {"Items": list(state_rows or [])}
+    state_table.query.side_effect = _serve_state_rows(state_rows)
     evaluation_table = MagicMock(name="evaluation_table")
     page = {"Items": list(evaluation_rows or [])}
     if evaluation_last_key is not None:
@@ -456,9 +492,13 @@ class TestSweep:
         mocks["state"].query.assert_not_called()
 
     def test_bound_assets_are_read_from_the_schema_name_index_to_exhaustion(self):
+        """Both index reads — the pending rows and the whole partition — follow LastEvaluatedKey."""
+        pending_row = {"databaseId": DB, "assetId": "p", "complianceState": PENDING}
         state_table = MagicMock()
         state_table.query.side_effect = [
-            {"Items": [{"databaseId": DB, "assetId": "a"}], "LastEvaluatedKey": {"k": 1}},
+            {"Items": [pending_row], "LastEvaluatedKey": {"k": 1}},
+            {"Items": []},
+            {"Items": [pending_row, {"databaseId": DB, "assetId": "a"}], "LastEvaluatedKey": {"k": 2}},
             {"Items": [{"databaseId": DB, "assetId": "b"}]},
         ]
         with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
@@ -469,10 +509,59 @@ class TestSweep:
                 patch(f"{MOD}.check_and_trigger_cascade"):
             response = svc.lambda_handler(
                 rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), MagicMock())
-        assert len(body_of(response)["assetsTriggered"]) == 2
-        assert state_table.query.call_args_list[0].kwargs["IndexName"] == "SchemaNameIndex"
-        assert state_table.query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"k": 1}
-        assert run.call_count == 2
+        assert [t["assetId"] for t in body_of(response)["assetsTriggered"]] == ["p", "a", "b"]
+        queries = state_table.query.call_args_list
+        assert len(queries) == 4
+        assert all(q.kwargs["IndexName"] == "SchemaNameIndex" for q in queries)
+        assert queries[1].kwargs["ExclusiveStartKey"] == {"k": 1}
+        assert queries[3].kwargs["ExclusiveStartKey"] == {"k": 2}
+        assert run.call_count == 3
+
+    def test_sweep_queries_pending_rows_first(self):
+        _, mocks = _run(rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}),
+                        schema_item=schema_row(),
+                        state_rows=[{"databaseId": DB, "assetId": "a", "complianceState": "compliant"}])
+        queries = mocks["state"].query.call_args_list
+        assert len(queries) >= 2
+        first = _key_equalities(queries[0].kwargs["KeyConditionExpression"])
+        assert first.get("schemaName") == SCHEMA
+        assert first.get("complianceState") == PENDING
+        assert all(_key_equalities(q.kwargs["KeyConditionExpression"]).get("schemaName") == SCHEMA
+                   for q in queries)
+        assert all(q.kwargs["IndexName"] == "SchemaNameIndex" for q in queries)
+
+    def test_sweep_evaluates_pending_assets_before_verdict_bearing_ones_under_the_cap(self, monkeypatch):
+        """The index sorts `pending_evaluation` after the verdict-bearing states, so a sweep bounded
+        below the binding count must reach the pending rows first or never reach them at all."""
+        monkeypatch.setattr(svc, "MAX_SWEEP_ASSETS", 2)
+        response, mocks = _run(
+            rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), schema_item=schema_row(),
+            state_rows=[{"databaseId": DB, "assetId": "c1", "complianceState": "compliant"},
+                        {"databaseId": DB, "assetId": "c2", "complianceState": "compliant"},
+                        {"databaseId": DB, "assetId": "waiting", "complianceState": PENDING}])
+        assert response["statusCode"] == 200, response
+        body = body_of(response)
+        evaluated = [t["assetId"] for t in body["assetsTriggered"]]
+        assert "waiting" in evaluated
+        assert evaluated[0] == "waiting"
+        assert len(evaluated) <= 2
+        assert body["assetsRemaining"] == 1
+        assert body["skipped"] == 0
+        assert mocks["run_evaluation"].call_args_list[0].args[:2] == (DB, "waiting")
+
+    def test_sweep_stops_launching_after_the_time_budget_and_reports_the_rest(self, monkeypatch):
+        assert svc.SWEEP_TIME_BUDGET_SECONDS < 29
+        monkeypatch.setattr(svc, "monotonic", _clock(0, 0, svc.SWEEP_TIME_BUDGET_SECONDS + 1))
+        response, mocks = _run(
+            rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), schema_item=schema_row(),
+            state_rows=[{"databaseId": DB, "assetId": f"a{i}"} for i in range(3)])
+        assert response["statusCode"] == 200, response
+        body = body_of(response)
+        assert [t["assetId"] for t in body["assetsTriggered"]] == ["a0"]
+        assert body["assetsRemaining"] == 2
+        assert body["skipped"] == 0
+        assert mocks["run_evaluation"].call_count == 1
+        assert mocks["cascade"].call_count == 1
 
     def test_a_sweep_is_bounded_and_reports_the_remainder(self):
         rows = [{"databaseId": DB, "assetId": f"a{i}"} for i in range(svc.MAX_SWEEP_ASSETS + 3)]
@@ -532,7 +621,8 @@ class TestSweep:
 class TestListings:
 
     def test_the_evaluation_history_token_round_trips(self):
-        last_key = {"databaseId:assetId": f"{DB}:{ASSET}", "evaluatedAt": "2026-01-01T00:00:00+00:00"}
+        last_key = {"evaluationId": "e2", "databaseId:assetId": f"{DB}:{ASSET}",
+                    "evaluatedAt": "2026-01-01T00:00:00+00:00"}
         response, _ = _run(rest_event("GET", EVALUATIONS_PATH, ASSET_PARAMS,
                                       query_params={"maxItems": "1"}),
                            evaluation_rows=[{"evaluationId": "e2"}], evaluation_last_key=last_key)
@@ -546,6 +636,21 @@ class TestListings:
         query = mocks["evaluation"].query.call_args.kwargs
         assert query["ExclusiveStartKey"] == last_key
         assert query["Limit"] == 1
+
+    @pytest.mark.parametrize("token", [
+        {"databaseId": DB, "assetId": ASSET, "complianceState": "compliant"},
+        {"offset": 5},
+        {"evaluationId": "e2", "databaseId:assetId": f"{DB}:{ASSET}"},
+        {"evaluationId": 7, "databaseId:assetId": f"{DB}:{ASSET}", "evaluatedAt": "t"},
+    ], ids=["quarantine-listing-key", "offset-token", "missing-sort-key", "non-string-key"])
+    def test_a_history_token_from_another_listing_is_rejected_before_any_read(self, token):
+        """A key that is not the AssetIndex's never reaches ExclusiveStartKey, where DynamoDB would
+        fail it as an internal error."""
+        response, mocks = _run(rest_event("GET", EVALUATIONS_PATH, ASSET_PARAMS,
+                                          query_params={"startingToken": encode_token(token)}))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Invalid pagination token"
+        mocks["evaluation"].query.assert_not_called()
 
     def test_the_page_size_is_clamped(self):
         _, mocks = _run(rest_event("GET", EVALUATIONS_PATH, ASSET_PARAMS,
