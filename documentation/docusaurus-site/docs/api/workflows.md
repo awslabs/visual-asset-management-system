@@ -368,6 +368,8 @@ When the request supplies `specifiedPipelines`, a consistency problem in that se
 
 Archives a workflow. The delete is a soft-delete that sets the workflow's `archived` flag to `true` and its `enabled` flag to `false`; the record is retained but hidden from listings and lookups unless `includeArchived=true` is supplied. The archive is reversible — see [Update a workflow](#update-a-workflow) for the restore.
 
+The workflow's trigger rows are deleted with the archive, so an upload matching a former trigger no longer launches an execution the workflow would refuse. The trigger deletion is not reversed by a restore: re-create any triggers a restored workflow needs with [Set a trigger](#set-a-trigger). The upload trigger dispatcher also skips a trigger whose workflow is archived or disabled, so a disabled workflow keeps its trigger rows and resumes firing when re-enabled.
+
 ```
 DELETE /database/{databaseId}/workflows/{workflowId}
 ```

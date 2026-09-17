@@ -834,6 +834,20 @@ Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.ja
 
 ---
 
+## Feature-Gated Families Do Not Import Each Other
+
+A capability that a deployment can switch off wholesale is a **family**: its handlers, its `common/` package, and its models, all absent from a deployment with the flag off. Two exist today — vector search (`handlers/vectorsearch`, `common/vectorsearch`, `models/vectorsearch`, on `app.vectorSearch.enabled`) and OpenSearch (`handlers/indexing`, `handlers/search`, on the OpenSearch mode flags). Either can be deployed without the other, so a module-level import across the boundary fails the surviving family at cold start — a `500` on every request that synth cannot see and a test suite importing both never reaches.
+
+The rules a family follows, each of which the vector family models:
+
+-   **It owns its packages and imports only `common/`.** Shared behaviour both families need is extracted into a neutral `common/` module rather than imported from either family: `common/indexing/documentIds.py` and `fileEnumeration.py` ("what is an asset file", defined once for the OpenSearch reindexer and the vector reindexer), `common/databaseAccess.py`.
+-   **Core never imports it.** Core touches a family through the registry seams every table and route already uses — a `ResourceKeys` constant, an `ApiRoute`, a feature switch — and through events: the pipeline publishes `vector.embedding.ready` on the orchestration bus and the vector indexer consumes it, so neither side imports the other.
+-   **A cross-family read at runtime is function-scoped and gated.** `vectorSearchService._opensearch_step` imports `handlers.search.search` inside the function, after `OPENSEARCH_DISABLED` is ruled out, to enrich hits when both families are on. That is the only admitted crossing; it is named, with a site count, in `tests/common/test_indexer_families_import_boundary.py`, which walks the tree and fails on a module-level import in either direction, an unlisted function-scoped one, or an exemption whose site no longer exists. The CDK half of the same boundary — no cross-gated function, no cross-wired queue — is `infra/test/platform/t1VectorIndexingWiring.test.ts`.
+
+A third family follows the same shape: its own `handlers/<family>` and `common/<family>` packages, its own queue subscribed to the storage stack's SNS fan-out topics (as the Garnet and Physna add-ons and the vector indexer do), its own tables registered through `ResourceKeys`, and an entry in that guard's family table.
+
+---
+
 ## Partition Portability (Commercial / GovCloud / EU Sovereign)
 
 Handlers run in `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign, region `eusc-de-east-1`), and potentially `aws-cn` / `aws-iso*`. A partition defect here is invisible in commercial tests and surfaces as a runtime 500 or a validation rejection that only reproduces in the affected partition. There is deliberately **no central partition helper** in the backend — the four rules below are the whole contract.

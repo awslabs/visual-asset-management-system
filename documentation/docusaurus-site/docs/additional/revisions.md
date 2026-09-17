@@ -50,7 +50,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   The 3D Preview Thumbnail pipeline is a system pipeline in the `SYSTEM - Preview` category.
 -   The backend Lambda layer pins boto3/botocore 1.43.89.
 -   The `/search` routes read their OpenSearch environment lazily and return `404` when OpenSearch is disabled.
--   The trigger dispatcher skips triggers whose workflow is archived or disabled, and archiving a workflow deletes its trigger rows.
+-   The trigger dispatcher skips triggers whose workflow is archived or disabled, and archiving a workflow deletes its trigger rows; a restore does not re-create them, so a restored workflow's triggers must be set again.
 
 **Removed:**
 

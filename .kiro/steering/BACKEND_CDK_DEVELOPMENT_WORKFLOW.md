@@ -333,6 +333,38 @@ and EU Sovereign (both templates set `app.govCloud.enabled: true`), so treat it 
 including the `AWS::Lambda::EventSourceMapping` tag restriction that fails a
 GovCloud deploy outright — are in `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`.
 
+### **Rule 5: Feature-gated families do not import each other**
+
+A capability a deployment can switch off wholesale is a **family**: its handlers, its
+`common/` package, and its models are all absent when the flag is off. Two exist today —
+vector search (`handlers/vectorsearch`, `common/vectorsearch`, `models/vectorsearch`, on
+`app.vectorSearch.enabled`) and OpenSearch (`handlers/indexing`, `handlers/search`, on the
+OpenSearch mode flags). Either deploys without the other, so a module-level import across
+the boundary fails the surviving family at cold start — a `500` on every request that
+synth cannot see and a suite importing both never reaches.
+
+-   **A family owns its packages and imports only `common/`.** Behaviour both families
+    need lives in a neutral `common/` module, never in either family:
+    `common/indexing/{documentIds,fileEnumeration}.py` define "what is an asset file" once
+    for the OpenSearch reindexer and the vector reindexer.
+-   **Core never imports a family.** Core reaches it through the registry seams every
+    table and route already uses — a `ResourceKeys` constant, an `ApiRoute`, a feature
+    switch — and through events (the pipeline publishes `vector.embedding.ready` on the
+    orchestration bus; the vector indexer consumes it).
+-   **A runtime cross-family read is function-scoped and gated.**
+    `vectorSearchService._opensearch_step` imports `handlers.search.search` inside the
+    function after `OPENSEARCH_DISABLED` is ruled out. It is the only admitted crossing,
+    named with a site count in `tests/common/test_indexer_families_import_boundary.py`,
+    which walks the tree and fails on a module-level import in either direction, an
+    unlisted function-scoped one, or an exemption whose site no longer exists. The CDK half
+    (no cross-gated function, no cross-wired queue) is
+    `infra/test/platform/t1VectorIndexingWiring.test.ts`.
+
+A new family takes the same shape: its own `handlers/<family>` and `common/<family>`
+packages, its own SQS queue subscribed to the storage stack's SNS fan-out topics (as the
+Garnet and Physna add-ons and the vector indexer do), its own tables registered through
+`ResourceKeys`, and an entry in that guard's family table.
+
 ## 🔐 **Security Guidelines for Exception Handling**
 
 ### **Critical Security Rule: Secure Exception Handling**

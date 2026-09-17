@@ -5080,9 +5080,10 @@ paths:
                     $ref: '#/components/schemas/id_regex'
         delete:
             summary: "Archive a workflow (soft-delete)."
+            description: "Sets archived to true and enabled to false, and deletes the workflow's trigger rows. A restore does not re-create the triggers; set them again afterwards."
             responses:
                 "200":
-                    description: Workflow archived (archived set to true).
+                    description: Workflow archived (archived set to true; trigger rows deleted).
                 "400":
                     description: "Invalid path parameters, or the workflow is a system workflow (message: System workflows cannot be archived or restored through the API; the deployment owns them.)."
                     content:
