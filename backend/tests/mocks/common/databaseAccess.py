@@ -7,7 +7,7 @@ database pre-filter.
 Mirrors the real class's two static methods and their signatures. Both answer "no access", which is
 the fail-safe direction and what the handlers' unpatched MagicMock paginator already yields. Tests of
 the pre-filter itself load the real module by path (tests/common/test_databaseAccess.py,
-tests/handlers/search/test_database_prefilter_object_type.py).
+tests/handlers/osSemanticSearch/test_database_prefilter_object_type.py).
 """
 
 from typing import Any, Dict, List, Optional, Tuple

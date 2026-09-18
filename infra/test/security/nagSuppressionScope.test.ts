@@ -151,7 +151,7 @@ describe("no suppression is a catch-all over Resource wildcards", () => {
 describe("the per-asset SNS topic grant is pinned to this deployment", () => {
     const SITES = [
         "../lib/lambdaBuilder/assetFunctions.ts",
-        "../lib/lambdaBuilder/searchIndexBucketSyncFunctions.ts",
+        "../lib/lambdaBuilder/indexingFunctions.ts",
         "../lib/lambdaBuilder/sendEmailFunctions.ts",
         "../lib/lambdaBuilder/subscriptionFunctions.ts",
     ];

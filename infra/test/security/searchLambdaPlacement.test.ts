@@ -81,9 +81,9 @@ describe("searchLambdasInVpc", () => {
 });
 
 const SEARCH_HANDLERS = [
-    "handlers.search.search.lambda_handler",
-    "handlers.indexing.fileIndexer.lambda_handler",
-    "handlers.indexing.assetIndexer.lambda_handler",
+    "handlers.osSemanticSearch.search.lambda_handler",
+    "handlers.osSemanticSearch.osFileIndexer.lambda_handler",
+    "handlers.osSemanticSearch.osAssetIndexer.lambda_handler",
     "handlers.indexing.crReindexer.lambda_handler",
 ];
 

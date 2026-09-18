@@ -37,7 +37,7 @@ const vectorQueues = (s: SynthResult) =>
 
 const vectorLambdas = (s: SynthResult) =>
     s.where("AWS::Lambda::Function", (f) =>
-        SynthResult.flatten(f.properties.Handler).startsWith("handlers.vectorsearch.")
+        SynthResult.flatten(f.properties.Handler).startsWith("handlers.osVectorSearch.")
     );
 
 const embeddingRules = (s: SynthResult) =>
@@ -56,7 +56,7 @@ const handlerOf = (s: SynthResult, module: string) => {
     const found = vectorLambdas(s).filter(
         (f) =>
             SynthResult.flatten(f.properties.Handler) ===
-            `handlers.vectorsearch.${module}.lambda_handler`
+            `handlers.osVectorSearch.${module}.lambda_handler`
     );
     expect(found).toHaveLength(1);
     return found[0];
@@ -95,10 +95,10 @@ describe("commercial: vector indexing is wired into the search stack", () => {
                 .map((f) => SynthResult.flatten(f.properties.Handler))
                 .sort()
         ).toEqual([
-            "handlers.vectorsearch.systemWorkflowLauncher.lambda_handler",
-            "handlers.vectorsearch.vectorIndexer.lambda_handler",
-            "handlers.vectorsearch.vectorReindexer.lambda_handler",
-            "handlers.vectorsearch.vectorSearchService.lambda_handler",
+            "handlers.osVectorSearch.systemWorkflowLauncher.lambda_handler",
+            "handlers.osVectorSearch.vectorIndexer.lambda_handler",
+            "handlers.osVectorSearch.vectorReindexer.lambda_handler",
+            "handlers.osVectorSearch.vectorSearchService.lambda_handler",
         ]);
         expect(vectorLambdas(s).every(inSearchStack)).toBe(true);
     });
@@ -219,9 +219,11 @@ describe.each(RESTRICTED_TEMPLATES)(
  * the two mixed ones. Every combination the config can express is synthesized here.
  */
 describe("the vector and OpenSearch indexer families are independent", () => {
+    // The two OpenSearch document indexers live in the osSemanticSearch family; the
+    // reindexer custom-resource handler stays in the core indexing package.
     const openSearchIndexerLambdas = (s: SynthResult) =>
         s.where("AWS::Lambda::Function", (f) =>
-            /^handlers\.indexing\.(fileIndexer|assetIndexer|crReindexer)\./.test(
+            /^handlers\.(osSemanticSearch\.(osFileIndexer|osAssetIndexer)|indexing\.crReindexer)\./.test(
                 SynthResult.flatten(f.properties.Handler)
             )
         );
@@ -279,7 +281,7 @@ describe("the vector and OpenSearch indexer families are independent", () => {
         // Positive control: the check below reads real mappings, not an empty list.
         expect(mappings.length).toBeGreaterThanOrEqual(4);
         for (const [handler, queue] of mappings) {
-            const vectorHandler = handler.startsWith("handlers.vectorsearch.");
+            const vectorHandler = handler.startsWith("handlers.osVectorSearch.");
             const vectorQueue = queue.startsWith("VectorIndexing");
             expect({ handler, queue, crossWired: vectorHandler !== vectorQueue }).toEqual({
                 handler,

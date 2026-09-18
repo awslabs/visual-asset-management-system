@@ -39,7 +39,7 @@ import {
     buildFileIndexerSnsQueuingFunction,
     buildAssetIndexerSnsQueuingFunction,
     buildDatabaseIndexerSnsQueuingFunction,
-} from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+} from "../../lambdaBuilder/indexingFunctions";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
 

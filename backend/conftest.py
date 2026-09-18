@@ -648,9 +648,9 @@ def setup_mock_imports():
         )
     
     # Add mock modules for search
-    if 'backend.handlers.search' not in sys.modules:
-        sys.modules['backend.handlers.search'] = MockModule()
-    if 'backend.handlers.search.search' not in sys.modules:
+    if 'backend.handlers.osSemanticSearch' not in sys.modules:
+        sys.modules['backend.handlers.osSemanticSearch'] = MockModule()
+    if 'backend.handlers.osSemanticSearch.search' not in sys.modules:
         def property_token_filter_to_opensearch_query(body):
             result = {
                 "query": {
@@ -719,7 +719,7 @@ def setup_mock_imports():
             def lambda_handler(self, event, context):
                 return {"statusCode": 200, "body": "{}"}
                 
-        sys.modules['backend.handlers.search.search'] = MockModule(
+        sys.modules['backend.handlers.osSemanticSearch.search'] = MockModule(
             SearchHandler=SearchHandler,
             property_token_filter_to_opensearch_query=property_token_filter_to_opensearch_query
         )

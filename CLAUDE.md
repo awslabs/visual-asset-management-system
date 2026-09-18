@@ -588,7 +588,7 @@ VAMS uses single-table design with composite keys. Common patterns:
 -   **PK**: Entity type + ID (e.g., `ASSET#uuid`)
 -   **SK**: Sort key for queries (e.g., `VERSION#v1`)
 -   **GSI**: Global secondary indexes for cross-entity queries
--   **Vector index**: the vector embeddings table carries a DynamoDB vector index (`vec-<slug(embeddingModelId)>-<dims>`, cosine, seven `INLINE_FILTER` string attributes including `segmentKind`) queried with `SearchVectors`; one Lambda (`handlers/vectorsearch/vectorIndexer.py`) is its only writer
+-   **Vector index**: the vector embeddings table carries a DynamoDB vector index (`vec-<slug(embeddingModelId)>-<dims>`, cosine, seven `INLINE_FILTER` string attributes including `segmentKind`) queried with `SearchVectors`; one Lambda (`handlers/osVectorSearch/vectorIndexer.py`) is its only writer
 
 ### **S3 Bucket Organization**
 

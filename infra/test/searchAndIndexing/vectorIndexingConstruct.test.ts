@@ -149,7 +149,7 @@ const byPrefix = (template: Template, type: string, prefix: string): [string, an
 const functionByHandler = (template: Template, module: string): [string, any] => {
     const entries = Object.entries(template.findResources("AWS::Lambda::Function")).filter(
         ([, r]: [string, any]) =>
-            r.Properties.Handler === `handlers.vectorsearch.${module}.lambda_handler`
+            r.Properties.Handler === `handlers.osVectorSearch.${module}.lambda_handler`
     );
     expect(entries).toHaveLength(1);
     return entries[0] as [string, any];

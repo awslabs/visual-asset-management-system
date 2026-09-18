@@ -156,10 +156,10 @@ describe("root, backend, and documentation steering", () => {
         expect(steering).toContain("`botocore` " + pin![1]);
     });
 
-    test("backend/CLAUDE.md lists the vectorsearch handler domain and the shared modules, and each module exists", () => {
+    test("backend/CLAUDE.md lists the osVectorSearch handler domain and the shared modules, and each module exists", () => {
         const steering = readRepo(path.join("backend", "CLAUDE.md"));
         const modules: Array<[string, string]> = [
-            ["vectorsearch/", path.join("backend", "backend", "handlers", "vectorsearch")],
+            ["osVectorSearch/", path.join("backend", "backend", "handlers", "osVectorSearch")],
             ["databaseAccess.py", path.join("backend", "backend", "common", "databaseAccess.py")],
             [
                 "indexing/documentIds.py",
@@ -305,10 +305,10 @@ describe("Kiro steering mirrors", () => {
         expect(pipelines).not.toMatch(/Six pipelines run in isolated subnets/);
     });
 
-    test("BACKEND_CDK_DEVELOPMENT_WORKFLOW.md lists the vectorsearch handler domain", () => {
+    test("BACKEND_CDK_DEVELOPMENT_WORKFLOW.md lists the osVectorSearch handler domain", () => {
         expect(
             readRepo(path.join(".kiro", "steering", "BACKEND_CDK_DEVELOPMENT_WORKFLOW.md"))
-        ).toContain("`vectorsearch/`");
+        ).toContain("`osVectorSearch/`");
     });
 
     test("DOCUMENTATION_WORKFLOW.md carries the same page and category counts as documentation/CLAUDE.md", () => {
@@ -413,7 +413,7 @@ describe("skills restate the steering they scaffold", () => {
     test("/update-docs maps the vector search and system pipeline sources to their pages, and each source exists", () => {
         const skill = readRepo(path.join(".claude", "commands", "update-docs.md"));
         for (const source of [
-            "backend/backend/handlers/vectorsearch/",
+            "backend/backend/handlers/osVectorSearch/",
             "backend/backend/common/vectorsearch/",
             "backendPipelines/system/",
             "infra/lib/nestedStacks/pipelines/system/",

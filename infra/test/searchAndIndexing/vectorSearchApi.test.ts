@@ -13,7 +13,7 @@
 
 import { synthTemplate, SynthResult, TemplateName, Resource } from "../support/templateSynth";
 
-const HANDLER = "handlers.vectorsearch.vectorSearchService.lambda_handler";
+const HANDLER = "handlers.osVectorSearch.vectorSearchService.lambda_handler";
 const TEMPLATES: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
 const ENABLED_TEMPLATES: TemplateName[] = ["commercial", "govcloud"];
 const enable = (c: any) => {

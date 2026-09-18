@@ -181,10 +181,11 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 
 ### Search and Indexing Functions
 
-| Builder File                        | Functions                                                                                                                                                                    | Purpose                                                                                              |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `searchIndexBucketSyncFunctions.ts` | searchFunction, fileIndexing, assetIndexing, sqsBucketSync (created/deleted per bucket), reindexer, fileIndexerSnsQueuing, assetIndexerSnsQueuing, databaseIndexerSnsQueuing | OpenSearch indexing and S3 bucket synchronization                                                    |
-| `vectorSearchFunctions.ts`          | vectorIndexer, vectorReindexer, systemWorkflowLauncher, vectorSearch (`POST /search/nlp`)                                                                                    | Vector embeddings table maintenance and reindex launches (conditional on `app.vectorSearch.enabled`) |
+| Builder File                   | Functions                                                                                                                       | Purpose                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `indexingFunctions.ts`         | sqsBucketSync (created/deleted per bucket), reindexer, fileIndexerSnsQueuing, assetIndexerSnsQueuing, databaseIndexerSnsQueuing | Core S3 bucket synchronization, SNS-to-SQS queuing shims, and the row-rewriting reindexer that feeds every indexer family |
+| `osSemanticSearchFunctions.ts` | searchFunction, fileIndexing, assetIndexing                                                                                     | OpenSearch semantic search route and its two stream-consuming indexers (conditional on an OpenSearch mode)                |
+| `osVectorSearchFunctions.ts`   | vectorIndexer, vectorReindexer, systemWorkflowLauncher, vectorSearch (`POST /search/nlp`)                                       | Vector embeddings table maintenance and reindex launches (conditional on `app.vectorSearch.enabled`)                      |
 
 ### Infrastructure Functions
 

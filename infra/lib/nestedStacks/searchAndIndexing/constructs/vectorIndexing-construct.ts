@@ -26,7 +26,7 @@ import {
     buildSystemWorkflowLauncherFunction,
     buildVectorIndexerFunction,
     buildVectorReindexerFunction,
-} from "../../../lambdaBuilder/vectorSearchFunctions";
+} from "../../../lambdaBuilder/osVectorSearchFunctions";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 
 export interface VectorIndexingConstructProps {

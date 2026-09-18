@@ -845,7 +845,7 @@ describe("concepts/vector-search.md — the vector search concept page", () => {
 
     test("the reindexing section names the reindexer's operations and optional keys as the handler accepts them", () => {
         const reindexer = readRepo(
-            path.join("backend", "backend", "handlers", "vectorsearch", "vectorReindexer.py")
+            path.join("backend", "backend", "handlers", "osVectorSearch", "vectorReindexer.py")
         );
         const s = section(readDoc("concepts/vector-search.md"), "## Reindexing");
         for (const op of ['"clear"', '"enqueue"', '"both"']) {
@@ -1045,7 +1045,7 @@ describe("architecture pages", () => {
     test("aws-resources.md names the vector search functions, queues, and rule", () => {
         const text = readDoc("architecture/aws-resources.md");
         expect(section(text, "### Search and Indexing Functions")).toContain(
-            "`vectorSearchFunctions.ts`"
+            "`osVectorSearchFunctions.ts`"
         );
         const sqs = section(text, "## Amazon SQS Queues");
         expect(sqs).toContain("**VectorIndexerQueue**");

@@ -15,9 +15,9 @@ import {
     buildSearchFunction,
     buildFileIndexingFunction,
     buildAssetIndexingFunction,
-    buildReindexerFunction,
-} from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
-import { buildVectorSearchFunction } from "../../lambdaBuilder/vectorSearchFunctions";
+} from "../../lambdaBuilder/osSemanticSearchFunctions";
+import { buildReindexerFunction } from "../../lambdaBuilder/indexingFunctions";
+import { buildVectorSearchFunction } from "../../lambdaBuilder/osVectorSearchFunctions";
 import { VectorIndexingConstruct } from "./constructs/vectorIndexing-construct";
 import { RouteRegistry, attachFunctionToApi } from "../apiLambda/apiRouteRegistry";
 import { NestedStack } from "aws-cdk-lib";
