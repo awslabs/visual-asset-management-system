@@ -57,7 +57,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     const placeholder =
         searchModeControl?.mode === "nlp"
             ? "Describe what you are looking for..."
-            : "Search by keywords (wildcard)...";
+            : "Search by keywords...";
 
     return (
         <Box padding={{ vertical: "m", horizontal: "l" }}>

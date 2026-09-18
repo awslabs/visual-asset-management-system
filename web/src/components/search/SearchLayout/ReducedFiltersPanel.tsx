@@ -127,6 +127,7 @@ const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
                         placeholder={`All ${Synonyms.databases}`}
                         disabled={loading || databaseLocked}
                         filteringType="auto"
+                        filteringAriaLabel={`Filter ${Synonyms.databases}`}
                     />
                 </FormField>
 
@@ -149,6 +150,7 @@ const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
                             placeholder="All types"
                             disabled={loading}
                             filteringType="auto"
+                            filteringAriaLabel="Filter file types"
                         />
                     </FormField>
                 )}

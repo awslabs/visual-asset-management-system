@@ -77,8 +77,13 @@ test.describe("Search page", () => {
 
     test("choosing a tab writes it into the hash query", async ({ page }) => {
         await gotoSearch(page);
-        await searchTabs(page).getByRole("tab", { name: /list$/i }).click();
-        await expect(page).toHaveURL(/[?&]tab=asset-list/);
+        const tabs = searchTabs(page).getByRole("tab");
+        test.skip((await tabs.count()) < 2, "Only one provider tab; nothing to choose");
+        // Choose whichever tab is not selected, so the click is a real change.
+        const target = searchTabs(page).getByRole("tab", { selected: false }).first();
+        const isList = /list$/i.test(await target.innerText());
+        await target.click();
+        await expect(page).toHaveURL(isList ? /[?&]tab=asset-list/ : /[?&]tab=unified-search/);
         await expectSearchRendered(page);
     });
 });

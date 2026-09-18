@@ -100,6 +100,32 @@ class TestSearchAssetsCommand:
             assert call_args['query'] == 'test'
     
     @patch('vamscli.commands.search.is_feature_enabled')
+    def test_assets_csv_output_is_only_the_csv_document(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """`--output-format csv > results.csv` is the documented use; status lines must not lead the file."""
+        import csv
+        from io import StringIO
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            mocks['api_client'].search_query.return_value = {
+                "hits": {
+                    "hits": [
+                        {
+                            "_index_type": "asset",
+                            "_source": {"str_assetname": "a-1", "str_databaseid": "db", "str_rectype": "asset"},
+                            "_score": 0.5,
+                        }
+                    ],
+                    "total": {"value": 1},
+                }
+            }
+            result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'a', '--output-format', 'csv'])
+            assert result.exit_code == 0
+            assert 'Building search request' not in result.output
+            assert 'Executing search' not in result.output
+            rows = list(csv.DictReader(StringIO(result.output)))
+            assert rows and rows[0]['str_assetname'] == 'a-1'
+
+    @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_with_metadata_query(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
         """Test asset search with metadata query."""
         with search_command_mocks as mocks:
@@ -299,7 +325,21 @@ class TestSearchAssetsCommand:
             
             assert result.exit_code == 1
             assert 'Search Disabled' in result.output
+            assert 'vamscli search nlp' in result.output
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_assets_search_disabled_names_assets_list_when_no_engine_is_on(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """With NOOPENSEARCH on and VECTORSEARCH off, the only remedy is the asset listing."""
+        from vamscli.constants import FEATURE_NOOPENSEARCH
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.side_effect = lambda feature, *_: feature == FEATURE_NOOPENSEARCH
+
+            result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'test'])
+
+            assert result.exit_code == 1
+            assert 'Search Disabled' in result.output
             assert 'Use \'vamscli assets list\'' in result.output
+            assert 'search nlp' not in result.output
     
     def test_assets_no_setup(self, cli_runner, search_no_setup_mocks):
         """Test assets command without setup."""

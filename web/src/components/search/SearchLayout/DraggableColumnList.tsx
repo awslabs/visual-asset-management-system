@@ -141,6 +141,7 @@ const DraggableColumnList: React.FC<DraggableColumnListProps> = ({
                 placeholder="Select columns to add"
                 disabled={disabled}
                 filteringType="auto"
+                filteringAriaLabel="Filter columns"
             />
 
             {/* Selected Columns - Draggable */}

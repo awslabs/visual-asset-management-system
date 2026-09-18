@@ -23,7 +23,7 @@ describe("SearchTopBar search-mode control", () => {
         render(<SearchTopBar {...baseProps} />);
         expect(screen.queryByTestId("keyword")).toBeNull();
         expect(screen.queryByTestId("nlp")).toBeNull();
-        expect(screen.getByPlaceholderText("Search by keywords (wildcard)...")).toBeInTheDocument();
+        expect(screen.getByPlaceholderText("Search by keywords...")).toBeInTheDocument();
     });
 
     it("offers both modes and reports a change when both engines are on", async () => {

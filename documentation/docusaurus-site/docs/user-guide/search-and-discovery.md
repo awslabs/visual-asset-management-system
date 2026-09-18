@@ -32,7 +32,7 @@ When you switch between Assets and Files mode, filters that do not apply to the 
 
 When both Amazon OpenSearch and natural-language search are enabled, a **Keyword / Natural language** control above the search bar selects how the query is interpreted; the choice is remembered in your preferences. Keyword search is the only mode when natural-language search is not enabled.
 
-The search bar at the top of the page performs a general text query across all indexed fields. Type any term and press **Enter** or choose the search button. The search runs against asset names, descriptions, tags, metadata values, file paths, and other indexed fields simultaneously.
+The search bar at the top of the page performs a general text query across all indexed fields. Type any term and press **Enter** or choose the search button. The search runs against asset names, descriptions, tags, metadata values, file paths, and other indexed fields simultaneously. The term matches anywhere inside a value, so `pump` finds `hydraulic-pump-housing`; `*` and `?` are treated as literal characters here. Wildcards are honoured in the per-field filters in the sidebar, such as the asset name filter (`My*`).
 
 The text query is combined with all other active filters using **AND** logic — results must match both the text query and any filters you have applied. For example, searching for "pump" with a database filter of "facility-db" returns only items that contain "pump" AND belong to "facility-db".
 

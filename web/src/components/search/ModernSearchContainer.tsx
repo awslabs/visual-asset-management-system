@@ -39,21 +39,21 @@ import Synonyms from "../../synonyms";
  * OpenSearch enrichment. Per record type because asset-mode hits have no file fields.
  */
 export const REDUCED_FILE_COLUMNS = [
+    "relevance",
     "str_assetname",
     "str_databaseid",
     "str_key",
     "str_fileext",
     "num_filesize",
     "bool_archived",
-    "relevance",
 ];
 export const REDUCED_ASSET_COLUMNS = [
+    "relevance",
     "str_assetname",
     "str_databaseid",
     "str_assettype",
     "list_tags",
     "bool_archived",
-    "relevance",
 ];
 
 const ModernSearchContainer: React.FC<SearchContainerProps> = ({
@@ -268,18 +268,28 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         }
     }, [searchState.selectedItems, onSelectionChange]);
 
-    // Debounced auto-refresh function
-    const debouncedAutoRefresh = useDebounce(() => {
-        if (hasInitialLoad) {
+    // Debounced auto-refresh: re-runs the query as it stood when a filter or mode change armed it.
+    // If the text has changed since, the user is mid-edit and will submit; searching what they had
+    // typed 500 ms in would embed a fragment and flash results for it.
+    const debouncedAutoRefresh = useDebounce((armedQuery: string) => {
+        if (hasInitialLoad && armedQuery === searchState.query) {
             setAutoRefreshing(true);
             handleSearch();
         }
     }, 500);
 
+    // A search the user asks for (Enter or the Search button) supersedes an auto-refresh still
+    // waiting on its debounce — otherwise a mode or filter change followed by a quick submit runs
+    // the same query twice, which in natural-language mode embeds it twice.
+    const handleExplicitSearch = async () => {
+        debouncedAutoRefresh.cancel();
+        await handleSearch();
+    };
+
     // Auto-refresh when filters or the search mode change
     useEffect(() => {
         if (hasInitialLoad) {
-            debouncedAutoRefresh();
+            debouncedAutoRefresh(searchState.query);
         }
     }, [
         searchState.filters,
@@ -549,6 +559,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
 
         return (
             <SegmentedControl
+                label="Result view"
                 selectedId={currentView}
                 onChange={({ detail }) => handleViewChange(detail.selectedId as any)}
                 options={viewOptions}
@@ -674,7 +685,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
             <SearchTopBar
                 query={searchState.query}
                 onQueryChange={searchState.setQuery}
-                onSearch={handleSearch}
+                onSearch={handleExplicitSearch}
                 onClearAll={handleClearSearch}
                 loading={searchState.loading}
                 resultCount={totalResults}

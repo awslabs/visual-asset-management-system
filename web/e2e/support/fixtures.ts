@@ -507,3 +507,84 @@ export async function chooseSelectOption(
     }
     await page.keyboard.press("Enter");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Unified search: keyword / natural-language mode
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Which engines the deployment offers, from the cached feature switches — the same derivation the
+ * container makes (`searchMode.ts`): NOOPENSEARCH is the negative switch, VECTORSEARCH the positive
+ * one. Specs derive their expected controls from this rather than assuming a fixture.
+ */
+export type SearchModeCase = "both" | "nlp-only" | "keyword-only" | "none";
+
+export function searchModeCase(features: string[]): SearchModeCase {
+    const vector = features.includes("VECTORSEARCH");
+    const keyword = !features.includes("NOOPENSEARCH");
+    if (vector && keyword) return "both";
+    if (vector) return "nlp-only";
+    if (keyword) return "keyword-only";
+    return "none";
+}
+
+/**
+ * The keyword / natural-language switch. Cloudscape renders SegmentedControl as a `toolbar` named by
+ * its `label`, holding one `aria-pressed` button per option — so this is where the mode lives, not
+ * under a `group` or `radiogroup`. Absent when only OpenSearch is on.
+ */
+export function modeToolbar(page: Page): Locator {
+    return page.getByRole("toolbar", { name: "Search mode" });
+}
+
+/** The unified tab's query box: an `Input type="search"`, so a `searchbox`, never a `textbox`. */
+export function searchQueryBox(page: Page): Locator {
+    return page.getByRole("searchbox").first();
+}
+
+/** Press the mode segment and wait for the placeholder to confirm the container switched. */
+export async function selectSearchMode(page: Page, mode: "keyword" | "nlp"): Promise<void> {
+    const name = mode === "nlp" ? "Natural language" : "Keyword";
+    await modeToolbar(page).getByRole("button", { name }).click();
+    await expect(searchQueryBox(page)).toHaveAttribute(
+        "placeholder",
+        mode === "nlp" ? /Describe what you are looking for/ : /Search by keywords/
+    );
+}
+
+/**
+ * WCAG contrast ratio of an element's text against its effective background, walking up the tree
+ * until an opaque background is found (Cloudscape leaves most containers transparent).
+ */
+export async function textContrastRatio(target: Locator): Promise<number> {
+    return target.evaluate((el) => {
+        const parse = (c: string): [number, number, number, number] => {
+            const m = c.match(/rgba?\(([^)]+)\)/);
+            if (!m) return [255, 255, 255, 1];
+            const p = m[1].split(",").map((v) => parseFloat(v.trim()));
+            return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+        };
+        const lum = ([r, g, b]: number[]) => {
+            const f = (v: number) => {
+                const s = v / 255;
+                return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+            };
+            return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+        };
+        let node: HTMLElement | null = el as HTMLElement;
+        let bg: [number, number, number, number] = [255, 255, 255, 0];
+        while (node) {
+            const c = parse(getComputedStyle(node).backgroundColor);
+            if (c[3] > 0.99) {
+                bg = c;
+                break;
+            }
+            node = node.parentElement;
+        }
+        const fg = parse(getComputedStyle(el).color);
+        const l1 = lum(fg);
+        const l2 = lum(bg);
+        const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+        return (hi + 0.05) / (lo + 0.05);
+    });
+}

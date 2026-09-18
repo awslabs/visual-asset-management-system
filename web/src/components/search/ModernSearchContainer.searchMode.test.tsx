@@ -221,6 +221,33 @@ describe("ModernSearchContainer search modes", () => {
         expect((searchNlp as jest.Mock).mock.calls[0][0].query).toBe("red truck");
     });
 
+    it("typing after a mode switch does not search the half-typed text when the auto-refresh fires", async () => {
+        setFeatures(["VECTORSEARCH"]);
+        renderContainer();
+        await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(1));
+        // Switching with an empty box arms the 500 ms auto-refresh; the user is typing when it fires.
+        await userEvent.click(screen.getByTestId("nlp"));
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        await userEvent.type(input, "red truck", { delay: 80 });
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        expect(searchNlp).not.toHaveBeenCalled();
+    });
+
+    it("a submit inside the auto-refresh window after a mode switch runs the query once, not twice", async () => {
+        setFeatures(["VECTORSEARCH"]);
+        renderContainer();
+        await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(1));
+        const input = screen.getByPlaceholderText("Search by keywords...");
+        await userEvent.type(input, "red truck");
+        // Switching arms the auto-refresh for "red truck"; an immediate submit must not be doubled.
+        await userEvent.click(screen.getByTestId("nlp"));
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        expect(searchNlp).toHaveBeenCalledTimes(1);
+        expect((searchNlp as jest.Mock).mock.calls[0][0].query).toBe("red truck");
+    });
+
     it("shows the message of each response warning in one toast, never the object", async () => {
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         const truncatedMessage =

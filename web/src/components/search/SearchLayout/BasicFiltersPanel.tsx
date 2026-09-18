@@ -282,6 +282,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                         placeholder={`All ${Synonyms.databases}`}
                         disabled={loading || databaseLocked}
                         filteringType="auto"
+                        filteringAriaLabel={`Filter ${Synonyms.databases}`}
                     />
                 </FormField>
 
@@ -313,6 +314,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             placeholder="All types"
                             disabled={loading}
                             filteringType="auto"
+                            filteringAriaLabel={`Filter ${Synonyms.asset} types`}
                         />
                     </FormField>
                 )}
@@ -345,6 +347,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             placeholder="All types"
                             disabled={loading}
                             filteringType="auto"
+                            filteringAriaLabel="Filter file types"
                         />
                     </FormField>
                 )}
@@ -373,6 +376,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                         placeholder="All tags"
                         disabled={loading}
                         filteringType="auto"
+                        filteringAriaLabel="Filter tags"
                     />
                 </FormField>
             </SpaceBetween>

@@ -15,12 +15,12 @@ This page covers issues encountered when using the VamsCLI `search` commands aga
 
 **Symptoms:**
 
--   `vamscli search assets`, `search files`, `search simple`, or `search mapping` fails with "Search functionality is disabled for this environment"
--   The error suggests using `vamscli assets list` instead
+-   `vamscli search assets`, `search files`, `search simple`, or `search mapping` fails with "Search functionality is disabled for this environment", or with "Keyword search is disabled for this environment (no OpenSearch)" when the deployment offers natural-language search
+-   The error suggests using `vamscli assets list` instead, or `vamscli search nlp` where vector search is enabled
 
 **Cause:**
 
-The `NOOPENSEARCH` feature switch is enabled in the deployment, so Amazon OpenSearch Service is not provisioned. All `search` subcommands check this feature switch before issuing a request and stop early when it is set.
+The `NOOPENSEARCH` feature switch is enabled in the deployment, so Amazon OpenSearch Service is not provisioned. The keyword `search` subcommands check this feature switch before issuing a request and stop early when it is set. `vamscli search nlp` is gated by the `VECTORSEARCH` switch instead and keeps working without OpenSearch.
 
 **Resolution:**
 
@@ -30,7 +30,7 @@ The `NOOPENSEARCH` feature switch is enabled in the deployment, so Amazon OpenSe
     vamscli features list
     ```
 
-    A `NOOPENSEARCH` entry in the enabled features confirms search is unavailable.
+    A `NOOPENSEARCH` entry in the enabled features confirms keyword search is unavailable; a `VECTORSEARCH` entry means `vamscli search nlp` is available.
 
 2. Use the non-search listing commands, which do not depend on Amazon OpenSearch Service:
 

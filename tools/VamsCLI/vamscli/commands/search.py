@@ -445,8 +445,13 @@ def _format_mapping_csv(mapping: Dict[str, Any]) -> str:
 
 
 def _check_search_availability(profile_manager, json_output: bool = False):
-    """Check if search is available (not disabled by NOOPENSEARCH feature)."""
+    """Check if keyword search is available (not disabled by NOOPENSEARCH feature)."""
     if is_feature_enabled(FEATURE_NOOPENSEARCH, profile_manager):
+        if is_feature_enabled(FEATURE_VECTORSEARCH, profile_manager):
+            raise SearchDisabledError(
+                "Keyword search is disabled for this environment (no OpenSearch). "
+                "Use 'vamscli search nlp' for natural-language search, or 'vamscli assets list'."
+            )
         raise SearchDisabledError(
             "Search functionality is disabled for this environment. "
             "Use 'vamscli assets list' instead."
@@ -560,12 +565,14 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
     # Handle legacy jsonOutput flag
     if output_format == 'json':
         json_output = True
+    # Status lines are for a human reading a terminal; csv output is redirected to a file.
+    status_quiet = json_output or output_format == 'csv'
     
     try:
         # Check if search is available
         _check_search_availability(profile_manager, json_output)
         
-        output_status("Building search request...", json_output)
+        output_status("Building search request...", status_quiet)
         
         # Build search request using new SearchRequestModel format
         search_request = {
@@ -597,7 +604,7 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
         if geo_search:
             search_request["geoSearch"] = geo_search
 
-        output_status("Executing search...", json_output)
+        output_status("Executing search...", status_quiet)
 
         # Execute search
         result = api_client.search_query(search_request)
@@ -721,12 +728,14 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
     # Handle legacy jsonOutput flag
     if output_format == 'json':
         json_output = True
+    # Status lines are for a human reading a terminal; csv output is redirected to a file.
+    status_quiet = json_output or output_format == 'csv'
     
     try:
         # Check if search is available
         _check_search_availability(profile_manager, json_output)
         
-        output_status("Building search request...", json_output)
+        output_status("Building search request...", status_quiet)
         
         # Build search request using new SearchRequestModel format
         search_request = {
@@ -758,7 +767,7 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
         if geo_search:
             search_request["geoSearch"] = geo_search
 
-        output_status("Executing search...", json_output)
+        output_status("Executing search...", status_quiet)
 
         # Execute search
         result = api_client.search_query(search_request)
@@ -874,12 +883,14 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
     # Handle legacy output format
     if output_format == 'json':
         json_output = True
+    # Status lines are for a human reading a terminal; csv output is redirected to a file.
+    status_quiet = json_output or output_format == 'csv'
     
     try:
         # Check if search is available
         _check_search_availability(profile_manager, json_output)
         
-        output_status("Building simple search request...", json_output)
+        output_status("Building simple search request...", status_quiet)
         
         # Build simple search request
         search_request = {
@@ -917,7 +928,7 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         if geo_search:
             search_request["geoSearch"] = geo_search
 
-        output_status("Executing search...", json_output)
+        output_status("Executing search...", status_quiet)
 
         # Execute simple search
         result = api_client.search_simple(search_request)
@@ -992,12 +1003,14 @@ def mapping(ctx: click.Context, output_format: str, json_output: bool):
     # Handle legacy output format
     if output_format == 'json':
         json_output = True
+    # Status lines are for a human reading a terminal; csv output is redirected to a file.
+    status_quiet = json_output or output_format == 'csv'
     
     try:
         # Check if search is available
         _check_search_availability(profile_manager, json_output)
         
-        output_status("Retrieving search index mappings...", json_output)
+        output_status("Retrieving search index mappings...", status_quiet)
         
         # Get search mapping
         mapping = api_client.get_search_mapping()
@@ -1119,9 +1132,11 @@ def nlp(ctx: click.Context, query: str, entity_type: str, databases: tuple, incl
     # Handle legacy output format
     if output_format == 'json':
         json_output = True
+    # Status lines are for a human reading a terminal; csv output is redirected to a file.
+    status_quiet = json_output or output_format == 'csv'
 
     try:
-        output_status("Building natural-language search request...", json_output)
+        output_status("Building natural-language search request...", status_quiet)
 
         search_request: Dict[str, Any] = {
             "query": query,
@@ -1143,7 +1158,7 @@ def nlp(ctx: click.Context, query: str, entity_type: str, databases: tuple, incl
             search_request["metadataQuery"] = metadata_query
             search_request["metadataSearchMode"] = "both"
 
-        output_status("Executing search...", json_output)
+        output_status("Executing search...", status_quiet)
 
         result = api_client.search_nlp(search_request)
 

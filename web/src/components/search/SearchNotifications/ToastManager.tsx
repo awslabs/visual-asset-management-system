@@ -20,6 +20,8 @@ const ToastManager: React.FC<ToastManagerProps> = ({ toasts, onDismiss }) => {
         header: toast.title,
         content: toast.message,
         dismissible: toast.dismissible,
+        dismissLabel: "Dismiss notification",
+        statusIconAriaLabel: toast.type.charAt(0).toUpperCase() + toast.type.slice(1),
         onDismiss: () => onDismiss(toast.id),
     }));
 
