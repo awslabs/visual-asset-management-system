@@ -115,8 +115,8 @@ test.describe("Unified search — layout and mode controls", () => {
     test("the mode control follows the engines the deployment advertises", async ({ page }) => {
         const mode = await openUnified(page);
         const toolbar = modeToolbar(page);
-        if (mode === "keyword-only") {
-            // One engine, nothing to choose: the switch must not be shown.
+        if (mode !== "both") {
+            // One engine, nothing to choose: the switch must not be shown, whichever engine it is.
             await expect(toolbar).toHaveCount(0);
             return;
         }
@@ -125,16 +125,9 @@ test.describe("Unified search — layout and mode controls", () => {
         const natural = toolbar.getByRole("button", { name: "Natural language" });
         await expect(keyword).toHaveCount(1);
         await expect(natural).toHaveCount(1);
-        if (mode === "nlp-only") {
-            // Pinned: the only engine is shown as selected and the segments are not actionable.
-            await expect(natural).toHaveAttribute("aria-pressed", "true");
-            await expect(keyword).toBeDisabled();
-            await expect(natural).toBeDisabled();
-        } else {
-            await expect(keyword).toBeEnabled();
-            await expect(natural).toBeEnabled();
-            await expect(toolbar.getByRole("button", { pressed: true })).toHaveCount(1);
-        }
+        await expect(keyword).toBeEnabled();
+        await expect(natural).toBeEnabled();
+        await expect(toolbar.getByRole("button", { pressed: true })).toHaveCount(1);
     });
 
     test("the query box tells the user how to phrase the query in each mode", async ({ page }) => {
@@ -451,7 +444,7 @@ test.describe("Unified search — accessibility and layout", () => {
             await expect(
                 page.getByRole("button", { name: "Search", exact: true })
             ).toBeInViewport();
-            if (mode !== "keyword-only") await expect(modeToolbar(page)).toBeInViewport();
+            if (mode === "both") await expect(modeToolbar(page)).toBeInViewport();
         });
     }
 
@@ -466,13 +459,14 @@ test.describe("Unified search — accessibility and layout", () => {
             const h1 = page.getByRole("heading", { level: 1 }).first();
             expect(await textContrastRatio(h1)).toBeGreaterThanOrEqual(4.5);
             if (mode !== "keyword-only") {
-                const toolbar = modeToolbar(page);
-                for (const name of ["Keyword", "Natural language"]) {
-                    const segment = toolbar.getByRole("button", { name });
-                    // WCAG 1.4.3 exempts inactive controls; the pinned switch is disabled by design.
-                    if (await segment.isDisabled()) continue;
-                    const ratio = await textContrastRatio(segment);
-                    expect(ratio, `${name} segment in ${theme}`).toBeGreaterThanOrEqual(4.5);
+                if (mode === "both") {
+                    const toolbar = modeToolbar(page);
+                    for (const name of ["Keyword", "Natural language"]) {
+                        const ratio = await textContrastRatio(
+                            toolbar.getByRole("button", { name })
+                        );
+                        expect(ratio, `${name} segment in ${theme}`).toBeGreaterThanOrEqual(4.5);
+                    }
                 }
                 await enterNlpMode(page, mode);
                 const { body } = await runNlpSearch(page, NLP_PROBE_QUERY);

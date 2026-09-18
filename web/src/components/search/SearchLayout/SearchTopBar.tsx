@@ -14,13 +14,12 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 import type { SearchMode } from "../types";
 
 /**
- * The keyword / natural-language switch. Absent when only OpenSearch is on; read-only (pinned to
- * natural language) when only vector search is on; live when both engines are enabled.
+ * The keyword / natural-language switch. Present only when both engines are enabled; a
+ * single-engine deployment has nothing to choose, so no switch is rendered.
  */
 export interface SearchModeControl {
     mode: SearchMode;
     onChange: (mode: SearchMode) => void;
-    readOnly: boolean;
 }
 
 interface SearchTopBarProps {
@@ -33,6 +32,8 @@ interface SearchTopBarProps {
     hasActiveFilters?: boolean;
     title?: string;
     description?: string;
+    /** The mode the query is interpreted in; selects the query box placeholder. */
+    searchMode?: SearchMode;
     searchModeControl?: SearchModeControl;
 }
 
@@ -46,6 +47,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     hasActiveFilters = false,
     title = "Search",
     description,
+    searchMode = "keyword",
     searchModeControl,
 }) => {
     const handleKeyDown = (event: any) => {
@@ -55,9 +57,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     };
 
     const placeholder =
-        searchModeControl?.mode === "nlp"
-            ? "Describe what you are looking for..."
-            : "Search by keywords...";
+        searchMode === "nlp" ? "Describe what you are looking for..." : "Search by keywords...";
 
     return (
         <Box padding={{ vertical: "m", horizontal: "l" }}>
@@ -75,16 +75,8 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                                     searchModeControl.onChange(detail.selectedId as SearchMode)
                                 }
                                 options={[
-                                    {
-                                        text: "Keyword",
-                                        id: "keyword",
-                                        disabled: searchModeControl.readOnly,
-                                    },
-                                    {
-                                        text: "Natural language",
-                                        id: "nlp",
-                                        disabled: searchModeControl.readOnly,
-                                    },
+                                    { text: "Keyword", id: "keyword" },
+                                    { text: "Natural language", id: "nlp" },
                                 ]}
                             />
                         )}

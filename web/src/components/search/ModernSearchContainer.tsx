@@ -529,14 +529,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         preferences.fileTableColumns,
     ]);
 
-    // Keyword / natural-language switch: live when both engines are on, pinned when only vector
-    // search is on, absent when only OpenSearch is on.
+    // Keyword / natural-language switch: offered only when both engines are on. A single-engine
+    // deployment has nothing to choose, so the top bar shows the query box alone.
     const searchModeControl: SearchModeControl | undefined =
-        modeCase === "both"
-            ? { mode: searchMode, onChange: handleSearchModeChange, readOnly: false }
-            : modeCase === "nlp-only"
-            ? { mode: "nlp", onChange: () => {}, readOnly: true }
-            : undefined;
+        modeCase === "both" ? { mode: searchMode, onChange: handleSearchModeChange } : undefined;
 
     // Render view selector
     const renderViewSelector = () => {
@@ -696,6 +692,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                         ? `${Synonyms.Assets} for ${databaseId}`
                         : `${Synonyms.Assets} and Files - Search`)
                 }
+                searchMode={searchMode}
                 searchModeControl={searchModeControl}
             />
 

@@ -68,7 +68,7 @@ Searching a specific older version is not supported through the API; the per-ver
 
 Natural-language search is one API — `POST /search/nlp` — reached from three surfaces:
 
--   **Web** — the **Search** tab of the Assets and Files page offers a **Keyword / Natural language** toggle when both Amazon OpenSearch and vector search are enabled, and natural-language mode alone when only vector search is. See [Search and Discovery](../user-guide/search-and-discovery.md).
+-   **Web** — the **Search** tab of the Assets and Files page offers a **Keyword / Natural language** toggle when both Amazon OpenSearch and vector search are enabled, and natural-language mode alone, with no toggle, when only vector search is. See [Search and Discovery](../user-guide/search-and-discovery.md).
 -   **CLI** — `vamscli search nlp` (for example `vamscli search nlp -q "…"`) with database, entity-type, file-class, file-extension, archived, size, and segment options. See [Search commands](../cli/commands/search.md).
 -   **MCP** — the read-tier `search_nlp` tool. See [Agentic Development](../developer/agentic-development.md).
 

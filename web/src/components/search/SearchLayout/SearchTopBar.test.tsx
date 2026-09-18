@@ -31,7 +31,8 @@ describe("SearchTopBar search-mode control", () => {
         render(
             <SearchTopBar
                 {...baseProps}
-                searchModeControl={{ mode: "keyword", onChange, readOnly: false }}
+                searchMode="keyword"
+                searchModeControl={{ mode: "keyword", onChange }}
             />
         );
         expect(screen.getByTestId("keyword")).toHaveAttribute("aria-pressed", "true");
@@ -40,16 +41,11 @@ describe("SearchTopBar search-mode control", () => {
         expect(onChange).toHaveBeenCalledWith("nlp");
     });
 
-    it("shows natural language selected and read-only when only vector search is on", () => {
-        render(
-            <SearchTopBar
-                {...baseProps}
-                searchModeControl={{ mode: "nlp", onChange: jest.fn(), readOnly: true }}
-            />
-        );
-        expect(screen.getByTestId("nlp")).toHaveAttribute("aria-pressed", "true");
-        expect(screen.getByTestId("nlp")).toBeDisabled();
-        expect(screen.getByTestId("keyword")).toBeDisabled();
+    it("renders no mode control but the natural-language placeholder when only vector search is on", () => {
+        render(<SearchTopBar {...baseProps} searchMode="nlp" />);
+        expect(screen.queryByTestId("nlp")).toBeNull();
+        expect(screen.queryByTestId("keyword")).toBeNull();
+        expect(screen.queryByRole("toolbar", { name: "Search mode" })).toBeNull();
         expect(
             screen.getByPlaceholderText("Describe what you are looking for...")
         ).toBeInTheDocument();

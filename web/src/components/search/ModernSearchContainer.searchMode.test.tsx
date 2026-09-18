@@ -142,10 +142,10 @@ describe("ModernSearchContainer search modes", () => {
     it("with OpenSearch off and vector search on: reduced sidebar, natural language forced, no request for an empty query", async () => {
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         renderContainer();
-        const nlpSegment = await screen.findByTestId("nlp");
-        expect(nlpSegment).toHaveAttribute("aria-pressed", "true");
-        expect(nlpSegment).toBeDisabled();
-        expect(screen.getByTestId("keyword")).toBeDisabled();
+        // One engine, nothing to choose: no mode control, and the query box is in natural-language mode.
+        await screen.findByPlaceholderText("Describe what you are looking for...");
+        expect(screen.queryByTestId("nlp")).toBeNull();
+        expect(screen.queryByTestId("keyword")).toBeNull();
         // Reduced sidebar: the mode selector and the NLP filters, none of the OpenSearch panels.
         expect(screen.getByText("Search Mode")).toBeInTheDocument();
         expect(screen.getByLabelText("Include archived items")).toBeInTheDocument();
