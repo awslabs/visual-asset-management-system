@@ -90,6 +90,24 @@ function pathsMissingParams(
 }
 
 describe("routeTable", () => {
+    it("highlights the Assets and Files navigation item on every search route", () => {
+        // Navigation matches activeHref to a nav item href by string equality, so a search route
+        // whose active value is "/" lights up Home while the search page is open.
+        const searchPage = pageFor("/assets");
+        const searchRoutes = routeTable.filter((route) => route.Page === searchPage);
+        expect(searchRoutes.map((route) => route.path)).toEqual(
+            expect.arrayContaining([
+                "/search",
+                "/search/:databaseId/assets",
+                "/assets",
+                "/databases/:databaseId/assets",
+            ])
+        );
+        for (const route of searchRoutes) {
+            expect(route.active).toBe("#/assets/");
+        }
+    });
+
     it("resolves /workflows/create to a page that needs no route parameters", () => {
         // Workflows are database-scoped: the builder reads :databaseId from the path and renders
         // "Missing Database ID" without one, so an unscoped create path must not point at it.

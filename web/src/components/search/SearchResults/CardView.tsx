@@ -4,19 +4,17 @@
  */
 
 import React from "react";
-import {
-    Cards,
-    Box,
-    SpaceBetween,
-    Badge,
-    Link,
-    Button,
-    Header,
-    Pagination,
-    CollectionPreferences,
-    Popover,
-    Icon,
-} from "@cloudscape-design/components";
+import Cards from "@cloudscape-design/components/cards";
+import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Badge from "@cloudscape-design/components/badge";
+import Link from "@cloudscape-design/components/link";
+import Button from "@cloudscape-design/components/button";
+import Header from "@cloudscape-design/components/header";
+import Pagination from "@cloudscape-design/components/pagination";
+import CollectionPreferences from "@cloudscape-design/components/collection-preferences";
+import Popover from "@cloudscape-design/components/popover";
+import Icon from "@cloudscape-design/components/icon";
 import { SearchResult, FIELD_MAPPINGS, SearchExplanation } from "../types";
 import PreviewThumbnailCell from "../SearchPreviewThumbnail/PreviewThumbnailCell";
 import FilePreviewThumbnailCell from "../SearchPreviewThumbnail/FilePreviewThumbnailCell";

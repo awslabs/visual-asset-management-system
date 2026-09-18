@@ -35,9 +35,6 @@ PIPELINES = (
     ("coordinateTransform", "backendPipelines/conversion/coordinateTransform",
      "infra/lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/"
      "coordinateTransform-construct.ts"),
-    ("metadata3dLabeling", "backendPipelines/genAi/metadata3dLabeling",
-     "infra/lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/"
-     "metadata3dLabeling-construct.ts"),
     ("modelOps", "backendPipelines/multi/modelOps",
      "infra/lib/nestedStacks/pipelines/multi/modelOps/constructs/modelOps-construct.ts"),
     ("rapidPipeline", "backendPipelines/multi/rapidPipeline",
@@ -48,6 +45,9 @@ PIPELINES = (
     ("pcPotreeViewer", "backendPipelines/preview/pcPotreeViewer",
      "infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/"
      "pcPotreeViewer-construct.ts"),
+    ("systemGenAiMetadata", "backendPipelines/system/genAiMetadata",
+     "infra/lib/nestedStacks/pipelines/system/genAiMetadata/constructs/"
+     "systemGenAiMetadata-construct.ts"),
 )
 
 PIPELINE_IDS = [name for name, _, _ in PIPELINES]

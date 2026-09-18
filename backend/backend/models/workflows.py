@@ -20,7 +20,7 @@ from customLogging.logger import safeLogger
 logger = safeLogger(service_name="WorkflowV2Models")
 
 TRIGGER_TYPES = ("fileUpload",)
-CONCURRENCY_RESTRICTIONS = ("none", "perAsset", "perInputFile")
+CONCURRENCY_RESTRICTIONS = ("none", "perAsset", "perInputFile", "perInputFileVersion")
 # outputTarget.locationType values. "asset" writes outputs onto an asset; "none" is results-only
 # (no asset files/metadata — only results text + logs against the execution), which requires an
 # input-file arity of "none".
@@ -239,6 +239,9 @@ class WorkflowRecordV2(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system workflow is read-only through the API except for
+    # `enabled` and its triggers' `enabled`. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""
@@ -396,6 +399,9 @@ class WorkflowResponseModel(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system workflow is read-only through the API except for
+    # `enabled` and its triggers' `enabled`. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""

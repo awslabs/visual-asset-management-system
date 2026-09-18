@@ -424,14 +424,14 @@ const session = await AmplifyAuth.currentSession();
 
 When frontend changes affect user-facing functionality, update the relevant Docusaurus documentation:
 
-| Change Type          | Documentation to Update                                        |
-| -------------------- | -------------------------------------------------------------- |
-| UI navigation change | `user-guide/web-interface.md`, `user-guide/getting-started.md` |
-| New feature/page     | `overview/features.md`, relevant user guide page               |
-| New viewer plugin    | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`  |
-| Config/feature flag  | `deployment/configuration-reference.md`                        |
-| Search UI change     | `user-guide/search.md`                                         |
-| Upload flow change   | `user-guide/upload-tutorial.md`                                |
+| Change Type          | Documentation to Update                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| UI navigation change | `user-guide/web-interface.md`, `user-guide/getting-started.mdx`                                                      |
+| New feature/page     | `overview/features.md`, relevant user guide page                                                                     |
+| New viewer plugin    | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`                                                        |
+| Config/feature flag  | `deployment/configuration-reference.md`, feature-flag tables in `overview/features.md` and `architecture/details.md` |
+| Search UI change     | `user-guide/search-and-discovery.md`, `concepts/vector-search.md` (natural-language mode)                            |
+| Upload flow change   | `user-guide/upload-first-asset.md`                                                                                   |
 
 ### **Rule 17: Update Steering Files When Standards Change**
 

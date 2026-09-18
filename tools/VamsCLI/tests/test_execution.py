@@ -24,6 +24,21 @@ class TestExecutionList:
             assert 'Output Type: asset' in result.output
             assert 'dbOut:aOut' in result.output
 
+    def test_trigger_type_is_forwarded_verbatim_including_system_reindex(self, cli_runner, generic_command_mocks):
+        """The filter is a stored-form equality on the server, so the CLI must not normalise it."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {'message': {'Items': []}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '--trigger-type', 'System-Reindex'])
+            assert result.exit_code == 0, result.output
+            params = mocks['api_client'].list_executions.call_args.kwargs['params']
+            assert params['triggerType'] == 'System-Reindex'
+
+    def test_trigger_type_help_names_the_three_stored_values(self, cli_runner):
+        result = cli_runner.invoke(cli, ['execution', 'list', '--help'])
+        assert result.exit_code == 0
+        # Click rewraps help text, so compare on a whitespace-normalised view.
+        assert 'Manual / File-Upload / System-Reindex' in " ".join(result.output.split())
+
     def test_list_omits_output_target_for_results_only(self, cli_runner, generic_command_mocks):
         """A results-only run writes no files and has no destination asset, so the output lines are
         omitted rather than printed as N/A."""

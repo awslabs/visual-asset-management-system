@@ -54,6 +54,9 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
     const { can } = useAllowedRoutes();
     const { data: pipeline } = usePipeline(databaseId, pipelineId);
     const pipelineLabel = pipelineName || pipeline?.pipelineName || pipelineId;
+    // Templates of a system pipeline cannot be added or deleted (the backend answers 400); their
+    // config body and tag schema stay editable through the form.
+    const systemPipeline = !!pipeline?.isSystem;
 
     const base = `/databases/${databaseId}/pipelines/${pipelineId}/templates`;
 
@@ -96,15 +99,15 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
         }
     };
 
-    const canCreate = can("POST", "/database/{databaseId}/pipelines/{pipelineId}/templates");
+    const canCreate =
+        can("POST", "/database/{databaseId}/pipelines/{pipelineId}/templates") && !systemPipeline;
     const canEdit = can(
         "PUT",
         "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}"
     );
-    const canDelete = can(
-        "DELETE",
-        "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}"
-    );
+    const canDelete =
+        can("DELETE", "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}") &&
+        !systemPipeline;
 
     return (
         <div className="orchestration-root orchestration-page space-y-6 bg-surface min-h-full">
@@ -127,6 +130,12 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
                         </button>
                     )}
                 </div>
+                {systemPipeline && (
+                    <p className="text-sm text-text-secondary">
+                        System pipeline: templates cannot be added or deleted here; each template's
+                        config body and tag schema can still be edited.
+                    </p>
+                )}
             </div>
 
             {/* Search + refresh on one aligned row, matching the Pipelines/Workflows/Executions

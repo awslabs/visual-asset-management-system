@@ -58,13 +58,14 @@ One folder per domain. The current domains:
 -   `assetLinks/` — Asset relationship management
 -   `comments/` — Comment CRUD
 -   `config/` — System configuration
+-   `osVectorSearch/` — Vector search family: `vectorIndexer.py` (single writer of the vector embeddings table, driven by `vector.embedding.ready` events and file/asset lifecycle records), `vectorReindexer.py` (`clear`/`enqueue`/`both`; direct invoke or CDK custom resource), `systemWorkflowLauncher.py` (paced SQS consumer that invokes `executeWorkflow` as `SYSTEM_USER`), `vectorSearchService.py` (`POST /search/nlp`). Shared code: `common/vectorsearch/{embeddings,vectorStore,fileClassIntent}.py`, `common/indexing/{documentIds,fileEnumeration}.py`, `common/databaseAccess.py`, `common/workflows/{executionLocks,systemRecords}.py`
 -   `databases/` — Database CRUD
--   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
+-   `indexing/` — Core indexing (every deployment): `sqsBucketSync.py` (S3 bucket synchronization), `snsQueuing.py` (SNS→SQS shims), `crReindexer.py` (row-rewriting reindexer that feeds every indexer family; direct invoke or CDK custom resource)
 -   `metadata/` — Metadata CRUD
 -   `metadataschema/` — Metadata schema management
 -   `pipelines/` — Pipeline management (Pydantic models; Lambda/SQS/EventBridge/DeadlineCloud execution types — `PIPELINE_EXECUTION_TYPES` in `models/pipelines.py`. DeadlineCloud is async-only with a mandatory task-token callback: `waitForCallback` must be `Enabled` or create returns 400, and it is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled` in the commercial `aws` partition only)
 -   `roles/` — Role CRUD
--   `search/` — OpenSearch search handlers
+-   `osSemanticSearch/` — OpenSearch semantic search family: `search.py` (keyword `/search` route), `osFileIndexer.py` and `osAssetIndexer.py` (DynamoDB/S3 stream consumers writing the OpenSearch file and asset indexes)
 -   `sendEmail/` — Email notification Lambda
 -   `subscription/` — Asset subscription management
 -   `tags/` — Tag CRUD
@@ -331,6 +332,50 @@ and EU Sovereign (both templates set `app.govCloud.enabled: true`), so treat it 
 "restricted partition" rather than literally GovCloud. The CDK-side rules —
 including the `AWS::Lambda::EventSourceMapping` tag restriction that fails a
 GovCloud deploy outright — are in `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`.
+
+### **Rule 5: Feature-gated families do not import each other**
+
+A capability a deployment can switch off wholesale is a **family**: its handlers, its
+`common/` package, and its models are all absent when the flag is off. Two exist today —
+the OpenSearch semantic search family (`handlers/osSemanticSearch`: the keyword `/search`
+route plus the `osFileIndexer` / `osAssetIndexer` stream consumers, on the OpenSearch mode
+flags) and the vector family (`handlers/osVectorSearch`, `common/vectorsearch`,
+`models/vectorsearch`, on `app.vectorSearch.enabled`). Between them sits `handlers/indexing`,
+the **core** that runs in every deployment: `sqsBucketSync`, the `snsQueuing` shims, and
+`crReindexer`. Either family deploys without the other, so a module-level import across a
+boundary fails the surviving code at cold start — a `500` on every request that synth
+cannot see and a suite importing everything never reaches.
+
+-   **A family owns its packages and imports only `common/`.** Behaviour both families
+    need lives in a neutral `common/` module, never in either family:
+    `common/indexing/{documentIds,fileEnumeration}.py` define "what is an asset file" once
+    for the core reindexer and the vector reindexer.
+-   **Core never imports a family, and a family never imports core.** Core reaches a
+    family through the registry seams every table and route already uses — a `ResourceKeys`
+    constant, an `ApiRoute`, a feature switch — and through events: `sqsBucketSync` publishes
+    to the storage stack's SNS fan-out topics both families' queues subscribe to, and the
+    pipeline publishes `vector.embedding.ready` on the orchestration bus for the vector
+    indexer.
+-   **A runtime cross-group read is function-scoped and gated.** Two are admitted:
+    `vectorSearchService._opensearch_step` imports `handlers.osSemanticSearch.search` inside
+    the function after `OPENSEARCH_DISABLED` is ruled out, and
+    `crReindexer.ReindexUtility.clear_opensearch_indexes` imports `opensearchpy` inside the
+    method. Both are named with a site count in
+    `tests/common/test_indexer_families_import_boundary.py`, which walks the tree and fails
+    on a module-level import in any direction, an unlisted function-scoped one, or an
+    exemption whose site no longer exists. The CDK half (no cross-gated function, no
+    cross-wired queue) is `infra/test/platform/t1VectorIndexingWiring.test.ts`.
+-   **Each family has its own reindexer when its rows are not derivable from metadata.**
+    `crReindexer` re-writes DynamoDB rows so stream consumers re-process them, which is
+    enough for OpenSearch documents; a vector row is the output of a Bedrock run, so
+    `vectorReindexer` enqueues one system-workflow launch per latest live file version.
+    Both are invoked directly or as a CDK custom resource on deploy
+    (`app.openSearch.reindexOnCdkDeploy` / `app.vectorSearch.reindexOnCdkDeploy`).
+
+A new family takes the same shape: its own `handlers/<family>` and `common/<family>`
+packages, its own SQS queue subscribed to the storage stack's SNS fan-out topics (as the
+Garnet and Physna add-ons and the vector indexer do), its own tables registered through
+`ResourceKeys`, its own reindexer if needed, and an entry in that guard's family table.
 
 ## 🔐 **Security Guidelines for Exception Handling**
 
@@ -942,9 +987,9 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth.
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.49 MB template and `apiBuilder2` emits 71 in ~0.29 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.49 MB template and `apiBuilder2` emits 71 in ~0.30 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
-A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
+A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 123 nodes from 101 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
 ```typescript
 // ✅ CORRECT - Register API routes
@@ -1333,6 +1378,13 @@ class Test[Domain]Handler:
 
                 assert response['statusCode'] == 403
 ```
+
+**Vector-search test doubles** (mirrors `backend/tests/CLAUDE.md`, "Use the shared Stubber helper in `tests/vectorStub.py`"):
+
+-   Vector-search code talks to two APIs that `moto` cannot serve: DynamoDB `SearchVectors` and Amazon Bedrock Runtime. `tests/vectorStub.py` wraps `botocore.stub.Stubber` for both — `stubbed_dynamodb(expected_calls)` and `stubbed_bedrock_runtime(expected_calls)` are context managers that yield a real botocore client with the scripted responses queued, so a test exercises request serialization against the live service model rather than a `MagicMock` that accepts anything. Write one Stubber contract test per vector operation the code performs; the helper's own checks are mutation-verified in `tests/test_vectorStub.py`.
+-   **Never `create_table(VectorIndexes=…)` under moto.** moto's DynamoDB does not implement vector indexes; the call either raises on the unknown parameter or silently creates a table without the index. Use moto for plain DynamoDB, S3, SQS, SNS, SSM, and Step Functions plumbing and the Stubber helper for the vector and Bedrock calls.
+-   **Bedrock is fakes only.** No test invokes a model; `stubbed_bedrock_runtime` and the house `_boto_client` fake are the only two doubles, and a handler's Bedrock error path is exercised by scripting the `ClientError` code (`AccessDeniedException`, `ThrottlingException`, `ValidationException`) into the stub.
+-   The service-model floor that makes `SearchVectors` stubbable is pinned by `tests/common/test_vector_api_floor.py`, which fails loudly (never skips) when the installed botocore lacks the operation, so a dependency downgrade shows up as one clear failure rather than as a hundred `ParamValidationError`s.
 
 ### **Rule 11: Poetry-Managed Requirements Files Are Generated — Never Edit Directly**
 

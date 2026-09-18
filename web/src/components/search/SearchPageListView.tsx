@@ -1,20 +1,19 @@
 import Table, { TableProps } from "@cloudscape-design/components/table";
-import {
-    CollectionPreferences,
-    Header,
-    Link,
-    Pagination,
-    Box,
-    Button,
-    SpaceBetween,
-    Alert,
-    Input,
-    Grid,
-    Select,
-    FormField,
-    Modal,
-    Icon,
-} from "@cloudscape-design/components";
+import CollectionPreferences from "@cloudscape-design/components/collection-preferences";
+import Header from "@cloudscape-design/components/header";
+import Link from "@cloudscape-design/components/link";
+import Pagination from "@cloudscape-design/components/pagination";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Alert from "@cloudscape-design/components/alert";
+import Input from "@cloudscape-design/components/input";
+import Grid from "@cloudscape-design/components/grid";
+import Select from "@cloudscape-design/components/select";
+import FormField from "@cloudscape-design/components/form-field";
+import Modal from "@cloudscape-design/components/modal";
+import Icon from "@cloudscape-design/components/icon";
+import Checkbox from "@cloudscape-design/components/checkbox";
 import Popover from "@cloudscape-design/components/popover";
 import { SearchExplanation, getTotalResultCount, FIELD_MAPPINGS } from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
@@ -36,7 +35,6 @@ import { useNavigate } from "react-router-dom";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { fetchtagTypes } from "../../services/APIService";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
-import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
 import FileViewerModal from "../filemanager/modals/FileViewerModal";
@@ -54,6 +52,7 @@ import {
     areFilenamesViewableTogether,
     areFilesComparableTogether,
 } from "../../visualizerPlugin/core/viewableExtensions";
+import { describeSegmentMatch, formatRelevancePercent } from "./utils/relevance";
 
 let tagTypes: any;
 
@@ -590,6 +589,44 @@ function columnRender(
                 <div style={{ whiteSpace: "normal", wordBreak: "break-word" }}>{description}</div>
             </Box>
         );
+    } else if (name === "relevance") {
+        // Natural-language hits: `_score` is 1 - cosine distance; the popover names what the
+        // embedding was built from (render, text, ...) and, for a file matched through its segment
+        // vectors, the best window or chunk and how many matched.
+        const modalities: string[] = Array.isArray(e._vector?.sourceModalities)
+            ? e._vector.sourceModalities
+            : [];
+        const segmentMatch = describeSegmentMatch(e._vector);
+        return (
+            <Box>
+                <SpaceBetween direction="horizontal" size="xs">
+                    <span>{formatRelevancePercent(e._score)}</span>
+                    {(modalities.length > 0 || segmentMatch) && (
+                        <Popover
+                            size="small"
+                            position="right"
+                            triggerType="custom"
+                            dismissButton={false}
+                            header="Matched from"
+                            content={
+                                <Box>
+                                    {modalities.length > 0 && <div>{modalities.join(", ")}</div>}
+                                    {segmentMatch && <div>{segmentMatch}</div>}
+                                </Box>
+                            }
+                        >
+                            {/* A Button, not a bare Icon: a custom trigger is only reachable by
+                                keyboard when the child itself takes focus. */}
+                            <Button
+                                variant="inline-icon"
+                                iconName="status-info"
+                                ariaLabel="Show what this result matched from"
+                            />
+                        </Popover>
+                    )}
+                </SpaceBetween>
+            </Box>
+        );
     } else if (name.indexOf("str") === 0 || name.indexOf("num_") === 0) {
         return <Box>{value}</Box>;
     }
@@ -622,6 +659,7 @@ const COLUMN_WIDTHS: Record<string, { width: number; minWidth: number }> = {
     str_assetversionid: { width: 180, minWidth: 130 },
     num_filesize: { width: 100, minWidth: 70 },
     num_size: { width: 100, minWidth: 70 },
+    relevance: { width: 130, minWidth: 100 },
     // Client-side thumbnail columns. Each is declared from a separate asset-mode and file-mode
     // branch below, so they resolve here rather than being written out twice.
     preview: { width: 150, minWidth: 100 },
@@ -805,6 +843,16 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     header: isFileMode ? `${Synonyms.Asset} Tags` : "Tags",
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
+                    isRowHeader: false,
+                    ...columnWidthFor(name),
+                };
+            }
+            if (name === "relevance") {
+                return {
+                    id: name,
+                    header: "Relevance",
+                    cell: (e: any) => columnRender(e, name, e._score, navigate, isFileMode),
+                    sortingField: "_score",
                     isRowHeader: false,
                     ...columnWidthFor(name),
                 };
@@ -1137,12 +1185,20 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                             : undefined
                     }
                     trackBy="_id"
+                    ariaLabels={{
+                        selectionGroupLabel: "Result selection",
+                        allItemsSelectionLabel: () => "Select all results on this page",
+                        itemSelectionLabel: (_, item) =>
+                            `Select ${item.str_key || item.str_assetname || item._id}`,
+                    }}
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
                     loadingText="Loading"
                     items={state?.result?.hits?.hits?.map((hit: any) => ({
                         ...hit._source,
                         _id: hit._id,
+                        _score: hit._score,
+                        _vector: hit._vector,
                         explanation: hit.explanation,
                     }))}
                     sortingColumn={
@@ -1186,6 +1242,11 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                         <Pagination
                             pagesCount={pageCount}
                             currentPageIndex={currentPage}
+                            ariaLabels={{
+                                nextPageLabel: "Next page",
+                                previousPageLabel: "Previous page",
+                                pageLabel: (pageNumber) => `Page ${pageNumber} of ${pageCount}`,
+                            }}
                             onChange={({ detail }) => {
                                 console.log(
                                     "pagination change",

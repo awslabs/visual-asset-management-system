@@ -36,13 +36,13 @@ release: the source had the fix, the served bundle did not.
 
 ## Two kinds of spec — know which you are writing
 
-|           | **Core specs (tracked)**                               | **Ad-hoc specs (untracked)**                                |
-| --------- | ------------------------------------------------------ | ----------------------------------------------------------- |
-| Purpose   | Permanent smoke coverage of a page or shared component | Prove one specific change / fix works                       |
-| Lifetime  | Lives with the page; updated when the page changes     | Deleted or left untracked after the change ships            |
-| Data      | **Must not require specific data**                     | May target known seed data                                  |
-| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`      | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes                                                    | No — keep out of git                                        |
+|           | **Core specs (tracked)**                                            | **Ad-hoc specs (untracked)**                                |
+| --------- | ------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component              | Prove one specific change / fix works                       |
+| Lifetime  | Lives with the page; updated when the page changes                  | Deleted or left untracked after the change ships            |
+| Data      | **Must not require specific data**                                  | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`, `search.spec.ts` | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                 | No — keep out of git                                        |
 
 **Add a core spec only when a new page or shared component is added.** A fix to existing behavior gets
 an ad-hoc spec, or a new assertion inside the relevant core spec if the behavior is permanent.
@@ -132,6 +132,10 @@ locators — the app's markup is not always guessable, and these were establishe
 | `wizardRail(page)`                              | The execute dialog's step rail (`navigation` "Execution steps") |
 | `rowValue(page, label)`                         | The value cell of a label/value row in a detail panel           |
 | `collectPageErrors(page)`                       | Uncaught page errors, for crash-regression assertions           |
+| `gotoSearch(page, { databaseId?, tab? })`       | Navigate to the search page; waits on its tab strip + h1        |
+| `searchTabs(page)`                              | The search page's provider tab strip (`role=tablist`)           |
+| `readFeaturesEnabled(page)`                     | Cached secure-config switches; `null` if none cached            |
+| `expectSearchRendered(page)`                    | Rows, "No matches", or "No … to display" — any sandbox          |
 
 **Selector facts worth not rediscovering:**
 
@@ -163,6 +167,12 @@ locators — the app's markup is not always guessable, and these were establishe
 -   Detail and quick-view panels render a field as a label span plus its value span, so a field's value
     is the label's next sibling. Use `rowValue(page, label)`; a page-wide `getByText` for a value's
     shape (a path, a slash, an id) matches dozens of unrelated elements.
+-   **The search page is a Cloudscape tab strip** (`role=tablist`): the asset-list tab is always there
+    and the `Search` tab only when OpenSearch or vector search is on — derive the expectation from
+    `readFeaturesEnabled(page)` (`VECTORSEARCH` present, or `NOOPENSEARCH` absent), never from a
+    fixture. The active tab is the `?tab=` hash query (`/#/assets/?tab=asset-list`). Its empty states
+    read `No matches` (search table) and `No assets to display.` (asset list), neither of which
+    `expectTableRendered`'s regex matches — use `expectSearchRendered(page)`.
 
 When a page's markup changes, fix the helper once; every spec follows.
 
@@ -224,9 +234,11 @@ challenge manually.
 ## Adding a core spec for a new page
 
 1. Add the page's route to the `gotoOrchestration` union in `support/fixtures.ts` if it is a new
-   orchestration route.
-2. Create `orchestration.{page}.spec.ts` and assert, in this order: the page renders without a crash;
-   its controls exist; its filters offer the expected values; and one interaction per row action.
+   orchestration route. A page outside the orchestration module gets its own `goto*` helper that
+   waits on its own structure — `gotoSearch` (tab strip + h1) is the model.
+2. Create `orchestration.{page}.spec.ts` — or `{page}.spec.ts` for a page outside the module, as
+   `search.spec.ts` is — and assert, in this order: the page renders without a crash; its controls
+   exist; its filters offer the expected values; and one interaction per row action.
 3. Derive every subject from the environment (Rule 1) and mutate nothing (Rule 2).
 4. Add any new selector knowledge to `support/fixtures.ts`, not inline in the spec.
 5. Run against a deployed environment and confirm the result is `passed` or an explicit `skipped` —

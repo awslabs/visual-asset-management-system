@@ -134,6 +134,76 @@ export async function expectTableRendered(page: Page): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Search page
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The feature switches the app cached from /api/secure-config after login. Reading them from the
+ * app's own cache lets a spec assert what the deployment implies instead of assuming a fixture.
+ * `null` when nothing is cached yet; `[]` when the cache holds a config with no switches.
+ */
+export async function readFeaturesEnabled(page: Page): Promise<string[] | null> {
+    return page.evaluate(() => {
+        const raw = window.localStorage.getItem("vams_cache_config");
+        if (!raw) return null;
+        const config = JSON.parse(raw);
+        const value = config?.featuresEnabled;
+        if (Array.isArray(value)) return value.filter((v: unknown) => typeof v === "string");
+        if (typeof value === "string") {
+            return value
+                .split(",")
+                .map((v: string) => v.trim())
+                .filter(Boolean);
+        }
+        return [];
+    });
+}
+
+/** The search page's provider tab strip. */
+export function searchTabs(page: Page): Locator {
+    return page.getByRole("tablist").first();
+}
+
+/**
+ * Navigate to the search page — optionally database-locked and optionally straight to a provider
+ * tab (`?tab=`) — and wait for its tab strip and an h1. Waits on structure, never on data: the
+ * unified tab's h1 comes from SearchTopBar and the asset-list tab's from ListPage, and either
+ * satisfies the wait.
+ */
+export async function gotoSearch(
+    page: Page,
+    options: { databaseId?: string; tab?: string } = {}
+): Promise<void> {
+    const path = options.databaseId ? `/#/databases/${options.databaseId}/assets/` : "/#/assets/";
+    const query = options.tab ? `?tab=${encodeURIComponent(options.tab)}` : "";
+    await page.goto(`${path}${query}`, { waitUntil: "domcontentloaded" });
+    await expect(searchTabs(page)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible({
+        timeout: 60_000,
+    });
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+}
+
+/**
+ * Assert the active search tab rendered rows or one of its empty states — the search table's
+ * "No matches" or the asset list's "No assets to display." — never that specific data exists.
+ * `expectTableRendered`'s `/no .*found/i` matches neither, which is why this exists.
+ */
+export async function expectSearchRendered(page: Page): Promise<number> {
+    const rows = tableRows(page);
+    await expect
+        .poll(
+            async () =>
+                (await rows.count()) > 0 ||
+                (await page.getByText(/No matches/).count()) > 0 ||
+                (await page.getByText(/^No .+ to display\.$/).count()) > 0,
+            { timeout: 60_000 }
+        )
+        .toBe(true);
+    return rows.count();
+}
+
+// ---------------------------------------------------------------------------------------------
 // Asset file viewer
 // ---------------------------------------------------------------------------------------------
 
@@ -436,4 +506,85 @@ export async function chooseSelectOption(
         await page.waitForTimeout(200);
     }
     await page.keyboard.press("Enter");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Unified search: keyword / natural-language mode
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Which engines the deployment offers, from the cached feature switches — the same derivation the
+ * container makes (`searchMode.ts`): NOOPENSEARCH is the negative switch, VECTORSEARCH the positive
+ * one. Specs derive their expected controls from this rather than assuming a fixture.
+ */
+export type SearchModeCase = "both" | "nlp-only" | "keyword-only" | "none";
+
+export function searchModeCase(features: string[]): SearchModeCase {
+    const vector = features.includes("VECTORSEARCH");
+    const keyword = !features.includes("NOOPENSEARCH");
+    if (vector && keyword) return "both";
+    if (vector) return "nlp-only";
+    if (keyword) return "keyword-only";
+    return "none";
+}
+
+/**
+ * The keyword / natural-language switch. Cloudscape renders SegmentedControl as a `toolbar` named by
+ * its `label`, holding one `aria-pressed` button per option — so this is where the mode lives, not
+ * under a `group` or `radiogroup`. Absent when only OpenSearch is on.
+ */
+export function modeToolbar(page: Page): Locator {
+    return page.getByRole("toolbar", { name: "Search mode" });
+}
+
+/** The unified tab's query box: an `Input type="search"`, so a `searchbox`, never a `textbox`. */
+export function searchQueryBox(page: Page): Locator {
+    return page.getByRole("searchbox").first();
+}
+
+/** Press the mode segment and wait for the placeholder to confirm the container switched. */
+export async function selectSearchMode(page: Page, mode: "keyword" | "nlp"): Promise<void> {
+    const name = mode === "nlp" ? "Natural language" : "Keyword";
+    await modeToolbar(page).getByRole("button", { name }).click();
+    await expect(searchQueryBox(page)).toHaveAttribute(
+        "placeholder",
+        mode === "nlp" ? /Describe what you are looking for/ : /Search by keywords/
+    );
+}
+
+/**
+ * WCAG contrast ratio of an element's text against its effective background, walking up the tree
+ * until an opaque background is found (Cloudscape leaves most containers transparent).
+ */
+export async function textContrastRatio(target: Locator): Promise<number> {
+    return target.evaluate((el) => {
+        const parse = (c: string): [number, number, number, number] => {
+            const m = c.match(/rgba?\(([^)]+)\)/);
+            if (!m) return [255, 255, 255, 1];
+            const p = m[1].split(",").map((v) => parseFloat(v.trim()));
+            return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+        };
+        const lum = ([r, g, b]: number[]) => {
+            const f = (v: number) => {
+                const s = v / 255;
+                return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+            };
+            return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+        };
+        let node: HTMLElement | null = el as HTMLElement;
+        let bg: [number, number, number, number] = [255, 255, 255, 0];
+        while (node) {
+            const c = parse(getComputedStyle(node).backgroundColor);
+            if (c[3] > 0.99) {
+                bg = c;
+                break;
+            }
+            node = node.parentElement;
+        }
+        const fg = parse(getComputedStyle(el).color);
+        const l1 = lum(fg);
+        const l2 = lum(bg);
+        const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+        return (hi + 0.05) / (lo + 0.05);
+    });
 }

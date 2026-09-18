@@ -70,6 +70,12 @@ from common.workflows.triggerTemplateValidation import (
     triggers_referencing_template,
     validate_template_not_breaking_triggers,
 )
+from common.workflows.systemRecords import (
+    is_schema_import_call,
+    template_locked_field_changed,
+    system_template_locked_field_message,
+    SYSTEM_TEMPLATE_LOCKED_MESSAGE,
+)
 
 logger = safeLogger(service_name="PipelineTemplateService")
 
@@ -572,10 +578,22 @@ def create_template(database_id, pipeline_id, request, username, event=None):
     return success(body={"message": _template_to_response(record, tag_schema_fields=tag_fields).dict()})
 
 
-def update_template(database_id, pipeline_id, template_id, request, username, event=None):
+def update_template(database_id, pipeline_id, template_id, request, username, event=None,
+                    locked=False):
     row = _get_template_row(database_id, pipeline_id, template_id)
     if not row:
         return validation_error(status_code=404, body={"message": "Template not found"})
+
+    # A system pipeline's template may change only its content (configBody, tagSchema, webFormJson).
+    # The rule is value-based because the web form sends the whole template on every save: a locked
+    # field equal to the stored value is not a change, a differing one is refused and named.
+    if locked:
+        changed = template_locked_field_changed(request.dict(exclude_none=True), row)
+        if changed is not None:
+            logger.info(f"Update of system template {database_id}:{pipeline_id}:{template_id} "
+                        f"refused: '{changed}' is locked")
+            return validation_error(
+                body={"message": system_template_locked_field_message(changed)}, event=event)
 
     # Validate the tag schema before applying any field/body changes (all-or-nothing).
     if request.tagSchema is not None:
@@ -833,6 +851,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         is_tag_schema = API_PIPELINE_TEMPLATE_TAG_SCHEMA.matches(path)
 
+        # The templates of a system pipeline are part of the shipped bundle: none may be added or
+        # deleted through the API, and an update may change only their content. The importer's own
+        # cross-call re-asserts the bundle and is exempt. The tag-schema route is open on every
+        # pipeline.
+        system_locked = bool(pipeline_item.get("isSystem")) and not is_schema_import_call(event)
+
         if is_tag_schema:
             # The tag schema is a sub-resource of a template; the template must exist.
             template_row = _get_template_row(database_id, pipeline_id, template_id)
@@ -868,6 +892,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 "message": list_templates(database_id, pipeline_id, query_parameters).dict()})
 
         if method == "POST":
+            if system_locked:
+                logger.info(f"Template create on system pipeline {database_id}:{pipeline_id} refused")
+                return validation_error(body={"message": SYSTEM_TEMPLATE_LOCKED_MESSAGE}, event=event)
             request = CreateTemplateRequestModel(**_request_body(event))
             return create_template(database_id, pipeline_id, request, username, event)
 
@@ -875,11 +902,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if not template_id:
                 return validation_error(body={"message": "templateId required"}, event=event)
             request = UpdateTemplateRequestModel(**_request_body(event))
-            return update_template(database_id, pipeline_id, template_id, request, username, event)
+            return update_template(database_id, pipeline_id, template_id, request, username, event,
+                                   locked=system_locked)
 
         if method == "DELETE":
             if not template_id:
                 return validation_error(body={"message": "templateId required"}, event=event)
+            if system_locked:
+                logger.info(f"Template delete on system pipeline {database_id}:{pipeline_id} refused")
+                return validation_error(body={"message": SYSTEM_TEMPLATE_LOCKED_MESSAGE}, event=event)
             return delete_template(database_id, pipeline_id, template_id, event)
 
         return validation_error(body={"message": "Method not allowed"}, event=event)

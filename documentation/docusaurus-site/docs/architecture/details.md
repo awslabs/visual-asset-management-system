@@ -64,7 +64,9 @@ Before calling Tier 2 enforcement, handlers must annotate the data object with i
 
 ![Data Queue Architecture](/img/dataQueues_MainFlow.png)
 
-VAMS maintains search indexes in Amazon OpenSearch that mirror data from Amazon DynamoDB. The indexing pipeline uses Amazon DynamoDB Streams, Amazon SNS, and Amazon SQS to decouple producers from consumers.
+<!-- TODO(owner): diagram: dataQueues_MainFlow.png — revise the data-queue diagram in place to add the VectorEmbeddingReadyRule → Vector Indexer SQS → Vector Indexer → Vector Embeddings Table branch (both PNG copies) -->
+
+VAMS maintains search indexes in Amazon OpenSearch that mirror data from Amazon DynamoDB, and — when vector search is enabled — a DynamoDB vector index of per-file-version embeddings. Both are fed through Amazon DynamoDB Streams, Amazon SNS, Amazon SQS, and the VAMS orchestration bus on Amazon EventBridge, which decouple producers from consumers.
 
 ```mermaid
 graph LR
@@ -93,6 +95,11 @@ graph LR
     subgraph SQS + Indexer Lambdas
         FSQS["File SQS"] --> FI["File Indexer"]
         ASQS["Asset SQS"] --> AI["Asset Indexer"]
+        VSQS["Vector Indexer SQS"] --> VI["Vector Indexer"]
+    end
+
+    subgraph Orchestration Bus
+        EBR["VectorEmbeddingReadyRule<br/>vector.embedding.ready"]
     end
 
     subgraph OpenSearch
@@ -100,10 +107,15 @@ graph LR
         AIdx["Asset Index"]
     end
 
+    subgraph DynamoDB Vector Index
+        VT["Vector Embeddings Table<br/>vec-&lt;model&gt;-&lt;dims&gt;"]
+    end
+
     MT -->|Stream| FQL
     FT -->|Stream| FQL
     FQL --> FSNS
     FSNS --> FSQS
+    FSNS --> VSQS
     FI --> FIdx
 
     AT -->|Stream| AQL
@@ -112,15 +124,24 @@ graph LR
     LMT -->|Stream| AQL
     AQL --> ASNS
     ASNS --> ASQS
+    ASNS --> VSQS
     AI --> AIdx
 
     DT -->|Stream| DQL
     DMT -->|Stream| DQL
     DQL --> DSNS
+
+    GP["SYSTEM GenAI metadata pipeline"] -->|PutEvents| EBR
+    EBR --> VSQS
+    VI --> VT
 ```
 
 :::info[Dual Index Architecture]
 VAMS uses a dual-index architecture with separate **file index** and **asset index** in Amazon OpenSearch. The file index stores per-file metadata, attributes, and S3 information. The asset index stores per-asset metadata, version information, tags, and relationship flags. Both indexes use `flat_object` fields for dynamic metadata and attributes to prevent field explosion.
+:::
+
+:::info[Vector Index]
+When `app.vectorSearch.enabled` is `true`, the SYSTEM GenAI metadata pipeline publishes one `vector.embedding.ready` event per analyzed file version on the orchestration bus. An Amazon EventBridge rule and the file and asset indexer SNS topics all feed one vector indexer queue, and a single vector indexer Lambda function owns the vector table: it writes new items, flips `isLatest` when a new version arrives, flips `isArchived` on archive and unarchive, and deletes items on permanent delete. Search reads the table with `SearchVectors` through the `POST /search/nlp` Lambda function. See [Vector search](../concepts/vector-search.md).
 :::
 
 ## File Upload Flow
@@ -162,7 +183,7 @@ sequenceDiagram
 
 ## Pipeline Execution Flow
 
-VAMS supports three pipeline execution types: **Lambda** (synchronous or asynchronous invocation), **SQS** (asynchronous message delivery), and **EventBridge** (asynchronous event delivery). All pipeline types are orchestrated through AWS Step Functions.
+VAMS supports four pipeline execution types: **Lambda** (synchronous or asynchronous invocation), **SQS** (asynchronous message delivery), **EventBridge** (asynchronous event delivery), and **DeadlineCloud** (AWS Deadline Cloud job submission, commercial partition only). All pipeline types are orchestrated through AWS Step Functions.
 
 ```mermaid
 graph TD
@@ -210,27 +231,31 @@ graph TD
 
 Each pipeline step in a workflow receives designated Amazon S3 output paths from the workflow state machine:
 
-| Path Variable                          | Target Bucket    | Purpose                                                              |
-| -------------------------------------- | ---------------- | -------------------------------------------------------------------- |
-| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs including `.previewFile.*` thumbnails (versioned) |
-| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images only (versioned)                          |
-| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline (versioned)                  |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or non-versioned viewer data                 |
+| Path Variable                          | Target Bucket                          | Purpose                                                                                        |
+| -------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `outputS3AssetFilesPath`               | Asset bucket                           | File-level outputs including `.previewFile.*` thumbnails (versioned)                           |
+| `outputS3AssetPreviewPath`             | Asset bucket                           | Asset-level preview images only (versioned)                                                    |
+| `outputS3AssetMetadataPath`            | Asset bucket                           | Metadata and attribute files produced by the pipeline (versioned)                              |
+| `outputS3AssetResultsPath`             | Workflow execution bucket (run prefix) | Results recorded on the execution; `execution.status.json` reports a pipeline-decided `FAILED` |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket                       | Temporary working files or non-versioned viewer data                                           |
 
 ### Available Pipelines
 
-| Pipeline                           | Compute             | Description                                                              |
-| ---------------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| 3D Basic Conversion                | AWS Batch (Fargate) | Convert 3D file formats                                                  |
-| CAD/Mesh Metadata Extraction       | AWS Batch (Fargate) | Extract metadata from CAD and mesh files                                 |
-| Point Cloud Potree Viewer          | AWS Batch (Fargate) | Generate Potree octree data for point cloud visualization                |
-| 3D Preview Thumbnail               | AWS Batch (Fargate) | Generate GIF/JPG/PNG preview thumbnails for 3D files                     |
-| Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate) | Generate Gaussian splat reconstructions                                  |
-| GenAI Metadata 3D Labeling         | AWS Batch (Fargate) | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition |
-| Model Optimization (ModelOps)      | AWS Batch (Fargate) | Optimize 3D models for web delivery                                      |
-| RapidPipeline (ECS)                | AWS Batch (Fargate) | RapidPipeline integration via Amazon ECS                                 |
-| RapidPipeline (EKS)                | Amazon EKS          | RapidPipeline integration via Amazon EKS                                 |
-| Isaac Lab Training                 | AWS Batch (GPU)     | NVIDIA Isaac Lab simulation training                                     |
+| Pipeline                                  | Compute                                                     | Description                                                                                    |
+| ----------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 3D Basic Conversion                       | AWS Lambda                                                  | Convert 3D file formats                                                                        |
+| SYSTEM - GenAI Metadata Generation        | AWS Lambda (container images); optional AWS Batch (Fargate) | Amazon Bedrock analysis of every viewer-supported file: attributes, GenAI metadata, embeddings |
+| 3D Preview Thumbnail (SYSTEM - Preview)   | AWS Batch (Fargate)                                         | Generate GIF/JPG/PNG preview thumbnails for 3D files                                           |
+| Coordinate Transform                      | AWS Batch (Fargate)                                         | Reproject point clouds between coordinate reference systems                                    |
+| Point Cloud Potree Viewer                 | AWS Batch (Fargate)                                         | Generate Potree octree data for point cloud visualization                                      |
+| Gaussian Splatting (Splat Toolbox)        | AWS Batch (GPU)                                             | Generate Gaussian splat reconstructions                                                        |
+| NVIDIA Cosmos Predict / Reason / Transfer | AWS Batch (GPU)                                             | World-model video generation, video reasoning, and control-signal video transfer               |
+| NVIDIA Cosmos 3                           | AWS Batch (GPU)                                             | Omnimodal world-model generation                                                               |
+| NVIDIA Gr00t Fine-Tuning                  | AWS Batch (GPU)                                             | Fine-tune the GR00T embodied AI model                                                          |
+| Isaac Lab Training                        | AWS Batch (GPU)                                             | NVIDIA Isaac Lab simulation training                                                           |
+| RapidPipeline (ECS)                       | Amazon ECS (Fargate)                                        | RapidPipeline integration via Amazon ECS                                                       |
+| RapidPipeline (EKS)                       | Amazon EKS                                                  | RapidPipeline integration via Amazon EKS                                                       |
+| Model Optimization (ModelOps)             | Amazon ECS (Fargate)                                        | Optimize 3D models for web delivery                                                            |
 
 ## Configuration Flow
 
@@ -271,20 +296,21 @@ Configuration values resolve through a four-tier fallback chain:
 
 ### Feature Flags
 
-| Feature Flag                    | Description                                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------ |
-| `GOVCLOUD`                      | AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments) |
-| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy                                       |
-| `LOCATIONSERVICES`              | Amazon Location Service enabled                                                      |
-| `ALBDEPLOY`                     | Application Load Balancer deployment mode                                            |
-| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                                    |
-| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                           |
-| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                               |
-| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                  |
-| `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito with OIDC federation                                                  |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
-| `PHYSNA_ADDON`                  | Physna add-on frontend features enabled                                              |
-| `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                   |
+| Feature Flag                    | Description                                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `GOVCLOUD`                      | AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                      |
+| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy                                                                            |
+| `LOCATIONSERVICES`              | Amazon Location Service enabled                                                                                           |
+| `ALBDEPLOY`                     | Application Load Balancer deployment mode                                                                                 |
+| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                                                                         |
+| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                                                                |
+| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                                                                    |
+| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                                                       |
+| `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito with OIDC federation                                                                                       |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                                                          |
+| `PHYSNA_ADDON`                  | Physna add-on frontend features enabled                                                                                   |
+| `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                                                        |
+| `VECTORSEARCH`                  | Natural-language (vector) search enabled; the search page shows the natural-language toggle and `POST /search/nlp` exists |
 
 ## Nested Stack Dependency Chain
 
@@ -298,15 +324,17 @@ graph TD
     Core --> LL["LambdaLayers"]
     Core --> SRB["StorageResourcesBuilder"]
 
+    SRB --> RNB["ResourceNamesBuilder"]
     SRB --> AB["AuthBuilder"]
 
-    AB --> APIGW["ApiGatewayV2Amplify"]
-
-    APIGW --> APIBuild["ApiBuilder"]
-    APIGW --> SW["StaticWeb"]
-    APIGW --> SearchB["SearchBuilder"]
-    APIGW --> PB["PipelineBuilder"]
-    APIGW --> Addon["AddonBuilder"]
+    AB --> APIBuild["ApiBuilder"]
+    APIBuild --> APIBuild2["ApiBuilder2"]
+    APIBuild2 --> SearchB["SearchBuilder<br/>(OpenSearch, vector indexing, /search/nlp)"]
+    APIBuild2 --> PB["PipelineBuilder"]
+    SRB --> Addon["AddonBuilder"]
+    SearchB --> RestApi["RestApi"]
+    Addon --> RestApi
+    SRB --> SW["StaticWeb"]
 
     Core --> LS["LocationService<br/><i>Conditional</i>"]
     Core --> FE["CustomFeatureEnabledConfig"]
@@ -314,7 +342,7 @@ graph TD
 
 ## Resource Name Resolution
 
-VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}/resourceNames/` — 65 in the shipped configuration (53 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 1 Lambda function name). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 64 of them; the Amazon OpenSearch Service stack publishes the remaining one, because the reindexer function it names is created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
+VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}/resourceNames/` — 68 in the shipped configuration (55 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 2 Lambda function names). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 66 of them; the Amazon OpenSearch Service stack publishes the remaining two (`lambdaFunctions/crOsReindexer`, `lambdaFunctions/vectorReindexer`), each only when its feature is enabled, because the functions they name are created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
 
 At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)`, or `get_log_group_name(ResourceKeys.*)` from `backend/backend/common/resourceNames.py`, which caches the parameter fetch for 60 minutes. This centralizes name management, enables environment variable overrides for testing, and reduces CDK template size by removing per-handler table/bucket/log-group environment variables (pipelines in `backendPipelines/` retain their direct environment variables).
 

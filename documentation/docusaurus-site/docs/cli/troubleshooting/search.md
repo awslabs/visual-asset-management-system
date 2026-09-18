@@ -15,12 +15,12 @@ This page covers issues encountered when using the VamsCLI `search` commands aga
 
 **Symptoms:**
 
--   `vamscli search assets`, `search files`, `search simple`, or `search mapping` fails with "Search functionality is disabled for this environment"
--   The error suggests using `vamscli assets list` instead
+-   `vamscli search assets`, `search files`, `search simple`, or `search mapping` fails with "Search functionality is disabled for this environment", or with "Keyword search is disabled for this environment (no OpenSearch)" when the deployment offers natural-language search
+-   The error suggests using `vamscli assets list` instead, or `vamscli search nlp` where vector search is enabled
 
 **Cause:**
 
-The `NOOPENSEARCH` feature switch is enabled in the deployment, so Amazon OpenSearch Service is not provisioned. All `search` subcommands check this feature switch before issuing a request and stop early when it is set.
+The `NOOPENSEARCH` feature switch is enabled in the deployment, so Amazon OpenSearch Service is not provisioned. The keyword `search` subcommands check this feature switch before issuing a request and stop early when it is set. `vamscli search nlp` is gated by the `VECTORSEARCH` switch instead and keeps working without OpenSearch.
 
 **Resolution:**
 
@@ -30,7 +30,7 @@ The `NOOPENSEARCH` feature switch is enabled in the deployment, so Amazon OpenSe
     vamscli features list
     ```
 
-    A `NOOPENSEARCH` entry in the enabled features confirms search is unavailable.
+    A `NOOPENSEARCH` entry in the enabled features confirms keyword search is unavailable; a `VECTORSEARCH` entry means `vamscli search nlp` is available.
 
 2. Use the non-search listing commands, which do not depend on Amazon OpenSearch Service:
 
@@ -57,6 +57,36 @@ The Amazon OpenSearch Service domain is temporarily unreachable, or the deployme
 -   Retry after a short delay, or confirm domain health with your administrator.
 -   Verify the deployment version with `vamscli version`. The dual-index search system requires VAMS 2.2 or later.
 -   Fall back to `vamscli assets list` or `vamscli database list-assets -d <database-id>` while the service is recovering.
+
+### Natural-Language Search Is Not Enabled
+
+**Symptoms:**
+
+-   `vamscli search nlp` exits with "Natural-language search is not enabled for this environment (the VECTORSEARCH feature switch is off)"
+
+**Cause:**
+
+The deployment was built without `app.vectorSearch.enabled`. The `/search/nlp` route does not exist on such a deployment, so the CLI checks the feature switch before calling it.
+
+**Resolution:**
+
+-   Confirm the deployment's feature switches with `vamscli features list`. A `VECTORSEARCH` entry means the command is available.
+-   The `NOOPENSEARCH` switch does not affect this command; use the keyword commands (`search assets`, `search files`) when only OpenSearch is available.
+
+### Vector Index Is Being Built
+
+**Symptoms:**
+
+-   `vamscli search nlp` exits with "Search Unavailable: Vector index is being built"
+
+**Cause:**
+
+The vector index was just created or re-created and is still being backfilled from DynamoDB; the API answers 503 until the index is ready.
+
+**Resolution:**
+
+-   Retry in a few minutes.
+-   Keyword search (`search assets`, `search files`) is unaffected while the index is being built.
 
 ---
 

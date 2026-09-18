@@ -1,0 +1,2175 @@
+"""
+Enhanced search handler for VAMS dual-index OpenSearch system.
+Supports searching across separate asset and file indexes with advanced metadata capabilities.
+
+Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+SPDX-License-Identifier: Apache-2.0
+"""
+
+import os
+import boto3
+import json
+import re
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple, Set
+from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
+from botocore.config import Config
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.constants import STANDARD_JSON_RESPONSE
+from common.resourceNames import get_table_name, ResourceKeys
+from common.databaseAccess import DatabaseAccessManager  # noqa: F401 -- the search routes' pre-filter, also addressed as handlers.osSemanticSearch.search.DatabaseAccessManager
+from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
+from common.validators import validate
+from common.dynamodb import validate_pagination_info
+from handlers.authz import CasbinEnforcer
+from handlers.auth import request_to_claims
+from customLogging.logger import safeLogger
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from models.search import (
+    SearchRequestModel, SimpleSearchRequestModel, SearchResponseModel, SearchHitModel, SearchHitExplanationModel,
+    AggregationModel, IndexMappingResponseModel
+)
+
+# Configure AWS clients with retry configuration
+retry_config = Config(
+    retries={
+        'max_attempts': 5,
+        'mode': 'adaptive'
+    }
+)
+
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+logger = safeLogger(service_name="DualIndexSearch")
+
+# Global variables for claims and roles
+claims_and_roles = {}
+
+# Both search endpoints fetch from offset 0 and page in Python, because the requested
+# page is cut only after per-hit Casbin filtering and after the two indexes' hits are
+# merged into one order. Asking for (from + size) * multiplier records leaves enough
+# behind the filter to fill the page. OpenSearch refuses from + size beyond its default
+# max_result_window, which is also the ceiling the request models validate against.
+AUTH_FILTER_BUFFER_MULTIPLIER = 2.0
+OPENSEARCH_MAX_RESULT_WINDOW = 10000
+
+# Load environment variables with error handling. The OpenSearch parameter names are optional: a
+# deployment without an OpenSearch mode sets OPENSEARCH_DISABLED and this module still imports.
+try:
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    opensearch_asset_index_ssm_param = os.environ.get("OPENSEARCH_ASSET_INDEX_SSM_PARAM", "")
+    opensearch_file_index_ssm_param = os.environ.get("OPENSEARCH_FILE_INDEX_SSM_PARAM", "")
+    opensearch_endpoint_ssm_param = os.environ.get("OPENSEARCH_ENDPOINT_SSM_PARAM", "")
+    opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
+except Exception as e:
+    logger.exception("Failed loading environment variables or resolving resource names")
+    raise e
+opensearch_disabled = os.environ.get("OPENSEARCH_DISABLED", "false") == "true"
+
+# Get SSM parameter values
+def get_ssm_parameter_value(parameter_name: str) -> str:
+    """Get SSM parameter value"""
+    try:
+        ssm_client = boto3.client('ssm', config=retry_config)
+        response = ssm_client.get_parameter(Name=parameter_name)
+        return response['Parameter']['Value']
+    except Exception as e:
+        logger.exception(f"Error getting SSM parameter {parameter_name}: {e}")
+        raise VAMSGeneralErrorResponse(f"Error getting configuration parameter: {parameter_name}")
+
+# The three aos/* SSM values, read on first OpenSearch use so a deployment without OpenSearch imports.
+_opensearch_settings: Optional[Dict[str, str]] = None
+
+
+def opensearch_settings() -> Dict[str, str]:
+    global _opensearch_settings
+    if _opensearch_settings is None:
+        _opensearch_settings = {
+            "asset_index": get_ssm_parameter_value(opensearch_asset_index_ssm_param),
+            "file_index": get_ssm_parameter_value(opensearch_file_index_ssm_param),
+            "endpoint": get_ssm_parameter_value(opensearch_endpoint_ssm_param),
+        }
+    return _opensearch_settings
+
+
+SEARCH_NOT_AVAILABLE_MESSAGE = "Search is not available when OpenSearch is not enabled"
+
+
+def _not_available() -> APIGatewayProxyResponseV2:
+    response = dict(STANDARD_JSON_RESPONSE)
+    response["statusCode"] = 404
+    response["body"] = json.dumps({"message": SEARCH_NOT_AVAILABLE_MESSAGE})
+    return response
+
+# Initialize DynamoDB tables
+asset_storage_table = dynamodb.Table(asset_storage_table_name)
+
+#######################
+# OpenSearch Client Management
+#######################
+
+class DualIndexSearchManager:
+    """Manages OpenSearch search operations across dual indexes"""
+    
+    def __init__(self):
+        self.client = None
+        self.asset_index = None
+        self.file_index = None
+        if not opensearch_disabled:
+            settings = opensearch_settings()
+            self.asset_index = settings["asset_index"]
+            self.file_index = settings["file_index"]
+            self._initialize_client(settings["endpoint"])
+    
+    def _initialize_client(self, endpoint: str):
+        """Initialize OpenSearch client; on failure the manager stays unavailable."""
+        try:
+            from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
+            
+            # Create OpenSearch client
+            host = endpoint.replace('https://', '').replace('http://', '')
+            region = os.environ.get('AWS_REGION', 'us-east-1')
+            service = 'aoss' if opensearch_type == 'serverless' else 'es'
+            
+            # Use AWSV4SignerAuth which uses boto3 credentials automatically
+            credentials = boto3.Session().get_credentials()
+            awsauth = AWSV4SignerAuth(credentials, region, service)
+            
+            self.client = OpenSearch(
+                hosts=[{'host': host, 'port': 443}],
+                http_auth=awsauth,
+                use_ssl=True,
+                verify_certs=True,
+                connection_class=RequestsHttpConnection,
+                pool_maxsize=20,
+                timeout=30,
+                max_retries=3,
+                retry_on_timeout=True
+            )
+            
+            logger.info(f"Initialized dual-index OpenSearch client - Asset: {self.asset_index}, File: {self.file_index}")
+        except Exception as e:
+            logger.exception(f"Failed to initialize OpenSearch client: {e}")
+            self.client = None
+    
+    def is_available(self) -> bool:
+        """Check if OpenSearch is available"""
+        return self.client is not None
+    
+    @staticmethod
+    def _sort_entry(sort_item: Any) -> Tuple[Optional[str], bool]:
+        """Resolve one OpenSearch sort entry to (source field name, descending).
+
+        Mirrors OpenSearch's own defaults: `_score` sorts descending, a bare field name
+        ascending, and an explicit `{"order": "desc"}` wins. The `.keyword` subfield the
+        query builder appends exists only in the index mapping, so it is stripped to
+        reach the value stored in `_source`.
+        """
+        field = None
+        order = None
+        if isinstance(sort_item, str):
+            field = sort_item
+        elif isinstance(sort_item, dict) and sort_item:
+            field = next(iter(sort_item))
+            config = sort_item[field]
+            if isinstance(config, dict):
+                order = config.get("order")
+            elif isinstance(config, str):
+                order = config
+        if not isinstance(field, str) or not field:
+            return None, False
+
+        if order in ("asc", "desc"):
+            descending = order == "desc"
+        else:
+            descending = field == "_score"
+
+        if field.endswith(".keyword"):
+            field = field[: -len(".keyword")]
+        return field, descending
+
+    @staticmethod
+    def _sort_value(value: Any) -> Tuple[int, Any]:
+        """Map a hit value onto a totally ordered key.
+
+        Hits merged from two indexes can carry different types (or nothing) for the same
+        sort field, and comparing those directly raises TypeError, which would discard the
+        ordering entirely. The leading rank groups missing / numeric / textual values so
+        every pair is comparable.
+        """
+        if value is None:
+            return (0, "")
+        if isinstance(value, bool):
+            return (1, int(value))
+        if isinstance(value, (int, float)):
+            return (1, value)
+        if isinstance(value, (list, tuple)):
+            return DualIndexSearchManager._sort_value(value[0]) if value else (0, "")
+        return (2, str(value))
+
+    def _sort_combined_results(self, hits: List[Dict], sort_config: List) -> List[Dict]:
+        """Order hits merged from the asset and file indexes into one sequence.
+
+        Each index answers its own query already sorted, so a plain concatenation leaves
+        every asset hit ahead of every file hit -- and the caller's page, sliced off the
+        head, then contains asset hits only. Sorting is applied least-significant key
+        first; Python's sort is stable, so the passes compose into the multi-key order
+        while letting each key keep its own direction.
+
+        Args:
+            hits: List of search hits to sort
+            sort_config: Sort configuration from OpenSearch query
+
+        Returns:
+            Sorted list of hits
+        """
+        if not sort_config or not hits:
+            return hits
+
+        logger.info(f"[Sort] Sorting {len(hits)} combined results with config: {sort_config}")
+
+        try:
+            ordered = list(hits)
+            applied = 0
+            for sort_item in reversed(list(sort_config)):
+                field, descending = self._sort_entry(sort_item)
+                if field is None:
+                    continue
+                if field == "_score":
+                    ordered.sort(key=lambda hit: self._sort_value(hit.get("_score", 0)),
+                                 reverse=descending)
+                else:
+                    ordered.sort(
+                        key=lambda hit: self._sort_value(hit.get("_source", {}).get(field)),
+                        reverse=descending,
+                    )
+                applied += 1
+            logger.info(f"[Sort] Applied {applied} sort keys to {len(ordered)} hits")
+            return ordered
+        except Exception as e:
+            logger.warning(f"[Sort] Error sorting combined results: {e}, returning unsorted")
+            return hits
+
+    def get_index_mappings(self) -> Dict[str, Any]:
+        """Get mappings for both indexes"""
+        if not self.is_available():
+            raise VAMSGeneralErrorResponse("Search service is not available")
+        
+        try:
+            asset_mapping = self.client.indices.get_mapping(self.asset_index)
+            file_mapping = self.client.indices.get_mapping(self.file_index)
+            
+            return {
+                "asset_index": asset_mapping.get(self.asset_index, {}),
+                "file_index": file_mapping.get(self.file_index, {})
+            }
+        except Exception as e:
+            logger.exception(f"Error getting index mappings: {e}")
+            raise VAMSGeneralErrorResponse("Error retrieving search index mappings")
+    
+    def search_dual_index(self, asset_query: Dict[str, Any], file_query: Dict[str, Any], 
+                         entity_types: List[str]) -> Dict[str, Any]:
+        """Execute search across both indexes based on entity types"""
+        if not self.is_available():
+            raise VAMSGeneralErrorResponse("Search service is not available")
+        
+        try:
+            results = {
+                "took": 0,
+                "timed_out": False,
+                "_shards": {"total": 0, "successful": 0, "skipped": 0, "failed": 0},
+                "hits": {"hits": [], "total": {"value": 0, "relation": "eq"}},
+                "aggregations": {}
+            }
+            
+            # Tracks whether both indexes contributed hits, which is what makes the merge
+            # sort below necessary; a single index answers already sorted.
+            indexes_with_hits = 0
+
+            # Search asset index if requested
+            if not entity_types or "asset" in entity_types:
+                logger.info("Searching asset index")
+                asset_response = self.client.search(body=asset_query, index=self.asset_index)
+
+                # Update timing and shard info
+                results["took"] += asset_response.get("took", 0)
+                results["timed_out"] = results["timed_out"] or asset_response.get("timed_out", False)
+                asset_shards = asset_response.get("_shards", {})
+                results["_shards"]["total"] += asset_shards.get("total", 0)
+                results["_shards"]["successful"] += asset_shards.get("successful", 0)
+                results["_shards"]["skipped"] += asset_shards.get("skipped", 0)
+                results["_shards"]["failed"] += asset_shards.get("failed", 0)
+                
+                # Add hits with index identifier
+                asset_hits = asset_response.get("hits", {}).get("hits", [])
+                if asset_hits:
+                    indexes_with_hits += 1
+                for hit in asset_hits:
+                    hit["_index_type"] = "asset"
+                    results["hits"]["hits"].append(hit)
+
+                # Merge aggregations
+                if "aggregations" in asset_response:
+                    results["aggregations"].update(asset_response["aggregations"])
+                
+                # Update total count
+                asset_total = asset_response.get("hits", {}).get("total", {}).get("value", 0)
+                results["hits"]["total"]["value"] += asset_total
+            
+            # Search file index if requested
+            if not entity_types or "file" in entity_types:
+                logger.info("Searching file index")
+                file_response = self.client.search(body=file_query, index=self.file_index)
+                
+                # Update timing and shard info
+                results["took"] += file_response.get("took", 0)
+                results["timed_out"] = results["timed_out"] or file_response.get("timed_out", False)
+                file_shards = file_response.get("_shards", {})
+                results["_shards"]["total"] += file_shards.get("total", 0)
+                results["_shards"]["successful"] += file_shards.get("successful", 0)
+                results["_shards"]["skipped"] += file_shards.get("skipped", 0)
+                results["_shards"]["failed"] += file_shards.get("failed", 0)
+                
+                # Add hits with index identifier
+                file_hits = file_response.get("hits", {}).get("hits", [])
+                if file_hits:
+                    indexes_with_hits += 1
+                for hit in file_hits:
+                    hit["_index_type"] = "file"
+                    results["hits"]["hits"].append(hit)
+
+                # Merge aggregations (combine with asset aggregations)
+                if "aggregations" in file_response:
+                    for agg_name, agg_data in file_response["aggregations"].items():
+                        if agg_name in results["aggregations"]:
+                            # Merge buckets for same aggregation
+                            existing_buckets = results["aggregations"][agg_name].get("buckets", [])
+                            new_buckets = agg_data.get("buckets", [])
+                            
+                            # Combine and deduplicate buckets
+                            combined_buckets = {}
+                            for bucket in existing_buckets + new_buckets:
+                                key = bucket.get("key")
+                                if key in combined_buckets:
+                                    combined_buckets[key]["doc_count"] += bucket.get("doc_count", 0)
+                                else:
+                                    combined_buckets[key] = bucket
+                            
+                            results["aggregations"][agg_name]["buckets"] = list(combined_buckets.values())
+                        else:
+                            results["aggregations"][agg_name] = agg_data
+                
+                # Update total count
+                file_total = file_response.get("hits", {}).get("total", {}).get("value", 0)
+                results["hits"]["total"]["value"] += file_total
+            
+            # Merge-sort the two indexes' hits into one global order. Appending the file
+            # hits after the asset hits puts every asset ahead of every file, so the page
+            # the response processor slices off the head would carry asset hits only.
+            sort_config = asset_query.get("sort") or file_query.get("sort") or ["_score"]
+            if indexes_with_hits > 1:
+                results["hits"]["hits"] = self._sort_combined_results(
+                    results["hits"]["hits"], sort_config
+                )
+
+            return results
+            
+        except Exception as e:
+            logger.exception(f"Error executing dual-index search: {e}")
+            raise VAMSGeneralErrorResponse("Error executing search query")
+
+#######################
+# Field Classification
+#######################
+
+class FieldClassifier:
+    """Classifies fields as core, metadata, attribute, or excluded for dual-index system"""
+    
+    # Core fields for asset index
+    ASSET_CORE_FIELDS = {
+        'str_assetname', 'str_description', 'str_assettype', 'str_databaseid',
+        'str_assetid', 'str_bucketid', 'str_bucketname', 'str_bucketprefix',
+        'bool_isdistributable', 'list_tags', 'str_asset_version_id',
+        'date_asset_version_createdate', 'str_asset_version_comment',
+        'bool_has_asset_children', 'bool_has_asset_parents', 'bool_has_assets_related',
+        'bool_archived', 'str_rectype', '_id', '_score'
+    }
+    
+    # Core fields for file index
+    FILE_CORE_FIELDS = {
+        'str_key', 'str_databaseid', 'str_assetid', 'str_bucketid', 'str_assetname',
+        'str_bucketname', 'str_bucketprefix', 'str_fileext', 'date_lastmodified',
+        'num_filesize', 'str_etag', 'str_s3_version_id', 'bool_archived',
+        'list_tags', 'str_rectype', '_id', '_score'
+    }
+    
+    EXCLUDED_PREFIXES = ['VAMS_', '_']  # Skip these entirely
+    METADATA_PREFIX = 'MD_'  # Metadata fields prefix (both asset and file)
+    ATTRIBUTE_PREFIX = 'AB_'  # Attribute fields prefix (FILE ONLY)
+    
+    @staticmethod
+    def is_metadata_field(field_name: str) -> bool:
+        """Check if field is a metadata field"""
+        return field_name.startswith(FieldClassifier.METADATA_PREFIX)
+    
+    @staticmethod
+    def is_attribute_field(field_name: str) -> bool:
+        """Check if field is an attribute field (FILE ONLY)"""
+        return field_name.startswith(FieldClassifier.ATTRIBUTE_PREFIX)
+    
+    @staticmethod
+    def is_core_field(field_name: str, index_type: str = "asset") -> bool:
+        """Check if field is a core field for the specified index"""
+        if index_type == "asset":
+            return field_name in FieldClassifier.ASSET_CORE_FIELDS
+        elif index_type == "file":
+            return field_name in FieldClassifier.FILE_CORE_FIELDS
+        return False
+    
+    @staticmethod
+    def is_excluded_field(field_name: str) -> bool:
+        """Check if field should be excluded from search"""
+        return any(field_name.startswith(prefix) for prefix in FieldClassifier.EXCLUDED_PREFIXES)
+    
+    @staticmethod
+    def get_searchable_core_fields(index_type: str = "asset") -> List[str]:
+        """Get list of core fields that should be included in general text search.
+        """
+        if index_type == "asset":
+            return [
+                "str_assetname", "str_description", "str_assettype",
+                "list_tags", "str_asset_version_comment",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix"
+            ]
+        elif index_type == "file":
+            return [
+                "str_key", "str_assetname", "str_fileext", "str_etag", "list_tags",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix"
+            ]
+        return []
+    
+    @staticmethod
+    def escape_opensearch_query_string(query: str, preserve_wildcards: bool = False) -> str:
+        """Escape special characters for OpenSearch query_string
+        
+        Args:
+            query: The query string to escape
+            preserve_wildcards: If True, don't escape * and ? wildcards
+        """
+        if not query:
+            return query
+        
+        # Characters that need escaping in OpenSearch query_string
+        # NOTE: Hyphen (-) is NOT escaped as it's commonly used in identifiers and should match literally
+        # The backslash MUST be escaped first; otherwise the backslashes inserted for the
+        # other special characters would themselves be re-escaped, doubling them and
+        # corrupting the query.
+        if preserve_wildcards:
+            # Don't escape * and ? if user wants wildcards
+            special_chars = r'\+=&|><!(){}[]^"~:/'
+        else:
+            special_chars = r'\+=&|><!(){}[]^"~*?:/'
+
+        escaped = query
+        for char in special_chars:
+            escaped = escaped.replace(char, f'\\{char}')
+        return escaped
+
+#######################
+# Geo Filter Helper
+#######################
+
+GEO_LOCATION_FIELD = "geo_MD_location"
+
+
+def build_geo_filter_clause(geo_search: Any) -> Optional[Dict[str, Any]]:
+    """
+    Translate a GeoSearchModel (or equivalent dict) into an OpenSearch
+    geo_shape filter clause against the geo_MD_location field.
+
+    Returns None if geo_search is empty or invalid.
+    """
+    if geo_search is None:
+        return None
+
+    geo_dict = geo_search.dict() if hasattr(geo_search, 'dict') else dict(geo_search)
+    relation = geo_dict.get("relation") or "intersects"
+    point = geo_dict.get("point")
+    bbox = geo_dict.get("bbox")
+    geo_json = geo_dict.get("geoJson")
+
+    shape: Optional[Dict[str, Any]] = None
+
+    if point:
+        lat = point.get("lat")
+        lon = point.get("lon")
+        radius = point.get("radiusMeters")
+        if lat is None or lon is None:
+            return None
+        if radius and radius > 0:
+            # Circle is supported by OpenSearch geo_shape via the "circle" type.
+            shape = {
+                "type": "circle",
+                "coordinates": [lon, lat],
+                "radius": f"{radius}m",
+            }
+        else:
+            shape = {"type": "point", "coordinates": [lon, lat]}
+    elif bbox:
+        top_left = bbox.get("topLeft") or {}
+        bottom_right = bbox.get("bottomRight") or {}
+        if not top_left or not bottom_right:
+            return None
+        shape = {
+            "type": "envelope",
+            "coordinates": [
+                [top_left.get("lon"), top_left.get("lat")],
+                [bottom_right.get("lon"), bottom_right.get("lat")],
+            ],
+        }
+    elif geo_json:
+        # Accept Geometry, Feature, or FeatureCollection; unwrap to a Geometry.
+        shape = _unwrap_geojson_geometry(geo_json)
+
+    if shape is None:
+        return None
+
+    return {
+        "geo_shape": {
+            GEO_LOCATION_FIELD: {
+                "shape": shape,
+                "relation": relation,
+            }
+        }
+    }
+
+
+def _unwrap_geojson_geometry(value: Any) -> Optional[Dict[str, Any]]:
+    """Reduce a GeoJSON value to a single Geometry dict suitable for geo_shape."""
+    if not isinstance(value, dict):
+        return None
+    geo_type = value.get("type")
+    if geo_type == "Feature":
+        return _unwrap_geojson_geometry(value.get("geometry"))
+    if geo_type == "FeatureCollection":
+        features = value.get("features") or []
+        if not features:
+            return None
+        return _unwrap_geojson_geometry(features[0])
+    if geo_type and value.get("coordinates") is not None:
+        return {"type": geo_type, "coordinates": value["coordinates"]}
+    return None
+
+
+#######################
+# Simple Search Query Building
+#######################
+
+class SimpleSearchQueryBuilder:
+    """Builds OpenSearch queries for simple search requests"""
+
+    # The criteria a simple-search request can carry, mirroring the set
+    # SimpleSearchRequestModel.validate_simple_search_request checks for. geoSearch is
+    # deliberately absent: it filters on geo_MD_location, which both indexes carry, so it
+    # is never foreign to either one.
+    SIMPLE_SEARCH_CRITERIA = (
+        'query', 'assetName', 'assetId', 'assetType', 'fileKey', 'fileExtension',
+        'databaseId', 'tags', 'metadataKey', 'metadataValue',
+    )
+
+    # Criteria that only one of the two indexes can answer. An asset document carries no
+    # str_key or str_fileext; a file document carries no str_assettype.
+    ASSET_ONLY_CRITERIA = ('assetType',)
+    FILE_ONLY_CRITERIA = ('fileKey', 'fileExtension')
+
+    # Criteria applied as a bool filter rather than as a search clause. Both indexes carry
+    # str_databaseid, so this is native to neither and foreign to neither -- but a filter can
+    # only narrow a selection, never make one, so supplying one contributes no match to either
+    # index. Kept separate from the two ONLY lists for that reason.
+    FILTER_ONLY_CRITERIA = ('databaseId',)
+
+    def __init__(self, database_access_manager: DatabaseAccessManager):
+        self.database_access_manager = database_access_manager
+        self.field_classifier = FieldClassifier()
+
+    def _matching_criteria_for_index(self, index_type: str) -> tuple:
+        """The criteria that can produce a match clause on `index_type`."""
+        foreign = self.FILE_ONLY_CRITERIA if index_type == "asset" else self.ASSET_ONLY_CRITERIA
+        return tuple(
+            name for name in self.SIMPLE_SEARCH_CRITERIA
+            if name not in foreign and name not in self.FILTER_ONLY_CRITERIA
+        )
+
+    def _only_foreign_criteria(self, request: SimpleSearchRequestModel, index_type: str) -> bool:
+        """True when nothing the caller supplied can MATCH on `index_type`.
+
+        A criterion reaches an index in one of two ways: as a search clause that selects
+        records (`fileKey` -> str_key) or as a bool filter that narrows a selection already
+        made (`databaseId` -> str_databaseid). Only a search clause can select, so the
+        question is not whether a criterion was supplied, it is whether any criterion
+        supplied can produce a match on the index being built. When none can, the builder is
+        left with filters alone and falls back to match_all -- so a {fileKey, databaseId}
+        lookup answers with every accessible asset in that database, which is the case a
+        "was any shared criterion supplied?" test lets through. Reporting it here keeps the
+        caller's page to records that match what they asked for.
+
+        A request whose only criteria are filter-only ones (`databaseId` by itself) is a
+        browse within that database and legitimately matches everything, so it is foreign to
+        neither index.
+        """
+        supplied = [name for name in self.SIMPLE_SEARCH_CRITERIA if getattr(request, name, None)]
+        selecting = [name for name in supplied if name not in self.FILTER_ONLY_CRITERIA]
+        if not selecting:
+            # No criteria at all, or filters only: the browse case, which legitimately
+            # matches everything the filters admit.
+            return False
+        native = self._matching_criteria_for_index(index_type)
+        return not any(name in native for name in selecting)
+
+    def _extract_metadata_field_name(self, field_with_prefix: str) -> tuple[str, str]:
+        """
+        Extract field name and determine if it's MD_ or AB_.
+        Supports backward compatibility for all these formats:
+        - MD_str_product -> (MD_, product)
+        - MD_product -> (MD_, product)
+        - AB_str_field -> (AB_, field)
+        - AB_field -> (AB_, field)
+        - product -> (MD_, product)  # Defaults to MD_ if no prefix
+        
+        Returns:
+            tuple: (prefix, field_name) where prefix is 'MD_' or 'AB_'
+        """
+        # Check for MD_ or AB_ prefix
+        if field_with_prefix.startswith('MD_'):
+            field_without_prefix = field_with_prefix[3:]  # Remove 'MD_'
+            prefix = 'MD_'
+        elif field_with_prefix.startswith('AB_'):
+            field_without_prefix = field_with_prefix[3:]  # Remove 'AB_'
+            prefix = 'AB_'
+        else:
+            # No prefix, assume MD_ for backward compatibility
+            field_without_prefix = field_with_prefix
+            prefix = 'MD_'
+        
+        # Now check if there's a type prefix to remove
+        # Type prefixes: str_, num_, bool_, date_, list_, gp_, gs_
+        type_prefixes = ['str_', 'num_', 'bool_', 'date_', 'list_', 'gp_', 'gs_']
+        for type_prefix in type_prefixes:
+            if field_without_prefix.startswith(type_prefix):
+                # Remove the type prefix and return
+                return prefix, field_without_prefix[len(type_prefix):]
+        
+        # No type prefix found, return field name as-is
+        return prefix, field_without_prefix
+    
+    def _build_field_query(self, field_name: str, value: str, use_keyword: bool = True) -> Dict[str, Any]:
+        """Build a query for a specific field with proper wildcard handling
+        
+        Args:
+            field_name: The field name to search (e.g., 'str_assetname')
+            value: The search value
+            use_keyword: Whether to use .keyword subfield for exact matching
+            
+        Returns:
+            OpenSearch query dict
+        """
+        # Check if user provided wildcards
+        has_wildcards = '*' in value or '?' in value
+        
+        if has_wildcards:
+            # User wants wildcard search - use query_string with their wildcards
+            escaped_value = self.field_classifier.escape_opensearch_query_string(value, preserve_wildcards=True)
+            return {
+                "query_string": {
+                    "query": f"{field_name}:{escaped_value}",
+                    "default_operator": "OR",
+                    "analyze_wildcard": True,
+                    "lenient": True
+                }
+            }
+        else:
+            # User wants exact match - use term query on .keyword field
+            if use_keyword:
+                return {
+                    "term": {
+                        f"{field_name}.keyword": value
+                    }
+                }
+            else:
+                # For fields that don't have .keyword subfield
+                escaped_value = self.field_classifier.escape_opensearch_query_string(value, preserve_wildcards=False)
+                return {
+                    "query_string": {
+                        "query": f'{field_name}:"{escaped_value}"',
+                        "default_operator": "OR",
+                        "lenient": True
+                    }
+                }
+    
+    def build_simple_dual_index_queries(self, request: SimpleSearchRequestModel, claims_and_roles: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Build simple queries for both asset and file indexes"""
+        
+        # Get accessible databases
+        # Note: includeArchived controls archived assets/files, not deleted databases
+        # Always pass False for show_deleted to exclude deleted databases
+        accessible_databases = self.database_access_manager.get_accessible_databases(
+            claims_and_roles, show_deleted=False
+        )
+        
+        # Build asset query
+        asset_query = self._build_simple_index_query(request, accessible_databases, "asset")
+        
+        # Build file query
+        file_query = self._build_simple_index_query(request, accessible_databases, "file")
+        
+        return asset_query, file_query
+    
+    def _build_simple_index_query(self, request: SimpleSearchRequestModel, accessible_databases: List[str], index_type: str) -> Dict[str, Any]:
+        """Build simple query for specific index type"""
+        try:
+            # Build base query structure
+            query_clause = self._build_simple_query_clause(request, accessible_databases, index_type)
+            
+            # Log the generated query for debugging
+            logger.info(f"[SimpleSearch] Generated {index_type} query clause: {json.dumps(query_clause, indent=2)}")
+
+            # Fetch from offset 0 with a buffer and page in Python, matching the complex
+            # path. Applying the offset here as well would skip the requested page twice.
+            requested_from = request.from_ or 0
+            requested_size = request.size or 100
+            opensearch_size = min(
+                int((requested_from + requested_size) * AUTH_FILTER_BUFFER_MULTIPLIER),
+                OPENSEARCH_MAX_RESULT_WINDOW,
+            )
+
+            query = {
+                "from": 0,
+                "size": opensearch_size,
+                "sort": ["_score"],
+                "query": query_clause,
+                "highlight": self._build_simple_highlight_config(index_type),
+                "_source": True,
+                "track_total_hits": True,
+            }
+            
+            return query
+        except Exception as e:
+            logger.exception(f"Error building simple {index_type} query: {e}")
+            raise VAMSGeneralErrorResponse(f"Error building simple {index_type} search query")
+    
+    def _build_simple_query_clause(self, request: SimpleSearchRequestModel, accessible_databases: List[str], index_type: str) -> Dict[str, Any]:
+        """Build the main query clause for simple search"""
+        if self._only_foreign_criteria(request, index_type):
+            logger.info(
+                f"[SimpleSearch] every supplied criterion is foreign to the {index_type} "
+                "index; it contributes no hits"
+            )
+            return {"match_none": {}}
+
+        must_clauses = []
+        must_not_clauses = []
+        should_clauses = []
+        filter_clauses = []
+        
+        # Add database access restrictions
+        if accessible_databases:
+            db_query_string = " OR ".join([f'"{db_id}"' for db_id in accessible_databases])
+            filter_clauses.append({
+                "query_string": {
+                    "query": f"str_databaseid:({db_query_string})"
+                }
+            })
+        else:
+            # No accessible databases - return no results
+            filter_clauses.append({
+                "query_string": {
+                    "query": 'str_databaseid:"NOACCESSDATABASE"'
+                }
+            })
+        
+        # Add archive exclusions (unless explicitly included)
+        if not request.includeArchived:
+            must_not_clauses.append({"term": {"bool_archived": True}})
+
+        # Apply geospatial filter on geo_MD_location if provided
+        geo_filter = build_geo_filter_clause(getattr(request, 'geoSearch', None))
+        if geo_filter:
+            filter_clauses.append(geo_filter)
+
+        # Build search queries based on parameters
+        search_queries = []
+
+        # General keyword search with hyphen support (ALWAYS uses wildcards for discovery)
+        if request.query:
+            escaped_query = self.field_classifier.escape_opensearch_query_string(request.query)
+            searchable_fields = self._get_simple_searchable_fields(index_type)
+            
+            # Build dual-field search for hyphen support
+            query_should_clauses = []
+            
+            # 1. Search analyzed text fields
+            query_should_clauses.append({
+                "query_string": {
+                    "query": f"*{escaped_query}*",
+                    "fields": searchable_fields,
+                    "default_operator": "OR",
+                    "analyze_wildcard": True,
+                    "lenient": True
+                }
+            })
+            
+            # 2. Search keyword fields for exact hyphenated matches
+            keyword_fields = [f"{field}.keyword" for field in searchable_fields 
+                             if field.startswith(("str_", "list_")) and not field.endswith(".keyword")]
+            
+            if keyword_fields:
+                query_should_clauses.append({
+                    "query_string": {
+                        "query": f"*{escaped_query}*",
+                        "fields": keyword_fields,
+                        "default_operator": "OR",
+                        "analyze_wildcard": True,
+                        "lenient": True
+                    }
+                })
+            
+            # Add combined query to search_queries
+            search_queries.append({
+                "bool": {
+                    "should": query_should_clauses,
+                    "minimum_should_match": 1
+                }
+            })
+        
+        # Asset-specific searches
+        # These use exact matching unless user provides wildcards
+        # Note: assetName and assetId exist in both asset and file indexes
+        if index_type == "asset":
+            if request.assetName:
+                search_queries.append(self._build_field_query("str_assetname", request.assetName))
+            
+            if request.assetId:
+                search_queries.append(self._build_field_query("str_assetid", request.assetId))
+            
+            if request.assetType:
+                search_queries.append(self._build_field_query("str_assettype", request.assetType))
+        
+        # File-specific searches
+        # Note: assetName and assetId also exist in file index (files belong to assets)
+        if index_type == "file":
+            # Apply assetName/assetId filters to file index as well
+            if request.assetName:
+                search_queries.append(self._build_field_query("str_assetname", request.assetName))
+            
+            if request.assetId:
+                search_queries.append(self._build_field_query("str_assetid", request.assetId))
+            
+            if request.fileKey:
+                search_queries.append(self._build_field_query("str_key", request.fileKey))
+            
+            if request.fileExtension:
+                # Exact match for file extension (no wildcards)
+                search_queries.append({
+                    "term": {
+                        "str_fileext.keyword": request.fileExtension
+                    }
+                })
+        
+        # Common searches (apply to both indexes)
+        if request.databaseId:
+            # Exact match for database ID - add to filters, not search queries
+            # This ensures it's a hard requirement, not just a scoring factor
+            filter_clauses.append({
+                "term": {
+                    "str_databaseid.keyword": request.databaseId
+                }
+            })
+        
+        if request.tags:
+            # Search for any of the specified tags (exact match unless wildcards provided)
+            tag_queries = []
+            for tag in request.tags:
+                tag_queries.append(self._build_field_query("list_tags", tag))
+            
+            if tag_queries:
+                search_queries.append({
+                    "bool": {
+                        "should": tag_queries,
+                        "minimum_should_match": 1
+                    }
+                })
+        
+        # Metadata searches with backward compatibility for MD_/AB_ prefixes
+        if request.metadataKey:
+            # Extract field name with backward compatibility
+            prefix, field_name = self._extract_metadata_field_name(request.metadataKey)
+            
+            # Check if user provided wildcards
+            has_wildcards = '*' in field_name or '?' in field_name
+            
+            if has_wildcards:
+                escaped_key = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=True)
+                # For wildcards, use wildcard query on the flat object field path
+                search_queries.append({
+                    "wildcard": {
+                        f"{prefix}.{escaped_key}": {
+                            "value": "*"
+                        }
+                    }
+                })
+            else:
+                # Exact field name - use exists query on the flat object field path
+                search_queries.append({
+                    "exists": {
+                        "field": f"{prefix}.{field_name}"
+                    }
+                })
+        
+        if request.metadataValue:
+            # Check if user provided wildcards
+            has_wildcards = '*' in request.metadataValue or '?' in request.metadataValue
+            
+            # Search across all values in flat objects
+            fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
+            
+            if has_wildcards:
+                escaped_value = self.field_classifier.escape_opensearch_query_string(request.metadataValue, preserve_wildcards=True)
+                search_queries.append({
+                    "query_string": {
+                        "query": escaped_value,
+                        "fields": fields,
+                        "default_operator": "OR",
+                        "analyze_wildcard": True,
+                        "lenient": True
+                    }
+                })
+            else:
+                # Exact value match across all metadata/attribute values
+                escaped_value = self.field_classifier.escape_opensearch_query_string(request.metadataValue, preserve_wildcards=False)
+                search_queries.append({
+                    "query_string": {
+                        "query": f"*{escaped_value}*",
+                        "fields": fields,
+                        "default_operator": "OR",
+                        "analyze_wildcard": True,
+                        "lenient": True
+                    }
+                })
+        
+        # Combine search queries with proper logic
+        # Specific field queries should be required (must match), not optional
+        if search_queries:
+            # Separate general query from specific field queries
+            general_query = None
+            specific_queries = []
+            
+            for query in search_queries:
+                # Check if this is the general query (has nested bool with should clauses for multiple fields)
+                if isinstance(query, dict) and "bool" in query and "should" in query["bool"]:
+                    # Check if it's searching multiple fields (general query pattern)
+                    should_clauses_in_query = query["bool"]["should"]
+                    if len(should_clauses_in_query) > 0:
+                        first_clause = should_clauses_in_query[0]
+                        if isinstance(first_clause, dict) and "query_string" in first_clause:
+                            query_string_fields = first_clause["query_string"].get("fields", [])
+                            # If searching multiple fields, it's the general query
+                            if len(query_string_fields) > 1 or any("*" in f for f in query_string_fields):
+                                general_query = query
+                                continue
+                
+                # Otherwise, it's a specific field query
+                specific_queries.append(query)
+            
+            # Build the final query structure
+            # IMPORTANT: Specific field queries are REQUIREMENTS (must match)
+            # Only the general query field is optional (should match)
+            if specific_queries:
+                # Add all specific queries to must_clauses (they are requirements)
+                must_clauses.extend(specific_queries)
+            
+            if general_query:
+                # General query is required (AND) with other filters
+                must_clauses.append(general_query)
+        
+        # Build final bool query
+        bool_query = {}
+        if must_clauses:
+            bool_query["must"] = must_clauses
+        if must_not_clauses:
+            bool_query["must_not"] = must_not_clauses
+        if should_clauses:
+            bool_query["should"] = should_clauses
+        if filter_clauses:
+            bool_query["filter"] = filter_clauses
+        
+        # If no search criteria provided, return match_all for browsing
+        if not bool_query.get("should") and not bool_query.get("must"):
+            if bool_query.get("filter") or bool_query.get("must_not"):
+                # We have filters but no search terms - use match_all with filters
+                bool_query["must"] = [{"match_all": {}}]
+            else:
+                return {"match_all": {}}
+        
+        return {"bool": bool_query}
+    
+    def _build_simple_highlight_config(self, index_type: str) -> Dict[str, Any]:
+        """Build simple highlight configuration"""
+        fields = {
+            "str_*": {},
+            "MD_*": {},
+            "list_*": {}
+        }
+        
+        # Add AB_* only for file index
+        if index_type == "file":
+            fields["AB_*"] = {}
+        
+        return {
+            "pre_tags": ["@opensearch-dashboards-highlighted-field@"],
+            "post_tags": ["@/opensearch-dashboards-highlighted-field@"],
+            "fields": fields,
+            "fragment_size": 2147483647
+        }
+    
+    def _get_simple_searchable_fields(self, index_type: str) -> List[str]:
+        """Get searchable fields for simple search - includes flat object _value fields.
+        """
+        if index_type == "asset":
+            return [
+                "str_assetname", "str_description", "str_assettype",
+                "list_tags", "str_asset_version_comment",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix",
+                "MD_._value"
+            ]
+        elif index_type == "file":
+            return [
+                "str_key", "str_assetname", "str_fileext", "str_etag",
+                "list_tags",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix",
+                "MD_._value", "AB_._value"
+            ]
+        return []
+
+#######################
+# Query Building
+#######################
+
+# Matches a bare `_rectype` field reference in a query_string. Anchored so that the live
+# `str_rectype` field, which contains the same substring, is not matched.
+LEGACY_RECTYPE_FIELD = re.compile(r'(?<![A-Za-z0-9_])_rectype\s*:')
+
+class DualIndexQueryBuilder:
+    """Builds OpenSearch queries for dual-index system"""
+    
+    def __init__(self, database_access_manager: DatabaseAccessManager):
+        self.database_access_manager = database_access_manager
+        self.field_classifier = FieldClassifier()
+    
+    def _extract_metadata_field_name(self, field_with_prefix: str) -> tuple[str, str]:
+        """
+        Extract field name and determine if it's MD_ or AB_.
+        Supports backward compatibility for all these formats:
+        - MD_str_product -> (MD_, product)
+        - MD_product -> (MD_, product)
+        - AB_str_field -> (AB_, field)
+        - AB_field -> (AB_, field)
+        - product -> (MD_, product)  # Defaults to MD_ if no prefix
+        
+        Returns:
+            tuple: (prefix, field_name) where prefix is 'MD_' or 'AB_'
+        """
+        # Check for MD_ or AB_ prefix
+        if field_with_prefix.startswith('MD_'):
+            field_without_prefix = field_with_prefix[3:]  # Remove 'MD_'
+            prefix = 'MD_'
+        elif field_with_prefix.startswith('AB_'):
+            field_without_prefix = field_with_prefix[3:]  # Remove 'AB_'
+            prefix = 'AB_'
+        else:
+            # No prefix, assume MD_ for backward compatibility
+            field_without_prefix = field_with_prefix
+            prefix = 'MD_'
+        
+        # Now check if there's a type prefix to remove
+        # Type prefixes: str_, num_, bool_, date_, list_, gp_, gs_
+        type_prefixes = ['str_', 'num_', 'bool_', 'date_', 'list_', 'gp_', 'gs_']
+        for type_prefix in type_prefixes:
+            if field_without_prefix.startswith(type_prefix):
+                # Remove the type prefix and return
+                return prefix, field_without_prefix[len(type_prefix):]
+        
+        # No type prefix found, return field name as-is
+        return prefix, field_without_prefix
+    
+    def build_dual_index_queries(self, request: SearchRequestModel, claims_and_roles: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Build queries for both asset and file indexes"""
+        
+        # Build base query components
+        # Note: includeArchived controls archived assets/files, not deleted databases
+        # Always pass False for show_deleted to exclude deleted databases
+        accessible_databases = self.database_access_manager.get_accessible_databases(
+            claims_and_roles, show_deleted=False
+        )
+        
+        # Build asset query
+        asset_query = self._build_index_query(request, accessible_databases, "asset")
+        
+        # Build file query
+        file_query = self._build_index_query(request, accessible_databases, "file")
+        
+        return asset_query, file_query
+    
+    def _build_index_query(self, request: SearchRequestModel, accessible_databases: List[str], index_type: str) -> Dict[str, Any]:
+        """Build query for specific index type"""
+        try:
+            # Calculate buffer size for authorization filtering
+            # Must fetch enough records to cover the requested offset + page size,
+            # with a buffer multiplier to account for records removed by auth filtering.
+            requested_from = request.from_ or 0
+            requested_size = request.size or 100
+            opensearch_size = min(
+                int((requested_from + requested_size) * AUTH_FILTER_BUFFER_MULTIPLIER),
+                OPENSEARCH_MAX_RESULT_WINDOW,
+            )
+
+            # Build base query structure
+            query = {
+                "from": 0,
+                "size": opensearch_size,
+                "sort": self._build_sort_config(request.sort, index_type),
+                "query": self._build_query_clause(request, accessible_databases, index_type),
+                "highlight": self._build_highlight_config(index_type),
+                "_source": True,
+                "track_total_hits": True,
+            }
+            
+            # Add aggregations if requested
+            if request.aggregations:
+                query["aggs"] = self._build_aggregations(index_type)
+            
+            # Add minimum score for text searches
+            if request.query or request.metadataQuery:
+                query["min_score"] = 0.01
+            
+            return query
+        except Exception as e:
+            logger.exception(f"Error building {index_type} query: {e}")
+            raise VAMSGeneralErrorResponse(f"Error building {index_type} search query")
+    
+    def _build_query_clause(self, request: SearchRequestModel, accessible_databases: List[str], index_type: str) -> Dict[str, Any]:
+        """Build the main query clause for specific index"""
+        must_clauses = []
+        must_not_clauses = []
+        should_clauses = []
+        filter_clauses = []
+        
+        # Add filters from request (e.g., boolean relationship filters)
+        if request.filters:
+            for filter_item in request.filters:
+                # Convert Pydantic model to dict if needed
+                filter_dict = None
+                if hasattr(filter_item, 'dict'):
+                    filter_dict = filter_item.dict()
+                elif isinstance(filter_item, dict):
+                    filter_dict = filter_item
+                else:
+                    filter_dict = dict(filter_item)
+                
+                # Drop a legacy `_rectype` field filter - no document carries that key and
+                # the record type is selected by entityTypes
+                if filter_dict and 'query_string' in filter_dict:
+                    query_str = filter_dict['query_string'].get('query', '')
+                    if not LEGACY_RECTYPE_FIELD.search(query_str):
+                        filter_clauses.append(filter_dict)
+        
+        # Add general text search (AND with other filters)
+        if request.query:
+            general_search_query = self._build_general_search_query(request.query, request.includeMetadataInSearch, index_type)
+            if general_search_query:
+                must_clauses.append(general_search_query)
+        
+        # Add dedicated metadata search (AND with other filters)
+        if request.metadataQuery:
+            metadata_search_query = self._build_metadata_search_query(request.metadataQuery, request.metadataSearchMode, index_type)
+            if metadata_search_query:
+                must_clauses.append(metadata_search_query)
+        
+        # Add database access restrictions
+        if accessible_databases:
+            db_query_string = " OR ".join([f'"{db_id}"' for db_id in accessible_databases])
+            filter_clauses.append({
+                "query_string": {
+                    "query": f"str_databaseid:({db_query_string})"
+                }
+            })
+        else:
+            # No accessible databases - return no results
+            filter_clauses.append({
+                "query_string": {
+                    "query": 'str_databaseid:"NOACCESSDATABASE"'
+                }
+            })
+        
+        # Add archive exclusions (unless explicitly included)
+        if not request.includeArchived:
+            must_not_clauses.append({"term": {"bool_archived": True}})
+
+        # Apply geospatial filter on geo_MD_location if provided
+        geo_filter = build_geo_filter_clause(getattr(request, 'geoSearch', None))
+        if geo_filter:
+            filter_clauses.append(geo_filter)
+
+        # Build final bool query
+        bool_query = {}
+        if must_clauses:
+            bool_query["must"] = must_clauses
+        if must_not_clauses:
+            bool_query["must_not"] = must_not_clauses
+        if should_clauses:
+            bool_query["should"] = should_clauses
+        if filter_clauses:
+            bool_query["filter"] = filter_clauses
+
+        return {"bool": bool_query} if bool_query else {"match_all": {}}
+
+    def _build_general_search_query(self, query: str, include_metadata: bool, index_type: str) -> Dict[str, Any]:
+        """Build general text search query for specific index with hyphen support"""
+        if not query:
+            return {}
+        
+        # Get searchable fields based on index type and metadata inclusion
+        searchable_fields = self._get_searchable_fields(include_metadata, index_type)
+        
+        # Use query_string for better special character handling
+        escaped_query = self.field_classifier.escape_opensearch_query_string(query)
+        
+        # Build dual-field search: text fields + keyword fields for hyphen support
+        should_clauses = []
+        
+        # 1. Search analyzed text fields (for partial matches and tokenized terms)
+        should_clauses.append({
+            "query_string": {
+                "query": f"*{escaped_query}*",
+                "fields": searchable_fields,
+                "default_operator": "OR",
+                "analyze_wildcard": True,
+                "lenient": True
+            }
+        })
+        
+        # 2. Search keyword fields (for exact hyphenated matches)
+        # Only add keyword variants for string and list fields that support .keyword subfield
+        keyword_fields = [f"{field}.keyword" for field in searchable_fields 
+                         if field.startswith(("str_", "list_")) and not field.endswith(".keyword")]
+        
+        if keyword_fields:
+            should_clauses.append({
+                "query_string": {
+                    "query": f"*{escaped_query}*",
+                    "fields": keyword_fields,
+                    "default_operator": "OR",
+                    "analyze_wildcard": True,
+                    "lenient": True
+                }
+            })
+        
+        # Return bool query with should clauses (OR logic)
+        return {
+            "bool": {
+                "should": should_clauses,
+                "minimum_should_match": 1
+            }
+        }
+    
+    def _build_metadata_search_query(self, metadata_query: str, search_mode: str, index_type: str = "asset") -> Dict[str, Any]:
+        """Build dedicated metadata search query with backward compatibility for flat objects
+        
+        Args:
+            metadata_query: The metadata query string
+            search_mode: Search mode (key, value, or both)
+            index_type: Type of index being searched (asset or file)
+            
+        Returns:
+            OpenSearch query dict
+        """
+        if not metadata_query:
+            return {}
+        
+        # Check if query contains AND or OR operator for multiple field:value pairs
+        operator = None
+        pairs = []
+        
+        if ' AND ' in metadata_query:
+            operator = 'AND'
+            pairs = [pair.strip() for pair in metadata_query.split(' AND ') if pair.strip()]
+        elif ' OR ' in metadata_query:
+            operator = 'OR'
+            pairs = [pair.strip() for pair in metadata_query.split(' OR ') if pair.strip()]
+        
+        if operator and pairs:
+            # Build individual queries for each pair
+            pair_queries = []
+            for pair in pairs:
+                if ':' in pair:
+                    parts = pair.split(':', 1)
+                    field_part = parts[0].strip()
+                    value_part = parts[1].strip() if len(parts) > 1 else ''
+                    
+                    # Extract field name with backward compatibility
+                    prefix, field_name = self._extract_metadata_field_name(field_part)
+
+                    # Escape the field name too -- it is user-controlled and interpolated
+                    # into the query_string text, so an unescaped special character could
+                    # otherwise alter the parsed query. Wildcards are never meaningful in a
+                    # field name, so do not preserve them here.
+                    escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+
+                    # Check if user provided wildcards
+                    has_wildcards = '*' in value_part or '?' in value_part
+
+                    # Escape the value part (preserve wildcards if user provided them)
+                    escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
+
+                    # Build flat object query
+                    if has_wildcards:
+                        query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
+                    else:
+                        # Exact match - quote the value for phrase matching
+                        query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
+                    
+                    # Build query for this specific field:value pair
+                    pair_queries.append({
+                        "query_string": {
+                            "query": query_str,
+                            "analyze_wildcard": True,
+                            "lenient": True
+                        }
+                    })
+            
+            # Return bool query with appropriate logic
+            if len(pair_queries) == 1:
+                return pair_queries[0]
+            elif len(pair_queries) > 1:
+                if operator == 'AND':
+                    # All must match
+                    return {
+                        "bool": {
+                            "must": pair_queries
+                        }
+                    }
+                else:  # OR
+                    # Any can match
+                    return {
+                        "bool": {
+                            "should": pair_queries,
+                            "minimum_should_match": 1
+                        }
+                    }
+            else:
+                return {}
+        
+        # Single field:value pair
+        if ':' in metadata_query:
+            parts = metadata_query.split(':', 1)
+            field_part = parts[0].strip()
+            value_part = parts[1].strip() if len(parts) > 1 else ''
+            
+            # Extract field name with backward compatibility
+            prefix, field_name = self._extract_metadata_field_name(field_part)
+
+            # Escape the user-controlled field name so it cannot alter the parsed query.
+            escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+
+            # Check if user provided wildcards
+            has_wildcards = '*' in value_part or '?' in value_part
+
+            # Escape the value part for query_string (preserve wildcards if user provided them)
+            escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
+
+            # Build flat object query
+            if has_wildcards:
+                query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
+            else:
+                # Exact match - quote the value for phrase matching
+                query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
+            
+            # Build query for specific field:value pair
+            return {
+                "query_string": {
+                    "query": query_str,
+                    "analyze_wildcard": True,
+                    "lenient": True
+                }
+            }
+        
+        # If no colon, treat as a general metadata search based on mode
+        # Check if user provided wildcards
+        has_wildcards = '*' in metadata_query or '?' in metadata_query
+        escaped_query = self.field_classifier.escape_opensearch_query_string(metadata_query, preserve_wildcards=has_wildcards)
+        
+        if search_mode == "key":
+            # Search for documents that have metadata fields matching the pattern
+            # Extract field name with backward compatibility
+            prefix, field_name = self._extract_metadata_field_name(metadata_query)
+            
+            if has_wildcards:
+                escaped_key = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=True)
+                # For wildcards, use wildcard query on the flat object field path
+                return {
+                    "wildcard": {
+                        f"{prefix}.{escaped_key}": {
+                            "value": "*"
+                        }
+                    }
+                }
+            else:
+                # Exact field name - use exists query on the flat object field path
+                return {
+                    "exists": {
+                        "field": f"{prefix}.{field_name}"
+                    }
+                }
+        
+        elif search_mode == "value":
+            # Search only metadata field values across all values in flat objects
+            if has_wildcards:
+                query_str = escaped_query
+            else:
+                # For value-only search, use wildcards to find partial matches
+                query_str = f"*{escaped_query}*"
+            
+            # Search across all values in flat objects
+            fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
+            
+            return {
+                "query_string": {
+                    "query": query_str,
+                    "fields": fields,
+                    "default_operator": "OR",
+                    "analyze_wildcard": True,
+                    "lenient": True
+                }
+            }
+        
+        else:  # search_mode == "both"
+            # Search both field names and values in flat objects
+            if has_wildcards:
+                query_str = escaped_query
+            else:
+                # Exact match for "both" mode
+                query_str = f'"{escaped_query}"'
+            
+            # Search across all values in flat objects
+            fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
+            
+            return {
+                "query_string": {
+                    "query": query_str,
+                    "fields": fields,
+                    "default_operator": "OR",
+                    "analyze_wildcard": True,
+                    "lenient": True
+                }
+            }
+    
+    def _build_sort_config(self, sort_config: List[Any], index_type: str) -> List[Any]:
+        """Build sort configuration for specific index"""
+        logger.info(f"[Sort] Building sort config for {index_type} index with input: {sort_config}")
+        
+        if not sort_config:
+            logger.info(f"[Sort] No sort config provided, using default _score")
+            return ["_score"]
+        
+        sanitized_sort = []
+        
+        # Helper function to add .keyword suffix for text fields that need it
+        def add_keyword_suffix_if_needed(field_name: str) -> str:
+            """Add .keyword suffix to text fields for proper sorting in OpenSearch"""
+            # Skip special fields that don't need .keyword
+            if field_name in ["_score", "_id"]:
+                return field_name
+            
+            # Skip if already has .keyword suffix
+            if field_name.endswith(".keyword"):
+                return field_name
+            
+            # Text fields (str_*) need .keyword suffix for sorting
+            # List fields (list_*) also need .keyword suffix
+            if field_name.startswith(("str_", "list_")):
+                logger.info(f"[Sort] Adding .keyword suffix to text field: {field_name}")
+                return f"{field_name}.keyword"
+            
+            # Numeric, boolean, and date fields don't need .keyword
+            # (num_*, bool_*, date_*)
+            return field_name
+        
+        for sort_item in sort_config:
+            if isinstance(sort_item, str):
+                # Simple string sort field
+                field_with_keyword = add_keyword_suffix_if_needed(sort_item)
+                sanitized_sort.append(field_with_keyword)
+            elif hasattr(sort_item, 'field') and hasattr(sort_item, 'order'):
+                # Handle Pydantic SearchSortModel objects
+                field_name = sort_item.field
+                order = sort_item.order
+                field_with_keyword = add_keyword_suffix_if_needed(field_name)
+                logger.info(f"[Sort] Transforming Pydantic SearchSortModel: field={field_name} -> {field_with_keyword}, order={order}")
+                sanitized_sort.append({field_with_keyword: {"order": order}})
+            elif isinstance(sort_item, dict):
+                # Check if this is the frontend format: {"field": "fieldname", "order": "asc|desc"}
+                if "field" in sort_item and "order" in sort_item:
+                    # Transform to OpenSearch format with .keyword suffix if needed
+                    field_name = sort_item["field"]
+                    order = sort_item["order"]
+                    field_with_keyword = add_keyword_suffix_if_needed(field_name)
+                    logger.info(f"[Sort] Transforming frontend format: field={field_name} -> {field_with_keyword}, order={order}")
+                    sanitized_sort.append({field_with_keyword: {"order": order}})
+                else:
+                    # Already in OpenSearch format - check if fields need .keyword suffix
+                    transformed_item = {}
+                    for field_name, field_config in sort_item.items():
+                        field_with_keyword = add_keyword_suffix_if_needed(field_name)
+                        transformed_item[field_with_keyword] = field_config
+                    sanitized_sort.append(transformed_item)
+        
+        # Ensure we always have at least one sort field
+        if not sanitized_sort:
+            logger.info(f"[Sort] No valid sort items, using default _score")
+            sanitized_sort = ["_score"]
+        
+        logger.info(f"[Sort] Final sort config for {index_type}: {sanitized_sort}")
+        return sanitized_sort
+    
+    def _build_highlight_config(self, index_type: str) -> Dict[str, Any]:
+        """Build highlight configuration for specific index"""
+        fields = {
+            "str_*": {},
+            "MD_*": {},
+            "list_*": {}
+        }
+        
+        # Add AB_* only for file index
+        if index_type == "file":
+            fields["AB_*"] = {}
+        
+        return {
+            "pre_tags": ["@opensearch-dashboards-highlighted-field@"],
+            "post_tags": ["@/opensearch-dashboards-highlighted-field@"],
+            "fields": fields,
+            "fragment_size": 2147483647
+        }
+    
+    def _build_aggregations(self, index_type: str) -> Dict[str, Any]:
+        """Build aggregations for specific index"""
+        base_filter = {
+            "bool": {
+                "must_not": [
+                    {"term": {"bool_archived": True}}
+                ]
+            }
+        }
+        
+        if index_type == "asset":
+            return {
+                "str_assettype": {
+                    "filter": base_filter,
+                    "aggs": {
+                        "filtered_assettype": {
+                            "terms": {
+                                "field": "str_assettype.keyword",
+                                "size": 1000
+                            }
+                        }
+                    }
+                },
+                "str_databaseid": {
+                    "filter": base_filter,
+                    "aggs": {
+                        "filtered_databaseid": {
+                            "terms": {
+                                "field": "str_databaseid.keyword",
+                                "size": 1000
+                            }
+                        }
+                    }
+                },
+                "list_tags": {
+                    "filter": base_filter,
+                    "aggs": {
+                        "filtered_tags": {
+                            "terms": {
+                                "field": "list_tags.keyword",
+                                "size": 1000
+                            }
+                        }
+                    }
+                }
+            }
+        elif index_type == "file":
+            return {
+                "str_fileext": {
+                    "filter": base_filter,
+                    "aggs": {
+                        "filtered_fileext": {
+                            "terms": {
+                                "field": "str_fileext.keyword",
+                                "size": 1000
+                            }
+                        }
+                    }
+                },
+                "str_databaseid": {
+                    "filter": base_filter,
+                    "aggs": {
+                        "filtered_databaseid": {
+                            "terms": {
+                                "field": "str_databaseid.keyword",
+                                "size": 1000
+                            }
+                        }
+                    }
+                },
+                "str_assetid": {
+                    "filter": base_filter,
+                    "aggs": {
+                        "filtered_assetid": {
+                            "terms": {
+                                "field": "str_assetid.keyword",
+                                "size": 1000
+                            }
+                        }
+                    }
+                },
+                "list_tags": {
+                    "filter": base_filter,
+                    "aggs": {
+                        "filtered_tags": {
+                            "terms": {
+                                "field": "list_tags.keyword",
+                                "size": 1000
+                            }
+                        }
+                    }
+                }
+            }
+        
+        return {}
+    
+    def _get_searchable_fields(self, include_metadata: bool, index_type: str) -> List[str]:
+        """Get list of fields that should be included in general text search - uses flat object _value fields"""
+        # Get core searchable fields for the index type
+        core_fields = self.field_classifier.get_searchable_core_fields(index_type)
+        
+        if include_metadata:
+            # Add flat object _value fields to search all metadata/attribute values
+            if index_type == "file":
+                # Files have both MD_ and AB_ flat objects
+                return core_fields + ["MD_._value", "AB_._value"]
+            else:
+                # Assets only have MD_ flat object
+                return core_fields + ["MD_._value"]
+        else:
+            return core_fields
+
+#######################
+# Response Processing
+#######################
+
+class DualIndexResponseProcessor:
+    """Processes OpenSearch responses from dual indexes"""
+    
+    def __init__(self, database_access_manager: DatabaseAccessManager):
+        self.database_access_manager = database_access_manager
+        self.field_classifier = FieldClassifier()
+    
+    def process_dual_search_response(self, opensearch_response: Dict[str, Any], 
+                                   request: SearchRequestModel, claims_and_roles: Dict[str, Any]) -> SearchResponseModel:
+        """Process dual-index search response with authorization filtering"""
+        try:
+            # Log the raw response for debugging
+            logger.info(f"Processing response with {len(opensearch_response.get('hits', {}).get('hits', []))} hits")
+            
+            # Apply Casbin filtering to hits
+            filtered_hits = []
+            for hit in opensearch_response.get("hits", {}).get("hits", []):
+                # Log hit structure for debugging
+                logger.debug(f"Processing hit with keys: {hit.keys()}")
+                
+                if self._is_hit_authorized(hit, claims_and_roles):
+                    # Add explanation if requested
+                    if request.explainResults:
+                        hit = self._add_search_explanation(hit, request)
+                    filtered_hits.append(hit)
+            
+            logger.info(f"After authorization filtering: {len(filtered_hits)} hits remain")
+            
+            # Re-sort filtered hits to maintain sort order after authorization filtering
+            # Authorization filtering may have disrupted the original sort order
+            # sort_config = opensearch_response.get("_sort_config", ["_score"])
+            # if sort_config and filtered_hits:
+            #     filtered_hits = self._sort_filtered_hits(filtered_hits, sort_config, request.sort)
+            
+            # Apply pagination to filtered results
+            paginated_hits = self._apply_pagination(filtered_hits, request)
+            
+            logger.info(f"After pagination: {len(paginated_hits)} hits")
+            
+            # Update response structure
+            response_data = opensearch_response.copy()
+            response_data["hits"]["hits"] = paginated_hits
+            response_data["hits"]["total"]["value"] = len(filtered_hits)
+            
+            # Fix aggregation structure
+            if "aggregations" in response_data:
+                response_data["aggregations"] = self._fix_aggregation_structure(response_data["aggregations"])
+
+            # Compute true total from aggregation bucket counts
+            aggregation_total = None
+            if "aggregations" in response_data:
+                aggregation_total = self._compute_aggregation_total(response_data["aggregations"])
+            response_data["aggregationTotal"] = aggregation_total
+
+            # Parse into response model
+            return parse(response_data, model=SearchResponseModel)
+            
+        except Exception as e:
+            logger.exception(f"Error processing dual search response: {e}")
+            raise VAMSGeneralErrorResponse("Error processing search results")
+    
+    def _add_search_explanation(self, hit: Dict[str, Any], request: SearchRequestModel) -> Dict[str, Any]:
+        """Add explanation for why this result matched the search"""
+        try:
+            source = hit.get("_source", {})
+            highlight = hit.get("highlight", {})
+            index_type = hit.get("_index_type", "unknown")
+            
+            # Determine query type
+            query_type = "none"
+            if request.query and request.metadataQuery:
+                query_type = "combined"
+            elif request.query:
+                query_type = "general"
+            elif request.metadataQuery:
+                query_type = "metadata"
+            
+            # Extract matched fields from highlights
+            matched_fields = list(highlight.keys()) if highlight else []
+            
+            # Build match reasons
+            match_reasons = {}
+            
+            # Process highlights to build match reasons
+            for field, highlights in highlight.items():
+                if highlights:
+                    if self.field_classifier.is_core_field(field, index_type):
+                        match_reasons[field] = f"Matched core {index_type} field '{field}'"
+                    elif self.field_classifier.is_metadata_field(field):
+                        match_reasons[field] = f"Matched metadata field '{field}'"
+                    else:
+                        match_reasons[field] = f"Matched field '{field}'"
+            
+            # Create explanation object
+            explanation = {
+                "matched_fields": matched_fields,
+                "match_reasons": match_reasons,
+                "query_type": query_type,
+                "index_type": index_type,
+                "score_breakdown": {
+                    "total_score": hit.get("_score", 0.0),
+                    "field_matches": len(matched_fields),
+                    "highlight_matches": len(highlight) if highlight else 0
+                }
+            }
+            
+            # Add explanation to hit
+            hit["explanation"] = explanation
+            
+            return hit
+            
+        except Exception as e:
+            logger.warning(f"Error adding search explanation: {e}")
+            return hit
+    
+    def _sort_filtered_hits(self, hits: List[Dict[str, Any]], sort_config: List, request_sort: List) -> List[Dict[str, Any]]:
+        """Sort filtered hits after authorization filtering
+        
+        Args:
+            hits: List of filtered hits
+            sort_config: Sort configuration from OpenSearch response
+            request_sort: Original sort configuration from request
+            
+        Returns:
+            Sorted list of hits
+        """
+        if not hits:
+            return hits
+        
+        # Use request sort if available, otherwise use response sort config
+        active_sort = request_sort if request_sort else sort_config
+        if not active_sort:
+            logger.warning("[Sort] No sort configuration available, returning unsorted hits")
+            return hits
+        
+        logger.info(f"[Sort] Re-sorting {len(hits)} filtered hits")
+        logger.info(f"[Sort] Request sort: {request_sort}")
+        logger.info(f"[Sort] Response sort config: {sort_config}")
+        logger.info(f"[Sort] Active sort: {active_sort}")
+        
+        # Log first few hits before sorting for debugging
+        if hits:
+            logger.info(f"[Sort] First hit before sort - fileext: {hits[0].get('_source', {}).get('str_fileext', 'N/A')}")
+        
+        # Build sort key function
+        def get_sort_key(hit):
+            keys = []
+            for sort_item in active_sort:
+                if isinstance(sort_item, str):
+                    if sort_item == "_score":
+                        keys.append(hit.get("_score", 0))
+                    else:
+                        # Remove .keyword suffix if present (OpenSearch mapping convention)
+                        field_name = sort_item.replace('.keyword', '')
+                        keys.append(hit.get("_source", {}).get(field_name, ""))
+                elif isinstance(sort_item, dict):
+                    for field, config in sort_item.items():
+                        # Remove .keyword suffix if present
+                        field_name = field.replace('.keyword', '')
+                        value = hit.get("_source", {}).get(field_name, "")
+                        if value is None:
+                            value = ""
+                        keys.append(value)
+                elif hasattr(sort_item, 'field'):
+                    # Handle Pydantic SearchSortModel objects
+                    # Remove .keyword suffix if present
+                    field_name = sort_item.field.replace('.keyword', '')
+                    value = hit.get("_source", {}).get(field_name, "")
+                    if value is None:
+                        value = ""
+                    keys.append(value)
+            return tuple(keys) if len(keys) > 1 else (keys[0] if keys else "")
+        
+        # Determine sort order - handle both dict and Pydantic model
+        reverse = False
+        if active_sort:
+            first_sort = active_sort[0]
+            if isinstance(first_sort, dict):
+                for field, config in first_sort.items():
+                    if isinstance(config, dict) and config.get("order") == "desc":
+                        reverse = True
+                        break
+            elif hasattr(first_sort, 'order'):
+                # Handle Pydantic SearchSortModel
+                reverse = first_sort.order == "desc"
+        
+        logger.info(f"[Sort] Determined reverse={reverse} from active_sort")
+        
+        try:
+            sorted_hits = sorted(hits, key=get_sort_key, reverse=reverse)
+            logger.info(f"[Sort] Successfully re-sorted {len(sorted_hits)} filtered hits (reverse={reverse})")
+            
+            # Log first few hits after sorting for debugging
+            if sorted_hits:
+                for i, hit in enumerate(sorted_hits[:5]):
+                    fileext = hit.get('_source', {}).get('str_fileext', 'N/A')
+                    logger.info(f"[Sort] Hit {i} after sort - fileext: {fileext}")
+            
+            return sorted_hits
+        except Exception as e:
+            logger.warning(f"[Sort] Error re-sorting filtered hits: {e}, returning unsorted")
+            return hits
+    
+    def _is_hit_authorized(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> bool:
+        """Check if user is authorized to see this search hit"""
+        try:
+            source = hit.get("_source", {})
+            
+            # Skip deleted items (additional safety check)
+            if source.get("str_databaseid", "").endswith("#deleted"):
+                return False
+            
+            # Build document for Casbin check
+            hit_document = {
+                "databaseId": source.get("str_databaseid", ""),
+                "assetName": source.get("str_assetname", ""),
+                "tags": source.get("list_tags", []),
+                "assetType": source.get("str_assettype", ""),
+                "object__type": "asset"  # For ABAC purposes, treat all as assets
+            }
+            
+            # Apply Casbin enforcement
+            if len(claims_and_roles.get("tokens", [])) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                return casbin_enforcer.enforce(hit_document, "GET")
+            
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking hit authorization: {e}")
+            return False
+    
+    def _apply_pagination(self, hits: List[Dict[str, Any]], request: SearchRequestModel) -> List[Dict[str, Any]]:
+        """Apply pagination to filtered hits"""
+        from_index = request.from_ or 0
+        size = request.size or 100
+        
+        if from_index >= len(hits):
+            return []
+        
+        end_index = min(from_index + size, len(hits))
+        return hits[from_index:end_index]
+
+    def _compute_aggregation_total(self, aggregations: Dict[str, Any]) -> Optional[int]:
+        """Compute total accessible record count from aggregation bucket sums.
+
+        Uses str_databaseid aggregation as the authoritative total since it
+        groups all records by database (which aligns with access control).
+        Falls back to str_assetid if str_databaseid is not present.
+        """
+        for agg_key in ["str_databaseid", "str_assetid"]:
+            agg_data = aggregations.get(agg_key, {})
+            buckets = agg_data.get("buckets", [])
+            if buckets:
+                return sum(bucket.get("doc_count", 0) for bucket in buckets)
+        return None
+
+    def _fix_aggregation_structure(self, aggregations: Dict[str, Any]) -> Dict[str, Any]:
+        """Fix nested aggregation structure to match expected format"""
+        fixed_aggregations = {}
+        
+        # Extract nested aggregations
+        for agg_name, agg_data in aggregations.items():
+            if isinstance(agg_data, dict) and f"filtered_{agg_name.replace('str_', '').replace('list_', '')}" in agg_data:
+                nested_key = f"filtered_{agg_name.replace('str_', '').replace('list_', '')}"
+                fixed_aggregations[agg_name] = agg_data[nested_key]
+            else:
+                fixed_aggregations[agg_name] = agg_data
+        
+        return fixed_aggregations
+
+#######################
+# Request Handlers
+#######################
+
+def handle_get_request(event: Dict[str, Any], search_manager: DualIndexSearchManager) -> APIGatewayProxyResponseV2:
+    """Handle GET request for index mappings"""
+    try:
+        if not search_manager.is_available():
+            return general_error(
+                body={"message": "Search is not available when OpenSearch feature is not enabled"},
+                status_code=404
+            )
+        
+        # Get index mappings
+        mappings = search_manager.get_index_mappings()
+        
+        return success(body={"mappings": mappings})
+        
+    except VAMSGeneralErrorResponse as e:
+        return general_error(body={"message": str(e)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error handling GET request: {e}")
+        return internal_error(event=event)
+
+def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 
+                       query_builder: DualIndexQueryBuilder, response_processor: DualIndexResponseProcessor,
+                       claims_and_roles: Dict[str, Any]) -> APIGatewayProxyResponseV2:
+    """Handle POST request for search operations"""
+    try:
+        if not search_manager.is_available():
+            return general_error(
+                body={"message": "Search is not available when OpenSearch feature is not enabled"},
+                status_code=404
+            )
+        
+        # Parse request body
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"}, event=event)
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string or dict")
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
+        
+        # Parse and validate request model
+        request_model = parse(body, model=SearchRequestModel)
+        
+        # Build dual-index queries
+        asset_query, file_query = query_builder.build_dual_index_queries(request_model, claims_and_roles)
+        
+        # Execute dual-index search
+        opensearch_response = search_manager.search_dual_index(
+            asset_query, file_query, request_model.entityTypes or ["asset", "file"]
+        )
+        
+        # Process response with authorization filtering
+        processed_response = response_processor.process_dual_search_response(
+            opensearch_response, request_model, claims_and_roles
+        )
+        
+        # by_alias so `_shards` serializes under the OpenSearch key rather than the
+        # pydantic-legal field name it has to be declared with.
+        return success(body=processed_response.dict(by_alias=True))
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error handling POST request: {e}")
+        return internal_error(event=event)
+
+def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 
+                              simple_query_builder: SimpleSearchQueryBuilder, response_processor: DualIndexResponseProcessor,
+                              claims_and_roles: Dict[str, Any]) -> APIGatewayProxyResponseV2:
+    """Handle POST request for simple search operations"""
+    try:
+        if not search_manager.is_available():
+            return general_error(
+                body={"message": "Search is not available when OpenSearch feature is not enabled"},
+                status_code=404
+            )
+        
+        # Parse request body
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"}, event=event)
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string or dict")
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
+        
+        # Parse and validate simple search request model
+        request_model = parse(body, model=SimpleSearchRequestModel)
+        
+        # Build simple dual-index queries
+        asset_query, file_query = simple_query_builder.build_simple_dual_index_queries(request_model, claims_and_roles)
+        
+        # Execute dual-index search
+        opensearch_response = search_manager.search_dual_index(
+            asset_query, file_query, request_model.entityTypes or ["asset", "file"]
+        )
+        
+        # Create a compatible SearchRequestModel for response processing
+        # This allows us to reuse the existing response processor.
+        # `from_` carries alias "from" and must be populated under that alias -- passing
+        # from_= drops the offset silently, and the page is then always sliced off the head.
+        compatible_request = SearchRequestModel(**{
+            'from': request_model.from_,
+            'size': request_model.size,
+            'entityTypes': request_model.entityTypes,
+            'includeArchived': request_model.includeArchived,
+            'explainResults': False,  # Simple search doesn't include explanations
+            'aggregations': False,    # Simple search doesn't include aggregations
+        })
+        
+        # Process response with authorization filtering
+        processed_response = response_processor.process_dual_search_response(
+            opensearch_response, compatible_request, claims_and_roles
+        )
+        
+        # by_alias so `_shards` serializes under the OpenSearch key rather than the
+        # pydantic-legal field name it has to be declared with.
+        return success(body=processed_response.dict(by_alias=True))
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error handling simple POST request: {e}")
+        return internal_error(event=event)
+
+#######################
+# Lambda Handler
+#######################
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for dual-index search API"""
+    global claims_and_roles
+    claims_and_roles = request_to_claims(event)
+    
+    try:
+        # Parse request
+        path = event['requestContext']['http']['path']
+        method = event['requestContext']['http']['method']
+        
+        logger.info(f"Processing {method} request to {path}")
+        
+        # Check API authorization
+        method_allowed_on_api = False
+        if len(claims_and_roles.get("tokens", [])) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        
+        if not method_allowed_on_api:
+            return authorization_error()
+
+        if opensearch_disabled:
+            return _not_available()
+        
+        # Initialize components
+        search_manager = DualIndexSearchManager()
+        database_access_manager = DatabaseAccessManager()
+        response_processor = DualIndexResponseProcessor(database_access_manager)
+        
+        # Route based on the master API route definitions
+        if method == 'GET':
+            # GET requests are only supported on the main /search endpoint for mappings
+            if API_SEARCH.matches(path):
+                return handle_get_request(event, search_manager)
+            else:
+                return validation_error(body={'message': "GET method only supported on /search endpoint"}, event=event)
+
+        elif method == 'POST':
+            if API_SEARCH.matches(path):
+                # Regular complex search
+                query_builder = DualIndexQueryBuilder(database_access_manager)
+                return handle_post_request(event, search_manager, query_builder, response_processor, claims_and_roles)
+
+            elif API_SEARCH_SIMPLE.matches(path):
+                # Simple search
+                simple_query_builder = SimpleSearchQueryBuilder(database_access_manager)
+                return handle_simple_post_request(event, search_manager, simple_query_builder, response_processor, claims_and_roles)
+
+            else:
+                return validation_error(body={'message': "POST method not supported on this path"}, event=event)
+        
+        else:
+            return validation_error(body={'message': f"Method {method} not allowed"}, event=event)
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error(event=event)

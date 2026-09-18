@@ -14,6 +14,10 @@ Reconfiguring the `GLOBAL` scope carries one additional requirement. A `GLOBAL` 
 An update is enforced twice: once on the pipeline as stored and again on the pipeline as changed. `pipelineName` and `category` are policy-evaluated attributes, so a request moving a pipeline into a name or category scope the caller's own constraints deny is rejected even when the caller may write the pipeline it read.
 :::
 
+:::note[System pipelines]
+A pipeline registered from a `vamsSchema` bundle that declares `isSystem: true` is a **system pipeline**: shipped and owned by the deployment. Every pipeline response carries `isSystem` — `false` for every other pipeline, including one created through this API, because the create and update bodies ignore the key. A system pipeline accepts only `enabled` on [Update a pipeline](#update-a-pipeline); refuses [Delete a pipeline](#delete-a-pipeline) and the `archived` restore; refuses [Create a template](#create-a-template) and [Delete a template](#delete-a-template); and on [Update a template](#update-a-template) accepts changes to `configBody`, `tagSchema`, and `webFormJson` only, while [Set a template's tag schema](#set-a-templates-tag-schema) stays open. Each refusal is a `400` whose `message` names the rule. The `enabled` switch is a pause, not a setting: the deployment re-asserts the shipped values — the pipeline enabled, its templates as shipped — when it next registers the bundle, exactly as it does for every built-in. See [System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines).
+:::
+
 ---
 
 ## List all pipelines
@@ -57,6 +61,7 @@ GET /pipelines
                 },
                 "enabled": true,
                 "archived": false,
+                "isSystem": false,
                 "templateCount": 2,
                 "dateCreated": "2026-03-15T10:30:00Z",
                 "dateModified": "2026-03-15T10:30:00Z",
@@ -71,6 +76,8 @@ GET /pipelines
 ```
 
 `templates` is absent from a list item — it is returned only by [Get a pipeline](#get-a-pipeline). `templateCount` is best-effort and is `null` when the count could not be computed.
+
+`isSystem` is `true` only for a pipeline the deployment registered from a `vamsSchema` bundle that declares it; see the System pipelines note above.
 
 `NextToken` is `null` on the last page.
 
@@ -198,6 +205,7 @@ To read a template's `configBody` and `webFormJson`, call [Get a template](#get-
         },
         "enabled": true,
         "archived": false,
+        "isSystem": false,
         "templateCount": 1,
         "templates": [
             {
@@ -248,6 +256,8 @@ POST /database/{databaseId}/pipelines
 | `executionConfig` | object  | No       | Execution binding. Omitted, it defaults to a `Lambda` binding with no target. See [Execution configuration](#execution-configuration). |
 | `systemConfig`    | object  | No       | Input handling and templating defaults. See [System configuration](#system-configuration).                                             |
 | `enabled`         | boolean | No       | Whether the pipeline is enabled (default `true`).                                                                                      |
+
+`isSystem` is not a request field. A body that carries it is accepted and the key is ignored: only the deployment's `vamsSchema` importer marks a pipeline as a system pipeline.
 
 ### Request body example
 
@@ -331,6 +341,10 @@ Set `enabled` to `true` or `false` to enable or disable a pipeline without chang
 `PUT` with `{"archived": false}` returns an archived pipeline to the active listings under its original identifier, together with every workflow reference and execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the pipeline.
 :::
 
+:::warning[A system pipeline accepts only `enabled`]
+When the stored pipeline carries `isSystem: true`, the body may contain no field other than `enabled`. Any other field — `archived` included, so a system pipeline cannot be restored through this route — is refused with `400` and the message `System pipelines are read-only; only "enabled" may be changed.` Disabling is a pause: the deployment re-enables the pipeline when it next registers the bundle.
+:::
+
 ### Request body example
 
 ```json
@@ -354,12 +368,12 @@ Returns the updated pipeline, in the same shape as [Get a pipeline](#get-a-pipel
 
 ### Error responses
 
-| Status | Description                                                                       |
-| ------ | --------------------------------------------------------------------------------- |
-| `400`  | Validation error, no field supplied, or a disabled `DeadlineCloud` execution type |
-| `403`  | Not authorized                                                                    |
-| `404`  | Pipeline not found                                                                |
-| `500`  | Internal server error                                                             |
+| Status | Description                                                                                                                                                                                             |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, no field supplied, a disabled `DeadlineCloud` execution type, or a field other than `enabled` on a system pipeline (`System pipelines are read-only; only "enabled" may be changed.`) |
+| `403`  | Not authorized                                                                                                                                                                                          |
+| `404`  | Pipeline not found                                                                                                                                                                                      |
+| `500`  | Internal server error                                                                                                                                                                                   |
 
 ### Trigger consistency warnings
 
@@ -405,11 +419,12 @@ DELETE /database/{databaseId}/pipelines/{pipelineId}
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `403`  | Not authorized        |
-| `404`  | Pipeline not found    |
-| `500`  | Internal server error |
+| Status | Description                                                                                                                      |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | The pipeline is a system pipeline (`System pipelines cannot be archived or restored through the API; the deployment owns them.`) |
+| `403`  | Not authorized                                                                                                                   |
+| `404`  | Pipeline not found                                                                                                               |
+| `500`  | Internal server error                                                                                                            |
 
 ---
 
@@ -571,12 +586,12 @@ When a template is referenced by a workflow trigger as a default (see [Set a tri
 
 #### Error responses
 
-| Status | Description                                                                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), or a trigger default with a required tag with no default value (`triggerTemplateErrors`) |
-| `403`  | Not authorized                                                                                                                                                                          |
-| `404`  | Pipeline not found                                                                                                                                                                      |
-| `500`  | Internal server error                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), a trigger default with a required tag with no default value (`triggerTemplateErrors`), or a system pipeline (`Templates of system pipelines cannot be added or deleted.`) |
+| `403`  | Not authorized                                                                                                                                                                                                                                                           |
+| `404`  | Pipeline not found                                                                                                                                                                                                                                                       |
+| `500`  | Internal server error                                                                                                                                                                                                                                                    |
 
 #### Template overrides
 
@@ -749,6 +764,8 @@ Any subset of `templateName`, `description`, `configFormat`, `configBody`, `webF
 
 A supplied `overrides` or `tagSchema` **replaces** the stored one rather than merging into it, so send the complete set. Send `tagSchema` as an empty array to remove a template's tags.
 
+On a system pipeline only `configBody`, `tagSchema`, and `webFormJson` may change. The other fields may still be sent — the web form sends the full template on every save — but each must equal the stored value; a locked field that differs is refused with `400` and a message naming it (for example `"templateName" differs from the stored value`).
+
 #### Response
 
 Returns the updated template with `configBody` and `webFormJson` inline, in the same shape as [Get a template](#get-a-template).
@@ -765,12 +782,12 @@ Supplying `tagSchema` therefore re-checks the schema against the body currently 
 
 #### Error responses
 
-| Status | Description                                                                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), or a trigger default with a required tag with no default value (`triggerTemplateErrors`) |
-| `403`  | Not authorized                                                                                                                                                                          |
-| `404`  | Pipeline or template not found                                                                                                                                                          |
-| `500`  | Internal server error                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), a trigger default with a required tag with no default value (`triggerTemplateErrors`), or a locked field of a system pipeline's template that differs from the stored value |
+| `403`  | Not authorized                                                                                                                                                                                                                                                             |
+| `404`  | Pipeline or template not found                                                                                                                                                                                                                                             |
+| `500`  | Internal server error                                                                                                                                                                                                                                                      |
 
 ### Delete a template
 
@@ -815,11 +832,12 @@ default template for this pipeline.
 
 #### Error responses
 
-| Status | Description                    |
-| ------ | ------------------------------ |
-| `403`  | Not authorized                 |
-| `404`  | Pipeline or template not found |
-| `500`  | Internal server error          |
+| Status | Description                                                                                     |
+| ------ | ----------------------------------------------------------------------------------------------- |
+| `400`  | The pipeline is a system pipeline (`Templates of system pipelines cannot be added or deleted.`) |
+| `403`  | Not authorized                                                                                  |
+| `404`  | Pipeline or template not found                                                                  |
+| `500`  | Internal server error                                                                           |
 
 ### Get a template's tag schema
 
@@ -900,6 +918,8 @@ PUT /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}/tagSche
 :::warning[Reserved tag keys]
 Reserved system tag keys (the built-in template tags, such as `executionId` and `workflowId`) and any key using the `metadata_` prefix are rejected.
 :::
+
+Setting the tag schema is permitted on a system pipeline's template; it is one of the three template edits the system rule leaves open, alongside `configBody` and `webFormJson` on [Update a template](#update-a-template).
 
 This route applies the same cross-checks the template `PUT` applies, because the schema and the stored `configBody` are one contract:
 
