@@ -117,6 +117,9 @@ test.describe("Unified search — layout and mode controls", () => {
         const toolbar = modeToolbar(page);
         if (mode !== "both") {
             // One engine, nothing to choose: the switch must not be shown, whichever engine it is.
+            // The top bar renders the query box and the switch in one pass, so anchoring on the box
+            // makes the absence check meaningful rather than a pass on a not-yet-rendered bar.
+            await expect(searchQueryBox(page)).toBeVisible();
             await expect(toolbar).toHaveCount(0);
             return;
         }
