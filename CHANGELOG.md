@@ -59,6 +59,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CDK** boto3/botocore 1.43.89 in the backend Lambda layer; version 2.7.0 across the root package, CLI, MCP server, and CDK.
 -   **Documentation** `NOTICE.md` records the three GenAI metadata container images' pinned third-party components (Blender, FFmpeg through `imageio-ffmpeg`, VTK, pypdfium2, tinytag, the Word/PowerPoint/Excel readers and their dependencies).
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin.
+-   **CDK** `infra/deploymentDataMigration/` carries no committed tests; migration transforms are verified against a deployment, and the tooling contract stays under `infra/test/platform/`. A guard fails the build when a test file is added to the tree.
 
 ### Known Outstanding Issues
 

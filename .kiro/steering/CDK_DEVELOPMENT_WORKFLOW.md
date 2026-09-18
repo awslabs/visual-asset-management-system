@@ -2749,6 +2749,19 @@ The helper **throws** on a Token, so a new site fails at synth with the argument
 `infra/test/security/hashedNamesAreDeterministic.test.ts` synthesizes the same template twice in one
 process -- the case where the token counter does not reset -- and requires identical ids and names.
 
+### **Rule 9: Data Migration Scripts MUST NOT Carry Committed Tests**
+
+`infra/deploymentDataMigration/` holds operator-run, one-shot scripts. Nothing matching `test_*.py`,
+`*_test.py`, `conftest.py`, a `tests/` directory, or a pytest configuration is committed under it. A
+transform is verified against a deployment -- `--dry-run`, then the real run, then the API and the tables
+the step reports on. Unit-style checks written while developing a transform (a `moto` seed per row shape,
+a Lambda fake) are run locally and left uncommitted: the scripts run once per upgrade against live data,
+where a `moto` table shape drifts from the real one without anything failing, and a test tree there is one
+pytest never collects (no configuration, no `__init__.py`), so it decays silently. The repository-level
+contract for the scripts -- wrapper exit-status propagation, the README's IAM policy, the step names the
+upgrade guide documents -- lives in `infra/test/platform/migrationTooling.test.ts`; a new cross-cutting
+migration guarantee goes there. Guard: `infra/test/platform/migrationNoCommittedTests.test.ts`.
+
 ## 📚 **Detailed Implementation Guide**
 
 ### **Adding New Configuration Options**

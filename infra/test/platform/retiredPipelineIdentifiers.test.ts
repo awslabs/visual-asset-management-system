@@ -54,7 +54,7 @@ const ALLOW: Record<string, string[]> = {
         "genai-metadata-3d-labeling",
         "metadata-extraction-cad-mesh",
     ],
-    // The migration that archives, deletes and reports on the retired ids, and its tests.
+    // The migration that archives, deletes and reports on the retired ids.
     "infra/deploymentDataMigration/v2.6_to_v2.7/upgrade/v2.6_to_v2.7_migration.py": [
         "genai-metadata-3d-labeling",
         "metadata-extraction-cad-mesh",
@@ -69,12 +69,6 @@ const ALLOW: Record<string, string[]> = {
         "useGenAiMetadata3dLabeling",
         "useConversionCadMeshMetadataExtraction",
     ],
-    "infra/deploymentDataMigration/v2.6_to_v2.7/upgrade/test_v2_6_to_v2_7_orphaned_triggers.py": [
-        "genai-metadata-3d-labeling",
-        "metadata-extraction-cad-mesh",
-    ],
-    "infra/deploymentDataMigration/v2.6_to_v2.7/upgrade/test_v2_6_to_v2_7_system_pipeline_retirement.py":
-        ["genai-metadata-3d-labeling", "metadata-extraction-cad-mesh"],
     // Pins the upgrade guide's `### v2.6 to v2.7` section to the rejected configuration keys.
     "infra/test/platform/migrationTooling.test.ts": [
         "useGenAiMetadata3dLabeling",
