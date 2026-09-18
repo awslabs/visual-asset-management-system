@@ -1,0 +1,45 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/vision_schema.json",
+    "title": "Tool input of the vision verification call",
+    "description": "One analysis per frame in the batch, keyed by the frame's momentIndex so results join back to frames.json without timestamp matching.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["frame_analyses"],
+    "properties": {
+        "frame_analyses": { "type": "array", "items": { "$ref": "#/$defs/frameAnalysis" } }
+    },
+    "$defs": {
+        "frameAnalysis": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "momentIndex",
+                "confirmed",
+                "components_seen",
+                "corrections",
+                "additional_details"
+            ],
+            "properties": {
+                "momentIndex": {
+                    "description": "The momentIndex printed with the frame.",
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "confirmed": {
+                    "description": "Whether the frame shows the expected content.",
+                    "type": "boolean"
+                },
+                "components_seen": { "type": "array", "items": { "type": "string" } },
+                "corrections": {
+                    "description": "What the frame shows instead, or null when confirmed.",
+                    "type": ["string", "null"]
+                },
+                "additional_details": {
+                    "description": "Materials, colours, markings, fasteners useful for the BOM.",
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

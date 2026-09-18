@@ -219,18 +219,19 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 
 ### Available Pipelines
 
-| Pipeline                           | Compute             | Description                                                              |
-| ---------------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| 3D Basic Conversion                | AWS Batch (Fargate) | Convert 3D file formats                                                  |
-| CAD/Mesh Metadata Extraction       | AWS Batch (Fargate) | Extract metadata from CAD and mesh files                                 |
-| Point Cloud Potree Viewer          | AWS Batch (Fargate) | Generate Potree octree data for point cloud visualization                |
-| 3D Preview Thumbnail               | AWS Batch (Fargate) | Generate GIF/JPG/PNG preview thumbnails for 3D files                     |
-| Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate) | Generate Gaussian splat reconstructions                                  |
-| GenAI Metadata 3D Labeling         | AWS Batch (Fargate) | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition |
-| Model Optimization (ModelOps)      | AWS Batch (Fargate) | Optimize 3D models for web delivery                                      |
-| RapidPipeline (ECS)                | AWS Batch (Fargate) | RapidPipeline integration via Amazon ECS                                 |
-| RapidPipeline (EKS)                | Amazon EKS          | RapidPipeline integration via Amazon EKS                                 |
-| Isaac Lab Training                 | AWS Batch (GPU)     | NVIDIA Isaac Lab simulation training                                     |
+| Pipeline                           | Compute             | Description                                                                                    |
+| ---------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------- |
+| 3D Basic Conversion                | AWS Batch (Fargate) | Convert 3D file formats                                                                        |
+| CAD/Mesh Metadata Extraction       | AWS Batch (Fargate) | Extract metadata from CAD and mesh files                                                       |
+| Point Cloud Potree Viewer          | AWS Batch (Fargate) | Generate Potree octree data for point cloud visualization                                      |
+| 3D Preview Thumbnail               | AWS Batch (Fargate) | Generate GIF/JPG/PNG preview thumbnails for 3D files                                           |
+| Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate) | Generate Gaussian splat reconstructions                                                        |
+| GenAI Metadata 3D Labeling         | AWS Batch (Fargate) | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition                       |
+| Video SOP/BOM Extraction           | AWS Batch (Fargate) | Teardown-video transcription and SOP/BOM extraction using Amazon Transcribe and Amazon Bedrock |
+| Model Optimization (ModelOps)      | AWS Batch (Fargate) | Optimize 3D models for web delivery                                                            |
+| RapidPipeline (ECS)                | AWS Batch (Fargate) | RapidPipeline integration via Amazon ECS                                                       |
+| RapidPipeline (EKS)                | Amazon EKS          | RapidPipeline integration via Amazon EKS                                                       |
+| Isaac Lab Training                 | AWS Batch (GPU)     | NVIDIA Isaac Lab simulation training                                                           |
 
 ## Configuration Flow
 

@@ -94,6 +94,14 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                         pipelines.useNvidiaGr00t.huggingFaceToken = "synth-only";
                     if (pipelines.useIsaacLabTraining)
                         pipelines.useIsaacLabTraining.acceptNvidiaEula = true;
+                    // The restricted templates ship the Video SOP/BOM model id empty (the commercial
+                    // inference profiles do not exist there) and the construct requires one; supply a
+                    // synth-only id with no partition-specific prefix.
+                    if (
+                        pipelines.useGenAiVideoSopBom &&
+                        !pipelines.useGenAiVideoSopBom.bedrockModelId
+                    )
+                        pipelines.useGenAiVideoSopBom.bedrockModelId = "synth-only-model";
                 },
             });
         });

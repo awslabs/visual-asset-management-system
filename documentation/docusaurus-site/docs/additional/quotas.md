@@ -107,15 +107,21 @@ The AWS Deadline Cloud execution type is available when the deployment sets
 
 ### Pipeline-Specific Limits
 
-| Pipeline               | Parameter               | Limit                        |
-| ---------------------- | ----------------------- | ---------------------------- |
-| 3D Preview Thumbnail   | Maximum input file size | 100 GB                       |
-| All ECS pipelines      | Metadata JSON input     | 8,000 characters             |
-| Gaussian Splat Toolbox | GPU instance required   | `g6e.2xlarge` or `g5.xlarge` |
-| Isaac Lab Training     | GPU instance required   | `g6e.2xlarge` or `g5.xlarge` |
-| RapidPipeline (EKS)    | Node instance type      | Configurable                 |
-| RapidPipeline (EKS)    | Job timeout             | Configurable                 |
-| RapidPipeline (EKS)    | Job backoff limit       | Configurable                 |
+| Pipeline                 | Parameter                    | Limit                                                 |
+| ------------------------ | ---------------------------- | ----------------------------------------------------- |
+| 3D Preview Thumbnail     | Maximum input file size      | 100 GB                                                |
+| All ECS pipelines        | Metadata JSON input          | 8,000 characters                                      |
+| Gaussian Splat Toolbox   | GPU instance required        | `g6e.2xlarge` or `g5.xlarge`                          |
+| Isaac Lab Training       | GPU instance required        | `g6e.2xlarge` or `g5.xlarge`                          |
+| RapidPipeline (EKS)      | Node instance type           | Configurable                                          |
+| RapidPipeline (EKS)      | Job timeout                  | Configurable                                          |
+| RapidPipeline (EKS)      | Job backoff limit            | Configurable                                          |
+| Video SOP/BOM Extraction | Maximum videos per run       | 4 (`limits.maxVideoFiles`, 1-4)                       |
+| Video SOP/BOM Extraction | Maximum size per video       | 4 GB (`config.ts` constant)                           |
+| Video SOP/BOM Extraction | Maximum total input size     | 16 GB (`config.ts` constant)                          |
+| Video SOP/BOM Extraction | Maximum total audio duration | 240 minutes (`limits.maxTotalDurationMinutes`, 1-480) |
+
+The Video SOP/BOM Extraction limits are enforced inside the pipeline: a run over a limit fails its pipeline step through the AWS Step Functions task token with a cause naming the observed value and the cap, rather than being rejected with a `400` as the template limits below are. See [Video SOP/BOM Extraction — Limits](../pipelines/video-sop-bom.md#limits).
 
 ### Pipeline Template and Tag-Schema Limits
 

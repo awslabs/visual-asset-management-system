@@ -1,0 +1,130 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/definition_schema.json",
+    "title": "definition.json written by constructPipeline to s3://<auxBucket>/<auxTempPrefix>definition.json and read by the container",
+    "description": "Neither task token travels in this document; additionalProperties is false so a token key is rejected. The config member is validated separately against config_schema.json.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schemaVersion",
+        "batchJobName",
+        "pipelineExecutionId",
+        "executionId",
+        "assetId",
+        "databaseId",
+        "assetName",
+        "inputFiles",
+        "outputs",
+        "outputTarget",
+        "auxBucket",
+        "auxTempPrefix",
+        "kmsKeyArn",
+        "bedrockModelId",
+        "limits",
+        "config"
+    ],
+    "properties": {
+        "schemaVersion": { "const": 1 },
+        "batchJobName": {
+            "description": "VideoSopBom_<pipelineExecutionId[:12]>_<YYYYmmdd>_<HHMMSS>_<6 hex>; also the sub-state-machine execution name. The middle segment is empty when openPipeline ran without an orchestration prefix.",
+            "type": "string",
+            "pattern": "^VideoSopBom_[0-9A-Za-z-]{0,12}_[0-9]{8}_[0-9]{6}_[0-9a-f]{6}$"
+        },
+        "pipelineExecutionId": {
+            "description": "Empty only for a direct openPipeline invocation without an orchestration prefix.",
+            "type": "string"
+        },
+        "executionId": {
+            "description": "Empty only for a direct openPipeline invocation without an orchestration prefix.",
+            "type": "string"
+        },
+        "assetId": { "type": "string", "minLength": 1 },
+        "databaseId": { "type": "string", "minLength": 1 },
+        "assetName": { "type": "string" },
+        "inputFiles": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": { "$ref": "#/$defs/inputFile" }
+        },
+        "outputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["bucket", "files", "previews", "metadata", "results"],
+            "properties": {
+                "bucket": { "type": "string", "minLength": 3 },
+                "files": { "type": "string", "pattern": "/files/$" },
+                "previews": { "type": "string", "pattern": "/previews/$" },
+                "metadata": { "type": "string", "pattern": "/metadata/$" },
+                "results": { "type": "string", "pattern": "/results/$" }
+            }
+        },
+        "outputTarget": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assetId", "databaseId", "fileBaseExecutionPathExtension"],
+            "properties": {
+                "assetId": { "type": "string", "minLength": 1 },
+                "databaseId": { "type": "string", "minLength": 1 },
+                "fileBaseExecutionPathExtension": {
+                    "description": "The workflow's defaultOutputFileBaseExecutionPathExtension after substitution, e.g. /<executionId>/.",
+                    "type": "string"
+                }
+            }
+        },
+        "auxBucket": { "type": "string", "minLength": 3 },
+        "auxTempPrefix": {
+            "description": "manifest.auxTempPrefix: pipelines/<pipelineName>/<executionId>/",
+            "type": "string",
+            "pattern": "^pipelines/.+/$"
+        },
+        "kmsKeyArn": {
+            "description": "Empty when the deployment has no customer-managed key.",
+            "type": "string",
+            "pattern": "^(|arn:[a-z-]+:kms:[a-z0-9-]+:[0-9]{12}:key/.+)$"
+        },
+        "bedrockModelId": { "type": "string", "minLength": 1 },
+        "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "maxVideoFiles",
+                "maxVideoFileSizeMb",
+                "maxTotalInputSizeMb",
+                "maxTotalDurationMinutes",
+                "maxKeyFramesCeiling"
+            ],
+            "properties": {
+                "maxVideoFiles": { "type": "integer", "minimum": 1 },
+                "maxVideoFileSizeMb": { "type": "integer", "minimum": 1 },
+                "maxTotalInputSizeMb": { "type": "integer", "minimum": 1 },
+                "maxTotalDurationMinutes": { "type": "integer", "minimum": 1 },
+                "maxKeyFramesCeiling": { "type": "integer", "minimum": 1 }
+            }
+        },
+        "config": {
+            "description": "Validated separately against config_schema.json.",
+            "type": "object"
+        }
+    },
+    "$defs": {
+        "inputFile": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["bucket", "key", "versionId", "relativePath"],
+            "properties": {
+                "bucket": { "type": "string", "minLength": 3 },
+                "key": { "type": "string", "minLength": 1 },
+                "versionId": {
+                    "description": "Empty when the object is unversioned; passed to GetObject only when non-empty and not the string null.",
+                    "type": "string"
+                },
+                "relativePath": {
+                    "description": "Asset-relative path with a leading slash and a file name (never a folder).",
+                    "type": "string",
+                    "pattern": "^/.*[^/]$"
+                }
+            }
+        }
+    }
+}
