@@ -17,7 +17,7 @@ Flow (before launch):
   5. Verify every selected input file exists in its own asset bucket (version-aware).
   6. Per-pipeline template resolution (templateResolution) + tag validation.
   7. Cross-entity validation (executionValidation.validate_execution) — arity, scope, filters.
-  8. Build the grouped input-metadata payload, take the perInputFileVersion locks when the workflow
+  8. Build the grouped input-metadata payload, take the concurrency locks when the workflow
      declares that restriction, launch the state machine, persist the V2 records (including a
      per-pipeline config snapshot: templateId, tag schema version, tags, override flag).
 
@@ -100,21 +100,6 @@ OBJECT_TYPE_DATABASE = "database"
 # a non-empty sentinel: the record builders coerce a falsy location_type back to "asset".
 OUTPUT_LOCATION_TYPE_ASSET = "asset"
 OUTPUT_LOCATION_TYPE_NONE = "none"
-
-# Upper bound on candidate input rows inspected by the concurrency guard so a launch never fans out
-# into an unbounded number of describe_execution calls (mirrors the V1 handler).
-MAX_CONCURRENCY_CANDIDATES_INSPECTED = 200
-
-# Upper bound on the index pages the candidate walk reads for one request, shared across the selected
-# assets. The candidate bound above counts rows the walk YIELDS, and a row belonging to another
-# workflow is discarded without yielding, so it does not bound the walk itself: an asset whose
-# by-asset history is mostly other workflows' runs would page its whole partition, one round trip at a
-# time, inside the request that still has to write the run's records and start the state machine. The
-# caller's API Gateway integration times out well before the Lambda does, so an unbounded walk answers
-# the caller with a gateway timeout while the launch it was checking goes on to start. A walk cut short
-# here is reported exactly as a spent candidate budget is - the restriction could not be confirmed - so
-# the bound costs a caveat on a pathologically deep asset, never a wrong answer.
-MAX_CONCURRENCY_PAGES_INSPECTED = 100
 
 # Worker bound for the per-input-file fan-out (S3 existence checks + metadata-service reads). The
 # input selection is capped at MAX_INPUT_FILES_PER_EXECUTION, so a large selection issues that many
@@ -1359,11 +1344,13 @@ def _verify_inputs_exist(selected_inputs, asset_records):
 
 
 def _lock_keys_for_launch(workflow, selected_inputs, asset_records):
-    """Lock keys for a perInputFileVersion launch: one per distinct selected file version, built from
-    the same full asset-bucket key and resolvedVersionId the WorkflowExecutionInputs rows record, so the
-    terminal handlers rebuild the identical keys from those rows. Empty for every other restriction."""
+    """Lock keys for a launch under the workflow's concurrencyRestriction: one per distinct asset
+    (perAsset), file (perInputFile), or file version (perInputFileVersion) among the selected inputs,
+    built from the same full asset-bucket key and resolvedVersionId the WorkflowExecutionInputs rows
+    record, so the terminal handlers rebuild the identical keys from those rows. Empty for `none`."""
     restriction = (workflow.get("systemConfig", {}) or {}).get("concurrencyRestriction", "none")
-    if restriction != el.CONCURRENCY_PER_INPUT_FILE_VERSION:
+    scope = el.lock_scope_for_restriction(restriction)
+    if scope is None:
         return []
     keys = []
     for item in selected_inputs:
@@ -1373,168 +1360,10 @@ def _lock_keys_for_launch(workflow, selected_inputs, asset_records):
         full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
         key = el.build_lock_key(
             workflow["databaseId"], workflow["workflowId"], item["databaseId"], item["assetId"],
-            er.normalize_file_key(full_key), item.get("resolvedVersionId", ""))
+            er.normalize_file_key(full_key), item.get("resolvedVersionId", ""), scope=scope)
         if key not in keys:
             keys.append(key)
     return keys
-
-
-#######################
-# Concurrency guard
-#######################
-
-def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, seen,
-                             workflow_composite="", page_budget=None, truncated=None):
-    """Yield distinct, not-yet-seen workflowExecutionIds for a (databaseId:assetId) partition,
-    newest-first, filtered to the exact input file keys when restriction is perInputFile. The caller
-    applies the inspection bound on the ids this yields, and lends `page_budget` - a single-element list
-    holding the request's remaining index pages - to bound the paging itself. A walk that stops on the
-    page budget adds its partition to `truncated` so the caller can tell it apart from one that ran out
-    of rows, which is the difference between "the restriction could not be confirmed" and "there is no
-    conflict".
-
-    Filtered to `workflow_composite` here, from the workflow ids the input row already carries, so
-    the caller's inspection budget is spent only on executions of THIS workflow. The by-asset GSI is
-    not partitioned by workflow, so without this a busy asset's runs of unrelated workflows exhaust
-    the budget before a conflicting run of this one is ever examined. A row written without workflow
-    ids (a migrated row) is kept as a candidate: the definitive workflow check then happens on its
-    main row in `_execution_running`, so an unlabelled row costs a read rather than a missed
-    conflict."""
-    query_kwargs = {
-        "IndexName": "WorkflowExecInputsByAssetGSI",
-        "KeyConditionExpression": Key("databaseId:assetId").eq(partition),
-        "ScanIndexForward": False,
-    }
-    while True:
-        if page_budget is not None:
-            if page_budget[0] <= 0:
-                if truncated is not None:
-                    truncated.add(partition)
-                return
-            page_budget[0] -= 1
-        resp = inputs_table.query(**query_kwargs)
-        for input_item in resp.get("Items", []):
-            if restriction == "perInputFile" and input_item.get("inputAssetFileKey") not in file_keys:
-                continue
-            row_workflow_database_id = input_item.get("workflowDatabaseId", "")
-            row_workflow_id = input_item.get("workflowId", "")
-            if workflow_composite and row_workflow_database_id and row_workflow_id:
-                if er.workflow_composite_key(
-                        row_workflow_database_id, row_workflow_id) != workflow_composite:
-                    continue
-            execution_id = input_item.get("workflowExecutionId", "")
-            if not execution_id or execution_id in seen:
-                continue
-            seen.add(execution_id)
-            yield execution_id
-        if "LastEvaluatedKey" not in resp:
-            return
-        query_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
-
-
-def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs, asset_records,
-                              restriction, notices=None):
-    """True when a still-running execution of this workflow conflicts with the concurrency
-    restriction:
-      - none: never conflicts.
-      - perAsset: a running execution touching any of the selected inputs' assets.
-      - perInputFile: a running execution on any of the exact selected input file keys.
-
-    Confirming one candidate costs a main-row read plus a Step Functions describe, so the number of
-    distinct executions confirmed is bounded, and the index pages the walk reads looking for those
-    candidates are bounded separately - a foreign workflow's row is discarded without being confirmed,
-    so it costs nothing against the candidate budget and would otherwise page the asset's whole history
-    for free. The candidate budget is spent ROUND-ROBIN over the selected assets rather than pre-split
-    into equal shares: every asset contributes its newest candidate before any of
-    them contributes a second, which keeps a long-history asset from consuming everything while
-    reserving nothing for an asset that has fewer candidates than a share would hand it. A floor of one
-    budget unit per asset keeps the guarantee that no selected asset goes entirely unexamined however
-    many the request spans.
-
-    A budget that runs out is NOT evidence of a conflict, and it does not deny the launch: it is
-    reported through `notices` (surfaced as an execute warning) and the run proceeds. Rejecting instead
-    is unrecoverable - an asset's execution count only grows, so once past the bound every later launch
-    on it fails identically with nothing the caller can change, and this same path runs as SYSTEM_USER
-    for trigger-dispatched runs, which would stop file-upload automation on exactly the assets that are
-    busiest, with only a log line to say so.
-
-    What that concedes is narrow, and needs POST on the workflow and on the assets already: to slip a
-    second concurrent run past the guard, more executions of THIS workflow on THESE assets must have
-    started after the still-running one than the budget covers (the walk is newest-first, so a
-    currently-running execution is normally among the first candidates examined). The effect is two runs
-    of the caller's own workflow writing the caller's own asset, no wider access - and the response
-    states that the limit could not be confirmed rather than implying it held."""
-    if restriction not in ("perAsset", "perInputFile"):
-        return False
-
-    inputs_table = dynamodb.Table(workflow_execution_inputs_table)
-    main_table = dynamodb.Table(workflow_execution_database_v2)
-    composite = er.workflow_composite_key(workflow_database_id, workflow_id)
-
-    # Sorted, not a bare set: the round-robin below visits the partitions in this order, and a
-    # deterministic order keeps which asset is examined first from varying between identical requests.
-    asset_partitions = sorted({f"{i['databaseId']}:{i['assetId']}" for i in selected_inputs})
-    # inputAssetFileKey is stored as the normalized FULL asset key (asset root + relative), so build
-    # the comparison set the same way (per its own asset's root) rather than from the relative key.
-    file_keys = set()
-    for i in selected_inputs:
-        asset = asset_records.get((i["databaseId"], i["assetId"]), {})
-        root = _asset_root_key(asset)
-        relative = i["relativeFileKey"]
-        full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
-        file_keys.add(er.normalize_file_key(full_key))
-
-    seen = set()
-    # One budget for the whole request, spent a candidate at a time across the partitions in turn. A
-    # walker is a lazy generator, so a partition costs a query only when its turn comes and only while
-    # budget remains. `pending` empties only when EVERY partition's candidates are exhausted, which is
-    # what separates "inspected all of them and none is running" from "ran out of budget".
-    # Index pages are budgeted for the whole request as well, because the workflow filter discards a
-    # foreign row without yielding it: without this the candidate budget below can go entirely unspent
-    # while the walk pages through every execution an asset has ever had. It carries the same
-    # one-per-asset floor, so the guarantee that no selected asset goes unexamined survives a selection
-    # wider than the page bound; the selection itself is capped, so the floor is too.
-    page_budget = [max(MAX_CONCURRENCY_PAGES_INSPECTED, len(asset_partitions))]
-    truncated = set()
-    walkers = {partition: _candidate_execution_ids(
-        inputs_table, partition, file_keys, restriction, seen, workflow_composite=composite,
-        page_budget=page_budget, truncated=truncated)
-        for partition in asset_partitions}
-    # Never fewer budget units than there are partitions, so each selected asset still gets its newest
-    # candidate examined however broad the selection is - the anti-starvation floor the per-share split
-    # provided, without the share's side effect of stopping while most of the budget is unspent.
-    budget = max(MAX_CONCURRENCY_CANDIDATES_INSPECTED, len(asset_partitions))
-    pending = list(asset_partitions)
-    inspected = 0
-    while pending and inspected < budget:
-        for partition in list(pending):
-            if inspected >= budget:
-                break
-            # A generator cannot yield None, so None is an unambiguous exhaustion sentinel.
-            execution_id = next(walkers[partition], None)
-            if execution_id is None:
-                pending.remove(partition)
-                continue
-            inspected += 1
-            if _execution_running(main_table, execution_id, composite):
-                return True
-    if pending or truncated:
-        # No conflict was found and the candidates were not exhausted - either the inspection budget ran
-        # out with partitions still to walk, or a walk stopped on the page budget. Reported, not
-        # rejected: an unspent-candidate count is a statement about this request's budget, not about
-        # concurrency, and a rejection here can never be cleared by the caller (or by the trigger
-        # dispatcher, which calls this as SYSTEM_USER with no one to read the error).
-        logger.warning(
-            f"Concurrency check confirmed {inspected} executions of this workflow across "
-            f"{len(asset_partitions)} selected asset(s) without exhausting the candidates "
-            f"({len(truncated)} asset(s) stopped on the page budget), so the {restriction} "
-            f"restriction could not be confirmed; the launch proceeds.")
-        if notices is not None:
-            notices.append(
-                "This workflow limits concurrent executions. The selected assets have more executions "
-                "of it than one request can examine, so no conflicting execution was found but the "
-                "limit could not be fully confirmed.")
-    return False
 
 
 #######################
@@ -1980,9 +1809,10 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         else:
             pipeline_config_bodies.append(rendered)
 
-    # Under perInputFileVersion the selected file versions are locked here — after every validation and
-    # render above, immediately before the run's first side effect — so a competing launch on the same
-    # version answers 400 instead of starting a second execution. The keys stay in memory for this call:
+    # Under a locking concurrencyRestriction the selected assets, files or file versions are locked here
+    # — after every validation and render above, immediately before the run's first side effect — so a
+    # competing launch on the same scope answers 400 instead of starting a second execution. The keys
+    # stay in memory for this call:
     # until _persist_execution_records has written the input rows nothing else can rebuild them, so every
     # failure below releases them from here.
     lock_keys = _lock_keys_for_launch(workflow, selected_inputs, asset_records)
@@ -2553,18 +2383,10 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         return validation_error(body={"message": {"executionValidationErrors": validation_errors}},
                                 event=event)
 
-    # 10) Concurrency guard per the workflow's concurrencyRestriction. concurrency_notices carries the
-    #     case where the guard found no conflicting execution but could not examine every candidate, so
-    #     the response says the limit was not fully confirmed instead of the launch being denied.
-    #     perInputFileVersion is not inspected here: it is a lock, taken in _launch_workflow immediately
-    #     before the run's first side effect.
-    restriction = (workflow.get("systemConfig", {}) or {}).get("concurrencyRestriction", "none")
-    concurrency_notices = []
-    if _running_execution_exists(
-            workflow_database_id, workflow_id, selected_inputs, asset_records, restriction,
-            notices=concurrency_notices):
-        return validation_error(body={
-            "message": "A conflicting execution of this workflow is already running."}, event=event)
+    # 10) The workflow's concurrencyRestriction is not inspected here: perAsset, perInputFile and
+    #     perInputFileVersion are all locks on the WorkflowExecutionLocks table, taken in _launch_workflow
+    #     immediately before the run's first side effect, so two launches racing for one asset, file or
+    #     version cannot both proceed and a conflict answers 400 (see the ExecutionLockConflict handler).
 
     # 11) Grouped input metadata (honoring the workflow's metadataInputs gate) from the selected inputs
     #     plus the resolved metadata sources. capture_notices collects what the capture could not take
@@ -2584,7 +2406,7 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     output_extension = _resolve_requested_output_extension(request_model, workflow)
     warnings = _missing_metadata_source_warnings(
         pipeline_records, resolved_configs, metadata_inputs, metadata_source_assets,
-        metadata_source_databases) + capture_notices + concurrency_notices
+        metadata_source_databases) + capture_notices
     try:
         execution_id = _launch_workflow(
             workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
@@ -2600,12 +2422,13 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             metadata_source_database_id=metadata_source_database_id,
             metadata_source_databases=metadata_source_databases)
     except el.ExecutionLockConflict as conflict:
-        # The key and the holder are for the log; the caller gets the fixed generic body. The trigger
-        # dispatcher drops a 400, which for a repeated delivery of one file version is the intent.
+        # The key and the holder are for the log; the caller gets a fixed body naming only the scope
+        # (asset / file / file version). The trigger dispatcher drops a 400, which for a repeated delivery
+        # of one file version is the intent.
         logger.warning(
             f"Execution lock conflict for workflow {workflow_database_id}:{workflow_id}: "
             f"{conflict.lock_key} is held by execution {conflict.holder_execution_id or 'unknown'}")
-        return validation_error(body={"message": el.LOCK_CONFLICT_MESSAGE}, event=event)
+        return validation_error(body={"message": conflict.message}, event=event)
 
     # AUDIT LOG: execution launched. Logged after the state machine has started, so a launch that
     # failed is never audited as a run. Tag VALUES are omitted deliberately — they can carry prompts and
@@ -2742,25 +2565,3 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
-
-
-def _execution_running(main_table, execution_id, workflow_composite):
-    """True when the execution belongs to this workflow, has no stop date, and Step Functions
-    confirms it is still running."""
-    main_resp = main_table.query(
-        KeyConditionExpression=Key("workflowExecutionId").eq(execution_id), ScanIndexForward=False)
-    main_rows = main_resp.get("Items", [])
-    if not main_rows:
-        return False
-    main_item = main_rows[0]
-    if main_item.get("workflowDatabaseId:workflowId", "") != workflow_composite:
-        return False
-    if main_item.get("executionStopDate"):
-        return False
-    try:
-        execution = sfn_client.describe_execution(
-            executionArn=main_item.get("workflow_execution_arn", ""))
-        return not execution.get("stopDate")
-    except Exception as e:
-        logger.exception(f"Error confirming running execution {execution_id}: {e}")
-        return False

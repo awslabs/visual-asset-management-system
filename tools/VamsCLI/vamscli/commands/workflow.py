@@ -339,8 +339,8 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
     captures. The workflow's gate builds the one metadata envelope every step shares.
 
     systemConfig.concurrencyRestriction is none, perAsset, perInputFile, or perInputFileVersion.
-    perInputFileVersion locks each selected file version for the run's duration: a second execution
-    of the same workflow on the same version is rejected with 400 until the first one finishes.
+    The three restrictions lock the selected assets, files, or file versions for the run's duration: a
+    second execution of the same workflow on a locked scope is rejected with 400 until the first finishes.
 
     Examples:
         vamscli workflow create -d my-db -n "Convert + Label" \\

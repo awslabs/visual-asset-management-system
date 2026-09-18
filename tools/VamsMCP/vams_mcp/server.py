@@ -1814,9 +1814,9 @@ if CONFIG.enable_writes:
         builds the one metadata envelope every step shares.
 
         systemConfig.concurrencyRestriction is one of none, perAsset, perInputFile, or
-        perInputFileVersion. perInputFileVersion locks each selected file version for the run's
-        duration, so a second execution on the same version is rejected with 400 until the first
-        finishes; the fileUpload trigger treats that rejection as an already-handled version.
+        perInputFileVersion. The three restrictions lock the selected assets, files, or file
+        versions for the run's duration, so a second execution on a locked scope is rejected with
+        400 until the first finishes; the fileUpload trigger treats that rejection as already handled.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_workflow(database_id, body))
 

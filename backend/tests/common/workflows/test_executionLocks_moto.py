@@ -121,19 +121,42 @@ class TestExecutionLocksOnDynamoDb:
 
         assert released == 2
         assert locks.scan()["Items"] == [
-            {"lockKey": other, "workflowExecutionId": "E2",
+            {"lockKey": other, "workflowExecutionId": "E2", "lockScope": "assetFileVersion",
              "acquiredAt": "2027-01-15T08:00:00Z", "expiresAt": NOW + 60}]
 
-    def test_row_derived_release_under_another_restriction_touches_no_lock_row(self):
+    def test_row_derived_release_under_the_none_restriction_touches_no_lock_row(self):
         ddb = _resource()
         locks = _lock_table(ddb)
         workflows = _workflow_table(ddb)
         _inputs_table(ddb)
         workflows.put_item(Item={"databaseId": "GLOBAL", "workflowId": "wf",
-                                 "systemConfig": {"concurrencyRestriction": "perInputFile"}})
+                                 "systemConfig": {"concurrencyRestriction": "none"}})
         el.acquire_locks(locks, [K1], "E1", 60, now=NOW)
         assert el.release_locks_for_execution(
             ddb, locks_table_name="t-locks", workflow_table_name="t-workflows",
             inputs_table_name="t-inputs", workflow_execution_id="E1",
             workflow_database_id="GLOBAL", workflow_id="wf") == 0
         assert "Item" in locks.get_item(Key={"lockKey": K1})
+
+    def test_a_release_rebuilds_the_key_shape_of_the_workflows_own_restriction(self):
+        # One execution, its inputs rows, and a row for EVERY scope of its file: the release under
+        # perInputFile deletes exactly the assetFile row and leaves the other two scopes' rows, which a
+        # different restriction (or a stale row from an earlier one) would own.
+        ddb = _resource()
+        locks = _lock_table(ddb)
+        workflows = _workflow_table(ddb)
+        inputs = _inputs_table(ddb)
+        workflows.put_item(Item={"databaseId": "GLOBAL", "workflowId": "wf",
+                                 "systemConfig": {"concurrencyRestriction": "perInputFile"}})
+        inputs.put_item(Item={"workflowExecutionId": "E1", "databaseId:assetId:inputAssetFileKey":
+                              "db:a1:/a1/one.glb", "databaseId": "db", "assetId": "a1",
+                              "inputAssetFileKey": "/a1/one.glb", "versionId": "v1"})
+        keys = {scope: el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v1", scope=scope)
+                for scope in el.LOCK_SCOPE_BY_RESTRICTION.values()}
+        el.acquire_locks(locks, list(keys.values()), "E1", 60, now=NOW)
+        assert el.release_locks_for_execution(
+            ddb, locks_table_name="t-locks", workflow_table_name="t-workflows",
+            inputs_table_name="t-inputs", workflow_execution_id="E1",
+            workflow_database_id="GLOBAL", workflow_id="wf") == 1
+        remaining = {item["lockKey"] for item in locks.scan()["Items"]}
+        assert remaining == {keys[el.LOCK_SCOPE_ASSET], keys[el.LOCK_SCOPE_ASSET_FILE_VERSION]}

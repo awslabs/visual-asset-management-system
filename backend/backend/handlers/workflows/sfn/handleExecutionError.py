@@ -231,7 +231,7 @@ def reconcile_failed_execution(body, error_info):
     except Exception as e:
         logger.exception(f"Error finalizing main execution row (continuing): {e}")
 
-    # 4) Release the perInputFileVersion locks the run held (a no-op for every other restriction).
+    # 4) Release the concurrency locks the run held (a no-op under the `none` restriction).
     #    Best-effort like every step here; an unreleased row expires through the table's TTL.
     el.release_locks_for_execution(
         dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table,

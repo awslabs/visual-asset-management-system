@@ -214,7 +214,7 @@ A model variant flag takes effect only when its family flag is also enabled: `us
 -   **Auto-trigger on upload** -- Configurable automatic pipeline execution when new files are uploaded
 -   **Workflow chaining** -- Chain multiple pipelines into multi-step workflows orchestrated by AWS Step Functions
 -   **System pipelines** -- Shipped pipelines and workflows carry `isSystem`; they are read-only through the API except for their `enabled` switches and template content, and a deployment re-asserts them
--   **Per-file-version execution lock** -- The `perInputFileVersion` concurrency restriction rejects a second execution over the same file version while one is running
+-   **Workflow execution locks** -- The `perAsset`, `perInputFile`, and `perInputFileVersion` concurrency restrictions lock the selected assets, files, or file versions for a run's duration, so a conflicting second execution is rejected while the first is running
 -   **Custom pipeline support** -- Register custom pipelines using the Lambda, SQS, EventBridge, or DeadlineCloud execution types
 
 :::note[VPC Requirement]

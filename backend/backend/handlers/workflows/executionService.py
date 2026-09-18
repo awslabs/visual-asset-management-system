@@ -1904,8 +1904,8 @@ def abort_execution(event, execution_id):
         _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
                                      only_if_not_terminal=True)
 
-    # The run is terminal, so a perInputFileVersion launch may now take the same file versions. A no-op
-    # for every other restriction; best-effort (an unreleased row expires through the table's TTL).
+    # The run is terminal, so a launch under a locking restriction may now take the same assets, files or
+    # file versions. A no-op under `none`; best-effort (an unreleased row expires through the table's TTL).
     el.release_locks_for_execution(
         dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_database,
         inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,

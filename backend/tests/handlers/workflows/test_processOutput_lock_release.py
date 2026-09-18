@@ -110,8 +110,8 @@ class TestEndStateReleasesLocks:
         assert dynamo.mock_calls.index(("Table", (po.workflow_execution_database_v2,), {})) < \
             dynamo.mock_calls.index(("Table", (po.workflow_execution_locks_table,), {}))
 
-    def test_another_restriction_reads_no_input_rows_and_deletes_nothing(self):
-        for restriction in ("none", "perAsset", "perInputFile"):
+    def test_the_none_restriction_reads_no_input_rows_and_deletes_nothing(self):
+        for restriction in ("none",):
             dynamo, _w, inputs_table, locks_table, _m = _dynamo(restriction)
             _record(dynamo)
             inputs_table.query.assert_not_called()

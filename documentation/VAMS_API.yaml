@@ -4425,8 +4425,8 @@ paths:
                         Validation, template-resolution, or cross-entity validation error, including
                         metadataSourceAssets spanning more assets than the workflow's assetScope span
                         keys allow, a workflow that is archived or disabled, a conflicting execution
-                        already running under the workflow's concurrencyRestriction (for
-                        perInputFileVersion, a lock held on one of the selected file versions), and a recorded
+                        already running under the workflow's concurrencyRestriction (a lock held on one of
+                        the selected assets, files, or file versions, by restriction), and a recorded
                         set of inputs too large to store (fewer or shorter template tag values and
                         metadata-source entities). A template-resolution failure returns
                         a message object carrying templateResolutionErrors, and a cross-entity failure
@@ -10962,7 +10962,7 @@ components:
                     $ref: "#/components/schemas/pipelineInputFileFilters"
                 concurrencyRestriction:
                     type: string
-                    description: "How concurrent executions of the workflow are limited. perAsset and perInputFile inspect running executions at launch; perInputFileVersion locks each selected file version before the state machine starts, so a launch on a version another execution holds is rejected with 400 until that execution reaches a terminal status."
+                    description: "How concurrent executions of the workflow are limited. perAsset, perInputFile and perInputFileVersion each lock the selected assets, files, or file versions before the state machine starts, so a launch on a scope another execution holds is rejected with 400 until that execution reaches a terminal status; none applies no limit."
                     enum:
                         - none
                         - perAsset

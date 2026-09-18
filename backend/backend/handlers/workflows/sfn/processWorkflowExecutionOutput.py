@@ -1007,9 +1007,9 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
 
-    # The run is terminal on the main row, so a perInputFileVersion launch may now take the same file
-    # versions. A no-op for every other restriction; best-effort by contract (an unreleased row expires
-    # through the table's TTL).
+    # The run is terminal on the main row, so a launch under a locking restriction may now take the same
+    # assets, files or file versions. A no-op under `none`; best-effort by contract (an unreleased row
+    # expires through the table's TTL).
     el.release_locks_for_execution(
         dynamo, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table_name,
         inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=workflow_execution_id,

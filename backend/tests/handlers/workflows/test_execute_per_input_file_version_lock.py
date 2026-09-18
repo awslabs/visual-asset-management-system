@@ -142,8 +142,11 @@ def _allow_enforcer():
 
 
 def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist_error=None,
-         write_error=None, start_error=None):
-    """Drive lambda_handler through a launch; returns (response, sfn mock, logger mock, stop spy)."""
+         write_error=None, start_error=None, tokens=("user1",), event=None):
+    """Drive lambda_handler through a launch; returns (response, sfn mock, logger mock, stop spy).
+    `tokens` is the identity request_to_claims answers with and `event` replaces the default REST-shaped
+    event (a lambdaCrossCall event, say), so the trigger-dispatched path can be driven through the same
+    harness."""
     def _table(name):
         return lock_table if name == ewv2.workflow_execution_locks_table else MagicMock()
 
@@ -164,8 +167,7 @@ def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist
                   return_value={"bucketName": "asset-bucket", "baseAssetsPrefix": ""}),
             patch(f"{MOD}._input_exists_in_s3", return_value=(True, "v-resolved")),
             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_enforcer()),
-            patch(f"{MOD}.request_to_claims", return_value={"tokens": ["user1"]}),
-            patch(f"{MOD}._running_execution_exists", return_value=False),
+            patch(f"{MOD}.request_to_claims", return_value={"tokens": list(tokens)}),
             patch(f"{MOD}.s3c"),
             patch.object(ewv2.dynamodb, "Table", side_effect=_table),
         ):
@@ -178,7 +180,7 @@ def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist
             stack.enter_context(patch(f"{MOD}._persist_execution_records", side_effect=persist_error))
         if write_error is not None:
             stack.enter_context(patch(f"{MOD}._write_execution_input_files", side_effect=write_error))
-        response = ewv2.lambda_handler(_event(body), MagicMock())
+        response = ewv2.lambda_handler(event if event is not None else _event(body), MagicMock())
     return response, sfn, log, stop
 
 
@@ -206,12 +208,23 @@ class TestLockKeysForLaunch:
             el.build_lock_key(WF_DB, WF_ID, "db1", "a1", "/a1/", ""),
         ]
 
-    def test_other_restrictions_yield_no_keys(self):
+    def test_the_none_restriction_yields_no_keys(self):
         selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb",
                      "resolvedVersionId": "v1"}]
-        for restriction in ("none", "perAsset", "perInputFile"):
-            assert ewv2._lock_keys_for_launch(_workflow(restriction), selected,
-                                              {("db1", "a1"): dict(_ASSET)}) == []
+        assert ewv2._lock_keys_for_launch(_workflow("none"), selected,
+                                          {("db1", "a1"): dict(_ASSET)}) == []
+
+    def test_per_asset_and_per_input_file_yield_their_own_scoped_keys(self):
+        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb",
+                     "resolvedVersionId": "v1"},
+                    {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/g.glb",
+                     "resolvedVersionId": "v2"}]
+        assets = {("db1", "a1"): dict(_ASSET)}
+        assert ewv2._lock_keys_for_launch(_workflow("perAsset"), selected, assets) == [
+            f"{WF_DB}:{WF_ID}|asset|db1:a1"]
+        assert ewv2._lock_keys_for_launch(_workflow("perInputFile"), selected, assets) == [
+            f"{WF_DB}:{WF_ID}|assetFile|db1:a1:/a1/f.glb",
+            f"{WF_DB}:{WF_ID}|assetFile|db1:a1:/a1/g.glb"]
 
 
 @pytest.mark.unit
@@ -234,19 +247,11 @@ class TestLaunchAcquiresBeforeStarting:
         sfn.start_execution.assert_called_once()
         assert table.deletes == [], "a successful launch keeps its locks for the terminal release"
 
-    def test_other_restrictions_touch_no_lock_row(self):
-        for restriction in ("none", "perAsset", "perInputFile"):
-            table = _LockTable()
-            response, _sfn, _log, _stop = _run(table, restriction=restriction)
-            assert response["statusCode"] == 200
-            assert table.puts == [] and table.deletes == []
-
-    def test_the_legacy_guard_reads_nothing_under_the_lock_restriction(self):
-        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
-        with patch.object(ewv2.dynamodb, "Table") as table_factory:
-            assert ewv2._running_execution_exists(
-                WF_DB, WF_ID, selected, {("db1", "a1"): dict(_ASSET)}, "perInputFileVersion") is False
-        table_factory.assert_not_called()
+    def test_the_none_restriction_touches_no_lock_row(self):
+        table = _LockTable()
+        response, _sfn, _log, _stop = _run(table, restriction="none")
+        assert response["statusCode"] == 200
+        assert table.puts == [] and table.deletes == []
 
 
 @pytest.mark.unit
@@ -255,7 +260,7 @@ class TestConflictAnswers400:
         table = _LockTable(held={KEY_G: "e-holder"})
         response, sfn, _log, _stop = _run(table)
         assert response["statusCode"] == 400
-        assert json.loads(response["body"])["message"] == el.LOCK_CONFLICT_MESSAGE
+        assert json.loads(response["body"])["message"] == el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[el.LOCK_SCOPE_ASSET_FILE_VERSION]
         sfn.start_execution.assert_not_called()
         # The first key was taken and rolled back before the 400 (multi-file rollback).
         assert [d["Key"]["lockKey"] for d in table.deletes] == [KEY_F]
@@ -265,7 +270,7 @@ class TestConflictAnswers400:
         table = _LockTable(held={KEY_G: "e-holder"})
         response, _sfn, log, _stop = _run(table)
         body = response["body"]
-        assert json.loads(body) == {"message": el.LOCK_CONFLICT_MESSAGE}
+        assert json.loads(body) == {"message": el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[el.LOCK_SCOPE_ASSET_FILE_VERSION]}
         for identifier in ("db1", "a1", "f.glb", "g.glb", "v-resolved", "wf1", "e-holder", "|"):
             assert identifier not in body
         logged = _warnings(log)
@@ -275,8 +280,8 @@ class TestConflictAnswers400:
     def test_the_cli_mapping_substrings_survive(self):
         # tools/VamsCLI/vamscli/utils/api_client.py maps this response to WorkflowAlreadyRunningError
         # by substring; the body is the contract that mapping reads.
-        assert "already running" in el.LOCK_CONFLICT_MESSAGE
-        assert "conflicting execution" in el.LOCK_CONFLICT_MESSAGE
+        assert "already running" in el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[el.LOCK_SCOPE_ASSET_FILE_VERSION]
+        assert "conflicting execution" in el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[el.LOCK_SCOPE_ASSET_FILE_VERSION]
 
 
 @pytest.mark.unit

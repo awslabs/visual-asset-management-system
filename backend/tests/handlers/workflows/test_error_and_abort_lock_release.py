@@ -110,8 +110,8 @@ class TestErrorHandlerReleasesLocks:
         assert {c.kwargs["ExpressionAttributeValues"][":e"]
                 for c in locks_table.delete_item.call_args_list} == {EXEC}
 
-    def test_another_restriction_reads_no_input_rows_and_deletes_nothing(self):
-        for restriction in ("none", "perAsset", "perInputFile"):
+    def test_the_none_restriction_reads_no_input_rows_and_deletes_nothing(self):
+        for restriction in ("none",):
             _finalize, inputs_table, locks_table = _reconcile(restriction)
             inputs_table.query.assert_not_called()
             locks_table.delete_item.assert_not_called()
@@ -167,8 +167,8 @@ class TestAbortReleasesLocks:
         assert {c.kwargs["ExpressionAttributeValues"][":e"]
                 for c in locks_table.delete_item.call_args_list} == {EXEC}
 
-    def test_another_restriction_reads_no_input_rows_and_deletes_nothing(self):
-        for restriction in ("none", "perAsset", "perInputFile"):
+    def test_the_none_restriction_reads_no_input_rows_and_deletes_nothing(self):
+        for restriction in ("none",):
             response, _persist, inputs_table, locks_table = _abort(restriction)
             assert response["statusCode"] == 200
             inputs_table.query.assert_not_called()

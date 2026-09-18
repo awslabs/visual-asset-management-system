@@ -66,23 +66,60 @@ K2 = el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/two.glb", "v2")
 
 @pytest.mark.unit
 class TestLockKey:
-    def test_the_key_is_the_documented_composite(self):
-        assert K1 == "GLOBAL:wf|db:a1:/a1/one.glb|v1"
+    def test_the_default_scope_key_is_the_documented_file_version_composite(self):
+        assert K1 == "GLOBAL:wf|assetFileVersion|db:a1:/a1/one.glb#v1"
+
+    def test_each_scope_carries_exactly_the_identity_its_restriction_serialises_on(self):
+        args = ("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v1")
+        assert el.build_lock_key(*args, scope=el.LOCK_SCOPE_ASSET) == "GLOBAL:wf|asset|db:a1"
+        assert el.build_lock_key(*args, scope=el.LOCK_SCOPE_ASSET_FILE) == \
+            "GLOBAL:wf|assetFile|db:a1:/a1/one.glb"
+        assert el.build_lock_key(*args, scope=el.LOCK_SCOPE_ASSET_FILE_VERSION) == \
+            "GLOBAL:wf|assetFileVersion|db:a1:/a1/one.glb#v1"
+
+    def test_the_three_scopes_never_collide_on_one_input(self):
+        args = ("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v1")
+        keys = {el.build_lock_key(*args, scope=s) for s in el.LOCK_SCOPE_BY_RESTRICTION.values()}
+        assert len(keys) == 3
+
+    def test_an_unknown_scope_is_a_programming_error(self):
+        with pytest.raises(ValueError):
+            el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "v1", scope="assetFolder")
 
     def test_an_empty_version_keeps_its_separator(self):
         # Whole-asset/folder selections and unversioned buckets lock with an empty version segment,
         # which must still be a different key from any real version of the same file.
-        assert el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/", "") == "GLOBAL:wf|db:a1:/a1/|"
-        assert el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/", None) == "GLOBAL:wf|db:a1:/a1/|"
+        assert el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/", "") == \
+            "GLOBAL:wf|assetFileVersion|db:a1:/a1/#"
+        assert el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/", None) == \
+            "GLOBAL:wf|assetFileVersion|db:a1:/a1/#"
 
-    def test_the_conflict_message_is_the_literal_the_cli_maps(self):
-        assert el.LOCK_CONFLICT_MESSAGE == (
-            "A conflicting execution of this workflow is already running for this file version.")
-        assert "already running" in el.LOCK_CONFLICT_MESSAGE
-        assert "conflicting execution" in el.LOCK_CONFLICT_MESSAGE
+    def test_every_conflict_message_carries_the_literals_the_cli_maps(self):
+        for message in [el.LOCK_CONFLICT_MESSAGE, *el.LOCK_CONFLICT_MESSAGE_BY_SCOPE.values()]:
+            assert "already running" in message
+            assert "conflicting execution" in message
+        assert el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[el.LOCK_SCOPE_ASSET_FILE_VERSION].endswith(
+            "for this file version.")
+        assert el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[el.LOCK_SCOPE_ASSET].endswith("for this asset.")
+        assert el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[el.LOCK_SCOPE_ASSET_FILE].endswith("for this file.")
 
-    def test_the_restriction_constant(self):
+    def test_a_conflict_names_the_scope_of_its_key_and_the_matching_message(self):
+        conflict = el.ExecutionLockConflict(
+            el.build_lock_key("GLOBAL", "wf", "db", "a1", "/a1/one.glb", "", scope=el.LOCK_SCOPE_ASSET),
+            "E9")
+        assert conflict.scope == el.LOCK_SCOPE_ASSET
+        assert conflict.message == el.LOCK_CONFLICT_MESSAGE_BY_SCOPE[el.LOCK_SCOPE_ASSET]
+        # A key of another shape (an older row, say) falls back to the generic body.
+        assert el.ExecutionLockConflict("GLOBAL:wf|db:a1:/a1/one.glb|v1", "E9").message == \
+            el.LOCK_CONFLICT_MESSAGE
+
+    def test_the_restriction_to_scope_mapping(self):
         assert el.CONCURRENCY_PER_INPUT_FILE_VERSION == "perInputFileVersion"
+        assert el.lock_scope_for_restriction("perAsset") == el.LOCK_SCOPE_ASSET
+        assert el.lock_scope_for_restriction("perInputFile") == el.LOCK_SCOPE_ASSET_FILE
+        assert el.lock_scope_for_restriction("perInputFileVersion") == el.LOCK_SCOPE_ASSET_FILE_VERSION
+        for restriction in ("none", "", None, "perFolder"):
+            assert el.lock_scope_for_restriction(restriction) is None
 
 
 @pytest.mark.unit
@@ -244,9 +281,21 @@ class TestRowDerivedKeys:
                 _input_row("/a1/one.glb", "v1")]
         assert el.lock_keys_for_execution(_workflow_record(), rows) == [K1, K2]
 
-    def test_other_restrictions_yield_no_keys(self):
+    def test_per_asset_collapses_every_file_of_one_asset_to_one_key(self):
+        rows = [_input_row("/a1/one.glb", "v1"), _input_row("/a1/two.glb", "v2"),
+                _input_row("/a2/x.glb", "v1", asset_id="a2")]
+        assert el.lock_keys_for_execution(_workflow_record("perAsset"), rows) == [
+            "GLOBAL:wf|asset|db:a1", "GLOBAL:wf|asset|db:a2"]
+
+    def test_per_input_file_collapses_versions_of_one_file_to_one_key(self):
+        rows = [_input_row("/a1/one.glb", "v1"), _input_row("/a1/one.glb", "v2"),
+                _input_row("/a1/two.glb", "v1")]
+        assert el.lock_keys_for_execution(_workflow_record("perInputFile"), rows) == [
+            "GLOBAL:wf|assetFile|db:a1:/a1/one.glb", "GLOBAL:wf|assetFile|db:a1:/a1/two.glb"]
+
+    def test_none_and_unknown_restrictions_yield_no_keys(self):
         rows = [_input_row("/a1/one.glb", "v1")]
-        for restriction in ("none", "perAsset", "perInputFile", None):
+        for restriction in ("none", None, "perFolder"):
             assert el.lock_keys_for_execution(_workflow_record(restriction), rows) == []
         assert el.lock_keys_for_execution({}, rows) == []
         assert el.lock_keys_for_execution(None, rows) == []
@@ -286,10 +335,25 @@ class TestReleaseForExecution:
         workflow_table.get_item.assert_any_call(Key={"databaseId": "GLOBAL", "workflowId": "wf"})
         inputs_table.query.assert_called()
 
-    def test_another_restriction_reads_no_input_rows_and_deletes_nothing(self):
+    def test_every_locking_restriction_releases_its_own_key_shape(self):
+        for restriction, expected in [
+                ("perAsset", ["GLOBAL:wf|asset|db:a1"]),
+                ("perInputFile", ["GLOBAL:wf|assetFile|db:a1:/a1/one.glb"])]:
+            locks = _FakeLockTable()
+            for key in expected:
+                locks.items[key] = {"lockKey": key, "workflowExecutionId": "E1", "expiresAt": 10 ** 12}
+            pager = Pager({"Items": [_input_row("/a1/one.glb", "v1")]}, name="inputs by execution")
+            dynamo, _workflow_table, inputs_table = self._dynamo(_workflow_record(restriction), pager, locks)
+            assert self._release(dynamo) == 1, restriction
+            assert locks.items == {}, restriction
+            inputs_table.query.assert_called()
+            assert locks.deletes, restriction
+            assert [d["Key"]["lockKey"] for d in locks.deletes] == expected, restriction
+
+    def test_the_none_restriction_reads_no_input_rows_and_deletes_nothing(self):
         locks = _FakeLockTable()
         pager = Pager({"Items": [_input_row("/a1/one.glb", "v1")]}, name="inputs by execution")
-        dynamo, _workflow_table, inputs_table = self._dynamo(_workflow_record("perInputFile"), pager, locks)
+        dynamo, _workflow_table, inputs_table = self._dynamo(_workflow_record("none"), pager, locks)
         assert self._release(dynamo) == 0
         inputs_table.query.assert_not_called()
         assert locks.deletes == []

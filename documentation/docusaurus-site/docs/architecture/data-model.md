@@ -473,14 +473,15 @@ run. `PipelineExecutionLogsStorageTable` holds the per-step result and error log
 
 ### Workflow Execution Locks Storage Table
 
-Holds one row per lock a running execution acquired under the `perInputFileVersion` concurrency restriction. Rows are written with a conditional put when the execution launches and deleted when it ends; the TTL attribute covers a release path that never ran.
+Holds one row per lock a running execution acquired under its workflow's `concurrencyRestriction` — `perAsset`, `perInputFile`, or `perInputFileVersion`. Rows are written with a conditional put when the execution launches and deleted when it ends; the TTL attribute covers a release path that never ran.
 
-| Attribute             | Type   | Key           | Notes                                                                                               |
-| --------------------- | ------ | ------------- | --------------------------------------------------------------------------------------------------- |
-| `lockKey`             | String | Partition Key | Identifies the workflow, input file, and S3 version the lock covers                                 |
-| `workflowExecutionId` | String |               | The execution holding the lock                                                                      |
-| `acquiredAt`          | String |               | ISO-8601 acquisition time                                                                           |
-| `expiresAt`           | Number |               | Epoch seconds; the table's TTL attribute, so a lock whose release path never ran expires on its own |
+| Attribute             | Type   | Key           | Notes                                                                                                                  |
+| --------------------- | ------ | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `lockKey`             | String | Partition Key | `{workflowDatabaseId}:{workflowId}\|{lockScope}\|{scopeKey}`: the asset, the file, or the file version the lock covers |
+| `workflowExecutionId` | String |               | The execution holding the lock                                                                                         |
+| `lockScope`           | String |               | `asset`, `assetFile`, or `assetFileVersion` — the restriction the row was taken under                                  |
+| `acquiredAt`          | String |               | ISO-8601 acquisition time                                                                                              |
+| `expiresAt`           | Number |               | Epoch seconds; the table's TTL attribute, so a lock whose release path never ran expires on its own                    |
 
 No DynamoDB Streams or global secondary indexes.
 

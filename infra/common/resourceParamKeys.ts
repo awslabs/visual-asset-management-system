@@ -65,9 +65,9 @@ export const RESOURCE_PARAM_KEYS = {
         pipelineTemplateTagSchemaStorage: "dynamoTables/pipelineTemplateTagSchemaStorage",
         workflowStorageV2: "dynamoTables/workflowStorageV2",
         workflowTriggersStorage: "dynamoTables/workflowTriggersStorage",
-        // Vector search + workflow coordination tables
-        vectorEmbeddingsStorage: "dynamoTables/vectorEmbeddingsStorage",
         workflowExecutionLocksStorage: "dynamoTables/workflowExecutionLocksStorage",
+        // Vector search tables
+        vectorEmbeddingsStorage: "dynamoTables/vectorEmbeddingsStorage",
     },
     // Deprecated tables retained for data migration only (no handler reads them)
     dynamoTablesLegacy: {

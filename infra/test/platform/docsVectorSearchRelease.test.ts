@@ -1368,7 +1368,7 @@ describe("changelog, revision history, and notices", () => {
             "-   **Search** Natural-language (vector) search",
             "-   **Pipelines** Consolidated `SYSTEM - GenAI Metadata Generation` pipeline",
             "-   **Workflows & Pipelines** System pipelines and workflows",
-            "-   **Workflows & Pipelines** `perInputFileVersion` concurrency restriction",
+            "-   **Workflows & Pipelines** Workflow execution locks",
             "-   **Workflows & Pipelines** `System-Reindex` trigger type",
             "-   **Pipelines** Reserved `execution.status.json` results file",
             "-   **CDK** The trigger dispatcher skips triggers",

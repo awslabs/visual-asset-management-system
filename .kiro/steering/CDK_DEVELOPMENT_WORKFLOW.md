@@ -168,7 +168,7 @@ interface storageResources {
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
         // Vector search + workflow coordination tables
         vectorEmbeddingsStorageTable: dynamodb.Table; // PK databaseId:assetId, SK fileVersionKey (+ "#" + segment key on a segment item); vector index vec-<model slug>-<dims> on `embedding` with seven INLINE_FILTER attributes (fixed at index creation), only when app.vectorSearch.enabled
-        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL attribute expiresAt
+        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
     };
 }
 ```

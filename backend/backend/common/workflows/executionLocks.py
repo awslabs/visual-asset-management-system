@@ -1,20 +1,25 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-input-file-version execution locks for the perInputFileVersion concurrency restriction.
+"""Execution locks for the perAsset, perInputFile and perInputFileVersion concurrency restrictions.
 
-A lock row is one item in WorkflowExecutionLocksStorageTable keyed by the exact file version an
-execution reads:
+A lock row is one item in WorkflowExecutionLocksStorageTable keyed by what the workflow's restriction
+serialises on:
 
-    {workflowDatabaseId}:{workflowId}|{databaseId}:{assetId}:{inputAssetFileKey}|{versionId}
+    {workflowDatabaseId}:{workflowId}|asset|{databaseId}:{assetId}
+    {workflowDatabaseId}:{workflowId}|assetFile|{databaseId}:{assetId}:{inputAssetFileKey}
+    {workflowDatabaseId}:{workflowId}|assetFileVersion|{databaseId}:{assetId}:{inputAssetFileKey}#{versionId}
 
 inputAssetFileKey is the normalized full asset-bucket key and versionId the resolved S3 VersionId ("" on
 an unversioned bucket and for whole-asset/folder selections) — the same values the WorkflowExecutionInputs
-rows store, so a terminal handler rebuilds the identical keys from those rows.
+rows store, so a terminal handler rebuilds the identical keys from those rows. A launch takes one key per
+distinct scope value across its selected inputs, so a perAsset run over three files of one asset holds one
+lock and a perInputFile run over them holds three.
 
 Acquire is a conditional PutItem (`attribute_not_exists(lockKey) OR expiresAt < :now`); release is a
 conditional DeleteItem on the holder's workflowExecutionId. expiresAt is the table's TTL attribute and a
-safety net only: TTL deletion lags, so the acquire condition tests it directly.
+safety net only: TTL deletion lags, so the acquire condition tests it directly. The lock is what makes
+the restriction hold under concurrency: two launches racing for one scope cannot both put the row.
 """
 
 import time
@@ -28,12 +33,33 @@ from customLogging.logger import safeLogger
 
 logger = safeLogger(service="ExecutionLocks")
 
+CONCURRENCY_PER_ASSET = "perAsset"
+CONCURRENCY_PER_INPUT_FILE = "perInputFile"
 CONCURRENCY_PER_INPUT_FILE_VERSION = "perInputFileVersion"
+
+# Lock scope written on the row and into the key: the restriction decides which of the input's identity
+# attributes the key carries, and the scope name keeps the three key shapes from colliding.
+LOCK_SCOPE_ASSET = "asset"
+LOCK_SCOPE_ASSET_FILE = "assetFile"
+LOCK_SCOPE_ASSET_FILE_VERSION = "assetFileVersion"
+
+LOCK_SCOPE_BY_RESTRICTION = {
+    CONCURRENCY_PER_ASSET: LOCK_SCOPE_ASSET,
+    CONCURRENCY_PER_INPUT_FILE: LOCK_SCOPE_ASSET_FILE,
+    CONCURRENCY_PER_INPUT_FILE_VERSION: LOCK_SCOPE_ASSET_FILE_VERSION,
+}
+LOCKING_RESTRICTIONS = frozenset(LOCK_SCOPE_BY_RESTRICTION)
 
 # The 400 body a conflicting launch answers with. Generic on purpose: the contested key and the holder
 # are logged server-side, never echoed. The CLI maps the response by the substrings "already running" /
 # "conflicting execution".
-LOCK_CONFLICT_MESSAGE = "A conflicting execution of this workflow is already running for this file version."
+LOCK_CONFLICT_MESSAGE = "A conflicting execution of this workflow is already running."
+LOCK_CONFLICT_MESSAGE_BY_SCOPE = {
+    LOCK_SCOPE_ASSET: "A conflicting execution of this workflow is already running for this asset.",
+    LOCK_SCOPE_ASSET_FILE: "A conflicting execution of this workflow is already running for this file.",
+    LOCK_SCOPE_ASSET_FILE_VERSION:
+        "A conflicting execution of this workflow is already running for this file version.",
+}
 
 # Bound on one pipeline's run when it declares no taskTimeout (or a malformed one): the Step Functions
 # task-token default of one day. The workflow's pipelines run one after another, so a lock lives for the
@@ -45,6 +71,7 @@ LOCK_TTL_MARGIN_SECONDS = 1800
 
 LOCK_KEY_ATTRIBUTE = "lockKey"
 HOLDER_ATTRIBUTE = "workflowExecutionId"
+LOCK_SCOPE_ATTRIBUTE = "lockScope"
 ACQUIRED_AT_ATTRIBUTE = "acquiredAt"
 EXPIRES_AT_ATTRIBUTE = "expiresAt"
 
@@ -60,11 +87,35 @@ class ExecutionLockConflict(Exception):
         self.lock_key = lock_key
         self.holder_execution_id = holder_execution_id
 
+    @property
+    def scope(self) -> str:
+        """The lock scope named in the contested key ("" for a key of another shape)."""
+        parts = self.lock_key.split("|")
+        return parts[1] if len(parts) == 3 and parts[1] in LOCK_SCOPE_BY_RESTRICTION.values() else ""
+
+    @property
+    def message(self) -> str:
+        return LOCK_CONFLICT_MESSAGE_BY_SCOPE.get(self.scope, LOCK_CONFLICT_MESSAGE)
+
+
+def lock_scope_for_restriction(restriction) -> Optional[str]:
+    """The lock scope a stored concurrencyRestriction serialises on; None for `none` and anything unknown,
+    which is what makes an unrecognised value fail open to "no lock" rather than to a malformed key."""
+    return LOCK_SCOPE_BY_RESTRICTION.get(restriction or "")
+
 
 def build_lock_key(workflow_database_id, workflow_id, database_id, asset_id,
-                   input_asset_file_key, version_id) -> str:
-    return (f"{workflow_database_id}:{workflow_id}|{database_id}:{asset_id}:{input_asset_file_key}"
-            f"|{version_id or ''}")
+                   input_asset_file_key, version_id, scope=LOCK_SCOPE_ASSET_FILE_VERSION) -> str:
+    """One lock key. The scope decides how much of the input's identity the key carries; the identity
+    attributes past that point are ignored, so callers may pass every attribute they hold."""
+    prefix = f"{workflow_database_id}:{workflow_id}|{scope}|{database_id}:{asset_id}"
+    if scope == LOCK_SCOPE_ASSET:
+        return prefix
+    if scope == LOCK_SCOPE_ASSET_FILE:
+        return f"{prefix}:{input_asset_file_key}"
+    if scope == LOCK_SCOPE_ASSET_FILE_VERSION:
+        return f"{prefix}:{input_asset_file_key}#{version_id or ''}"
+    raise ValueError(f"unknown lock scope: {scope!r}")
 
 
 def pipeline_timeout_seconds(pipeline_record) -> int:
@@ -87,19 +138,19 @@ def lock_ttl_seconds(pipeline_records) -> int:
 
 
 def lock_keys_for_execution(workflow_record, input_rows) -> List[str]:
-    """The lock keys an execution holds, rebuilt from its WorkflowExecutionInputs rows. Empty unless the
-    workflow's stored concurrencyRestriction is perInputFileVersion. Rows that resolve to one version
-    collapse to one key, in row order."""
+    """The lock keys an execution holds, rebuilt from its WorkflowExecutionInputs rows under the
+    workflow's stored concurrencyRestriction. Empty for `none` (and any unknown value). Rows that resolve
+    to one scope value collapse to one key, in row order."""
     record = workflow_record or {}
-    restriction = (record.get("systemConfig") or {}).get("concurrencyRestriction")
-    if restriction != CONCURRENCY_PER_INPUT_FILE_VERSION:
+    scope = lock_scope_for_restriction((record.get("systemConfig") or {}).get("concurrencyRestriction"))
+    if scope is None:
         return []
     keys: List[str] = []
     for row in input_rows or []:
         key = build_lock_key(
             record.get("databaseId", ""), record.get("workflowId", ""),
             row.get("databaseId", ""), row.get("assetId", ""),
-            row.get("inputAssetFileKey", ""), row.get("versionId", ""))
+            row.get("inputAssetFileKey", ""), row.get("versionId", ""), scope=scope)
         if key not in keys:
             keys.append(key)
     return keys
@@ -129,6 +180,12 @@ def _holder_from_conflict(error) -> str:
     return str(holder or "")
 
 
+def _scope_of_key(lock_key: str) -> str:
+    """The scope segment of a key built by build_lock_key ("" for any other shape)."""
+    parts = (lock_key or "").split("|")
+    return parts[1] if len(parts) == 3 and parts[1] in LOCK_SCOPE_BY_RESTRICTION.values() else ""
+
+
 def acquire_locks(table, lock_keys, execution_id, ttl_seconds, now=None) -> List[str]:
     """Take every lock in `lock_keys` for `execution_id`, or none of them.
 
@@ -146,6 +203,7 @@ def acquire_locks(table, lock_keys, execution_id, ttl_seconds, now=None) -> List
                 Item={
                     LOCK_KEY_ATTRIBUTE: lock_key,
                     HOLDER_ATTRIBUTE: execution_id,
+                    LOCK_SCOPE_ATTRIBUTE: _scope_of_key(lock_key),
                     ACQUIRED_AT_ATTRIBUTE: _iso(now_epoch),
                     EXPIRES_AT_ATTRIBUTE: now_epoch + int(ttl_seconds),
                 },
@@ -199,17 +257,18 @@ def _execution_input_rows(inputs_table, workflow_execution_id) -> list:
 
 def release_locks_for_execution(dynamo, *, locks_table_name, workflow_table_name, inputs_table_name,
                                 workflow_execution_id, workflow_database_id, workflow_id) -> int:
-    """Terminal-side release. Reads the workflow's stored concurrencyRestriction; when it is
-    perInputFileVersion, rebuilds the execution's lock keys from its WorkflowExecutionInputs rows and
-    releases them. Best-effort: any failure is logged and 0 returned, so a terminal status write never
-    fails on the lock table — an unreleased row expires through the table's TTL."""
+    """Terminal-side release. Reads the workflow's stored concurrencyRestriction; when it is one that
+    locks (perAsset, perInputFile, perInputFileVersion), rebuilds the execution's lock keys from its
+    WorkflowExecutionInputs rows and releases them. Best-effort: any failure is logged and 0 returned, so
+    a terminal status write never fails on the lock table — an unreleased row expires through the
+    table's TTL."""
     if not workflow_execution_id:
         return 0
     try:
         workflow_record = dynamo.Table(workflow_table_name).get_item(
             Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item") or {}
         restriction = (workflow_record.get("systemConfig") or {}).get("concurrencyRestriction")
-        if restriction != CONCURRENCY_PER_INPUT_FILE_VERSION:
+        if lock_scope_for_restriction(restriction) is None:
             return 0
         rows = _execution_input_rows(dynamo.Table(inputs_table_name), workflow_execution_id)
         keys = lock_keys_for_execution(workflow_record, rows)
