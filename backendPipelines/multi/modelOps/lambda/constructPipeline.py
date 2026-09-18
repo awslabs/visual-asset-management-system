@@ -53,7 +53,7 @@ def lambda_handler(event, context):
     # {"includeAllAssetFileHierarchyFiles": "True", "seedMetadataGenerationWithInputMetadata": "True" }
     #################
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     try:

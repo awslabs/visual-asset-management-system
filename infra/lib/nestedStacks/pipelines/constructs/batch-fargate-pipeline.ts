@@ -39,9 +39,11 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
     /** Memory reserved for the container, in MiB. Default 65536. */
     memoryMiB?: number;
     /**
-     * Log group the container's stdout and stderr are written to through the `awslogs` driver. When
-     * absent, AWS Batch writes to its default `aws/batch/job` group, which carries neither a KMS key
-     * nor a retention policy.
+     * Log group the container's stdout and stderr are written to through the `awslogs` driver, as
+     * `<jobDefinitionName>/default/<ecs-task-id>`. Every Fargate pipeline passes its own VAMS-owned
+     * `/aws/vendedlogs/Pipelines/<Name><hash>` group and registers that same group as the Batch
+     * state's log source. When absent, AWS Batch writes to its default `/aws/batch/job` group, which
+     * carries neither a KMS key nor a retention policy.
      */
     logGroup?: logs.ILogGroup;
     /**
@@ -101,7 +103,11 @@ export class BatchFargatePipelineConstruct extends Construct {
         // Container image: use ECR repository if provided, otherwise build locally
         const containerImage = props.ecrImage
             ? ecs.ContainerImage.fromEcrRepository(props.ecrImage.repository, props.ecrImage.tag)
-            : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
+            : // Synth-time asset path built from __dirname and a construct prop that the calling
+              // construct hard-codes; CDK resolves it on the operator's machine, never from request
+              // input.
+              // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+              ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
                   file: props.dockerfileName,
                   platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
               });
@@ -130,10 +136,17 @@ export class BatchFargatePipelineConstruct extends Construct {
                 },
                 jobRole: props.jobRole,
                 executionRole: props.executionRole,
+                // The stream is `<awslogs-stream-prefix>/default/<ecs-task-id>` (Batch names the
+                // container `default`). Prefixing with the PHYSICAL job definition name -- base name
+                // plus hash, the string `jobDefinition.jobDefinitionName` resolves to -- keeps the
+                // stream under the `<jobDefinitionName>/default/` prefix the pipeline's registering
+                // lambda derives from that same property, and matches the shape Batch's default
+                // group gives the GPU pipelines. With the bare base name the resolved stream falls
+                // outside the registered prefix and the execution log view filters every line out.
                 logging: props.logGroup
                     ? ecs.LogDrivers.awsLogs({
                           logGroup: props.logGroup,
-                          streamPrefix: props.batchJobDefinitionName,
+                          streamPrefix: batchJobName,
                       })
                     : undefined,
                 // No `user` override: the job runs as whatever the image's own USER declares. An

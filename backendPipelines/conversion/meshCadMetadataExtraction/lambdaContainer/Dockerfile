@@ -27,4 +27,7 @@ RUN pip install -r requirements.txt
 COPY . .
 
 # Points to the handler function of your lambda function
+# AWS Lambda runs container-image functions as its own non-root sandbox user regardless of a
+# Dockerfile USER, so adding one here changes nothing at runtime.
+# nosemgrep: dockerfile.security.missing-user.missing-user
 CMD ["lambda.lambda_handler"]

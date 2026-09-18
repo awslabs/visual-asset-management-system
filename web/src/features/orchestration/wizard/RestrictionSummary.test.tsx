@@ -5,7 +5,7 @@
 
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import RestrictionSummary from "./RestrictionSummary";
+import RestrictionSummary, { patternHelpText } from "./RestrictionSummary";
 import { resolveRestrictions } from "./resolveRestrictions";
 
 const wf = (over: any = {}) => ({
@@ -133,6 +133,37 @@ describe("RestrictionSummary", () => {
         expect(
             screen.getByRole("button", { name: /Which files this workflow accepts/i })
         ).toBeInTheDocument();
+    });
+
+    it("renders the compact line without its icon when the surface cannot hold a control", () => {
+        // A listbox option may contain no interactive element, so the picker asks for the bare line
+        // and exposes the pattern detail itself.
+        render(
+            <RestrictionSummary
+                compact
+                tooltip={false}
+                restrictions={resolveRestrictions(
+                    wf({ inputFileFilters: { allow: ["*.glb"] } }),
+                    []
+                )}
+            />
+        );
+        expect(screen.getByText(/1 file type · 1 file · writes to an asset/)).toBeInTheDocument();
+        expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("states the pattern detail as plain text", () => {
+        const text = patternHelpText(
+            resolveRestrictions(
+                wf({ inputFileFilters: { allow: ["*.glb", "*.e57"], exclude: ["*.tmp"] } }),
+                [{ systemConfig: {}, templateKnown: false }]
+            )
+        );
+        expect(text).toContain("Accepted: *.glb, *.e57");
+        expect(text).toContain("Excluded: *.tmp");
+        expect(text).toContain("Takes exactly one input file.");
+        expect(text).toContain("may narrow this further once chosen");
+        expect(patternHelpText(resolveRestrictions(wf(), []))).toContain("Accepted: any file type");
     });
 
     it("notes in compact mode when a template could still narrow things", () => {

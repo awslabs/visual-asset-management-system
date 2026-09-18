@@ -27,9 +27,14 @@ const ExecuteWorkflowButton: React.FC<ExecuteWorkflowButtonProps> = ({ scope }) 
 
     if (!canExecute) return null;
 
-    // The asset's database (asset scope) scopes the workflow list; global/workflow scope lists all.
+    // The asset's database (asset scope) scopes the workflow list; global scope lists all. A board
+    // scoped to one workflow presets that workflow, so the dialog opens on its Inputs step.
     const assetDatabaseId = scope.kind === "asset" ? scope.databaseId : undefined;
     const assetIdForPreset = scope.kind === "asset" ? scope.assetId : undefined;
+    const presetWorkflow =
+        scope.kind === "workflow"
+            ? { databaseId: scope.databaseId, workflowId: scope.workflowId }
+            : undefined;
 
     return (
         <>
@@ -45,6 +50,7 @@ const ExecuteWorkflowButton: React.FC<ExecuteWorkflowButtonProps> = ({ scope }) 
                     onClose={() => setOpen(false)}
                     databaseId={assetDatabaseId}
                     assetId={assetIdForPreset}
+                    presetWorkflow={presetWorkflow}
                 />
             )}
         </>

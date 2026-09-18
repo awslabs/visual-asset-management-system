@@ -114,7 +114,7 @@ def lambda_handler(event, context):
     Validates the rendered configuration and writes the container's definition document.
     """
 
-    logger.info(event)
+    logger.info("Event", event=event)
 
     try:
         return build_execution_params(event)

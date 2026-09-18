@@ -36,7 +36,7 @@ REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
     if (task_token != None and task_token != ""):
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
@@ -60,6 +60,7 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "Coordinate transform processing",
         },
     }
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
@@ -67,6 +68,8 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
+            "sourceType": "stateMachine",
+            "label": "Coordinate transform state machine",
         }]
     try:
         events_client.put_events(Entries=[{
@@ -86,7 +89,7 @@ def lambda_handler(event, context):
     Starts StepFunctions State Machine for coordinate transformation processing.
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     # Get the input metadata + input-configuration S3 locations
     input_metadata_s3_location = event.get('inputMetadataS3Location', '')

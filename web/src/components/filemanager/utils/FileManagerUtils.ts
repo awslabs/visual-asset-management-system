@@ -254,6 +254,14 @@ export function mergeFiles(
                         update.changeUserId !== undefined
                             ? update.changeUserId
                             : newNode.changeUserId;
+                    newNode.changeWorkflowId =
+                        update.changeWorkflowId !== undefined
+                            ? update.changeWorkflowId
+                            : newNode.changeWorkflowId;
+                    newNode.changeWorkflowExecutionId =
+                        update.changeWorkflowExecutionId !== undefined
+                            ? update.changeWorkflowExecutionId
+                            : newNode.changeWorkflowExecutionId;
                 }
             }
 
@@ -411,6 +419,8 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
                     previewFile: fileKey.previewFile,
                     changeSource: fileKey.changeSource,
                     changeUserId: fileKey.changeUserId,
+                    changeWorkflowId: fileKey.changeWorkflowId,
+                    changeWorkflowExecutionId: fileKey.changeWorkflowExecutionId,
                 });
             } else {
                 // For nested files, find or create parent directories
@@ -488,6 +498,8 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
                     previewFile: fileKey.previewFile,
                     changeSource: fileKey.changeSource,
                     changeUserId: fileKey.changeUserId,
+                    changeWorkflowId: fileKey.changeWorkflowId,
+                    changeWorkflowExecutionId: fileKey.changeWorkflowExecutionId,
                 });
             }
 

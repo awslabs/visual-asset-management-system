@@ -40,6 +40,7 @@ infra/
     aspects/                    # iam-role-transform.aspect.ts, log-retention.aspect.ts (1-year retention)
     constructs/wafv2-basic-construct.ts  # Builds the WAF Web ACL from wafPolicyConfig.json: managed rule groups (block or count-only per `block`) + per-rule `ruleActionOverrides` (e.g. SizeRestrictions_BODY -> count) + rate-based rules (always keyed on the connection `IP`; a `FORWARDED_IP` override is accepted but not emitted and raises a synth warning, and a 429 custom-response body); count-only Common Rule Set fallback when no policy supplied
     helper/
+      batchJobLogGroup.ts       # /aws/batch/job name + colon-form ARN env for registering lambdas; job-definition name from a CfnJobDefinition Ref
       const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso, aws-eusc)
       iamRoleCustomization.ts   # Bootstrap synthesizer + iam.Role.customizeRoles wiring
       lambda.ts                 # Layer bundling commands
@@ -95,6 +96,17 @@ infra/
                                  # infra.test.ts snapshot (uses the outdated @aws-cdk/assert)
     apiStackCeilings.test.ts     # Grounds the API-stack-split figures + app-wide log retention
                                  # against the synthesized templates
+    pipelines/batchLogRegistrationEnvFargate.test.ts  # Per-pipeline synth: registering-lambda env + every
+                                 # producer-declared *_STATE_NAME is a key of the ASL States
+                                 # (3dThumbnail, pcPotreeViewer, metadata3dLabeling, coordinateTransform)
+    pipelines/batchLogRegistrationEnvGpu.test.ts  # Same for splatToolbox, cosmos x4 (the COSMOS_BATCH_STATE_NAME
+                                 # env value is the joined name), gr00t, isaacLabTraining
+    pipelines/containerLogRegistrationEnvEcs.test.ts  # Same for rapidPipeline, modelOps
+                                 # (/aws/vendedlogs/Pipelines/* container group)
+    support/asl.ts               # parseAsl + lambda-env / job-definition-name / declared-stage-name helpers
+                                 # joining a producer's *_STATE_NAME literals to the synthesized ASL
+    support/pipelineConstructHarness.ts  # One-pipeline synth harness (stack, VPC, storage stubs, EFS/ECR imports)
+                                 # for per-construct assertions
     support/templateSynth.ts     # T1 harness: synthesizes the whole app from each shipped config
                                  # template with no Docker daemon; exposes every nested template
     t1PartitionPortability.test.ts  # T1 assertions across commercial/govcloud/eusovereign
@@ -466,7 +478,7 @@ When writing a partition deny-list, **name every restricted partition explicitly
 
 7. **No internet egress at build time.** A restricted-partition build host generally cannot reach commercial endpoints, so a `curl`/download inside a Docker bundling command hardcoded to a commercial S3 host will fail there.
 
-8. **IAM resource matching is case-sensitive.** Log-group grants for `/aws/vendedlogs/*` are explicit allow-lists, and the pipeline constructs are split across two casings (`VAMSStateMachine-*` and `VAMSstateMachine-*`), both of which `workflowFunctions.ts` grants. A new pipeline that invents a third casing silently loses log-read access — reuse an existing casing.
+8. **IAM resource matching is case-sensitive.** Log-group grants are explicit allow-lists: the `/aws/vendedlogs/*` prefixes the pipeline constructs use (split across two casings, `VAMSStateMachine-*` and `VAMSstateMachine-*`, both granted by `workflowFunctions.ts`), plus AWS Batch's default container group `/aws/batch/job`, which the executionService reads because the built-in Batch pipelines register it as a per-stage log source (no VAMS job definition sets a log configuration; `lib/helper/batchJobLogGroup.ts` is the one place that names it). A new pipeline that invents a third casing silently loses log-read access — reuse an existing casing, or the `/aws/vendedlogs/Pipelines/*` prefix.
 
 ### How to verify a partition change before shipping
 
@@ -614,7 +626,7 @@ Copy-paste scaffolds for new lambda builders, API routes, nested stacks, and con
 
 ## Pipeline Stacks
 
-Pipeline nested stacks, their required `backendPipelines/{name}/lambda/` layout, the VPC builder condition blocks a new Batch/ECS/Fargate pipeline is added to (which ones follows from its subnet placement and from whether its container calls a service without an endpoint), and the S3 output path conventions live in `lib/nestedStacks/pipelines/CLAUDE.md` (auto-loaded when editing under that directory).
+Pipeline nested stacks, their required `backendPipelines/{name}/lambda/` layout, the VPC builder condition blocks a new Batch/ECS/Fargate pipeline is added to (which ones follows from its subnet placement and from whether its container calls a service without an endpoint), the registering lambda's sub-process/log env wiring (`batchJobLogGroupEnvironment()`, `BATCH_JOB_DEFINITION_NAME`, construct id = `stageName`, the three registration tests), and the S3 output path conventions live in `lib/nestedStacks/pipelines/CLAUDE.md` (auto-loaded when editing under that directory).
 
 ---
 
@@ -724,6 +736,7 @@ node -e "const l=require('./package-lock.json');Object.entries(l.packages).filte
 | Auth (Cognito/SAML/OAuth)         | `lib/nestedStacks/auth/authBuilder-nestedStack.ts`                                           |
 | Security / Service / Partition    | `lib/helper/{security,service-helper,const}.ts`                                              |
 | S3 bucket registry                | `lib/helper/s3AssetBuckets.ts`                                                               |
+| Batch container log group env     | `lib/helper/batchJobLogGroup.ts`                                                             |
 | Feature flags enum                | `common/vamsAppFeatures.ts`                                                                  |
 | WAF stack                         | `lib/cf-waf-stack.ts`                                                                        |
 | WAF construct + rule policy       | `lib/constructs/wafv2-basic-construct.ts` + `config/policy/wafPolicyConfig.json`             |

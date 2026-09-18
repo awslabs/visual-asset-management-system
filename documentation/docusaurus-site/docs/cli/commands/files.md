@@ -122,7 +122,7 @@ vamscli file list -d my-db -a my-asset --starting-token "token123" --page-size 2
 `--auto-paginate` and `--starting-token` cannot be combined. `--max-items` is a CLI-side aggregation limit (default 10,000) applied only in auto-paginate mode and is never sent to the API; supplying it in manual mode prints a warning and ignores it. `--page-size` is passed to the API in both modes.
 :::
 
-Each file entry shows its relative path, size, primary type, and change source on the main line, with the current-version creation date, version ID, Amazon S3 ETag, storage class, and preview file listed as indented detail sub-lines. Version-mismatch and permanently-deleted files are flagged. Fields skipped in `--basic` mode (such as version ID and preview file) are omitted. In manual pagination, the response includes a next token to retrieve the following page.
+Each file entry shows its relative path, size, primary type, and change source on the main line, with the current-version creation date, version ID, Amazon S3 ETag, storage class, preview file, and — for a version written by a workflow execution — the workflow and execution ids (`Change Workflow`, `Change Execution`) listed as indented detail sub-lines. Version-mismatch and permanently-deleted files are flagged. Fields skipped in `--basic` mode (such as version ID and preview file) are omitted. In manual pagination, the response includes a next token to retrieve the following page.
 
 ---
 
@@ -148,7 +148,7 @@ vamscli file info -d my-db -a my-asset -p "/model.gltf"
 vamscli file info -d my-db -a my-asset -p "/model.gltf" --include-versions
 ```
 
-With `--include-versions`, each version lists its version ID, current/previous status, last-modified timestamp, size, associated asset versions, and any change-tracking fields (change source, user, workflow, and originating file path).
+The output names the current version's change source and the user it is attributed to (`Change Source`, `Changed By`) and, when a workflow execution wrote it, the workflow and execution ids (`Change Workflow`, `Change Execution`) — the same pair the [file info API](../../api/files.md#get-file-info) returns as `changeWorkflowId` / `changeWorkflowExecutionId`. With `--include-versions`, each version lists its version ID, current/previous status, last-modified timestamp, size, associated asset versions, and any change-tracking fields (change source, user, workflow, and originating file path).
 
 ---
 

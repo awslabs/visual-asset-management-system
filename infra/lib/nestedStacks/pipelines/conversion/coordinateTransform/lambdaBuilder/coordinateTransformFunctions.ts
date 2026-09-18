@@ -18,6 +18,7 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import * as Config from "../../../../../../config/config";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     globalLambdaEnvironmentsAndPermissions,
     grantReadPermissionsToAllAssetBuckets,
@@ -267,6 +268,7 @@ export function buildExecuteBatchJobFunction(
     lambdaCommonBaseLayer: LayerVersion,
     batchJobQueue: batch.JobQueue,
     batchJobDefinition: batch.IJobDefinition,
+    containerLogGroup: logs.ILogGroup,
     orchestrationBus: events.IEventBus,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -302,6 +304,9 @@ export function buildExecuteBatchJobFunction(
             BATCH_JOB_DEFINITION: batchJobDefinition.jobDefinitionName,
             // Orchestration bus for registering the submitted Batch job as an abortable sub-process
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            // This pipeline's vended container log group, registered with the job as the
+            // CoordTransformBatchJob log source (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...vendedBatchJobLogGroupEnvironment(containerLogGroup),
         },
     });
 

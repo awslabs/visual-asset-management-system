@@ -56,23 +56,32 @@ web/
     features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
-                            #   client.ts queries.ts
+                            #   client.ts queries.ts triggerCache.ts
       permissions/useAllowedRoutes.ts  # Tier-1 permission gating
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, ...)
+                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
+                            #   Callout, VirtualList (fixed-row-height windowed list), ...)
                             #   ToastProvider.tsx — notifications for the whole module
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
                             #   TemplateEditor.tsx TemplateForm.tsx TagSchemaBuilder.tsx
                             #   TemplateOverridesEditor.tsx pipelineValidation.ts
+                            #   templateBodyValidation.ts (tag placeholder quoting + the json
+                            #   body shape check mirrored from the backend)
       workflows/            # WorkflowsPage.tsx WorkflowBuilder.tsx PipelineOrderList.tsx
-                            #   TriggersEditor.tsx WorkflowSystemConfigFields.tsx DagPreview.tsx
+                            #   TriggersEditor.tsx (live) TriggerDraftsEditor.tsx (create) over
+                            #   TriggerList.tsx TriggerForm.tsx triggerDraft.ts triggerStyles.ts
+                            #   WorkflowSystemConfigFields.tsx DagPreview.tsx
                             #   WorkflowValidationPanel.tsx workflowValidation.ts
       executions/           # ExecutionsBoard.tsx ExecutionDetailPage.tsx ExecutionLogViewer.tsx
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
-      wizard/               # ExecuteWizard.tsx + WizardPipelineStage/WizardInputStage/
-                            #   WizardReviewStage, InputFileSelector, MetadataSourceSelector,
+                            #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+      wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
+                            #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
+                            #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
+                            #   SelectedInputFilesList + BulkFilePicker + selectedInputFiles.ts (the
+                            #   multi-file selection: windowed list, bulk/paste picker, dedupe, 1000 cap),
                             #   RestrictionSummary, resolveRestrictions.ts resolveTemplate.ts
       types.ts reservedTagKeys.ts
 
@@ -110,10 +119,13 @@ web/
           hooks/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
       createupdate/         # CreateDatabase.tsx, UpdateAsset.tsx + form definitions
-      filemanager/          # File tree and file operations
+      filemanager/          # File tree and file operations; EnhancedFileManager lazy-loads the
+                            #   orchestration execution quick view for a file's "View execution" link
         components/         # FileDetailsPanel, AutomationActions (lazy-loads the execute modal),
                             #   tree views, preview thumbnails, splitters
-        utils/              # automationSelection.ts maps a selection to workflow input files
+        utils/              # automationSelection.ts maps a selection to workflow input files;
+                            #   executionLinks.ts maps workflow-execution provenance to the execution
+                            #   detail route and the Tier-1 route the link is gated on
       form/
       list/
       loading/              # Loading screens and spinners
@@ -900,6 +912,81 @@ export const VIEWER_COMPONENTS = {
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+| `compareMode`                | object?           | Compare-mode opt-in (see 8.5)                        |
+
+### 8.5 Compare Mode (cross-asset / multi-version)
+
+`PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` accepts
+`mode: "compare"`, which surfaces only viewers declaring `compareMode.enabled` whose
+`[minFiles, maxFiles]` window and shape flags admit the selection. The per-viewer admission predicates
+for both paths are pure and unit-tested in `src/visualizerPlugin/core/viewerSelection.ts`
+(`admitsVisualizeSelection`, `admitsCompareSelection`); the classification is pure and
+unit-tested in `src/visualizerPlugin/core/compareShape.ts` (`deriveCompareContext(files)` →
+`{ fileCount, shape, crossAsset }`); the registry re-exports both. **File identity is database + asset +
+key, never the key alone** — the same key under two assets is `"different-files"` + `crossAsset: true`.
+
+`compareMode` fields: `enabled`, `compareOnly?`, `minFiles`, `maxFiles`,
+`allowSameFileDifferentVersions`, `allowDifferentFiles`, and `allowCrossAsset?` (default: not allowed).
+
+**Compare-only viewers** (`compareMode.compareOnly: true`, e.g. `text-diff-viewer`) render nothing but
+`compareFiles`, so the visualize path never offers them — one file or many, regardless of
+`supportsMultiFile` or extension match — because visualize never passes `compareFiles`. Keep such a
+viewer's `supportsMultiFile: false` (that flag is the visualize `multiFileKeys` capability; compare
+file count is `minFiles`/`maxFiles`). Without `compareOnly`, compare capability is orthogonal to
+visualize.
+
+Contract for `compareFiles` entries (`ViewerPluginProps.compareFiles`, index 0 = left/base):
+
+-   Each entry is a resolved `{ databaseId, assetId, key, versionId? }`. `DynamicViewer` fills a missing
+    per-entry db/asset from its **top-level** props (never from `files[0]`) before classifying and before
+    handing the list to the viewer.
+-   Missing `versionId` = **latest** (search selections arrive this way via `searchRowToFileInfo`).
+-   The viewer fetches every entry under **its own** db/asset via `downloadAsset` — each asset is
+    Casbin-authorized independently — and renders a per-entry 401/403/410/404 as **that entry's** state
+    while the other entry still renders. `downloadAsset` returns `[false, message, status]` on failure.
+-   A viewer opting into `allowCrossAsset` offers a per-entry version picker (`fetchFileVersions`, one
+    list per db+asset+key) and re-fetches only the entry whose version changed.
+
+Reference implementation: `viewers/TextDiffViewerPlugin/TextDiffViewerComponent.tsx` (per-side
+state, per-side error panel, per-side `Select` version picker; diff library dynamically imported;
+compact controls for layout, Line/Word/Character granularity, line numbers, and collapse-unchanged
+with context lines; single-line ellipsis-truncated side labels and library titles).
+Surfaces: search results "Compare Selected" (rows may span assets), the file manager's "Compare
+Selected Files" icon (`FileDetailsPanel.tsx`), and the version-compare actions in
+`AssetVersionComparison.tsx` / `FileVersionsList.tsx`, all hosted by `FileViewerModal`.
+
+**Mode availability — one rule for every entry point.** A viewer is EITHER a compare-differ
+(`compareMode.compareOnly`) OR a regular viewer; never a hybrid (guarded over the shipped
+`viewerConfig.json` by `viewerSelection.test.ts`). A surface offers **Visualize** only when
+`hasVisualizeViewer` / `areFilenamesViewableTogether` says a non-compare viewer admits the selection,
+and **Compare** only when `hasCompareViewer` / `areFilesComparableTogether` says a compare viewer admits
+its file count, shape and types (`isExtensionComparableAsVersions(ext)` for a per-row version Compare).
+`FileViewerModal` consults `availableModesForFiles(files)`: both modes → toggle (top-right); one →
+that mode, no toggle; none → "No viewer for this selection". `ViewerSelector` additionally filters
+compare-only viewers out of the Visualize dropdown (`listableViewers`) regardless of the list it is
+handed. Never gate a Visualize/Compare control with a hand-written extension list; use these
+predicates behind `useViewerRegistryReady()`.
+
+**Single-file compare.** A LONE file is judged for compare as two versions of itself:
+`availableViewerModes` (pure, `viewerSelection.ts`) maps a one-file selection onto
+`LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`), the same question
+`isExtensionComparableAsVersions` asks, so a single `.txt` admits BOTH modes while a single `.png`/`.glb`
+stays Visualize-only — admission, never an extension list. The host seeds the pair with
+`seedCompareFromSingleFile(file)` (`compareShape.ts`): `[the viewed entry (its pinned `versionId`, or
+latest), the same file at latest]`; when the viewed side is latest both start at latest and the differ
+shows its identical-versions notice while the user picks the other version in the per-side picker.
+Toggling back to Visualize shows the one file again. Hosts: `FileViewerModal` (single-file view from
+`FileDetailsPanel`) and the `ViewFile` page (where "View File" from `FileVersionsList` /
+`AssetVersionComparison` lands; its toggle sits beside the File/Preview control and only on the File
+tab). The version lists' per-row Compare keeps seeding `[snapshot@version, latest]`.
+
+**Differ inside `DynamicViewer`.** Every plugin mounts inside `.visualizer-container-canvases`, which
+`src/styles/index.scss` gives `text-align: center` and `line-height: 100%` for the 3D canvases. A
+text-rendering viewer must reset both (`TextViewerPlugin` on its highlighter, `TextDiffViewerComponent`
+at its root) or its lines render centered and stop wrapping. The differ also passes
+`styles={{ titleBlock: { pre: { margin: 0 } } }}` to `react-diff-viewer-continued`: the library's
+`pre` margin reset covers only the table, and the UA `1em` margin on the title `<pre>` pushed the
+labels down and clipped them inside the fixed-height title block.
 
 ---
 

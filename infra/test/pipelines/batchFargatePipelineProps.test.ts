@@ -4,14 +4,19 @@
  */
 
 /**
- * The shared Fargate construct sizes and logs a container the way its caller asks, and every caller that
- * asks for nothing keeps the sizing it always had.
+ * The shared Fargate construct sizes and logs a container the way its caller asks, and every Fargate
+ * job definition VAMS deploys writes its container output to a VAMS-owned log group.
  *
- * `BatchFargatePipelineConstruct` hardcoded 16 vCPU / 64 GiB and set no `logging`, so every Fargate job
- * paid the point-cloud sizing and wrote its stdout to AWS Batch's default `aws/batch/job` group — a group
- * with no KMS key and no retention. The video SOP/BOM pipeline needs 4 vCPU / 16 GiB and a KMS-encrypted
- * log group; the other five job definitions must not move. Asserted on the emitted
- * `AWS::Batch::JobDefinition`, because the size and the log group AWS Batch receives are what run.
+ * Part one exercises `BatchFargatePipelineConstruct` directly: `cpu` / `memoryMiB` size the container,
+ * the defaults are the 16 vCPU / 64 GiB every existing caller was built against, and `logGroup` routes
+ * the container stream through the `awslogs` driver. Asserted on the emitted `AWS::Batch::JobDefinition`,
+ * because the size and the log group AWS Batch receives are what run.
+ *
+ * Part two synthesizes the whole application with every Fargate pipeline enabled and the customer
+ * managed key on. Without a `logGroup` AWS Batch writes to its default `/aws/batch/job` group, which
+ * sits outside the `/aws/vendedlogs/Pipelines/*` prefix the workflow Lambdas are granted to read, outside
+ * the retention aspect, and outside the KMS key — so every Fargate job definition must name a group under
+ * that prefix, and that group must carry the key.
  */
 
 import * as cdk from "aws-cdk-lib";
@@ -24,10 +29,13 @@ import * as Config from "../../config/config";
 import { BatchFargatePipelineConstruct } from "../../lib/nestedStacks/pipelines/constructs/batch-fargate-pipeline";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
-import { SynthResult, synthTemplate } from "../support/templateSynth";
+import { Resource, SynthResult, synthTemplate } from "../support/templateSynth";
 
 const ACCOUNT = "123456789012";
 const REGION = "us-east-1";
+
+/** The prefix `workflowFunctions.ts` grants the execution-service Lambdas read access to. */
+const PIPELINE_LOG_GROUP_PREFIX = "/aws/vendedlogs/Pipelines/";
 
 const createMockConfig = (): Config.Config => {
     const config = JSON.parse(JSON.stringify(commercialTemplate)) as Config.Config;
@@ -47,7 +55,7 @@ describe("BatchFargatePipelineConstruct sizing and logging props", () => {
     beforeAll(() => {
         const config = createMockConfig();
         const app = newTestApp();
-        stack = new cdk.Stack(app, "FargateSizingTestStack", {
+        stack = new cdk.Stack(app, "FargatePropsTestStack", {
             env: { account: ACCOUNT, region: REGION },
         });
         const vpc = new ec2.Vpc(stack, "Vpc", { maxAzs: 2 });
@@ -113,7 +121,7 @@ describe("BatchFargatePipelineConstruct sizing and logging props", () => {
     });
 
     test("the defaults are the sizing every existing caller receives", () => {
-        // 16 vCPU / 64 GiB is what the five existing job definitions were built with; a changed default
+        // 16 vCPU / 64 GiB is what the existing job definitions were built with; a changed default
         // would resize all of them in one deploy.
         const jd = jobDefinitionNamed("DefaultedJob_");
         expect(requirement(jd, "VCPU")).toBe("16");
@@ -121,10 +129,16 @@ describe("BatchFargatePipelineConstruct sizing and logging props", () => {
     });
 
     test("logGroup routes the container log stream through the awslogs driver", () => {
-        const lc = jobDefinitionNamed("SizedJob_").ContainerProperties.LogConfiguration;
+        const jd = jobDefinitionNamed("SizedJob_");
+        const lc = jd.ContainerProperties.LogConfiguration;
         expect(lc.LogDriver).toBe("awslogs");
         expect(lc.Options["awslogs-group"]).toEqual(stack.resolve(logGroup.logGroupName));
-        expect(lc.Options["awslogs-stream-prefix"]).toBe("SizedJob_vams-test");
+        // The prefix is the PHYSICAL job definition name (base + hash), not the base name the caller
+        // passed: the registering lambdas build their `<name>/default/` prefix from
+        // `jobDefinition.jobDefinitionName`, which resolves to this string, and the stream
+        // `<prefix>/default/<task-id>` has to start with it.
+        expect(lc.Options["awslogs-stream-prefix"]).toBe(jd.JobDefinitionName);
+        expect(jd.JobDefinitionName).toMatch(/^SizedJob_vams-test[0-9a-f]{10}$/);
     });
 
     test("without logGroup no LogConfiguration is rendered, so Batch keeps its default", () => {
@@ -133,15 +147,11 @@ describe("BatchFargatePipelineConstruct sizing and logging props", () => {
     });
 });
 
-/**
- * Enable the five pipelines that build Fargate Batch jobs.
- *
- * Duplicated from `fargateBatchAttemptDuration.test.ts` rather than shared: each suite owns its own
- * mutation and `mutateKey`, and a shared mutator would couple the synth caches together.
- */
-function fargatePipelines(c: any) {
+/** Enable every pipeline that builds a Fargate job definition, in a VPC, with the CMK on. */
+function allFargatePipelinesWithCmk(c: any) {
     c.app.useGlobalVpc.enabled = true;
     c.app.useGlobalVpc.addVpcEndpoints = true;
+    c.app.useKmsCmkEncryption.enabled = true;
     for (const flag of [
         "useConversionCoordinateTransform",
         "useGenAiMetadata3dLabeling",
@@ -149,84 +159,103 @@ function fargatePipelines(c: any) {
         "usePreviewPcPotreeViewer",
         "useGenAiVideoSopBom",
     ]) {
-        if (c.app.pipelines[flag]) {
-            c.app.pipelines[flag].enabled = true;
-            if (c.app.pipelines[flag].autoRegisterWithVAMS !== undefined) {
-                c.app.pipelines[flag].autoRegisterWithVAMS = false;
-            }
+        c.app.pipelines[flag].enabled = true;
+        if (c.app.pipelines[flag].autoRegisterWithVAMS !== undefined) {
+            c.app.pipelines[flag].autoRegisterWithVAMS = false;
         }
     }
+    c.app.pipelines.useGenAiVideoSopBom.useCodeBuild = true;
 }
 
 /** Fargate job definitions, identified by the platform capability Batch receives. */
-function fargateJobDefinitions(synth: SynthResult) {
+function fargateJobDefinitions(synth: SynthResult): Resource[] {
     return synth.ofType("AWS::Batch::JobDefinition").filter((jd) => {
         const capabilities = ((jd.properties as any).PlatformCapabilities ?? []) as string[];
         return capabilities.includes("FARGATE");
     });
 }
 
-/** The value of one resource requirement (VCPU or MEMORY) as Batch receives it: a string. */
-function requirementOf(jd: any, type: string): string {
-    const requirements = (jd.properties.ContainerProperties?.ResourceRequirements ?? []) as any[];
-    return requirements.find((r) => r.Type === type)?.Value;
+/**
+ * The log group a job definition's `awslogs-group` option refers to, resolved within the job
+ * definition's own nested template — the construct passes the group's name as a `Ref`.
+ */
+function logGroupOf(synth: SynthResult, jd: Resource): Resource {
+    const option = (jd.properties as any).ContainerProperties?.LogConfiguration?.Options?.[
+        "awslogs-group"
+    ];
+    expect(option).toBeDefined();
+    const logicalId = option.Ref;
+    expect(typeof logicalId).toBe("string");
+    const group = synth.resources.find(
+        (r) => r.stack === jd.stack && r.logicalId === logicalId && r.type === "AWS::Logs::LogGroup"
+    );
+    expect(group).toBeDefined();
+    return group!;
 }
 
-describe("Fargate job definition sizing across the five Fargate pipelines", () => {
+describe("every Fargate job definition logs to a VAMS-owned group", () => {
     let synth: SynthResult;
 
     beforeAll(() => {
         synth = synthTemplate("commercial", {
-            mutate: fargatePipelines,
-            mutateKey: "video-sop-bom-fargate-sizing",
+            mutate: allFargatePipelinesWithCmk,
+            mutateKey: "fargate-log-groups-cmk",
         });
     });
 
-    test("[control] six Fargate job definitions are emitted", () => {
-        // Coordinate transform, metadata labeling, 3D thumbnail, PDAL and Potree from the point-cloud
-        // viewer, and the video SOP/BOM job. Exactly six, so "the other five" below is the whole rest.
+    test("[control] the six Fargate job definitions are emitted in this synth", () => {
+        // Coordinate transform, Blender renderer, 3D thumbnail, PDAL and Potree, and the video SOP/BOM
+        // job. A lower count means a pipeline was left out of the mutate, and the loop below would then
+        // assert on nothing for it.
         expect(fargateJobDefinitions(synth)).toHaveLength(6);
     });
 
-    test("exactly one job definition is the video SOP/BOM job, sized 4 vCPU / 16 GiB", () => {
-        const video = fargateJobDefinitions(synth).filter((jd) =>
-            String(jd.properties.JobDefinitionName).startsWith("VideoSopBomJob_")
-        );
+    test("the video SOP/BOM job is sized 4 vCPU / 16 GiB; the other five keep 16 vCPU / 64 GiB", () => {
+        const requirementOf = (jd: Resource, type: string) =>
+            ((jd.properties as any).ContainerProperties?.ResourceRequirements ?? []).find(
+                (r: any) => r.Type === type
+            )?.Value;
+        const isVideo = (jd: Resource) =>
+            String((jd.properties as any).JobDefinitionName).startsWith("VideoSopBomJob_");
+        const video = fargateJobDefinitions(synth).filter(isVideo);
         expect(video).toHaveLength(1);
         expect(requirementOf(video[0], "VCPU")).toBe("4");
         expect(requirementOf(video[0], "MEMORY")).toBe("16384");
-    });
-
-    test("the video SOP/BOM job writes its container stream to the Pipelines log group", () => {
-        const [video] = fargateJobDefinitions(synth).filter((jd) =>
-            String(jd.properties.JobDefinitionName).startsWith("VideoSopBomJob_")
-        );
-        const logConfiguration = video.properties.ContainerProperties.LogConfiguration;
-        expect(logConfiguration.LogDriver).toBe("awslogs");
-        // The group is referenced by logical id from the same nested template; resolve it to its name.
-        const groupLogicalId = logConfiguration.Options["awslogs-group"].Ref;
-        const group = synth.resources.find(
-            (r) => r.stack === video.stack && r.logicalId === groupLogicalId
-        );
-        expect(group).toBeDefined();
-        expect(String(group!.properties.LogGroupName)).toMatch(
-            /^\/aws\/vendedlogs\/Pipelines\/VideoSopBom[0-9a-f]{10}$/
-        );
-    });
-
-    test("the other five keep 16 vCPU / 64 GiB and Batch's default logging", () => {
-        const others = fargateJobDefinitions(synth).filter(
-            (jd) => !String(jd.properties.JobDefinitionName).startsWith("VideoSopBomJob_")
-        );
-        expect(others).toHaveLength(5);
-        const resized = others
+        const resized = fargateJobDefinitions(synth)
+            .filter((jd) => !isVideo(jd))
             .filter(
                 (jd) =>
-                    requirementOf(jd, "VCPU") !== "16" ||
-                    requirementOf(jd, "MEMORY") !== "65536" ||
-                    jd.properties.ContainerProperties?.LogConfiguration !== undefined
+                    requirementOf(jd, "VCPU") !== "16" || requirementOf(jd, "MEMORY") !== "65536"
             )
             .map((jd) => `${jd.stack}/${jd.logicalId}`);
         expect(resized).toEqual([]);
+    });
+
+    test("each job definition names a group under the prefix the workflow Lambdas can read", () => {
+        for (const jd of fargateJobDefinitions(synth)) {
+            const lc = (jd.properties as any).ContainerProperties.LogConfiguration;
+            expect(lc.LogDriver).toBe("awslogs");
+            const group = logGroupOf(synth, jd);
+            const name = SynthResult.flatten((group.properties as any).LogGroupName);
+            expect(name.startsWith(PIPELINE_LOG_GROUP_PREFIX)).toBe(true);
+        }
+    });
+
+    test("each group is encrypted with the customer managed key", () => {
+        for (const jd of fargateJobDefinitions(synth)) {
+            const group = logGroupOf(synth, jd);
+            expect((group.properties as any).KmsKeyId).toBeDefined();
+        }
+    });
+
+    test("no two job definitions share a stream prefix", () => {
+        // The stream prefix is what separates one job's output from another's inside a group.
+        const prefixes = fargateJobDefinitions(synth).map(
+            (jd) =>
+                (jd.properties as any).ContainerProperties.LogConfiguration.Options[
+                    "awslogs-stream-prefix"
+                ]
+        );
+        expect(new Set(prefixes).size).toBe(prefixes.length);
     });
 });

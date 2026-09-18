@@ -22,6 +22,8 @@ import {
     downloadFile,
 } from "../utils/FileManagerUtils";
 import { getChangeSourceLabel } from "../utils/changeSourceLabels";
+import { EXECUTION_DETAILS_API_ROUTE, linkedExecutionId } from "../utils/executionLinks";
+import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
 import { CreateFolderModal } from "../modals/CreateFolderModal";
 import AssetDeleteModal from "../../modals/AssetDeleteModal";
 import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
@@ -39,11 +41,13 @@ import FileMetadata from "../../metadata/FileMetadata";
 import "./FileDetailsPanel.css";
 import { previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
+import { ViewerMode } from "../../../visualizerPlugin/core/PluginRegistry";
 import Synonyms from "../../../synonyms";
 import { EYE_ICON_SVG } from "../../../visualizerPlugin/components/EyeIconSvg";
 import {
     isViewableExtension,
     areFilenamesViewableTogether,
+    areFilesComparableTogether,
     extensionOfFilename,
 } from "../../../visualizerPlugin/core/viewableExtensions";
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
@@ -55,7 +59,7 @@ import { FileManagerContext } from "./FileTreeView";
 
 // File Info Panel Component
 export function FileDetailsPanel({}: FileInfoPanelProps) {
-    const { state, dispatch } = useContext(FileManagerContext)!;
+    const { state, dispatch, onViewExecution } = useContext(FileManagerContext)!;
     const navigate = useNavigate();
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
@@ -74,6 +78,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // appear on this page: nothing else initializes the registry before they render, so every
     // viewability check reported "no viewer" (only the search page's container initializes it).
     const viewerRegistryReady = useViewerRegistryReady();
+    // The "View execution" provenance link is hidden when the caller may not read execution
+    // details, the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
 
     // Clear fetched files cache when refresh happens
     useEffect(() => {
@@ -180,6 +188,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     previewFile: fileInfo.previewFile,
                                     changeSource: fileInfo.changeSource,
                                     changeUserId: fileInfo.changeUserId,
+                                    changeWorkflowId: fileInfo.changeWorkflowId,
+                                    changeWorkflowExecutionId: fileInfo.changeWorkflowExecutionId,
                                 },
                             ],
                             loadingPhase: state.loadingPhase,
@@ -266,6 +276,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [showShareUrlsModal, setShowShareUrlsModal] = useState(false);
     const [showFileViewerModal, setShowFileViewerModal] = useState(false);
     const [modalFiles, setModalFiles] = useState<FileInfo[]>([]);
+    // Which surface the viewer modal opens on: the eye opens Visualize, the compare icon Compare.
+    const [modalInitialMode, setModalInitialMode] = useState<ViewerMode>("visualize");
     const [showRenameFileModal, setShowRenameFileModal] = useState(false);
 
     // Helper function to get files for the modal
@@ -330,18 +342,20 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     };
 
     // Add handler for file viewer modal with debugging
-    const handleFileViewerModal = () => {
+    const handleFileViewerModal = (initialMode: ViewerMode = "visualize") => {
         console.log("handleFileViewerModal called - current state:", {
             isMultiSelect,
             selectedItems: selectedItems.length,
             selectedItem: selectedItem?.name,
             showFileViewerModal,
+            initialMode,
         });
 
         // Capture the files at the moment the button is clicked
         const files = getModalFiles();
         console.log("Captured files for modal:", files);
         setModalFiles(files);
+        setModalInitialMode(initialMode);
         setShowFileViewerModal(true);
     };
 
@@ -452,6 +466,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     databaseId={databaseId!}
                     assetId={assetId!}
                     assetVersionId={state.assetVersionId}
+                    initialMode={modalInitialMode}
                 />
 
                 <div className="file-info-panel">
@@ -685,27 +700,58 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     </div>
 
                     <div className="multi-select-info">
-                        {/* Eye icon for the multi-file selection, hidden unless ONE viewer can render
-                            every selected file — a viewer covering only part of a mixed selection
-                            would open and then fail on the files it cannot read. */}
+                        {/* Viewer entry points for the multi-file selection. Each is gated by ITS OWN
+                            path: the eye needs ONE visualize viewer that renders every selected file
+                            (never a compare-only one), the compare icon needs ONE compare viewer that
+                            admits the selection's count, shape and types. A viewer covering only part
+                            of a mixed selection would open and then fail on the files it cannot read. */}
                         {!hasSelectedFolders &&
                             !isNotDistributable &&
                             viewerRegistryReady &&
-                            areFilenamesViewableTogether(selectedItems.map((i: any) => i.name)) && (
-                                <div className="file-info-item">
-                                    <div className="file-info-label">File Viewer:</div>
-                                    <div className="file-info-value">
-                                        <span title="Visualize Selected Files">
-                                            <Button
-                                                variant="icon"
-                                                iconSvg={EYE_ICON_SVG}
-                                                ariaLabel="Visualize Selected Files"
-                                                onClick={handleFileViewerModal}
-                                            />
-                                        </span>
+                            (() => {
+                                const names = selectedItems.map((i: any) => i.name);
+                                const canVisualize = areFilenamesViewableTogether(names);
+                                const canCompare = areFilesComparableTogether(
+                                    selectedItems.map((i: any) => ({
+                                        filename: i.name,
+                                        key: i.keyPrefix,
+                                        assetId: assetId || undefined,
+                                        databaseId: databaseId || undefined,
+                                    }))
+                                );
+                                if (!canVisualize && !canCompare) return null;
+                                return (
+                                    <div className="file-info-item">
+                                        <div className="file-info-label">File Viewer:</div>
+                                        <div className="file-info-value">
+                                            {canVisualize && (
+                                                <span title="Visualize Selected Files">
+                                                    <Button
+                                                        variant="icon"
+                                                        iconSvg={EYE_ICON_SVG}
+                                                        ariaLabel="Visualize Selected Files"
+                                                        onClick={() =>
+                                                            handleFileViewerModal("visualize")
+                                                        }
+                                                    />
+                                                </span>
+                                            )}
+                                            {canCompare && (
+                                                <span title="Compare Selected Files">
+                                                    <Button
+                                                        variant="icon"
+                                                        iconName="copy"
+                                                        ariaLabel="Compare Selected Files"
+                                                        onClick={() =>
+                                                            handleFileViewerModal("compare")
+                                                        }
+                                                    />
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            )}
+                                );
+                            })()}
 
                         <div className="selected-files-list">
                             {selectedItems.map((item) => (
@@ -849,6 +895,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 databaseId={databaseId!}
                 assetId={assetId!}
                 assetVersionId={state.assetVersionId}
+                initialMode={modalInitialMode}
             />
 
             <div className="file-info-panel">
@@ -1342,7 +1389,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 variant="icon"
                                                 iconSvg={EYE_ICON_SVG}
                                                 ariaLabel={`Visualize File ${selectedItem.name}`}
-                                                onClick={handleFileViewerModal}
+                                                onClick={() => handleFileViewerModal("visualize")}
                                             />
                                         </span>
                                     )}
@@ -1492,7 +1539,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                             </div>
                         )}
 
-                        {/* Show Change Source (with modifying user in parentheses) for files only */}
+                        {/* Show Change Source (with modifying user in parentheses) for files only.
+                            A version written by a workflow execution links to that run's quick view. */}
                         {!isFolder && selectedItem.level > 0 && (
                             <div className="file-info-item">
                                 <div className="file-info-label">Change Source:</div>
@@ -1506,6 +1554,22 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         if (source) return source;
                                         if (user) return `(${user})`;
                                         return "—";
+                                    })()}
+                                    {(() => {
+                                        const executionId = linkedExecutionId(selectedItem);
+                                        if (!executionId || !canViewExecution || !onViewExecution) {
+                                            return null;
+                                        }
+                                        return (
+                                            <span style={{ marginLeft: "8px" }}>
+                                                <Link
+                                                    onFollow={() => onViewExecution(executionId)}
+                                                    fontSize="body-s"
+                                                >
+                                                    View execution
+                                                </Link>
+                                            </span>
+                                        );
                                     })()}
                                 </div>
                             </div>

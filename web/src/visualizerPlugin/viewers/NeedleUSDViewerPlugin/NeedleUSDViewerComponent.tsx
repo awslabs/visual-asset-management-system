@@ -644,6 +644,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     extractFromBinary(content, sourceFilePath, dependencies);
                 }
             } catch (error) {
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.warn(`Error extracting dependencies from ${sourceFilePath}:`, error);
             }
 
@@ -703,6 +706,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     try {
                         USD.FS_unlink(fullPath);
                     } catch (unlinkError) {
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         console.warn(`    Failed to unlink ${fullPath}:`, unlinkError);
                         // Continue anyway - the createDataFile might still work
                     }
@@ -781,6 +788,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 return await response.arrayBuffer();
             } catch (error) {
                 if (isMainFile) throw error;
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.warn(`Error loading dependency: ${fileKey}`, error);
                 return null;
             }
@@ -1269,6 +1279,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                         fileInfos.push({ fileKey, fileName, directory, fileGroup });
                     } catch (fileError: any) {
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         console.error(`Error loading ${fileKey}:`, fileError);
                         errors.push({
                             file: fileKey,
@@ -1445,6 +1459,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                                         }
                                     }
                                 } catch (storeError: any) {
+                                    // Console logging only: a % specifier in the interpolated value
+                                    // can at most garble this one log line; nothing is executed,
+                                    // stored or returned from it.
+                                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                     console.warn(`Error storing ${assetPath} in WASM:`, storeError);
                                     console.warn(
                                         `  Error details: errno=${storeError?.errno}, message=${storeError?.message}`

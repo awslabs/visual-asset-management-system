@@ -13,6 +13,7 @@ import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { Service, IAMArn, Partition } from "../helper/service-helper";
+import { BATCH_JOB_LOG_GROUP_NAME } from "../helper/batchJobLogGroup";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
@@ -137,9 +138,20 @@ export function buildExecutionServiceFunction(
             resources: ["*"],
         })
     );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Resolve a registered Batch job's status and container log stream for the execution
+            // details and logs APIs. DescribeJobs supports no resource-level scoping (its only
+            // resource type is `*`); the handler only ever passes job ids read from registration
+            // rows of the execution being read.
+            actions: ["batch:DescribeJobs"],
+            resources: ["*"],
+        })
+    );
     // Gated the same way the createJob grant is: with the execution type disabled no pipeline can be
-    // registered as DeadlineCloud, so no execution can hold a job to cancel and the grant would be
-    // standing access to every farm in the account for a code path that cannot run.
+    // registered as DeadlineCloud, so no execution can hold a job to cancel or report on, and the
+    // grants would be standing access to every farm in the account for code paths that cannot run.
     if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
         fun.addToRolePolicy(
             new iam.PolicyStatement({
@@ -155,12 +167,39 @@ export function buildExecutionServiceFunction(
                 // produces one. Discovery walks the pipeline's queue and matches the reserved
                 // VamsPipelineExecutionId job parameter instead, so it needs no event to have
                 // occurred.
-                actions: ["deadline:UpdateJob", "deadline:ListJobs", "deadline:GetJob"],
+                //
+                // GetJob also resolves a registered job's name and status for the execution details
+                // view. ListSessions lists the job's sessions for the logs API: each session is one
+                // CloudWatch log stream in the queue's shared '/aws/deadline/{farmId}/{queueId}'
+                // group, and the lines carry no VAMS id, so the streams are read by exact session
+                // id (log-group grant below).
+                actions: [
+                    "deadline:UpdateJob",
+                    "deadline:ListJobs",
+                    "deadline:GetJob",
+                    "deadline:ListSessions",
+                ],
                 // Farm and queue ids come from the pipeline record, not from configuration, so they
-                // are not known at deploy time; the abort path only ever passes ids read from the
-                // execution being aborted. Scoped to the account/Region's Deadline resources.
+                // are not known at deploy time; the handler only ever passes ids read from the
+                // execution being aborted or read. Scoped to the account/Region's Deadline resources.
                 resources: [
                     `arn:${Partition()}:deadline:${config.env.region}:${config.env.account}:farm/*`,
+                ],
+            })
+        );
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
+                // Deadline Cloud writes session logs to the queue's own group
+                // '/aws/deadline/{farmId}/{queueId}', one stream per session, shared by every job of
+                // the queue. Farm and queue ids come from the pipeline record, so the group is not
+                // known at deploy time; the handler only ever reads the streams named by the session
+                // ids ListSessions returned for a job registered on the execution being read. Suffixed
+                // with ':*' for stream-level reads, as the log-group statement below.
+                resources: [
+                    IAMArn("/aws/deadline/*").loggroup,
+                    IAMArn("/aws/deadline/*").loggroup + ":*",
                 ],
             })
         );
@@ -171,12 +210,26 @@ export function buildExecutionServiceFunction(
                     id: "AwsSolutions-IAM5",
                     reason:
                         "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
-                        "known at deploy time, so the abort path's deadline:UpdateJob/ListJobs/GetJob are scoped to " +
+                        "known at deploy time, so deadline:UpdateJob/ListJobs/GetJob/ListSessions are scoped to " +
                         "this account and Region's farm hierarchy. The handler only ever passes a farm/queue read " +
-                        "from the pipeline definition of the execution being aborted, and a job id it either read " +
-                        "from that execution's registration rows or matched by the execution's own id in a reserved " +
-                        "job parameter.",
+                        "from the pipeline definition of the execution being aborted or read, and a job id it " +
+                        "either read from that execution's registration rows or matched by the execution's own id " +
+                        "in a reserved job parameter.",
                     appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
+                },
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "Deadline Cloud session logs land in the queue's own '/aws/deadline/<farmId>/<queueId>' " +
+                        "log group, and farm and queue ids are recorded on VAMS pipeline records rather than " +
+                        "known at deploy time, so the logs read is scoped to this account and Region's Deadline " +
+                        "log-group namespace. The handler only ever reads the streams named by the session ids " +
+                        "Deadline Cloud returned for a job registered on the execution being read.",
+                    appliesTo: [
+                        {
+                            regex: "/^Resource::arn:.*:logs:.*:log-group:/aws/deadline/\\*(:\\*)?$/g",
+                        },
+                    ],
                 },
             ],
             true
@@ -193,7 +246,14 @@ export function buildExecutionServiceFunction(
             //   (2) config-name-based groups (the audit/log groups that embed the config name);
             //   (3) pipeline state-machine groups — BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
             //       '/aws/vendedlogs/VAMSstateMachine-*' are used across pipelines (case varies);
-            //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*'.
+            //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*' — the ECS pipelines and
+            //       the six Fargate Batch pipelines (coordinate transform, Blender renderer, 3D
+            //       thumbnail, PDAL, Potree, video SOP/BOM extraction), whose job definitions route
+            //       container output there through the awslogs driver and register that group per
+            //       stage;
+            //   (5) AWS Batch's default container group '/aws/batch/job' — the GPU Batch pipelines
+            //       (Cosmos, GR00T, Isaac Lab, Splat) set no log configuration, so their container
+            //       streams land there and that is the group they register.
             // Scoped to these prefixes (not the whole /aws/vendedlogs/* namespace) so it cannot read
             // unrelated apps' vended log groups. Each is suffixed with ':*' for stream-level reads.
             resources: [
@@ -207,6 +267,8 @@ export function buildExecutionServiceFunction(
                 IAMArn("/aws/vendedlogs/VAMSstateMachine-*").loggroup + ":*",
                 IAMArn("/aws/vendedlogs/Pipelines/*").loggroup,
                 IAMArn("/aws/vendedlogs/Pipelines/*").loggroup + ":*",
+                IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup,
+                IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup + ":*",
             ],
         })
     );

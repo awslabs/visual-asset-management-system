@@ -214,6 +214,9 @@ const downloadSingleFile = async (
         } catch (error) {
             retries++;
             console.error(
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 `Error downloading ${file.relativePath} (Attempt ${retries}/${maxRetries}):`,
                 error
             );

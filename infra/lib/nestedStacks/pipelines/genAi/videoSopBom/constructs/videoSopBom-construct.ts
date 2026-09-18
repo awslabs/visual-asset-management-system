@@ -506,7 +506,11 @@ export class VideoSopBomConstruct extends Construct {
             props.vpc,
             props.pipelineSubnets,
             props.storageResources.eventBridge.orchestrationBus,
-            stateMachineLogGroup
+            stateMachineLogGroup,
+            {
+                jobDefinitionName: batchPipeline.batchJobDefinition.jobDefinitionName,
+                logGroup: containerLogGroup,
+            }
         );
 
         // VAMS execute Lambda

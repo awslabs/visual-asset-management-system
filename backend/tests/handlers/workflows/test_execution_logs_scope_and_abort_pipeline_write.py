@@ -6,6 +6,7 @@ read scoped to the requesting execution, and abort marks a still-running pipelin
 targeted, condition-guarded update rather than a whole-item write.
 """
 
+import json
 import os
 import pytest
 from unittest.mock import MagicMock, patch
@@ -49,12 +50,34 @@ class TestRegisteredLogScoping:
              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}), \
              patch(f"{MOD}._sfn_execution_history_events",
                    return_value={"events": [], "nextToken": None}), \
-             patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [])) as fetch:
+             patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [], None)) as fetch:
             resp = le.get_execution_logs(
                 {}, EXEC_ID, {"mode": "full", "pipelineExecutionId": "pe-1"})
         assert resp["statusCode"] == 200
         call = next(c for c in fetch.call_args_list if "/shared" in c.args[0])
         assert call.kwargs.get("scope_terms") == [EXEC_ID, "pe-1"]
+
+    def test_the_step_invocation_log_is_read_scoped_to_the_execution_alone(self):
+        # The invoked function logs the invoke body: the workflow execution id is in it, the pipeline
+        # execution id is not, so an AND of both read every plain Lambda step's own log as empty.
+        le.claims_and_roles = {"tokens": ["u1"]}
+        main = {"workflowId": "wf", "workflowDatabaseId": "db",
+                "executionLogGroupArn": "arn:aws:logs:us-west-2:1:log-group:/g:*"}
+        prow = {"pipelineExecutionId": "pe-1", "registeredSubExecutions": [], "registeredLogs": [],
+                "pipelineExecutionType": "Lambda",
+                "pipelineResourceArn": "arn:aws:lambda:us-west-2:123456789012:function:vams-vamsExecuteY"}
+        with patch(f"{MOD}.get_execution_main_row", return_value=main), \
+             patch(f"{MOD}.authorize_execution_access", return_value=(True, "")), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]), \
+             patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}), \
+             patch(f"{MOD}._sfn_execution_history_events",
+                   return_value={"events": [], "nextToken": None}), \
+             patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [], None)) as fetch:
+            resp = le.get_execution_logs(
+                {}, EXEC_ID, {"mode": "full", "pipelineExecutionId": "pe-1"})
+        assert resp["statusCode"] == 200
+        call = next(c for c in fetch.call_args_list if "/aws/lambda/vams-vamsExecuteY" in c.args[0])
+        assert call.kwargs.get("scope_terms") == [EXEC_ID]
 
     def test_registered_log_stream_prefix_is_kept_alongside_the_scope(self):
         # A reported stream prefix still narrows streams; the scope terms narrow the events within.
@@ -70,11 +93,77 @@ class TestRegisteredLogScoping:
              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}), \
              patch(f"{MOD}._sfn_execution_history_events",
                    return_value={"events": [], "nextToken": None}), \
-             patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [])) as fetch:
+             patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [], None)) as fetch:
             le.get_execution_logs({}, EXEC_ID, {"mode": "full", "pipelineExecutionId": "pe-1"})
         call = next(c for c in fetch.call_args_list if "/batch" in c.args[0])
         assert call.kwargs.get("log_stream_prefix") == "job/family"
         assert call.kwargs.get("scope_terms") == [EXEC_ID, "pe-1"]
+
+    def _run(self, prow, summaries=None):
+        le.claims_and_roles = {"tokens": ["u1"]}
+        main = {"workflowId": "wf", "workflowDatabaseId": "db",
+                "executionLogGroupArn": "arn:aws:logs:us-west-2:1:log-group:/g:*"}
+        with patch(f"{MOD}.get_execution_main_row", return_value=main), \
+             patch(f"{MOD}.authorize_execution_access", return_value=(True, "")), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]), \
+             patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}), \
+             patch(f"{MOD}._sfn_execution_history_events",
+                   return_value={"events": [], "nextToken": None}), \
+             patch(f"{MOD}._batch_stream_summaries", return_value=summaries or []), \
+             patch(f"{MOD}._log_search_window_start", return_value=1_700_000_000_000), \
+             patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [], None)) as fetch:
+            resp = le.get_execution_logs({}, EXEC_ID, {"mode": "full", "pipelineExecutionId": "pe-1"})
+        return resp, fetch
+
+    def _batch_log(self, stream="", prefix="thumb-jd/default/", stage="Preview3dThumbnailBatchJob"):
+        return {"logGroupArn": "arn:aws:logs:us-west-2:1:log-group:/aws/batch/job",
+                "logGroupName": "/aws/batch/job", "logStreamName": stream, "logStreamPrefix": prefix,
+                "stageName": stage, "label": "", "sourceType": "batch"}
+
+    def test_an_exact_stream_the_pipeline_registered_is_read_without_scope_terms(self):
+        prow = {"pipelineExecutionId": "pe-1", "registeredSubExecutions": [],
+                "registeredLogs": [self._batch_log(stream="thumb-jd/default/task-1")]}
+        resp, fetch = self._run(prow)
+        call = next(c for c in fetch.call_args_list if "/aws/batch/job" in c.args[0])
+        assert call.args[1] == "thumb-jd/default/task-1"
+        assert not call.kwargs.get("scope_terms")
+        # Dropping the scope terms must not drop the time window: the read is still bounded below.
+        assert call.kwargs["default_start_time"] == 1_700_000_000_000
+        body = json.loads(resp["body"])["message"]
+        assert body["logSources"][0]["status"] == "empty"
+
+    def test_a_batch_prefix_with_a_resolved_stream_under_it_is_read_exact_and_unscoped(self):
+        prow = {"pipelineExecutionId": "pe-1", "registeredSubExecutions": [],
+                "registeredLogs": [self._batch_log()]}
+        summaries = [{"resourceType": "stepFunctionsExecution", "stageName": "", "stages": [
+            {"stageName": "Preview3dThumbnailBatchJob",
+             "batch": {"jobId": "j", "logStreamName": "thumb-jd/default/task-9"}}]}]
+        _resp, fetch = self._run(prow, summaries)
+        call = next(c for c in fetch.call_args_list if "/aws/batch/job" in c.args[0])
+        assert call.args[1] == "thumb-jd/default/task-9"
+        assert call.kwargs.get("log_stream_prefix") == ""
+        assert not call.kwargs.get("scope_terms")
+
+    def test_a_resolved_stream_outside_every_registered_prefix_keeps_the_scope_terms(self):
+        prow = {"pipelineExecutionId": "pe-1", "registeredSubExecutions": [],
+                "registeredLogs": [self._batch_log()]}
+        summaries = [{"resourceType": "stepFunctionsExecution", "stageName": "", "stages": [
+            {"stageName": "Preview3dThumbnailBatchJob",
+             "batch": {"jobId": "j", "logStreamName": "elsewhere/default/task-9"}}]}]
+        _resp, fetch = self._run(prow, summaries)
+        call = next(c for c in fetch.call_args_list if "/aws/batch/job" in c.args[0])
+        assert call.args[1] == "elsewhere/default/task-9"
+        assert call.kwargs.get("scope_terms") == [EXEC_ID, "pe-1"]
+
+    def test_a_batch_prefix_with_no_resolvable_stream_keeps_the_terms_and_is_reported_unscoped(self):
+        prow = {"pipelineExecutionId": "pe-1", "registeredSubExecutions": [],
+                "registeredLogs": [self._batch_log()]}
+        resp, fetch = self._run(prow)
+        call = next(c for c in fetch.call_args_list if "/aws/batch/job" in c.args[0])
+        assert call.args[1] == "" and call.kwargs.get("log_stream_prefix") == "thumb-jd/default/"
+        assert call.kwargs.get("scope_terms") == [EXEC_ID, "pe-1"]
+        body = json.loads(resp["body"])["message"]
+        assert body["logSources"][0]["status"] == "unscoped"
 
 
 @pytest.mark.unit

@@ -47,6 +47,10 @@ VIDEO_SOP_BOM_TEST_ENV = {
     "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/VAMSStateMachine-VideoSopBom",
     "STATE_MACHINE_LOG_GROUP_ARN":
         "arn:aws:logs:us-east-1:1:log-group:/aws/vendedlogs/VAMSStateMachine-VideoSopBom:*",
+    "BATCH_JOB_LOG_GROUP_NAME": "/aws/vendedlogs/Pipelines/VideoSopBomabc123",
+    "BATCH_JOB_LOG_GROUP_ARN":
+        "arn:aws:logs:us-east-1:1:log-group:/aws/vendedlogs/Pipelines/VideoSopBomabc123:*",
+    "BATCH_JOB_DEFINITION_NAME": "VideoSopBomJob_test_sbx_abc123",
 }
 os.environ.update(VIDEO_SOP_BOM_TEST_ENV)
 

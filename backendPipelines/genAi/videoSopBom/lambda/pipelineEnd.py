@@ -132,7 +132,7 @@ def lambda_handler(event, context):
     Releases the external task token with the run's outcome and returns the event unchanged.
     """
 
-    logger.info(event)
+    logger.info("Event", event=event)
 
     external_sfn_task_token = event.get('externalSfnTaskToken', "")
 

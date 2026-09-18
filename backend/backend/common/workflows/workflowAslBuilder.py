@@ -89,6 +89,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
     # Generate unique names for each pipeline job
     # Trim UID to first 5 chars, place in front of pipeline name, then trim to 80 chars
     job_names = [
+        # uuid1 only makes a state-machine or job name unique; the value is neither a secret nor a
+        # capability token, so predictability has no security consequence.
+        # nosemgrep: python.lang.security.insecure-uuid-version.insecure-uuid-version
         (uuid.uuid1().hex[:5] + "-" + x['name'])[:80] for x in pipelines
     ]
     logger.info(f"Generated job names: {job_names}")
@@ -194,6 +197,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         # State name. The step position leads so it survives the 80-char trim, making the name
         # unique within the definition even when two steps carry the same job name — states are
         # keyed by name, so a repeated name would drop a step from the deployed workflow.
+        # uuid1 only makes a state-machine or job name unique; the value is neither a secret nor a
+        # capability token, so predictability has no security consequence.
+        # nosemgrep: python.lang.security.insecure-uuid-version.insecure-uuid-version
         state_name = f"step{i + 1}-{uuid.uuid1().hex[:5]}-{pipeline['name']}"[:80]
 
         # Build the task state using the builder
@@ -209,6 +215,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
 
         # Insert an interim-tracking state between this pipeline and the next.
         if i < len(pipelines) - 1:
+            # uuid1 only makes a state-machine or job name unique; the value is neither a secret nor
+            # a capability token, so predictability has no security consequence.
+            # nosemgrep: python.lang.security.insecure-uuid-version.insecure-uuid-version
             interim_state_id = f"interim-{i + 1}-{uuid.uuid1().hex[:8]}"
             # Bucket-relative, execution-scoped aux temp working prefix for the NEXT pipeline
             # (pipelines/{nextName}/{executionId}/). The next pipeline's per-input-file aux preview
@@ -303,6 +312,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
     # Create SINGLE process output state (runs ONCE after ALL pipelines complete). Its body carries
     # only keys processWorkflowExecutionOutput reads; the shared output-folder prefixes it lists are
     # the FIRST pipeline's (all steps write into the same execution output folder).
+    # uuid1 only makes a state-machine or job name unique; the value is neither a secret nor a
+    # capability token, so predictability has no security consequence.
+    # nosemgrep: python.lang.security.insecure-uuid-version.insecure-uuid-version
     process_output_state_id = f"process-outputs-{uuid.uuid1().hex}"
     process_output_payload = {
         "body": {

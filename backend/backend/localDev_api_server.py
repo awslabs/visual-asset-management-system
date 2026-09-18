@@ -166,4 +166,7 @@ if __name__ == '__main__':
   app = Flask(__name__)
   app.secret_key = 'development'
   app.register_blueprint(vams)
+  # Local-development server only: run by hand under __main__, never packaged or deployed; 0.0.0.0
+  # and debug=True are intentional for the dev loop (bandit B201 already annotated).
+  # nosemgrep: python.flask.security.audit.app-run-param-config.avoid_app_run_with_bad_host, python.flask.security.audit.debug-enabled.debug-enabled
   app.run(debug=True, port=8002, host='0.0.0.0') # nosec B201

@@ -17,6 +17,7 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import * as Config from "../../../../../../config/config";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     globalLambdaEnvironmentsAndPermissions,
     grantReadPermissionsToAllAssetBuckets,
@@ -119,6 +120,15 @@ export function buildConstructPipelineFunction(
     return fun;
 }
 
+/**
+ * The Batch job definition whose container log stream prefix openPipeline registers, and the
+ * VAMS-owned group that job definition writes its container output to.
+ */
+export interface OpenPipelineBatchLogProps {
+    jobDefinitionName: string;
+    logGroup: logs.ILogGroup;
+}
+
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -128,7 +138,8 @@ export function buildOpenPipelineFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     orchestrationBus: events.IEventBus,
-    stateMachineLogGroup: logs.ILogGroup
+    stateMachineLogGroup: logs.ILogGroup,
+    batchLogs: OpenPipelineBatchLogProps
 ): lambda.Function {
     const name = "openPipeline";
     const region = cdk.Stack.of(scope).region;
@@ -156,6 +167,10 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // This pipeline's vended container log group + its job definition name, registered as
+            // the Batch state's log source (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...vendedBatchJobLogGroupEnvironment(batchLogs.logGroup),
+            BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
         },
     });
 

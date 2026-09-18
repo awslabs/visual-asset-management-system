@@ -39,6 +39,9 @@ function sourceFiles(root: string): string[] {
     if (!fs.existsSync(root)) return [];
     const found: string[] = [];
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        // Unit test walking the repo's own source tree: the joined segment is a readdirSync entry,
+        // not external input.
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         const full = path.join(root, entry.name);
         if (entry.isDirectory()) {
             if (entry.name === "node_modules" || entry.name === "dist") continue;

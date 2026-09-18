@@ -153,6 +153,33 @@ class TestStartsTheSubStateMachine:
         assert detail["subExecution"]["executionArn"].endswith("VideoSopBom_x")
         assert detail["subExecution"]["stateMachineArn"] == mod.STATE_MACHINE_ARN
         assert detail["logs"][0]["logGroupName"] == "/aws/vendedlogs/VAMSStateMachine-VideoSopBom"
+        assert detail["logs"][0]["sourceType"] == "stateMachine"
+
+    def test_registers_the_container_log_under_the_job_definition_stream_prefix(self):
+        """The Batch state's log source names the vended group the job definition writes to; the
+        stream prefix is `<jobDefinitionName>/default/` and the stage is the BatchSubmitJob state id."""
+        mod = _load()
+        _, _, _, put_events = _invoke(mod, _event())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        batch_logs = [log for log in detail["logs"] if log["sourceType"] == "batch"]
+        assert len(batch_logs) == 1
+        container = batch_logs[0]
+        assert container["logGroupName"] == os.environ["BATCH_JOB_LOG_GROUP_NAME"]
+        assert container["logGroupArn"] == os.environ["BATCH_JOB_LOG_GROUP_ARN"]
+        assert container["logStreamPrefix"] == os.environ["BATCH_JOB_DEFINITION_NAME"] + "/default/"
+        assert container["stageName"] == "VideoSopBomBatchJob" == mod.BATCH_STATE_NAME
+
+    def test_an_unconfigured_container_log_group_registers_the_state_machine_log_only(self, monkeypatch):
+        monkeypatch.setenv("BATCH_JOB_LOG_GROUP_NAME", "")
+        monkeypatch.setenv("BATCH_JOB_LOG_GROUP_ARN", "")
+        try:
+            mod = _load()
+            _, _, _, put_events = _invoke(mod, _event())
+            detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+            assert [log["sourceType"] for log in detail["logs"]] == ["stateMachine"]
+        finally:
+            monkeypatch.undo()
+            _load()
 
     def test_a_registration_failure_never_fails_the_pipeline(self):
         mod = _load()

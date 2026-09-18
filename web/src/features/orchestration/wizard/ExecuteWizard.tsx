@@ -4,13 +4,22 @@
  */
 
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import Dialog from "../components/Dialog";
-import Stepper from "../components/Stepper";
-import { btnPrimary, btnSecondary } from "../components/controlStyles";
+import Dialog, { DialogFooter } from "../components/Dialog";
+import Callout from "../components/Callout";
+import { btnPrimary, btnSecondary, btnSuccess } from "../components/controlStyles";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import WizardInputStage from "./WizardInputStage";
 import WizardPipelineStage from "./WizardPipelineStage";
 import WizardReviewStage from "./WizardReviewStage";
+import WizardRail, { RailStep } from "./WizardRail";
+import RequirementsStrip from "./RequirementsStrip";
+import { buildRailSteps } from "./railSteps";
+import {
+    workflowBlockedReason as blockedReasonOf,
+    MAX_INPUT_FILES_PER_EXECUTION,
+    tooManyInputFilesText,
+} from "./reviewBlockers";
+import { resolveRestrictions } from "./resolveRestrictions";
 import {
     useWorkflow,
     useAllPipelines,
@@ -42,9 +51,20 @@ interface ExecuteWizardProps {
     presetInputFiles?: ExecuteInputFile[];
 }
 
+/** The wizard's steps and footer, for hosting inside a Dialog another component owns. */
+export interface ExecuteWizardBodyProps extends Omit<ExecuteWizardProps, "open"> {
+    /** True while the enclosing dialog shows another step; the body stays mounted, footer-less. */
+    hidden: boolean;
+    /** Steps the enclosing dialog completed before this body's own (the workflow picker). */
+    leadingSteps?: RailStep[];
+    /** Receives a leading step's id when its rail row is clicked. */
+    onJumpTo?: (stepId: string) => void;
+}
+
 export interface PipelineStageData {
     pipelineId: string;
     templateId?: string;
+    templateName?: string;
     tags: { key: string; value: any }[];
     customTemplateOverride?: string;
     customEditedBody?: string;
@@ -113,6 +133,10 @@ const globToRegExp = (pattern: string): RegExp => {
             out += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         }
     }
+    // Glob-to-regex for the execute form's own file filter: every metacharacter except the glob
+    // wildcards is escaped, and the test runs only in the submitting user's browser against file
+    // keys.
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
     return new RegExp(`^${out}$`);
 };
 
@@ -264,6 +288,9 @@ export function validateInputSelection(
     if (inputs.some((f) => f.assetId && !f.relativeFileKey)) {
         errors.push("Every input row needs a file selection.");
     }
+    if (inputs.length > MAX_INPUT_FILES_PER_EXECUTION) {
+        errors.push(tooManyInputFilesText(inputs.length));
+    }
 
     const workflowArityError = arityViolation(wsc.inputFileArity || "one", inputs.length);
     if (workflowArityError) {
@@ -334,13 +361,15 @@ export function launchErrorLines(message: string): string[] {
         .filter(Boolean);
 }
 
-const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
-    open,
+export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     onClose,
     workflow,
     databaseId,
     presetAsset,
     presetInputFiles,
+    hidden,
+    leadingSteps,
+    onJumpTo,
 }) => {
     const toast = useToast();
     const { data: workflowData, isLoading: workflowLoading } = useWorkflow(
@@ -417,25 +446,17 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     // Current stage
     const [currentStageId, setCurrentStageId] = useState<string>("input");
 
+    // Readiness gating for the Inputs step. `inputsTouched` flips only from DOM events (a single
+    // capture handler on the step root), never from the effects that seed the prefix, drop
+    // arity-none rows or auto-fill the output asset; `nextBlockedOnInputs` flips when Next is
+    // pressed with unmet requirements. Both reset with the body (keyed remount).
+    const [inputsTouched, setInputsTouched] = useState(false);
+    const [nextBlockedOnInputs, setNextBlockedOnInputs] = useState(false);
+
     // Launch outcome. An error keeps the wizard open with the server message; warnings mean the run
     // launched but has caveats worth reading before the dialog closes.
     const [launchError, setLaunchError] = useState<string | null>(null);
     const [launchWarnings, setLaunchWarnings] = useState<string[]>([]);
-
-    // Build step list: Input -> Pipeline1 -> Pipeline2 -> ... -> Review
-    const steps = useMemo(() => {
-        const stageSteps = [
-            { id: "input", label: "Input" },
-            ...effectiveWorkflow.specifiedPipelines.map((p, idx) => ({
-                id: `pipeline-${idx}`,
-                label: pipelines[idx]?.pipelineName || `Pipeline ${idx + 1}`,
-            })),
-            { id: "review", label: "Review" },
-        ];
-        return stageSteps;
-    }, [effectiveWorkflow.specifiedPipelines, pipelines]);
-
-    const currentIndex = steps.findIndex((s) => s.id === currentStageId);
 
     // Compute offending (disabled/archived) pipelines
     const offendingPipelines = useMemo(() => {
@@ -577,25 +598,82 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         [effectiveWorkflow.specifiedPipelines, pipelines, pipelineData, databaseId]
     );
 
+    // A disabled or archived workflow cannot run whatever is selected. The Inputs step is then its
+    // banner, with no picker to act on, so the selection rules are not raised on top of it — the
+    // workflow's state is the one blocker the rail, the Review list and the Launch gate report.
+    const workflowBlockedReason = blockedReasonOf(effectiveWorkflow);
+
     // Workflow + per-pipeline arity/scope/filter checks on the selection, so an invalid selection is
     // reported here rather than as a launch-time 400.
     const inputSelectionErrors = useMemo(
         () =>
-            validateInputSelection(
-                effectiveWorkflow.systemConfig,
-                pipelineInputConstraints,
-                inputFiles
-            ),
-        [effectiveWorkflow.systemConfig, pipelineInputConstraints, inputFiles]
+            workflowBlockedReason
+                ? []
+                : validateInputSelection(
+                      effectiveWorkflow.systemConfig,
+                      pipelineInputConstraints,
+                      inputFiles
+                  ),
+        [
+            workflowBlockedReason,
+            effectiveWorkflow.systemConfig,
+            pipelineInputConstraints,
+            inputFiles,
+        ]
     );
 
     const hasValidationErrors =
+        !!workflowBlockedReason ||
         Object.values(validationErrors).some((errs) => errs.length > 0) ||
         offendingPipelines.length > 0 ||
         inputSelectionErrors.length > 0 ||
         outputAssetMissing;
 
+    // What the workflow accepts, resolved through every step's chosen template — the strip under
+    // the title, shown from Inputs onward (the Workflow step's rows carry the same facts).
+    const restrictions = useMemo(
+        () =>
+            resolveRestrictions(
+                effectiveWorkflow.systemConfig,
+                pipelineInputConstraints.map((c) => ({
+                    systemConfig: c.systemConfig,
+                    templateOverrides: c.templateOverrides,
+                    templateKnown: c.templateKnown,
+                }))
+            ),
+        [effectiveWorkflow.systemConfig, pipelineInputConstraints]
+    );
+
+    // Step list: Inputs -> Pipeline1 -> Pipeline2 -> ... -> Review, each with its rail chip.
+    const steps = useMemo(
+        () =>
+            buildRailSteps({
+                specifiedPipelines: effectiveWorkflow.specifiedPipelines,
+                pipelines,
+                databaseId,
+                pipelineData,
+                offendingPipelines,
+                inputSelectionErrors,
+                outputAssetMissing,
+                workflowBlockedReason,
+            }),
+        [
+            effectiveWorkflow.specifiedPipelines,
+            pipelines,
+            databaseId,
+            pipelineData,
+            offendingPipelines,
+            inputSelectionErrors,
+            outputAssetMissing,
+            workflowBlockedReason,
+        ]
+    );
+    const currentIndex = steps.findIndex((s) => s.id === currentStageId);
+
     const handleNext = () => {
+        if (currentStageId === "input" && inputSelectionErrors.length > 0) {
+            setNextBlockedOnInputs(true);
+        }
         if (currentIndex < steps.length - 1) {
             setCurrentStageId(steps[currentIndex + 1].id);
         }
@@ -605,6 +683,13 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         if (currentIndex > 0) {
             setCurrentStageId(steps[currentIndex - 1].id);
         }
+    };
+
+    // Rail rows and Review "Edit" links jump to one of this body's steps; a leading step belongs
+    // to the enclosing dialog.
+    const jumpTo = (stepId: string) => {
+        if (steps.some((s) => s.id === stepId)) setCurrentStageId(stepId);
+        else onJumpTo?.(stepId);
     };
 
     const handleLaunch = async () => {
@@ -694,39 +779,38 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         }
     };
 
-    // The same list of unmet input requirements, shown as guidance while the selection is still
-    // being built (Input step) and as a blocking error once the run is about to launch (Review).
-    const renderInputSelectionPanel = (tone: "guidance" | "error") => {
-        if (inputSelectionErrors.length === 0) return null;
-        const toneClasses =
-            tone === "error"
-                ? "bg-red-100 dark:bg-red-900/20 border-red-400 dark:border-red-700 text-red-900 dark:text-red-200"
-                : "bg-yellow-100 dark:bg-yellow-900/20 border-yellow-400 dark:border-yellow-700 text-yellow-900 dark:text-yellow-200";
-        return (
-            <div role="alert" className={`mb-4 p-4 border rounded ${toneClasses}`}>
-                <strong>
-                    {tone === "error"
-                        ? "Cannot Execute: the input selection does not satisfy this workflow:"
-                        : "Input requirements not met yet:"}
-                </strong>
-                <ul className="list-disc list-inside mt-2">
-                    {inputSelectionErrors.map((err, idx) => (
-                        <li key={idx}>{err}</li>
-                    ))}
-                </ul>
-            </div>
-        );
+    const markInputsTouched = () => {
+        if (!inputsTouched) setInputsTouched(true);
     };
 
     const renderStage = () => {
         if (currentStageId === "input") {
+            const showReadiness =
+                inputSelectionErrors.length > 0 && (inputsTouched || nextBlockedOnInputs);
             return (
-                <>
-                    {renderInputSelectionPanel("guidance")}
+                // One capture handler pair marks the step as interacted with; effects that write
+                // input state do not go through here, so a preset launch opens clean.
+                <div
+                    className="space-y-4"
+                    onChangeCapture={markInputsTouched}
+                    onClickCapture={markInputsTouched}
+                >
+                    {showReadiness && (
+                        <Callout tone="info" aria-live="polite" title="To continue">
+                            <ul className="list-disc list-inside mt-1">
+                                {inputSelectionErrors.map((err, idx) => (
+                                    <li key={idx}>{err}</li>
+                                ))}
+                            </ul>
+                        </Callout>
+                    )}
                     <WizardInputStage
                         workflow={effectiveWorkflow}
                         databaseId={databaseId}
                         presetAsset={presetAsset}
+                        showPresetHint={
+                            !!presetAsset && !(presetInputFiles && presetInputFiles.length > 0)
+                        }
                         inputFiles={inputFiles}
                         metadataSourceAssets={metadataSourceAssets}
                         metadataSourceDatabaseId={metadataSourceDatabaseId}
@@ -742,47 +826,30 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                         offendingPipelines={offendingPipelines}
                         pipelineConstraints={pipelineInputConstraints}
                     />
-                </>
+                </div>
             );
         }
 
         if (currentStageId === "review") {
             return (
-                <>
-                    {renderInputSelectionPanel("error")}
-                    {outputAssetMissing && (
-                        <div className="mb-4 p-4 bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-400 dark:border-yellow-700 rounded text-yellow-900 dark:text-yellow-200">
-                            The selected input files span multiple assets. Go back to the Input step
-                            and choose an output asset before launching.
-                        </div>
-                    )}
-                    {offendingPipelines.length > 0 && (
-                        <div className="mb-4 p-4 bg-red-100 dark:bg-red-900/20 border border-red-400 dark:border-red-700 rounded text-red-900 dark:text-red-200">
-                            <strong>Cannot Execute:</strong> The following pipelines are disabled or
-                            archived:
-                            <ul className="list-disc list-inside mt-2">
-                                {offendingPipelines.map((off, idx) => (
-                                    <li key={idx}>
-                                        <strong>{off.pipelineName}</strong> ({off.reason})
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-                    <WizardReviewStage
-                        workflow={effectiveWorkflow}
-                        databaseId={databaseId}
-                        pipelines={pipelines}
-                        pipelineData={pipelineData}
-                        inputFiles={inputFiles}
-                        metadataSourceAssets={metadataSourceAssets}
-                        metadataSourceDatabaseId={metadataSourceDatabaseId}
-                        outputAssetId={outputAssetId}
-                        outputDatabaseId={outputDatabaseId}
-                        outputPathPrefix={outputPathPrefix}
-                        validationErrors={validationErrors}
-                    />
-                </>
+                <WizardReviewStage
+                    workflow={effectiveWorkflow}
+                    databaseId={databaseId}
+                    pipelines={pipelines}
+                    pipelineData={pipelineData}
+                    inputFiles={inputFiles}
+                    metadataSourceAssets={metadataSourceAssets}
+                    metadataSourceDatabaseId={metadataSourceDatabaseId}
+                    outputAssetId={outputAssetId}
+                    outputDatabaseId={outputDatabaseId}
+                    outputPathPrefix={outputPathPrefix}
+                    validationErrors={validationErrors}
+                    inputSelectionErrors={inputSelectionErrors}
+                    outputAssetMissing={outputAssetMissing}
+                    offendingPipelines={offendingPipelines}
+                    workflowBlockedReason={workflowBlockedReason}
+                    onEdit={jumpTo}
+                />
             );
         }
 
@@ -817,29 +884,26 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         );
     };
 
-    const canNavigateNext = () => {
-        // No validation, just allow navigation
-        return true;
-    };
-
     const launched = launchWarnings.length > 0;
+    const railSteps = [...(leadingSteps || []), ...steps];
 
-    // While workflow/pipeline data is still loading, the wizard body is a spinner; suppress the
-    // navigation footer so the user cannot step through stages that have no data yet. Once the run
-    // has launched with warnings the only remaining action is closing the dialog.
-    const footer = dataLoading ? null : launched ? (
+    // While workflow/pipeline data is still loading, the body is a spinner with no footer, so the
+    // user cannot step through stages that have no data yet. Once the run has launched with
+    // warnings the only remaining action is closing the dialog. Nothing renders into the footer
+    // while another step of the enclosing dialog is showing.
+    const footer = launched ? (
         <button onClick={onClose} className={btnPrimary}>
             Close
         </button>
     ) : (
-        <div className="flex gap-2">
+        <>
             {currentIndex > 0 && (
                 <button onClick={handleBack} className={btnSecondary}>
                     Back
                 </button>
             )}
             {currentIndex < steps.length - 1 && (
-                <button onClick={handleNext} disabled={!canNavigateNext()} className={btnPrimary}>
+                <button onClick={handleNext} className={btnPrimary}>
                     Next
                 </button>
             )}
@@ -847,62 +911,74 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                 <button
                     onClick={handleLaunch}
                     disabled={executeWorkflow.isPending || hasValidationErrors}
-                    className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 text-sm font-bold rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className={btnSuccess}
                 >
                     {executeWorkflow.isPending ? "Launching..." : "Launch"}
                 </button>
             )}
-        </div>
+        </>
     );
 
     return (
-        <Dialog
-            open={open}
-            onOpenChange={onClose}
-            title={`Execute ${effectiveWorkflow.workflowName}`}
-            footer={footer}
-        >
-            <div className="space-y-4">
-                {dataLoading ? (
-                    <div className="flex items-center justify-center min-h-[400px]">
-                        <div className="text-center">
-                            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 dark:border-blue-400 mb-3" />
-                            <p className="text-text-secondary">Loading workflow pipelines…</p>
+        <>
+            {dataLoading ? (
+                <div className="flex items-center justify-center min-h-[400px]">
+                    <div className="text-center">
+                        <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 dark:border-blue-400 mb-3" />
+                        <p className="text-text-secondary">Loading workflow pipelines…</p>
+                    </div>
+                </div>
+            ) : launched ? (
+                <Callout tone="warning">
+                    <strong>Execution launched with warnings:</strong>
+                    <ul className="list-disc list-inside mt-2">
+                        {launchWarnings.map((warning, idx) => (
+                            <li key={idx}>{warning}</li>
+                        ))}
+                    </ul>
+                </Callout>
+            ) : (
+                <div className="space-y-4">
+                    <RequirementsStrip restrictions={restrictions} />
+                    <div className="flex flex-col gap-4 md:flex-row md:gap-6">
+                        <WizardRail
+                            steps={railSteps}
+                            currentId={currentStageId}
+                            onJumpTo={jumpTo}
+                        />
+                        <div className="min-w-0 flex-1 space-y-4">
+                            {renderStage()}
+                            {launchError && (
+                                <Callout tone="error" role="alert">
+                                    <strong>Execution failed:</strong>
+                                    {/* One entry per rejection reason — a multi-step launch is
+                                        rejected per pipeline, and run together the reasons read as
+                                        one sentence. */}
+                                    <ul className="list-disc list-inside mt-2">
+                                        {launchErrorLines(launchError).map((line, idx) => (
+                                            <li key={idx}>{line}</li>
+                                        ))}
+                                    </ul>
+                                </Callout>
+                            )}
                         </div>
                     </div>
-                ) : launched ? (
-                    <div className="p-4 bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-400 dark:border-yellow-700 rounded text-yellow-900 dark:text-yellow-200">
-                        <strong>Execution launched with warnings:</strong>
-                        <ul className="list-disc list-inside mt-2">
-                            {launchWarnings.map((warning, idx) => (
-                                <li key={idx}>{warning}</li>
-                            ))}
-                        </ul>
-                    </div>
-                ) : (
-                    <>
-                        <Stepper steps={steps} current={currentStageId} />
-                        <div className="min-h-[400px]">{renderStage()}</div>
-                        {launchError && (
-                            <div
-                                role="alert"
-                                className="p-4 bg-red-100 dark:bg-red-900/20 border border-red-400 dark:border-red-700 rounded text-red-900 dark:text-red-200"
-                            >
-                                <strong>Execution failed:</strong>
-                                {/* One entry per rejection reason — a multi-step launch is rejected
-                                    per pipeline, and run together the reasons read as one sentence. */}
-                                <ul className="list-disc list-inside mt-2">
-                                    {launchErrorLines(launchError).map((line, idx) => (
-                                        <li key={idx}>{line}</li>
-                                    ))}
-                                </ul>
-                            </div>
-                        )}
-                    </>
-                )}
-            </div>
-        </Dialog>
+                </div>
+            )}
+            {!hidden && !dataLoading && <DialogFooter>{footer}</DialogFooter>}
+        </>
     );
 };
+
+/**
+ * The execute wizard in its own dialog. Kept for callers that already hold the workflow; the
+ * Executions board and the file manager compose `ExecuteWizardBody` behind a workflow picker in
+ * `ExecuteWorkflowModal`.
+ */
+const ExecuteWizard: React.FC<ExecuteWizardProps> = ({ open, onClose, workflow, ...rest }) => (
+    <Dialog open={open} onOpenChange={onClose} size="lg" title={`Execute ${workflow.workflowName}`}>
+        <ExecuteWizardBody onClose={onClose} workflow={workflow} hidden={false} {...rest} />
+    </Dialog>
+);
 
 export default ExecuteWizard;

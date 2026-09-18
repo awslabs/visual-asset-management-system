@@ -21,9 +21,15 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout repository
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/checkout@v4
 
             - name: Setup Node.js
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-node@v4
               with:
                   node-version: "22"
@@ -32,8 +38,10 @@ jobs:
 
             - name: Determine deploy path
               id: paths
+              env:
+                  BRANCH_NAME: ${{ github.ref_name }}
               run: |
-                  BRANCH="${{ github.ref_name }}"
+                  BRANCH="$BRANCH_NAME"
                   if [ "$BRANCH" = "main" ]; then
                     echo "deploy_subdir=." >> $GITHUB_OUTPUT
                     echo "base_url=/visual-asset-management-system/" >> $GITHUB_OUTPUT
@@ -51,7 +59,8 @@ jobs:
               run: cd documentation/docusaurus-site && DOCS_BASE_URL="${{ steps.paths.outputs.base_url }}" npm run build
 
             - name: Deploy to gh-pages branch
-              uses: peaceiris/actions-gh-pages@v4
+              # Third-party action pinned to the commit its release tag resolved to.
+              uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
               with:
                   github_token: ${{ secrets.GITHUB_TOKEN }}
                   publish_dir: documentation/docusaurus-site/build

@@ -136,7 +136,14 @@ export class PcPotreeViewerConstruct extends NestedStack {
         const stateTaskPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
-                    actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+                    // The container reports its result AND heartbeats the parent workflow's
+                    // task token while PDAL/Potree run (pipelines/core.py); without the
+                    // heartbeat grant every SendTaskHeartbeat is an AccessDenied in the job log.
+                    actions: [
+                        "states:SendTaskSuccess",
+                        "states:SendTaskFailure",
+                        "states:SendTaskHeartbeat",
+                    ],
                     resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
                 }),
             ],
@@ -177,6 +184,36 @@ export class PcPotreeViewerConstruct extends NestedStack {
         // (no-op when no external keys are configured)
         grantExternalAssetBucketKmsKeys(containerJobRole);
 
+        // The containers' stdout/stderr, one group per job. Named vended groups under the
+        // /aws/vendedlogs/Pipelines/ prefix the execution-service role is granted to read;
+        // KMS-encrypted and retained for a year, unlike Batch's default group.
+        const pdalLogGroup = new logs.LogGroup(this, "PcPotreeViewerPdalBatchJobLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "PcPotreeViewerPdalBatchJobLogGroup",
+                    10
+                ),
+            encryptionKey: props.storageResources.encryption.kmsKey,
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+        const potreeLogGroup = new logs.LogGroup(this, "PcPotreeViewerPotreeBatchJobLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/Pipelines/PcPotreeViewerPotree" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "PcPotreeViewerPotreeBatchJobLogGroup",
+                    10
+                ),
+            encryptionKey: props.storageResources.encryption.kmsKey,
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
         /**
          * AWS Batch Job Definition & Compute Env for PDAL Container
          */
@@ -192,6 +229,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: pdalLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",
@@ -229,6 +267,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: potreeLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",
@@ -420,6 +459,25 @@ export class PcPotreeViewerConstruct extends NestedStack {
             }
         );
 
+        // Stopping the state machine cancels whichever .sync Batch task is running (PDAL or Potree),
+        // which requires terminating the job; the BatchSubmitJob tasks grant only batch:SubmitJob.
+        // DescribeJobs has no resource type; job ids are generated at submit time, so TerminateJob is
+        // scoped to this account's jobs.
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:DescribeJobs"],
+                resources: ["*"],
+            })
+        );
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:TerminateJob"],
+                resources: [`arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job/*`],
+            })
+        );
+
         /**
          * Lambda Resources & SNS Subscriptions
          */
@@ -437,6 +495,12 @@ export class PcPotreeViewerConstruct extends NestedStack {
             props.pipelineSubnets,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            {
+                pdalJobDefinitionName: pdalBatchPipeline.batchJobDefinition.jobDefinitionName,
+                pdalLogGroup: pdalLogGroup,
+                potreeJobDefinitionName: potreeBatchPipeline.batchJobDefinition.jobDefinitionName,
+                potreeLogGroup: potreeLogGroup,
+            },
             props.storageResources.encryption.kmsKey
         );
 
@@ -632,11 +696,17 @@ export class PcPotreeViewerConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "PipelineProcessingStateMachine uses default policy that contains wildcard",
+                    reason:
+                        "batch:DescribeJobs supports no resource-level permissions and Batch job ids are " +
+                        "generated at submit time, so cancelling the .sync job on StopExecution needs " +
+                        "DescribeJobs on * and TerminateJob on job/*; BatchSubmitJob grants SubmitJob on " +
+                        "job-definition/* and LambdaInvoke grants the functions' version qualifiers, and " +
+                        "the logging and X-Ray delivery actions have no resource type.",
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
                         `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        { regex: "/^Resource::arn:.*:batch:.*:job/\\*$/g" },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },

@@ -417,6 +417,98 @@ vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
 vamscli pipeline template list -d GLOBAL -p {pipelineId}
 ```
 
+## Registering Sub-Processes and Logs (abort, stage status, log sources)
+
+A pipeline reports the resources it starts by putting one event on the orchestration bus.
+`backend/backend/handlers/workflows/sfn/registerPipelineExecution.py` appends them to the
+pipeline-execution row, and three readers consume the record: abort (`registeredSubExecutions`), the
+execution details API (`availableLogs` on every step; `subExecutions` with per-stage status behind
+`includeSubExecutions=true`, derived at read time from the sub-state-machine definition and history —
+nothing about stages is stored), and the full-mode logs API (`logSources`, one source at a time by `logId`).
+
+Event contract:
+
+-   `Source` = `<ORCHESTRATION_EVENT_SOURCE_PREFIX>.execution.<executionId>.pipeline.<pipelineExecutionId>`
+    (the manifest/payload already carries it). The handler ignores an event whose `Source` does not end in
+    `.pipeline.<pipelineExecutionId>` for the id the detail names.
+-   `DetailType` = `pipeline.execution.register`.
+-   `Detail.pipelineExecutionId` (required); `Detail.subExecution` =
+    `{resourceType, <locator keys>, stageName?, label?}`; `Detail.logs[]` =
+    `{logGroupArn, logGroupName, logStreamName, logStreamPrefix, stageName?, label?, sourceType?}` with
+    `sourceType` one of `stateMachine | lambda | batch | ecs | container | custom` (anything else is stored
+    as `custom`).
+-   Validators: `CLOUDWATCH_LOG_GROUP_ARN`, `CLOUDWATCH_LOG_GROUP_NAME`, `LOG_STREAM_NAME` (also the prefix
+    — no `:` or `*`), `SFN_STATE_NAME` (`^[^\x00-\x1f\x7f]{1,80}$`), `DISPLAY_LABEL` (same class, 1–128),
+    `LOG_SOURCE_TYPE`. An invalid optional field is dropped with a warning; the entry survives.
+-   Dedup is by location `(logGroupArn without ":*" | logGroupName, logStreamName, logStreamPrefix)`; a
+    redelivered entry that carries `stageName` / `label` / `sourceType` the stored one lacks merges them in.
+    At most 50 logs and 50 sub-executions are stored per pipeline execution. Registration stays best-effort:
+    wrap `put_events` so a failure logs and returns.
+
+What every built-in emits (the `register_sub_execution` helper in each `openPipeline.py`, or
+`register_batch_job` in `executeBatchJob.py`):
+
+-   The state-machine log entry with `sourceType: "stateMachine"`, `label: "<pipeline> state machine"`; the
+    `subExecution` with `label: "<pipeline> processing"`.
+-   One **container** entry per Batch state, only when the env vars are present:
+
+    ```python
+    {"logGroupArn": BATCH_JOB_LOG_GROUP_ARN, "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+     "logStreamPrefix": f"{<job definition name>}/default/", "stageName": "<Batch state name>",
+     "sourceType": "batch", "label": "<Batch state name> container"}
+    ```
+
+    Which group that is depends on the compute family. The five **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree) write through the `awslogs` driver to a
+    VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and register **that** group;
+    the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
+    so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
+    `<jobDefinitionName>/default/<ecs-task-id>` — the Fargate construct sets `awslogs-stream-prefix` to the
+    physical (hashed) job definition name, the same string the producer's derived `*_JOB_DEFINITION_NAME`
+    resolves to. Container output does not print the VAMS execution ids, so a registered prefix that the
+    real stream falls under is what lets the read skip the execution-scope terms; a prefix the stream does
+    not start with reads as `scoped`, and the filter drops every container line.
+
+CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
+
+-   The registering lambda's environment spreads one of the two helpers in
+    `infra/lib/helper/batchJobLogGroup.ts`: `...vendedBatchJobLogGroupEnvironment(containerLogGroup)` for a
+    Fargate pipeline (the group its `BatchFargatePipelineConstruct` was given as `logGroup`; the Potree
+    builder sets `PDAL_` / `POTREE_JOB_LOG_GROUP_NAME` / `_ARN` inline because its two jobs write to two
+    groups), or `...batchJobLogGroupEnvironment()` for a GPU pipeline — `BATCH_JOB_LOG_GROUP_NAME =
+"/aws/batch/job"` and `BATCH_JOB_LOG_GROUP_ARN = IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup`, the colon
+    `log-group:` form. The helper is the one place the default group is named: never spell the literal or
+    derive the ARN in a builder, and never `formatArn(..., ArnFormat.SLASH_RESOURCE_NAME)`, which renders
+    `log-group//aws/batch/job`, fails `CLOUDWATCH_LOG_GROUP_ARN`, and degrades the entry to a name-only
+    read. Beside those two, the builder sets
+    the job-definition env its producer reads (`BATCH_JOB_DEFINITION_NAME` for an `openPipeline.py`, `PDAL_` /
+    `POTREE_JOB_DEFINITION_NAME` for the two Potree states, the pre-existing `BATCH_JOB_DEFINITION` for an
+    `executeBatchJob.py`) from the `{ jobDefinitionName }` the construct passes it — a per-builder
+    `OpenPipelineBatchLogProps` interface in the `openPipeline` builders.
+-   `jobDefinitionName` is the job definition **name**, never its ARN: Fargate `EcsJobDefinition` →
+    `.jobDefinitionName` (a token that resolves to the hashed name); GPU `CfnJobDefinition` given a
+    `jobDefinitionName` prop → that same string (never `.ref`, the ARN with revision); an unnamed
+    `CfnJobDefinition` → `jobDefinitionNameFromRef(jobDef.ref)` from the same helper. An ARN in
+    `logStreamPrefix` contains `:`, fails `LOG_STREAM_NAME`, and leaves the container source permanently
+    `unscoped`.
+-   `stageName` must equal the ASL state name, which is the CDK construct id because no construct sets
+    `stateName`. `infra/test/pipelines/batchLogRegistrationEnvFargate.test.ts`,
+    `batchLogRegistrationEnvGpu.test.ts` and `containerLogRegistrationEnvEcs.test.ts` synthesize each
+    pipeline construct (`infra/test/support/pipelineConstructHarness.ts`), parse its ASL
+    (`infra/test/support/asl.ts`) and assert that every module-level `*_STATE_NAME = "…"` literal the
+    producer declares (`declaredStageNames`; for cosmos, the `COSMOS_BATCH_STATE_NAME` env value) is a
+    key of `States`; renaming a Batch construct without changing the producer's `stageName` fails those
+    tests instead of silently breaking the stage ⇄ history join. Declare a stage name as a module-level
+    string literal, never built at runtime, or the test cannot see it.
+-   A `lambda` entry uses `` `/aws/lambda/${fn.functionName}` `` with `IAMArn(name).loggroup`; never read
+    `fn.logGroup` on a function without an explicit log group (it synthesizes a `Custom::LogRetention`
+    resource).
+
+Producer tests (`lambda/tests/test_manifest_refactor.py`, `test_batch_job_registration.py`) assert the new
+keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes
+`LOG_STREAM_NAME`. Run each pipeline's `tests/` in its own pytest process (module-name collision across
+pipelines).
+
 ## Every boto3 Client Carries the Adaptive Retry Configuration
 
 Every `boto3.client(...)` and `boto3.resource(...)` in this tree takes the shared retry configuration:
@@ -493,6 +585,9 @@ holding:
 
 -   the pinned-revision checks over each `Dockerfile` (a `--build-arg …_COMMIT=main` still builds green)
 -   the `manifestHelper.py` byte-identity check across every vendored copy
+-   the `customLogging/logger.py` byte-identity check and the emitted-line token redaction checks
+    (`backendPipelines/tests/test_pipeline_logger_identity.py`, `test_pipeline_logger_formatter.py`) — a
+    handler can always be edited back to an f-string event log or a drifting logger copy
 -   the `_run_streaming` no-drift comparison across the four deployable NVIDIA containers
 -   `test_container_file_inventory.py`'s `from .utils` scan — the package is `vams_utils`, so that import
     fails at container **runtime** on a GPU Batch job, invisible to the image build and to CDK synth
@@ -511,6 +606,17 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
 
     Without these files, Lambda will fail at import time with `No module named 'customLogging'`. The Lambda layer provides a fallback, but the local `customLogging/` package is required in each pipeline's code asset.
 
+    **All `customLogging/logger.py` copies must stay byte-identical** — verify with
+    `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`,
+    which must print exactly one hash. The logger is where task tokens are redacted from every log line,
+    so a copy that drifts is a pipeline whose CloudWatch stream carries a bearer credential. Edit one
+    copy, then propagate to the rest in the same change, and add the new pipeline's path to the
+    `LOGGER_COPIES` tuple in `backendPipelines/tests/test_pipeline_logger_identity.py`, which pins the
+    single digest, fails on an unlisted copy, and is the list `test_pipeline_logger_formatter.py` reads
+    too. Log an
+    event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never
+    log a task token on its own.
+
     A pipeline that reads the workflow manifest also vendors `manifestHelper.py`. **All copies must stay
     byte-identical** — verify with
     `find backendPipelines -name manifestHelper.py -exec md5sum {} \; | awk '{print $1}' | sort -u`,
@@ -522,18 +628,34 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     `resolve_pipeline_inputs` in every `vamsExecute` handler so the raise reaches `SendTaskFailure`.
 
 3. Add container if needed in `container/` subdirectory.
-4. **Author the `vamsSchema/` bundle** (`pipeline.json`, plus `workflow.json` and `templates/` as
+4. **Register the pipeline's sub-process and log sources** from `openPipeline.py` (or from
+   `executeBatchJob.py` when that lambda submits the job itself): the state-machine log entry with
+   `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the
+   group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group
+   for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix`
+   `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a
+   module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` +
+   `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`,
+   `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU)
+   and the job-definition-name env the producer reads
+   (`BATCH_JOB_DEFINITION_NAME`). Add the construct to
+   `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or
+   `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in
+   `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution
+   shows no stages or container logs. See
+   [Registering Sub-Processes and Logs](#registering-sub-processes-and-logs-abort-stage-status-log-sources).
+5. **Author the `vamsSchema/` bundle** (`pipeline.json`, plus `workflow.json` and `templates/` as
    needed) and register it with the `VamsSchemaRegistration` construct from the pipeline's nested
    stack. Without this the AWS resources deploy but nothing appears in VAMS. Each
    `templates/{templateId}.json` carries the `configBody` the container receives and the `tagSchema`
    declaring the per-run options an operator sets on the execute form — that is where a prompt, a seed,
    or a target format belongs, rather than hardcoded in the body. See
    [vamsSchema Registration](#vamsschema-registration-how-a-built-in-becomes-usable).
-5. Create CDK nested stack in `infra/lib/nestedStacks/pipelines/`.
-6. Add pipeline config to `config.ts` under `pipelines` section.
-7. Register in pipeline builder nested stack.
-8. Add feature switch if pipeline is optional.
-9. **Add pipeline flag to VPC builder** (`infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`). A pipeline using AWS Batch, ECS, or Fargate goes into some of the VPC builder's three condition blocks — **which ones depends on the subnets its compute runs in.** Decide that first from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
+6. Create CDK nested stack in `infra/lib/nestedStacks/pipelines/`.
+7. Add pipeline config to `config.ts` under `pipelines` section.
+8. Register in pipeline builder nested stack.
+9. Add feature switch if pipeline is optional.
+10. **Add pipeline flag to VPC builder** (`infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`). A pipeline using AWS Batch, ECS, or Fargate goes into some of the VPC builder's three condition blocks — **which ones depends on the subnets its compute runs in.** Decide that first from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
 
     - **Subnet creation condition** (~line 343) — the `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig` into `subnetConfigurations`. **Private-subnet pipelines only.** Omit it for one and its Batch compute environment fails with "Resource subnets are required"; add an isolated-subnet pipeline and CDK creates public subnets plus **one NAT gateway per Availability Zone** (~$66/month at two AZs, plus data processing) that the pipeline never routes through, because `subnetPrivateConfig` is `PRIVATE_WITH_EGRESS` and the `ec2.Vpc` sets no `natGateways`.
     - **Pipeline-only endpoint condition** (~line 651) — the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Required for every pipeline, either placement.** Without it Batch jobs cannot pull container images.
@@ -541,14 +663,14 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
 
     Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate).
 
-10. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
-11. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).
-12. **Preserve relative paths** in container output. When writing asset-adjacent files (e.g., `.previewFile.X`), the container must maintain the input file's relative subdirectory within the asset so process-output can locate outputs correctly. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for the derivation pattern.
-13. **Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`** with all new pipeline configuration options (`enabled`, `autoRegisterWithVAMS`, `autoRegisterAutoTriggerOnFileUpload`, and any pipeline-specific settings). Follow the existing format: `-   \`app.pipelines.{pipelineName}.{option}\` | default: {value} | #{description}`.
-14. **Update licenses/attributions** when a pipeline adds, removes, or changes a third-party model, container base image, or dependency with its own license. Update **both** `NOTICE.md` (the per-pipeline dependency table + attribution note at the repo root) **and** `documentation/docusaurus-site/docs/additional/notices.md` (the per-pipeline license paragraph + the closing attribution/reference list). Record the exact license (e.g. NVIDIA Open Model License, OpenMDW-1.1, Apache-2.0) and any required attribution string. A model under a new license (as Cosmos 3 uses OpenMDW-1.1 rather than the NVIDIA Open Model License) must be reflected in both files, and the pipeline doc page's Prerequisites + Attribution sections.
-15. **Update the pipeline count** wherever the docs state one. `documentation/docusaurus-site/docs/overview/features.md` opens the "Built-In Pipelines" section with a spelled-out count ("VAMS includes _fourteen_ built-in processing pipelines…") followed by a table — bump the number to match the new table row count when adding or removing a pipeline. Grep the docs for the current number word to catch any other count references.
-16. **Update the root `CLAUDE.md`** — its Project Overview pipeline list and its directory tree both enumerate the pipeline set, and the tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist. Required by root `CLAUDE.md` Rule 11 ("New pipeline"). Also add a row to `documentation/docusaurus-site/docs/pipelines/` and its `pipelines/overview.md` table per `documentation/CLAUDE.md`.
-17. **A pipeline built by AWS CodeBuild pushes and consumes ONE content-addressed tag.** The construct
+11. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
+12. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).
+13. **Preserve relative paths** in container output. When writing asset-adjacent files (e.g., `.previewFile.X`), the container must maintain the input file's relative subdirectory within the asset so process-output can locate outputs correctly. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for the derivation pattern.
+14. **Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`** with all new pipeline configuration options (`enabled`, `autoRegisterWithVAMS`, `autoRegisterAutoTriggerOnFileUpload`, and any pipeline-specific settings). Follow the existing format: `-   \`app.pipelines.{pipelineName}.{option}\` | default: {value} | #{description}`.
+15. **Update licenses/attributions** when a pipeline adds, removes, or changes a third-party model, container base image, or dependency with its own license. Update **both** `NOTICE.md` (the per-pipeline dependency table + attribution note at the repo root) **and** `documentation/docusaurus-site/docs/additional/notices.md` (the per-pipeline license paragraph + the closing attribution/reference list). Record the exact license (e.g. NVIDIA Open Model License, OpenMDW-1.1, Apache-2.0) and any required attribution string. A model under a new license (as Cosmos 3 uses OpenMDW-1.1 rather than the NVIDIA Open Model License) must be reflected in both files, and the pipeline doc page's Prerequisites + Attribution sections.
+16. **Update the pipeline count** wherever the docs state one. `documentation/docusaurus-site/docs/overview/features.md` opens the "Built-In Pipelines" section with a spelled-out count ("VAMS includes _fourteen_ built-in processing pipelines…") followed by a table — bump the number to match the new table row count when adding or removing a pipeline. Grep the docs for the current number word to catch any other count references.
+17. **Update the root `CLAUDE.md`** — its Project Overview pipeline list and its directory tree both enumerate the pipeline set, and the tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist. Required by root `CLAUDE.md` Rule 11 ("New pipeline"). Also add a row to `documentation/docusaurus-site/docs/pipelines/` and its `pipelines/overview.md` table per `documentation/CLAUDE.md`.
+18. **A pipeline built by AWS CodeBuild pushes and consumes ONE content-addressed tag.** The construct
     supplies `IMAGE_TAG` to the project's `environmentVariables` from `sourceAsset.assetHash`, and the
     pull site names that same value — a shared compute construct takes it as one prop together with the
     repository (`ecrImage` on `batch-fargate-pipeline.ts`, `codeBuildImage` on `batch-gpu-pipeline.ts`)
@@ -559,7 +681,7 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     cold cache adds hours to a GPU image build. Copying an existing buildspec is how this regresses;
     `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the immutable-tag block of
     `infra/test/pipelines/containerBuildSources.test.ts` assert both halves.
-18. **A container that clones an upstream repository at build time clones a FIXED revision.** Declare
+19. **A container that clones an upstream repository at build time clones a FIXED revision.** Declare
     the revision as an `ARG <NAME>_COMMIT=<40-hex>`, `git checkout --detach` it, and verify it landed
     with `test "$(git rev-parse HEAD)" = "${<NAME>_COMMIT}"` **in the same `RUN`** — a checkout in a
     later instruction is a different layer and pins nothing. Write the resolved id to a file in the
@@ -570,7 +692,7 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     `infra/test/pipelines/containerBuildSources.test.ts`, which lists the Dockerfiles explicitly
     because a `**/Dockerfile` glob passes locally and fails in CI on the gitignored splat Dockerfile.
 
-19. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and
+20. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and
     on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and
     copies **every** upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. Editing one
     of those files does not stick: the change survives until the next CDK invocation and is then gone,

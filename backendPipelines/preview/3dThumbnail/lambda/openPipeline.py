@@ -35,11 +35,19 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# This pipeline's vended container log group (the group its Fargate job definition writes to through
+# the awslogs driver) + its job definition name; the container log source is registered only when
+# both are configured.
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
+BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
+# The Batch state of this pipeline's state machine (its CDK construct id).
+BATCH_STATE_NAME = "Preview3dThumbnailBatchJob"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
     if (task_token != None and task_token != ""):
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
@@ -47,9 +55,25 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def batch_container_log_entry(job_definition_name, state_name):
+    """The log source for one Batch state's container: the job's vended group, streamed under
+    `<jobDefinitionName>/default/`. None when the group or the job definition is not configured."""
+    if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name:
+        return None
+    return {
+        "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+        "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": f"{job_definition_name}/default/",
+        "stageName": state_name,
+        "sourceType": "batch",
+        "label": f"{state_name} container",
+    }
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    """Best-effort: report this pipeline's sub-SFN execution + log group to the orchestration bus."""
+    """Best-effort: report this pipeline's sub-SFN execution + its log sources to the orchestration bus."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -63,14 +87,23 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "3D thumbnail processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "3D thumbnail state machine",
+        })
+    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)
+    if container_log:
+        logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,
@@ -88,7 +121,7 @@ def lambda_handler(event, context):
     Starts StepFunctions State Machine for processing
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     responses = []

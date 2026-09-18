@@ -31,6 +31,13 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get("ALLOWED_INPUT_FILEEXTENSIONS", ".
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# The vended group the Batch job definition writes container output to, and that job definition's
+# name (the `awslogs` stream prefix), registered as the Batch state's log source
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
+BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
+# Must match the BatchSubmitJob state id in the pipeline's state machine
+BATCH_STATE_NAME = "VideoSopBomBatchJob"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 ERROR_INPUT_REJECTED = "VideoSopBomInputRejected"
@@ -53,9 +60,26 @@ def abort_external_workflow(code, cause, task_token):
         )
 
 
+def batch_container_log_entry(job_definition_name, state_name):
+    """The log source for one Batch state's container: the job's vended group, streamed under
+    `<jobDefinitionName>/default/`. None when the group or the job definition is not configured."""
+    if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name:
+        return None
+    return {
+        "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+        "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": f"{job_definition_name}/default/",
+        "stageName": state_name,
+        "sourceType": "batch",
+        "label": f"{state_name} container",
+    }
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    """Best-effort report of this sub-SFN execution to the VAMS orchestration bus; failures are swallowed."""
+    """Best-effort report of this sub-SFN execution and its log sources to the VAMS orchestration bus;
+    failures are swallowed."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -69,14 +93,23 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "Video SOP/BOM extraction",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "Video SOP/BOM state machine",
+        })
+    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)
+    if container_log:
+        logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,
@@ -150,7 +183,7 @@ def lambda_handler(event, context):
     Starts the pipeline's state machine under the Batch job name.
     """
 
-    logger.info(event)
+    logger.info("Event", event=event)
 
     external_sfn_task_token = event.get('sfnExternalTaskToken', '')
     orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
