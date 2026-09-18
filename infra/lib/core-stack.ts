@@ -313,6 +313,13 @@ export class CoreVAMSStack extends cdk.Stack {
             pipelineBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             // The V2 vamsSchema registration CRs invoke the import lambda built in ApiBuilder2.
             pipelineBuilderNestedStack.addStackDependency(apiBuilder2NestedStack);
+            // The vector reindexer enqueues launches of the system GenAI metadata workflow, which the
+            // pipeline stack's vamsSchema registration writes; with reindexOnCdkDeploy the search stack's
+            // custom resource reads that row during the deploy, so the pipeline stack must land first.
+            // Neither stack consumes the other's outputs, so the ordering introduces no cycle.
+            if (props.config.app.vectorSearch.enabled) {
+                searchBuilderNestedStack.addStackDependency(pipelineBuilderNestedStack);
+            }
 
             ///Optional Addons (Nested Stack)
             const addonBuilderNestedStack = new AddonBuilderNestedStack(this, "AddonBuilder", {

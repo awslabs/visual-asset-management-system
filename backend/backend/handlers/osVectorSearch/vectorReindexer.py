@@ -4,7 +4,9 @@
 """Vector index reindexer: clears the vector table and/or enqueues the latest live file versions for
 re-embedding by the system GenAI workflow.
 
-Invoked directly (operator or data-migration tooling); there is no event source. Payload:
+Invoked directly (operator or data-migration tooling), or as a CloudFormation custom resource when
+`app.vectorSearch.reindexOnCdkDeploy` is set — the same two shapes the OpenSearch `crReindexer` takes.
+There is no event source. Direct payload:
 
     {operation: "enqueue" | "clear" | "both", dryRun?: bool, limit?: int, databaseId?: str, startAfter?: str}
 
@@ -244,11 +246,8 @@ def _self_invoke(params: Dict[str, Any], state: Dict[str, Any]) -> None:
     logger.info(f"vector reindex run {state['runId']} continues in phase {state['phase']}")
 
 
-def lambda_handler(event, context) -> Dict[str, Any]:
-    params, error = validate_payload(event)
-    if error:
-        logger.warning(f"Rejected vector reindex payload: {error}")
-        return {'statusCode': 400, 'body': json.dumps({'error': error})}
+def _run_reindex(params: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """One invocation's worth of work for a validated payload; the response reports where the run stands."""
     time_left = _time_left(context)
     state = _initial_state(params)
     logger.info(f"vector reindex run {state['runId']}: operation={params['operation']} "
@@ -278,3 +277,86 @@ def lambda_handler(event, context) -> Dict[str, Any]:
         logger.exception(f"vector reindex run {state['runId']} failed in phase {state['phase']}: {e}")
         return {'statusCode': 500, 'body': json.dumps(
             {'error': 'vector reindex failed', 'reindexRunId': state['runId'], 'phase': state['phase']})}
+
+
+# ---------------------------------------------------------------------------------------------------
+# CloudFormation custom resource (app.vectorSearch.reindexOnCdkDeploy)
+# ---------------------------------------------------------------------------------------------------
+
+def is_cfn_event(event: Any) -> bool:
+    """A custom-resource request carries both keys; a direct invocation carries neither."""
+    return isinstance(event, dict) and 'RequestType' in event and 'ResponseURL' in event
+
+
+def cfn_payload_from_properties(properties: Dict[str, Any]) -> Dict[str, Any]:
+    """Map the resource's string properties onto the direct-invoke payload.
+
+    `Operation` defaults to `both` and `DryRun` to false; `Timestamp` is what the construct changes to
+    re-fire the resource and carries no meaning here. Anything else is passed through so an unknown
+    property is rejected by validate_payload rather than ignored.
+    """
+    payload: Dict[str, Any] = {'operation': properties.get('Operation', 'both')}
+    dry_run = str(properties.get('DryRun', 'false')).lower()
+    if dry_run not in ('true', 'false'):
+        payload['dryRun'] = properties.get('DryRun')
+    elif dry_run == 'true':
+        payload['dryRun'] = True
+    if properties.get('DatabaseId'):
+        payload['databaseId'] = properties['DatabaseId']
+    for key in properties:
+        if key not in ('Operation', 'DryRun', 'DatabaseId', 'Timestamp', 'ServiceToken'):
+            payload[key] = properties[key]
+    return payload
+
+
+def handle_cfn_event(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """Run the reindex for a Create/Update request and return the cr.Provider onEvent response.
+
+    The provider framework relays this dict to CloudFormation, so the function never posts to
+    `ResponseURL` itself. A run that outlives one invocation hands off to an async continuation and is
+    reported as started: the deploy does not wait on Bedrock re-analyzing every file, and the run's id
+    is returned as `Data.ReindexRunId` so an operator can follow it in the function's log group. A
+    Delete request is a no-op — the vector table is retained and the rows stay valid.
+    """
+    request_type = event.get('RequestType')
+    physical_id = event.get('PhysicalResourceId') or 'vams-vector-reindex-trigger'
+    if request_type == 'Delete':
+        logger.info("CloudFormation Delete request: nothing to reindex")
+        return {'PhysicalResourceId': physical_id, 'Data': {'Message': 'Delete is a no-op'}}
+    payload = cfn_payload_from_properties(event.get('ResourceProperties') or {})
+    params, error = validate_payload(payload)
+    if error:
+        logger.error(f"CloudFormation {request_type} request rejected: {error}")
+        raise ValueError(f"vector reindex request rejected: {error}")
+    logger.info(f"CloudFormation {request_type} request: operation={params['operation']} "
+                f"dryRun={params['dryRun']}")
+    result = _run_reindex(params, context)
+    body = json.loads(result['body'])
+    if result['statusCode'] != 200:
+        # A failed FIRST invocation fails the resource; a failure inside a later continuation is
+        # reported only in the log group, as the deploy has already moved on by then.
+        raise RuntimeError(
+            f"vector reindex run {body.get('reindexRunId')} failed in phase {body.get('phase')}")
+    return {
+        'PhysicalResourceId': physical_id,
+        'Data': {
+            'Message': 'Vector reindex started' if body['continued'] else 'Vector reindex completed',
+            'ReindexRunId': body['reindexRunId'],
+            'Phase': body['phase'],
+            'Deleted': str(body['deleted']),
+            'Enqueued': str(body['enqueued']),
+            'Continued': str(body['continued']).lower(),
+        },
+    }
+
+
+def lambda_handler(event, context) -> Dict[str, Any]:
+    """Two invocation shapes: a direct payload, or a CloudFormation custom-resource request relayed
+    by the CDK provider framework when `app.vectorSearch.reindexOnCdkDeploy` is set."""
+    if is_cfn_event(event):
+        return handle_cfn_event(event, context)
+    params, error = validate_payload(event)
+    if error:
+        logger.warning(f"Rejected vector reindex payload: {error}")
+        return {'statusCode': 400, 'body': json.dumps({'error': error})}
+    return _run_reindex(params, context)

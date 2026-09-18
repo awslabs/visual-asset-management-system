@@ -907,6 +907,7 @@ export function getConfig(app: cdk.App): Config {
             embeddingModelId: VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
             embeddingDimensions: VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
             indexingConcurrency: VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY,
+            reindexOnCdkDeploy: false,
         };
     }
     if (config.app.vectorSearch.enabled == undefined) {
@@ -921,6 +922,13 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.vectorSearch.indexingConcurrency == undefined) {
         config.app.vectorSearch.indexingConcurrency = VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY;
     }
+    // Same deploy-time override shape as the OpenSearch flag, under its own context key because the
+    // two reindexers rebuild different stores and an operator may want only one of them.
+    config.app.vectorSearch.reindexOnCdkDeploy = resolveConfigBool(
+        "vectorReindexOnCdkDeploy",
+        app.node.tryGetContext("vectorReindexOnCdkDeploy"),
+        config.app.vectorSearch.reindexOnCdkDeploy ?? false
+    );
     if (
         vectorSearchEnabledWasUnset &&
         !config.app.vectorSearch.enabled &&
@@ -2582,6 +2590,13 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    //Error check for the vector reindex flag - requires vector search to be enabled
+    if (config.app.vectorSearch?.reindexOnCdkDeploy && !config.app.vectorSearch.enabled) {
+        throw new Error(
+            "Configuration Error: app.vectorSearch.reindexOnCdkDeploy requires app.vectorSearch.enabled to be true!"
+        );
+    }
+
     //Check when implementing auth providers
     if (
         config.app.authProvider.useCognito.enabled &&
@@ -3575,6 +3590,7 @@ export interface ConfigPublic {
             embeddingModelId: string;
             embeddingDimensions: number;
             indexingConcurrency: number;
+            reindexOnCdkDeploy: boolean;
         };
         useLocationService: {
             enabled: boolean;

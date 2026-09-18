@@ -390,3 +390,107 @@ describe("the vector and OpenSearch indexer families are independent", () => {
         }
     });
 });
+
+/**
+ * app.vectorSearch.reindexOnCdkDeploy mirrors app.openSearch.reindexOnCdkDeploy: a cr.Provider over the
+ * family's own reindexer plus a CustomResource that re-fires on every deploy while the flag is set.
+ * The vector reindexer enqueues launches of the system GenAI workflow, which the pipeline stack's
+ * vamsSchema registration writes, so the search stack must build after the pipeline stack whenever
+ * vector search is on -- with the flag off too, because the ordering is what makes turning the flag on
+ * later safe without a template change to the dependency graph.
+ */
+describe("vector reindex on deploy", () => {
+    const withVectorReindex = (c: any) => {
+        c.app.vectorSearch.enabled = true;
+        c.app.vectorSearch.reindexOnCdkDeploy = true;
+    };
+
+    const vectorReindexTrigger = (s: SynthResult) =>
+        s.where(
+            "AWS::CloudFormation::CustomResource",
+            (r) => inSearchStack(r) && r.logicalId.startsWith("VectorReindexTrigger")
+        );
+
+    const openSearchReindexTrigger = (s: SynthResult) =>
+        s.where(
+            "AWS::CloudFormation::CustomResource",
+            (r) => inSearchStack(r) && r.logicalId.startsWith("ReindexTrigger")
+        );
+
+    const nestedStack = (s: SynthResult, prefix: string) => {
+        const found = s.where("AWS::CloudFormation::Stack", (r) => r.logicalId.startsWith(prefix));
+        expect({ prefix, count: found.length }).toEqual({ prefix, count: 1 });
+        return found[0];
+    };
+
+    test("the flag off emits no vector reindex resource while the OpenSearch one is unaffected", () => {
+        const s = synthTemplate("commercial");
+        expectAbsent("VectorReindexTrigger", vectorReindexTrigger(s), {
+            description: "commercial emits the vector reindexer Lambda at all",
+            count: s.where("AWS::Lambda::Function", (f) =>
+                /^handlers\.osVectorSearch\.vectorReindexer\./.test(
+                    SynthResult.flatten(f.properties.Handler)
+                )
+            ).length,
+        });
+        // The OpenSearch flag is off in the template as well; both triggers absent is the baseline.
+        expect(openSearchReindexTrigger(s)).toHaveLength(0);
+    });
+
+    test("the flag on emits one custom resource whose provider fronts the vector reindexer", () => {
+        const s = synthTemplate("commercial", {
+            mutate: withVectorReindex,
+            mutateKey: "vector-reindex-on-deploy",
+        });
+        const triggers = vectorReindexTrigger(s);
+        expect(triggers).toHaveLength(1);
+        expect(triggers[0].properties.Operation).toBe("both");
+        // No ClearIndexes: the vector `both` operation clears the table itself, and an unknown
+        // property is rejected by the handler rather than ignored.
+        expect(Object.keys(triggers[0].properties).sort()).toEqual(
+            ["Operation", "ServiceToken", "Timestamp"].sort()
+        );
+
+        // The provider framework's onEvent is the vector reindexer, not the OpenSearch one.
+        const providerFramework = s.where(
+            "AWS::Lambda::Function",
+            (f) =>
+                inSearchStack(f) && f.logicalId.startsWith("VectorReindexProviderframeworkonEvent")
+        );
+        expect(providerFramework).toHaveLength(1);
+        const onEventTarget = SynthResult.flatten(
+            providerFramework[0].properties.Environment.Variables.USER_ON_EVENT_FUNCTION_ARN
+        );
+        const reindexer = s.where("AWS::Lambda::Function", (f) =>
+            /^handlers\.osVectorSearch\.vectorReindexer\./.test(
+                SynthResult.flatten(f.properties.Handler)
+            )
+        );
+        expect(reindexer).toHaveLength(1);
+        expect(onEventTarget).toContain(reindexer[0].logicalId);
+
+        // The OpenSearch trigger stays off: the two flags are independent.
+        expect(openSearchReindexTrigger(s)).toHaveLength(0);
+    });
+
+    test("the search stack builds after the pipeline stack whenever vector search is enabled", () => {
+        const s = synthTemplate("commercial");
+        const search = nestedStack(s, "SearchBuilderNestedStack");
+        const pipeline = nestedStack(s, "PipelineBuilderNestedStack");
+        expect(search.raw.DependsOn ?? []).toContain(pipeline.logicalId);
+        // And not the reverse, or CloudFormation rejects the template with a cycle.
+        expect(pipeline.raw.DependsOn ?? []).not.toContain(search.logicalId);
+    });
+
+    test("with vector search off the search stack does not wait on the pipeline stack", () => {
+        const s = synthTemplate("commercial", {
+            mutate: (c) => {
+                c.app.vectorSearch.enabled = false;
+            },
+            mutateKey: "vector-off-stack-order",
+        });
+        const search = nestedStack(s, "SearchBuilderNestedStack");
+        const pipeline = nestedStack(s, "PipelineBuilderNestedStack");
+        expect(search.raw.DependsOn ?? []).not.toContain(pipeline.logicalId);
+    });
+});

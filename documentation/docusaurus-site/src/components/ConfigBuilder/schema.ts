@@ -725,6 +725,15 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: vectorSearch,
     },
     {
+        path: "app.vectorSearch.reindexOnCdkDeploy",
+        label: "Vector search — reindex on CDK deploy",
+        input: "boolean",
+        section: "search",
+        advanced: true,
+        help: "Clears the vector table and re-launches the SYSTEM GenAI metadata workflow for every latest live file during the deploy. Re-runs the analysis model on every file; enable for one deploy, then set back to false.",
+        visibleWhen: vectorSearch,
+    },
+    {
         path: "app.useLocationService.enabled",
         label: "Amazon Location Service",
         input: "boolean",

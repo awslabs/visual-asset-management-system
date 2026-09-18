@@ -49,6 +49,7 @@ const mockConfig = (govCloud: boolean): Config.Config => {
         embeddingModelId: "amazon.titan-embed-text-v2:0",
         embeddingDimensions: 1024,
         indexingConcurrency: 7,
+        reindexOnCdkDeploy: false,
     };
     (config as any).vectorIndexName = "vec-amazon-titan-embed-text-v2-0-1024";
     config.enableCdkNag = false;

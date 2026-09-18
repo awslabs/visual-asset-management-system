@@ -49,7 +49,7 @@ infra/
       service-helper.ts         # ServiceFormatter: ARN(), Endpoint, Principal
     lambdaBuilder/              # 18 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
                                 # config, pipeline, workflow, role, userRole, tag, tagType, subscription, sendEmail,
-                                # metadataSchema, assetsLink, searchIndexBucketSync, vectorSearch)
+                                # metadataSchema, assetsLink, indexing, osSemanticSearch, osVectorSearch)
     nestedStacks/
       vpc/vpcBuilder-nestedStack.ts      # VPC, subnets, VPC endpoints
       storage/
@@ -137,9 +137,12 @@ CoreVAMSStack (root)
   |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
   |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
-  |     +-- SearchBuilder (OpenSearch, vector indexing)          -> storage, resourceNames, ApiBuilder2
+  |     +-- SearchBuilder (OpenSearch, vector indexing)          -> storage, resourceNames, ApiBuilder2,
+  |     |                                                           PipelineBuilder (vectorSearch.enabled only)
   |     |                                                           (its system-workflow launcher invokes
-  |     |                                                            an ApiBuilder2 Lambda by name)
+  |     |                                                            an ApiBuilder2 Lambda by name; its vector
+  |     |                                                            reindexer launches the SYSTEM workflow the
+  |     |                                                            pipeline stack registers)
   |     +-- PipelineBuilder (all use-case pipelines)             -> storage, ApiBuilder2
   |     |                                                           (its vamsSchema registration custom
   |     |                                                            resources invoke an ApiBuilder2 Lambda)
@@ -186,6 +189,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 -   `app.assetBuckets`: createNewBucket, defaultNewBucketSyncDatabaseId, externalAssetBuckets (bucketArn, baseAssetsPrefix, defaultSyncDatabaseId; optional bucketAccountId / bucketRegion / bucketKmsKeyArn for cross-account + SSE-KMS), presignedUrlNetworkRestrictions (allowedIpRanges / allowedVpceIds; mutually exclusive; empty = no restriction). Non-empty restrictions add a bucket policy Deny scoped to presigned `s3:authType=REST-QUERY-STRING` requests on the created asset + auxiliary bucket via `addPresignedUrlNetworkRestrictionsToBucketPolicy()`; imported external buckets are not policy-managed by VAMS. A bucketArn may be registered multiple times under non-overlapping prefixes (validated by `validateExternalAssetBuckets()`, which rejects overlapping prefixes and inconsistent per-bucket attributes); `storageBuilder` imports each unique ARN once so per-prefix event notifications merge into one S3 notification configuration.
 -   `app.useGlobalVpc`: enabled, useForAllLambdas, addVpcEndpoints, optionalExternalVpcId, vpcCidrRange
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu, deployDeferredIndexSchema), useProvisioned, reindexOnCdkDeploy
+-   `app.vectorSearch`: enabled, embeddingModelId, embeddingDimensions, indexingConcurrency, reindexOnCdkDeploy (a `cr.Provider` over the vector reindexer plus a re-firing `CustomResource` in the search stack, the vector counterpart of the OpenSearch flag; CDK context `vectorReindexOnCdkDeploy`)
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
 -   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCoordinateTransform, usePreviewPcPotreeViewer, usePreview3dThumbnail, useSplatToolbox, useSystemGenAiMetadata (enabled, bedrockAnalysisModelId, useFargateRenderer, lambdaLimits, bedrockGuardrail — `create.{enabled,promptAttackInputStrength,piiFilter}` creates the guardrail, `guardrailIdentifier`/`guardrailVersion` reference an operator-owned one; exclusive), useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining, useNvidiaCosmos, useNvidiaCosmos3, useNvidiaGr00t

@@ -211,6 +211,7 @@ const COMMERCIAL: ConfigShape = {
             embeddingModelId: "amazon.titan-embed-text-v2:0",
             embeddingDimensions: 1024,
             indexingConcurrency: 5,
+            reindexOnCdkDeploy: false,
         },
         useLocationService: { enabled: true },
         useAlb: {

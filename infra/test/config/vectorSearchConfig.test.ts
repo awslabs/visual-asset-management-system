@@ -139,6 +139,7 @@ describe("app.vectorSearch backfill", () => {
             embeddingModelId: Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
             embeddingDimensions: Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
             indexingConcurrency: Config.VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY,
+            reindexOnCdkDeploy: false,
         });
     });
 
@@ -151,6 +152,7 @@ describe("app.vectorSearch backfill", () => {
             embeddingModelId: "amazon.titan-embed-text-v2:0",
             embeddingDimensions: 1024,
             indexingConcurrency: 5,
+            reindexOnCdkDeploy: false,
         });
         expect(warnings()).not.toContain("app.vectorSearch is not set");
     });
@@ -191,6 +193,7 @@ describe("app.vectorSearch backfill", () => {
             embeddingModelId: "amazon.titan-embed-text-v2:0",
             embeddingDimensions: 512,
             indexingConcurrency: 5,
+            reindexOnCdkDeploy: false,
         });
         expect(config.vectorIndexName).toBe("vec-amazon-titan-embed-text-v2-0-512");
     });

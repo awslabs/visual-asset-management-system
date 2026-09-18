@@ -100,6 +100,7 @@ function mockConfig(vectorSearchEnabled: boolean): Config.Config {
         embeddingModelId: "amazon.titan-embed-text-v2:0",
         embeddingDimensions: EMBEDDING_DIMENSIONS,
         indexingConcurrency: 5,
+        reindexOnCdkDeploy: false,
     };
     config.enableCdkNag = false;
     config.resourceNamesSSMParamPrefix = "/vams-test-us-east-1/resourceNames";

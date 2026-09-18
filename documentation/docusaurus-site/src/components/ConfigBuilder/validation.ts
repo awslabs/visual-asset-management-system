@@ -1542,6 +1542,18 @@ export const RULES: Rule[] = [
         message: "reindexOnCdkDeploy requires OpenSearch Serverless or Provisioned to be enabled.",
     },
 
+    // ----- Vector reindex flag (config.ts: "Error check for the vector reindex flag") -----
+    {
+        id: "vector-reindex-requires-vector-search",
+        severity: "error",
+        fieldPaths: ["app.vectorSearch.reindexOnCdkDeploy", "app.vectorSearch.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.vectorSearch.reindexOnCdkDeploy") === true &&
+            !g(c, "app.vectorSearch.enabled"),
+        message:
+            "app.vectorSearch.reindexOnCdkDeploy requires app.vectorSearch.enabled to be true.",
+    },
+
     // ----- Auth providers (config.ts: "Check when implementing auth providers") -----
     {
         id: "auth-one",

@@ -112,6 +112,12 @@ Turning `app.vectorSearch.enabled` off and back on needs this catch-up: the vect
 
 The `vectorBackfill` step of the data migration under `infra/deploymentDataMigration/` wraps this call (`--clear-vectors` selects `"both"`; `--dry-run` and `--limit` are forwarded as `dryRun` and `limit`). The launched executions appear in the executions list with trigger type `System-Reindex` and an execution group id per 1,000-file chunk of the run (`vec-<runId>-<chunk>`), so each chunk can be watched, aborted, or purged as a group. See [Reindex utilities](../developer/utilities/reindex.md).
 
+### Reindexing on deploy
+
+Setting `app.vectorSearch.reindexOnCdkDeploy` to `true` (or passing the CDK context `vectorReindexOnCdkDeploy=true`) runs the `"both"` operation as a CloudFormation custom resource during the deployment, the same way `app.openSearch.reindexOnCdkDeploy` rebuilds the OpenSearch indexes. The two flags are independent: each rebuilds only its own store, because an OpenSearch document is derived from the DynamoDB metadata row while a vector is the output of an analysis run. The resource re-fires on every deployment while the flag is set, so set it back to `false` once the rebuild has been launched.
+
+The custom resource reports success as soon as the run has started. A rebuild larger than one Lambda invocation continues on its own through the reindexer's self-invocation, so the deployment does not wait for the analysis of every file; the resource's `ReindexRunId` output names the run, and its progress is visible as `System-Reindex` executions in the executions list and in the reindexer's log group. A payload the reindexer rejects, or a first invocation that fails (for example the system workflow not yet being registered), fails the resource and rolls the deployment back. Because the reindexer launches the SYSTEM GenAI metadata workflow, the search stack is deployed after the pipeline stack that registers it whenever vector search is enabled.
+
 ## Changing the embedding model
 
 The vector index is bound to one model and one dimension count. To move to a different embeddings model:

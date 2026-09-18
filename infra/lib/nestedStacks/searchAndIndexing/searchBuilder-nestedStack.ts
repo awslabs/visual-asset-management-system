@@ -595,6 +595,25 @@ export class SearchBuilderNestedStack extends NestedStack {
             });
         }
 
+        // Vector reindex on deploy: clears the vector table and re-launches the system GenAI workflow
+        // for every latest live file. The handler reports SUCCESS once the run is started (it continues
+        // asynchronously past one Lambda window), so the deploy does not wait on the re-analysis. The
+        // system workflow the handler enqueues against is registered by the pipeline stack, which
+        // core-stack.ts orders ahead of this stack whenever vector search is enabled.
+        if (vectorIndexing && config.app.vectorSearch.reindexOnCdkDeploy) {
+            const vectorReindexProvider = new cr.Provider(scope, "VectorReindexProvider", {
+                onEventHandler: vectorIndexing.vectorReindexerFunction,
+            });
+
+            new cdk.CustomResource(scope, "VectorReindexTrigger", {
+                serviceToken: vectorReindexProvider.serviceToken,
+                properties: {
+                    Operation: "both",
+                    Timestamp: Date.now().toString(),
+                },
+            });
+        }
+
         //Setup final index output
         const openSearchIndexAssetSOutput = new cdk.CfnOutput(
             scope,

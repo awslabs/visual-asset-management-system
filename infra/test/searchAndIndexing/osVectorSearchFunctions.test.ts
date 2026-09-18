@@ -53,6 +53,7 @@ const mockConfig = (mutate?: (c: any) => void): Config.Config => {
         embeddingModelId: "amazon.titan-embed-text-v2:0",
         embeddingDimensions: 1024,
         indexingConcurrency: 5,
+        reindexOnCdkDeploy: false,
     };
     (config as any).vectorIndexName = "vec-amazon-titan-embed-text-v2-0-1024";
     config.enableCdkNag = false;

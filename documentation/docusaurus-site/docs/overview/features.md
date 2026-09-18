@@ -153,7 +153,7 @@ For the full list of command groups and every command in each, see the [Command 
 -   **Event-driven indexing** -- Amazon SNS and Amazon SQS-based automatic index synchronization on asset and file changes
 -   **Vector indexing** -- A single vector indexer writes per-file-version Amazon Bedrock embeddings published by the SYSTEM GenAI metadata pipeline into a DynamoDB vector index, tracking latest-version, archive, and delete lifecycle
 -   **Preview file indexing** -- `str_previewfilekey` and `str_assetlocationkey` fields in search indexes for optimized UI rendering
--   **Re-index on deploy** -- Optional `reindexOnCdkDeploy` flag for full index rebuild during deployment; a vector reindexer Lambda function clears and rebuilds the vector index on demand
+-   **Re-index on deploy** -- Optional `app.openSearch.reindexOnCdkDeploy` and `app.vectorSearch.reindexOnCdkDeploy` flags rebuild the OpenSearch indexes or the vector table during a deployment, each independently; both reindexers can also be invoked directly on demand
 
 ---
 

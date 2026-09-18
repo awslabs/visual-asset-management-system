@@ -69,7 +69,8 @@
             "enabled": false,
             "embeddingModelId": "",
             "embeddingDimensions": 1024,
-            "indexingConcurrency": 5
+            "indexingConcurrency": 5,
+            "reindexOnCdkDeploy": false
         },
         "useLocationService": {
             "enabled": false
