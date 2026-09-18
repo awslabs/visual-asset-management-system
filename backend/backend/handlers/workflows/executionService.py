@@ -683,7 +683,7 @@ def prewarm_asset_details(pairs):
 
 def build_execution_items(input_items, fetch_main_row, describe_execution,
                           persist_main_row, workflow_id_filter, workflow_database_id,
-                          fetch_execution_log_and_error=None):
+                          fetch_execution_log_and_error=None, on_terminal_observed=None):
     """Join WorkflowExecutionInputs rows with V2 main rows into the legacy wire
     shape. Dedupes by workflowExecutionId. Reconciles running status lazily.
 
@@ -787,6 +787,12 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
                             execution_error = err_text
                             main_item['executionError'] = err_text
                             reconciled_snapshot['executionError'] = err_text
+                    # An execution stopped outside VAMS (a direct Step Functions stop) reaches
+                    # neither the end-state lambda nor the error handler, so this read is the
+                    # first place its termination is observed; the caller releases what the
+                    # run still holds.
+                    if on_terminal_observed is not None and status in TERMINAL_STATUSES:
+                        on_terminal_observed(execution_id, main_item, status)
             persist_main_row(reconciled_snapshot)
 
         result_items.append({
@@ -1196,6 +1202,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             workflow_id_filter=workflow_id or '',
             workflow_database_id=workflow_database_id or '',
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
+            on_terminal_observed=_release_locks_for_reconciled_terminal,
         )
 
         # Apply the optional equality filters (same semantics as the global board) so the asset
@@ -3415,6 +3422,29 @@ def _reconcile_main_status(execution_id, main_item):
             only_if_not_terminal=True)
     except Exception as e:
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
+    if sfn_stop and status in TERMINAL_STATUSES:
+        _release_locks_for_reconciled_terminal(execution_id, main_item, status)
+
+
+def _release_locks_for_reconciled_terminal(execution_id, main_item, status):
+    """Release the concurrency locks of an execution whose termination a READ path observed.
+
+    The end-state lambda and the error handler release locks for every execution that finishes through
+    the state machine, and the abort route releases for one VAMS stopped. An execution stopped outside
+    VAMS — a direct Step Functions StopExecution, or a state machine deleted under it — takes none of
+    those paths: its locks would otherwise sit until the table's TTL, refusing every launch on the same
+    asset, file, or file version for up to a day. Best-effort by the same contract as the other release
+    sites (a failure is logged, never surfaced), and a no-op for the `none` restriction."""
+    composite = main_item.get("workflowDatabaseId:workflowId", "") or ""
+    workflow_database_id = main_item.get("workflowDatabaseId") or composite.split(":", 1)[0]
+    workflow_id = main_item.get("workflowId") or (composite.split(":", 1)[1] if ":" in composite else "")
+    released = el.release_locks_for_execution(
+        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_database,
+        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
+        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
+    if released:
+        logger.info(f"Released {released} lock row(s) of execution {execution_id} observed {status} "
+                    f"outside VAMS")
 
 
 def _log_search_window_start(main_item):
