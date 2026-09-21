@@ -184,7 +184,7 @@ You must enable access to the configured Amazon Bedrock model in your deployment
 
 ## Output
 
-Outputs are per-run aggregates, so they anchor at the asset root rather than beside each input video. The container writes flat into a `sop-bom/` folder and the workflow inserts the run folder as the leaf, so files land at `sop-bom/<executionId>/` on the asset and a rerun never overwrites an earlier run. No previews and no file-level metadata are written. A run that fails ingests nothing: there are no partial deliverables.
+Outputs are per-run aggregates, so they anchor at the asset root rather than beside each input video. The container writes flat into a `sop-bom/` folder and the workflow inserts the run folder as the leaf, so files land at `sop-bom/<executionId>/` on the asset and two separate executions never share a folder. A re-run of an execution reproduces that execution's layout: it writes into the original run's folder, and the earlier deliverables remain available as prior versions of each file. No previews and no file-level metadata are written. A run that fails ingests nothing: there are no partial deliverables.
 
 | File                                         | Full mode                           | Transcript mode | Content                                                                                                                |
 | :------------------------------------------- | :---------------------------------- | :-------------- | :--------------------------------------------------------------------------------------------------------------------- |

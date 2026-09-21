@@ -220,7 +220,7 @@ def _run_stages(ctx):
         if total_seconds > cap_seconds:
             raise PipelineRejection(
                 LIMIT_EXCEEDED,
-                f"total video duration {_hm(total_seconds)} exceeds this deployment's limit of {_hm(cap_seconds)} ({limits['maxTotalDurationMinutes']} minutes).",
+                f"total video duration {_hms(total_seconds)} exceeds this deployment's limit of {limits['maxTotalDurationMinutes']} minutes.",
             )
         ctx.observed["totalDurationSeconds"] = round(total_seconds, 3)
         logger.info("audio tracks=%d total=%.1fs", len(tracks), total_seconds)

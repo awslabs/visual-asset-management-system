@@ -435,8 +435,21 @@ class TestRunRejections:
         assert status == "FAILED"
         failure = self._failure(sfn)
         assert failure["error"] == "VideoSopBomLimitExceeded"
-        assert failure["cause"] == "total video duration 0h02m exceeds this deployment's limit of 0h01m (1 minutes)."
+        assert failure["cause"] == "total video duration 00h02m35s exceeds this deployment's limit of 1 minutes."
         assert s3.keys("run-bucket") == [] and transcribe.start_calls == []
+
+    def test_duration_cap_cause_distinguishes_a_total_that_rounds_to_the_cap(self, tmp_path, monkeypatch, vsb_task_token):
+        """155 s against a 3-minute cap: whole-minute rendering shows both sides as 0h03m, so the cause read as
+        a contradiction. The observed total carries seconds; the cap is stated once, in its own unit."""
+        definition = make_definition(limits={"maxTotalDurationMinutes": 3})
+        monkeypatch.setattr("video_sop_bom_pipeline.media.extract_audio_flac", lambda path, flac: 100.0)
+        status, _, _, _, sfn = _run(tmp_path, monkeypatch, definition=definition)
+        assert status == "FAILED"
+        failure = self._failure(sfn)
+        assert failure["error"] == "VideoSopBomLimitExceeded"
+        assert failure["cause"] == "total video duration 00h03m20s exceeds this deployment's limit of 3 minutes."
+        observed, cap = failure["cause"].split(" exceeds this deployment's limit of ")
+        assert observed.rsplit(" ", 1)[1] != cap.split(" ")[0], "the two sides must not render identically"
 
     def test_a_disk_budget_rejection_happens_before_any_download(self, tmp_path, monkeypatch, vsb_task_token):
         import shutil
