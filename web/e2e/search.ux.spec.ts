@@ -201,7 +201,7 @@ test.describe("Unified search — layout and mode controls", () => {
         await expect(segments).toBeChecked();
         if (mode === "nlp-only") {
             await expect(
-                page.getByText(/Natural-language search matches on meaning/)
+                page.getByText(/narrow where the natural-language search looks/)
             ).toBeVisible();
             // OpenSearch-only panels are absent rather than shown and inert.
             await expect(page.getByRole("button", { name: "Metadata Search" })).toHaveCount(0);

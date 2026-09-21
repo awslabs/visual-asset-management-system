@@ -102,7 +102,8 @@ const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
             headingTagOverride="h5"
         >
             <Box variant="p" color="text-body-secondary" margin={{ bottom: "s" }}>
-                Natural-language search matches on meaning; these filters narrow where it looks.
+                These filters narrow where the natural-language search looks; the query band above
+                states what it matches.
             </Box>
             <SpaceBetween direction="vertical" size="m">
                 <FormField
