@@ -186,8 +186,9 @@ export async function gotoSearch(
 
 /**
  * Assert the active search tab rendered rows or one of its empty states — the search table's
- * "No matches" or the asset list's "No assets to display." — never that specific data exists.
- * `expectTableRendered`'s `/no .*found/i` matches neither, which is why this exists.
+ * "No matches", its idle natural-language state ("Describe what you are looking for"), or the asset
+ * list's "No assets to display." — never that specific data exists. `expectTableRendered`'s
+ * `/no .*found/i` matches none of them, which is why this exists.
  */
 export async function expectSearchRendered(page: Page): Promise<number> {
     const rows = tableRows(page);
@@ -196,6 +197,9 @@ export async function expectSearchRendered(page: Page): Promise<number> {
             async () =>
                 (await rows.count()) > 0 ||
                 (await page.getByText(/No matches/).count()) > 0 ||
+                (await page
+                    .getByText("Describe what you are looking for", { exact: true })
+                    .count()) > 0 ||
                 (await page.getByText(/^No .+ to display\.$/).count()) > 0,
             { timeout: 60_000 }
         )

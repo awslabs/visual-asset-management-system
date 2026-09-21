@@ -48,13 +48,13 @@ Each database record displays the following information:
 
 ## Asset Search Page
 
-The **Assets and Files** page is the primary interface for discovering and browsing assets. It hosts two tabs: **Asset List**, always available, lists the assets you are authorized to see; **Search**, available when Amazon OpenSearch or natural-language search is enabled, offers keyword and natural-language queries with filters and multiple view modes. The active tab is carried in the URL (`?tab=`).
+The **Assets and Files** page is the primary interface for discovering and browsing assets. It hosts two tabs: **Basic Asset List**, always available, lists the assets you are authorized to see with archive, permanent-delete, and unarchive actions; **Primary Search**, available when Amazon OpenSearch or natural-language search is enabled, offers keyword and natural-language queries with filters and multiple view modes. The active tab is carried in the URL (`?tab=`).
 
 ![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20260323_v2.5.png)
 
 ### View Modes
 
-VAMS provides three ways to browse assets on the Search tab:
+VAMS provides three ways to browse assets on the Primary Search tab:
 
 | View Mode      | Description                                                                                               |
 | -------------- | --------------------------------------------------------------------------------------------------------- |
@@ -64,7 +64,7 @@ VAMS provides three ways to browse assets on the Search tab:
 
 ### Search and Filtering
 
-The Search tab provides several mechanisms for finding assets:
+The Primary Search tab provides several mechanisms for finding assets:
 
 -   **Keyword** / **Natural language** -- When both engines are enabled, choose how the query is read: keyword matching across indexed fields, or a natural-language description ranked by semantic similarity of each file's generated metadata, text, and renders. With only one engine enabled the control is fixed to that engine.
 -   **Text search** -- Enter keywords to search across asset names and properties.

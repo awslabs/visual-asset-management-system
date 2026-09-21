@@ -1127,22 +1127,29 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     stickyHeader={true}
                     wrapLines={false}
                     empty={
-                        <EmptyState
-                            title="No matches"
-                            subtitle="We can't find a match."
-                            action={
-                                <Button
-                                    onClick={() => {
-                                        dispatch({ type: "query-criteria-cleared" });
-                                        setTimeout(() => {
-                                            search(INITIAL_STATE, { state, dispatch });
-                                        }, 10);
-                                    }}
-                                >
-                                    Clear filter
-                                </Button>
-                            }
-                        />
+                        state?.nlpIdle ? (
+                            <EmptyState
+                                title="Describe what you are looking for"
+                                subtitle="Natural-language search runs once you enter a description. It matches on meaning across file contents, including image and video scenes."
+                            />
+                        ) : (
+                            <EmptyState
+                                title="No matches"
+                                subtitle="We can't find a match."
+                                action={
+                                    <Button
+                                        onClick={() => {
+                                            dispatch({ type: "query-criteria-cleared" });
+                                            setTimeout(() => {
+                                                search(INITIAL_STATE, { state, dispatch });
+                                            }, 10);
+                                        }}
+                                    >
+                                        Clear filter
+                                    </Button>
+                                }
+                            />
+                        )
                     }
                     columnDefinitions={enhancedColumnDefinitions}
                     selectedItems={state?.selectedItems}

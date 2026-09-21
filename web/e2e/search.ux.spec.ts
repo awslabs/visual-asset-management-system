@@ -223,7 +223,14 @@ test.describe("Unified search — natural-language behaviour", () => {
         await searchQueryBox(page).fill("");
         await searchQueryBox(page).press("Enter");
         await page.getByRole("button", { name: "Search", exact: true }).click();
-        await expect(page.getByText("No matches")).toBeVisible({ timeout: 30_000 });
+        // The idle state says what to type; it neither reports "No matches" (nothing was searched)
+        // nor offers to clear filters that are not the cause, and no count badge claims 0 results.
+        await expect(
+            page.getByText("Describe what you are looking for", { exact: true })
+        ).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByText("No matches")).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Clear filter" })).toHaveCount(0);
+        await expect(page.getByText(/^\d[\d,]* results$/)).toHaveCount(0);
         expect(requests, "an empty query has nothing to embed and must not be sent").toBe(0);
     });
 
@@ -493,4 +500,100 @@ test.describe("Unified search — accessibility and layout", () => {
             }
         });
     }
+});
+
+test.describe("Unified search — query band", () => {
+    test("the query box is full width under the header and explains the active mode beneath it", async ({
+        page,
+    }) => {
+        const mode = await openUnified(page);
+        const box = searchQueryBox(page);
+        await expect(box).toBeVisible();
+        // The box is the primary control: it takes most of the band's width rather than sitting in
+        // the header's action slot beside the title.
+        const band = page.locator(".search-query-band");
+        const boxWidth = (await box.boundingBox())!.width;
+        const bandWidth = (await band.boundingBox())!.width;
+        expect(boxWidth, "query box width vs its band").toBeGreaterThan(bandWidth * 0.6);
+        // The heading sits above the band, never on the same row.
+        const heading = page.getByRole("heading", { level: 1 }).first();
+        expect((await heading.boundingBox())!.y).toBeLessThan((await band.boundingBox())!.y);
+
+        // The mode line tells the two engines' defaults apart: keyword lists everything in scope,
+        // natural language reaches file contents and needs a description first.
+        const keywordLine = page.getByText(/lists everything in scope/);
+        const nlpLine = page.getByText(/Describe what you are looking for to see results/);
+        if (mode === "keyword-only") {
+            await expect(keywordLine).toBeVisible();
+            await expect(nlpLine).toHaveCount(0);
+            return;
+        }
+        if (mode === "nlp-only") {
+            await expect(nlpLine).toBeVisible();
+            await expect(page.getByText(/image and video scenes/).first()).toBeVisible();
+            await expect(keywordLine).toHaveCount(0);
+            return;
+        }
+        await selectSearchMode(page, "keyword");
+        await expect(keywordLine).toBeVisible();
+        await expect(nlpLine).toHaveCount(0);
+        await selectSearchMode(page, "nlp");
+        await expect(nlpLine).toBeVisible();
+        await expect(keywordLine).toHaveCount(0);
+    });
+
+    test("the result count appears only after a search has run", async ({ page }) => {
+        const mode = await openUnified(page);
+        const badge = page.getByText(/^\d[\d,]* results$/);
+        if (mode === "keyword-only") {
+            // Keyword mode searches on load, so the count is the first thing reported.
+            await expect(badge).toBeVisible({ timeout: 60_000 });
+            return;
+        }
+        await enterNlpMode(page, mode);
+        await searchQueryBox(page).fill("");
+        await expect(badge).toHaveCount(0);
+        const { body } = await runNlpSearch(page, NLP_PROBE_QUERY);
+        const total: number = body?.hits?.total?.value ?? 0;
+        await expect(badge).toHaveText(`${total.toLocaleString()} results`, { timeout: 30_000 });
+    });
+
+    test("the sidebar's record-type selector is not called Search mode", async ({ page }) => {
+        await openUnified(page);
+        // Two controls sharing one label was the ambiguity: the engine switch is "Search mode",
+        // the Assets/Files selector is "Search for".
+        await expect(page.getByText("Search for", { exact: true })).toBeVisible();
+        await expect(page.getByText("Search Mode", { exact: true })).toHaveCount(0);
+    });
+});
+
+test.describe("Basic Asset List — bulk actions", () => {
+    test("offers the shared Delete/Unarchive actions and a Show archived toggle, and the delete confirm can be dismissed", async ({
+        page,
+    }) => {
+        await gotoSearch(page, { tab: "asset-list" });
+        await expect(searchTabs(page).getByRole("tab", { name: /Basic .* List$/ })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+        await expectSearchRendered(page);
+        const del = page.getByRole("button", { name: "Delete Selected" });
+        await expect(del).toBeVisible();
+        await expect(del).toBeDisabled();
+        await expect(page.getByRole("button", { name: "Unarchive Selected" })).toHaveCount(0);
+        await expect(page.getByRole("checkbox", { name: "Show archived" })).toBeVisible();
+
+        const rows = page.getByRole("row").filter({ has: page.getByRole("checkbox") });
+        test.skip((await rows.count()) < 2, "No assets in this environment");
+        // Row 0 is the header's select-all; pick the first data row.
+        await rows.nth(1).getByRole("checkbox").check();
+        await expect(del).toBeEnabled();
+        await del.click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog).toBeVisible();
+        // The same modal as the Primary Search tab: archive is the default, permanent delete a choice.
+        await expect(dialog.getByText(/archive/i).first()).toBeVisible();
+        await dialog.getByRole("button", { name: /^Cancel$/ }).click();
+        await expect(dialog).toHaveCount(0);
+    });
 });

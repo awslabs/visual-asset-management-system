@@ -45,7 +45,7 @@ test.describe("Search page", () => {
         // `null` = nothing cached yet; `[]` = cached with no switches (OpenSearch on, nothing else),
         // which is a real deployment state the tab must be asserted for, not skipped.
         test.skip(features === null, "No cached secure-config; the app has not loaded it yet");
-        await expect(searchTabs(page).getByRole("tab", { name: "Search" })).toHaveCount(
+        await expect(searchTabs(page).getByRole("tab", { name: "Primary Search" })).toHaveCount(
             unifiedSearchOffered(features ?? []) ? 1 : 0
         );
     });
@@ -59,7 +59,7 @@ test.describe("Search page", () => {
         await expectSearchRendered(page);
     });
 
-    test("the unified tab renders rows or its No matches empty state", async ({ page }) => {
+    test("the unified tab renders rows or one of its empty states", async ({ page }) => {
         await gotoSearch(page);
         const features = await readFeaturesEnabled(page);
         test.skip(features === null, "No cached secure-config; the app has not loaded it yet");
@@ -68,7 +68,7 @@ test.describe("Search page", () => {
             "Neither OpenSearch nor vector search is enabled in this environment"
         );
         await gotoSearch(page, { tab: "unified-search" });
-        await expect(searchTabs(page).getByRole("tab", { name: "Search" })).toHaveAttribute(
+        await expect(searchTabs(page).getByRole("tab", { name: "Primary Search" })).toHaveAttribute(
             "aria-selected",
             "true"
         );

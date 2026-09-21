@@ -27,6 +27,7 @@ RESULTS_PREFIX = "pipelines/sgm/sgm/output/E1/results/"
 CONFIG_KEY = "pipelines/workflowExecutionInputs/E1/pipeline1/config.json"
 METADATA_KEY = "pipelines/workflowExecutionInputs/E1/metadata.json"
 METADATA_FILE_KEY = META_PREFIX + "models/pump.glb.metadata.json"
+ATTRIBUTE_FILE_KEY = META_PREFIX + "models/pump.glb.attribute.json"
 STATUS_KEY = RESULTS_PREFIX + "execution.status.json"
 ANALYSIS_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 VECTOR = [0.123456789123, -0.5, 0.25, 1.0]
@@ -69,11 +70,21 @@ def _metadata_file(**over):
             "genai_keywords": "pump, gear pump, brass", "genai_category": "mechanical part",
             "genai_subcategory": "Hydraulic Pump", "genai_style": "technical/CAD", "genai_materials": "brass, steel",
             "genai_colors": "gold, gray", "genai_objects": "pump housing, inlet flange",
-            "genai_size_estimate": "about 30 cm long", "genai_orientation": "Z-up, front faces -Y",
-            "genai_model": ANALYSIS_MODEL, "genai_generated_at": "2026-09-08T10:00:00Z",
-            "genai_source_modalities": "file-attributes, renders"}
+            "genai_size_estimate": "about 30 cm long", "genai_orientation": "Z-up, front faces -Y"}
     rows.update(over)
     return {"type": "metadata", "updateType": "update",
+            "metadata": [{"metadataKey": key, "metadataValue": value, "metadataValueType": "string"}
+                         for key, value in rows.items()]}
+
+
+def _attribute_file(**over):
+    """The .attribute.json the analysis step writes: the sys_* groups, the ext_* facts and the run's
+    genai_* provenance rows, every one string-typed."""
+    rows = {"sys_file": '{"name": "pump.glb"}', "ext_vertex_count": "1200",
+            "genai_model": ANALYSIS_MODEL, "genai_generated_at": "2026-09-08T10:00:00Z",
+            "genai_source_modalities": "file-attributes, renders", "genai_complexity": "medium"}
+    rows.update(over)
+    return {"type": "attribute", "updateType": "update",
             "metadata": [{"metadataKey": key, "metadataValue": value, "metadataValueType": "string"}
                          for key, value in rows.items()]}
 
@@ -94,12 +105,14 @@ def _envelope(description="A brass gear pump", file_metadata=None, database_meta
                            else {"SITE": "Plant 7"}}]}
 
 
-def _seed(s3, manifest=None, config=None, envelope=None, metadata_file=None):
+def _seed(s3, manifest=None, config=None, envelope=None, metadata_file=None, attribute_file=None):
     s3.put_json(AUX, MANIFEST_KEY, manifest if manifest is not None else _manifest())
     s3.put_json("abkt", CONFIG_KEY, config if config is not None else {"embeddingIncludeTextExcerpt": True})
     s3.put_json("abkt", METADATA_KEY, envelope if envelope is not None else _envelope())
     if metadata_file is not False:
         s3.put_json("abkt", METADATA_FILE_KEY, metadata_file if metadata_file is not None else _metadata_file())
+    if attribute_file is not False:
+        s3.put_json("abkt", ATTRIBUTE_FILE_KEY, attribute_file if attribute_file is not None else _attribute_file())
     return s3
 
 
@@ -412,7 +425,8 @@ class TestSourceText:
         assert "Gear Pump" in _embedded_text(mod)
         _key, document = _document(s3)
         assert "genai-metadata" not in document["sourceModalities"]
-        assert document["analysisModelId"] == ""
+        # The model id is read from the attribute file, which the analysis step writes first.
+        assert document["analysisModelId"] == ANALYSIS_MODEL
 
 
 @pytest.mark.unit
@@ -658,11 +672,15 @@ class TestContentChunks:
         assert summary["wholeFileDocument"] == state["embeddingDocumentS3Location"]
         assert summary["videoSegmentCount"] == 0 and summary["embeddingModelId"] == "amazon.titan-embed-text-v2:0"
         assert summary["generatedAt"].endswith("Z")
-        rows = {row["metadataKey"]: row for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        # The count describes the run, so it is an attribute row (string-typed, like every attribute),
+        # appended after the analysis step's rows, which are kept; the metadata file is untouched.
+        rows = {row["metadataKey"]: row for row in s3.json_at("abkt", ATTRIBUTE_FILE_KEY)["metadata"]}
         assert rows["genai_content_chunk_count"] == {"metadataKey": "genai_content_chunk_count", "metadataValue": "3",
-                                                     "metadataValueType": "number"}
-        assert rows["genai_title"]["metadataValue"] == "Brass gear pump"  # the analysis step's rows are kept
+                                                     "metadataValueType": "string"}
+        assert rows["genai_model"]["metadataValue"] == ANALYSIS_MODEL
         assert list(rows)[-1] == "genai_content_chunk_count"
+        metadata_rows = {row["metadataKey"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        assert "genai_title" in metadata_rows and "genai_content_chunk_count" not in metadata_rows
 
     def test_dropped_chunks_are_counted(self):
         s3 = _seed_text(h.FakeS3())
@@ -675,7 +693,7 @@ class TestContentChunks:
         state = mod.lambda_handler(_state(), MagicMock())
         assert state["contentChunks"] == {"count": 2, "dropped": 1, "skipped": None}
         assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 2, "dropped": 1, "skipped": None}
-        assert {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}[
+        assert {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", ATTRIBUTE_FILE_KEY)["metadata"]}[
             "genai_content_chunk_count"] == "2"
         documents = _documents(s3)
         assert len(documents) == 3
@@ -688,7 +706,7 @@ class TestContentChunks:
         assert len(_details(mod)) == 1 and _details(mod)[0]["segmentCount"] == 0
         assert state["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
         assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
-        assert "genai_content_chunk_count" not in {row["metadataKey"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        assert "genai_content_chunk_count" not in {row["metadataKey"] for row in s3.json_at("abkt", ATTRIBUTE_FILE_KEY)["metadata"]}
 
     def test_no_captured_text_means_no_chunks(self):
         s3 = _seed(h.FakeS3())
@@ -709,7 +727,7 @@ class TestContentChunks:
         assert state["embeddingStatus"] == "SUCCEEDED" and state["embeddingEventPublished"] is True
         assert state["contentChunks"] == {"count": 0, "dropped": 0, "skipped": "size"}
         assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 0, "dropped": 0, "skipped": "size"}
-        assert "genai_content_chunk_count" not in {row["metadataKey"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        assert "genai_content_chunk_count" not in {row["metadataKey"] for row in s3.json_at("abkt", ATTRIBUTE_FILE_KEY)["metadata"]}
         assert mod.embeddings.embed_text.call_count == 1  # the whole-file vector only
         assert not any(key.startswith(AUX_PREFIX + "text/") for _bucket, key in s3.puts)
 
@@ -723,7 +741,7 @@ class TestContentChunks:
         assert status["error"] == "BedrockEmbeddingError" and status["cause"].startswith("chunk c000001: ")
         assert len(_documents(s3)) == 1 and len(_details(mod)) == 1  # the whole-file vector stands
         assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
-        assert "genai_content_chunk_count" not in {row["metadataKey"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        assert "genai_content_chunk_count" not in {row["metadataKey"] for row in s3.json_at("abkt", ATTRIBUTE_FILE_KEY)["metadata"]}
         assert "embeddingDocumentS3Location" in state
 
     def test_a_throttled_chunk_embedding_is_recorded_as_throttled(self):
@@ -757,7 +775,7 @@ class TestContentChunks:
         status = s3.json_at("abkt", STATUS_KEY)
         assert status["error"] == "BedrockEmbeddingError" and status["cause"].startswith("chunk c000002: ")
         assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 1, "dropped": 0, "skipped": None}
-        rows = {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        rows = {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", ATTRIBUTE_FILE_KEY)["metadata"]}
         assert rows["genai_content_chunk_count"] == "1"
 
     @pytest.mark.parametrize("failure, marker", [
@@ -782,7 +800,7 @@ class TestContentChunks:
         assert status["status"] == "FAILED" and status["error"] == "SegmentPublishError"
         assert status["cause"].startswith("chunk c000011: ") and marker in status["cause"]
         assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 10, "dropped": 0, "skipped": None}
-        rows = {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        rows = {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", ATTRIBUTE_FILE_KEY)["metadata"]}
         assert rows["genai_content_chunk_count"] == "10"
 
     def test_the_video_window_count_reaches_the_whole_file_document(self):

@@ -211,6 +211,25 @@ const REGISTRY_GENAI_KEYS = [
     "genai_asset_categories",
 ];
 
+/**
+ * The pipeline-owned keys that are file ATTRIBUTES rather than metadata: every `ext_*` fact promoted
+ * from the attribute groups, and the run's provenance rows. They appear in the field tables (typed by
+ * how the value is rendered) but not in the metadata-schema JSON, which schemas do not govern.
+ */
+const ATTRIBUTE_GENAI_KEYS = [
+    "genai_model",
+    "genai_generated_at",
+    "genai_source_modalities",
+    "genai_complexity",
+    "genai_content_chunk_count",
+];
+function isAttributeKey(key: string): boolean {
+    return key.startsWith("ext_") || ATTRIBUTE_GENAI_KEYS.includes(key);
+}
+function metadataOnly(fields: Record<string, string>): Record<string, string> {
+    return Object.fromEntries(Object.entries(fields).filter(([key]) => !isAttributeKey(key)));
+}
+
 /** Every `"ext_…"` / `"genai_…"` string literal in a Python source text (a bare `"ext_"` prefix does not match). */
 function pipelineOwnedKeys(pySource: string): string[] {
     return [
@@ -424,7 +443,7 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
         const fw = section(readDoc("pipelines/system-genai-metadata.md"), "## Fields written");
         for (const s of [
             "### Attribute groups",
-            "### Promoted metadata",
+            "### Promoted attributes",
             "### Generated metadata",
             "### Location",
             "### Editing the classification vocabulary",
@@ -485,15 +504,16 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
         expect(documented.location).toBe("geojson");
         expect(documented.ext_dimensions).toBe("xyz");
         expect(documented.genai_description).toBe("multiline_string");
-        expect(documented.genai_generated_at).toBe("date");
+        // The provenance rows are attributes, which hold strings only: no `date` row remains.
+        for (const key of ATTRIBUTE_GENAI_KEYS) expect(documented[key]).toBe("string");
         // Control: the row extractor reads table rows only, so a key that appears nowhere is not "documented".
         expect(documented).not.toHaveProperty("ext_made_up_control");
     });
 
-    test("the schema JSON blocks parse, use accepted value types, and list exactly the keys the tables document", () => {
+    test("the schema JSON blocks parse, use accepted value types, and list exactly the METADATA keys the tables document", () => {
         const fw = section(readDoc("pipelines/system-genai-metadata.md"), "## Fields written");
         const schema = schemaFieldTypes(fw);
-        expect(Object.keys(schema).length).toBeGreaterThan(60); // control: the blocks were found and parsed
+        expect(Object.keys(schema).length).toBeGreaterThan(15); // control: the blocks were found and parsed
         for (const type of Object.values(schema)) {
             expect([
                 "string",
@@ -505,7 +525,43 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
                 "geojson",
             ]).toContain(type);
         }
-        expect(schema).toEqual(documentedFieldTypes(fw));
+        // Attributes are outside a metadata schema's reach, so the ext_* facts and the provenance
+        // rows are documented in the tables but deliberately absent from the schema blocks.
+        expect(schema).toEqual(metadataOnly(documentedFieldTypes(fw)));
+        for (const key of ATTRIBUTE_GENAI_KEYS) expect(schema).not.toHaveProperty(key);
+        expect(Object.keys(schema).some((key) => key.startsWith("ext_"))).toBe(false);
+    });
+
+    test("the source writes the provenance rows and the ext_* facts as attributes, not metadata", () => {
+        const lambdaDir = path.join("backendPipelines", "system", "genAiMetadata", "lambda");
+        const generate = readRepo(path.join(lambdaDir, "generateMetadata.py"));
+        const embed = readRepo(path.join(lambdaDir, "generateEmbedding.py"));
+        // The descriptive metadata tuple no longer carries the complexity grade.
+        const keyTypes = generate.slice(
+            generate.indexOf("GENAI_KEY_TYPES = ("),
+            generate.indexOf(")", generate.indexOf("GENAI_KEY_TYPES = ("))
+        );
+        expect(keyTypes).toContain('"genai_title"'); // control: the tuple was found
+        expect(keyTypes).not.toContain('"genai_complexity"');
+        for (const key of [
+            "genai_model",
+            "genai_generated_at",
+            "genai_source_modalities",
+            "genai_complexity",
+        ]) {
+            expect(generate).toContain(`"${key}"`);
+        }
+        expect(generate).toContain("GENAI_ATTRIBUTE_KEYS");
+        // The metadata body takes the location and the descriptive rows only; the attribute body takes
+        // the promoted items and the provenance rows.
+        expect(generate).toContain("def metadata_file_body(location_row, genai)");
+        expect(generate).toContain(
+            "def attribute_file_body(attributes, promoted_items=(), genai_attribute_rows=())"
+        );
+        // The chunk count is appended to the attribute file.
+        expect(embed).toContain(
+            'append_attribute_row(attribute_file_uri, {"metadataKey": CONTENT_CHUNK_COUNT_KEY'
+        );
     });
 
     test("every ext_*/genai_* key the pipeline source writes is documented in the tables and the schema blocks", () => {
@@ -526,7 +582,11 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
         const schema = schemaFieldTypes(fw);
         for (const key of written) {
             expect(documented).toHaveProperty(key);
-            expect(schema).toHaveProperty(key);
+            if (isAttributeKey(key)) {
+                expect(schema).not.toHaveProperty(key);
+            } else {
+                expect(schema).toHaveProperty(key);
+            }
         }
     });
 
@@ -1268,7 +1328,7 @@ describe("user guide", () => {
         expect(nlp).toContain("top");
         expect(nlp).toContain("`genai_*`");
         expect(nlp).toContain("`ext_*`");
-        expect(nlp).toContain("**Metadata** tab");
+        expect(nlp).toContain("**Attributes** tab"); // the ext_* facts and provenance rows are attributes
         expect(nlp).toContain("listed once"); // segment matches collapse to one row; the popover names the best one
         expect(nlp).toContain("**Search inside files**"); // the whole-file-only toggle, on by default
         expect(nlp).toContain("50 MiB"); // the content-embedding size bound: a larger file has no chunks
@@ -1291,8 +1351,8 @@ describe("user guide", () => {
     test("web-interface.md describes the tabs, the toggle, the System badge, and the tab URL", () => {
         const text = readDoc("user-guide/web-interface.md");
         const search = section(text, "## Asset Search Page");
-        expect(search).toContain("**Asset List**");
-        expect(search).toContain("**Search**");
+        expect(search).toContain("**Basic Asset List**");
+        expect(search).toContain("**Primary Search**");
         expect(search).toContain("**Natural language**");
         expect(section(text, "### Pipelines Page")).toContain("**System**");
         expect(section(text, "### Workflows Page")).toContain("**System**");

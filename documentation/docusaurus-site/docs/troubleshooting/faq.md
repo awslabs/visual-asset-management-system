@@ -90,7 +90,7 @@ Yes. Amazon OpenSearch is optional. When neither OpenSearch Serverless nor OpenS
 -   The web application hides keyword search, metadata filtering, and map view.
 -   Asset and file listing uses Amazon DynamoDB queries with pagination instead of full-text search.
 -   Advanced keyword features (full-text search, metadata field filtering, relevance ranking) are not available.
--   Natural-language search remains available when `app.vectorSearch.enabled` is `true`: the search page shows the asset list tab and a Search tab in natural-language mode, with database, file-type, and archived filters. See [Vector search](../concepts/vector-search.md).
+-   Natural-language search remains available when `app.vectorSearch.enabled` is `true`: the search page shows the Basic Asset List tab and a Primary Search tab in natural-language mode, with database, file-type, and archived filters. See [Vector search](../concepts/vector-search.md).
 
 ---
 

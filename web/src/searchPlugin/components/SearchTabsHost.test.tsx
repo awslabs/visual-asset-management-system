@@ -33,14 +33,14 @@ const registry = () =>
 
 const unified: SearchProviderConfig = {
     id: "unified-search",
-    name: "Search",
+    name: "Primary Search",
     componentPath: "UnifiedSearchProvider/UnifiedSearchProviderComponent",
     priority: 10,
     availability: { always: true },
 };
 const assetList: SearchProviderConfig = {
     id: "asset-list",
-    name: "Asset List",
+    name: "Basic Asset List",
     componentPath: "AssetListProvider/AssetListProviderComponent",
     priority: 100,
     availability: { always: true },
@@ -65,7 +65,7 @@ describe("SearchTabsHost", () => {
     it("renders one tab per available provider, lowest priority first and selected", async () => {
         renderHost("/assets");
         const tabs = screen.getAllByRole("tab");
-        expect(tabs.map((tab) => tab.textContent)).toEqual(["Search", "Asset List"]);
+        expect(tabs.map((tab) => tab.textContent)).toEqual(["Primary Search", "Basic Asset List"]);
         expect(tabs[0]).toHaveAttribute("aria-selected", "true");
         await screen.findByTestId("body-unified-search");
         expect(screen.getByTestId("body-unified-search")).toHaveTextContent("active all");
@@ -79,7 +79,7 @@ describe("SearchTabsHost", () => {
 
     it("selects the tab named by ?tab= and passes the database through", async () => {
         renderHost("/databases/db1/assets?tab=asset-list", "db1");
-        expect(screen.getByRole("tab", { name: "Asset List" })).toHaveAttribute(
+        expect(screen.getByRole("tab", { name: "Basic Asset List" })).toHaveAttribute(
             "aria-selected",
             "true"
         );
@@ -89,7 +89,7 @@ describe("SearchTabsHost", () => {
 
     it("falls back to the default tab for an unknown ?tab= value", async () => {
         renderHost("/assets?tab=no-such-provider");
-        expect(screen.getByRole("tab", { name: "Search" })).toHaveAttribute(
+        expect(screen.getByRole("tab", { name: "Primary Search" })).toHaveAttribute(
             "aria-selected",
             "true"
         );
@@ -97,7 +97,7 @@ describe("SearchTabsHost", () => {
 
     it("writes the chosen tab into the query string", async () => {
         renderHost("/assets");
-        await userEvent.click(screen.getByRole("tab", { name: "Asset List" }));
+        await userEvent.click(screen.getByRole("tab", { name: "Basic Asset List" }));
         await waitFor(() =>
             expect(screen.getByTestId("search")).toHaveTextContent("?tab=asset-list")
         );
@@ -108,7 +108,7 @@ describe("SearchTabsHost", () => {
         registry().getAvailableProviders.mockReturnValue([assetList]);
         renderHost("/assets");
         expect(screen.getAllByRole("tab")).toHaveLength(1);
-        expect(screen.getByRole("tab", { name: "Asset List" })).toHaveAttribute(
+        expect(screen.getByRole("tab", { name: "Basic Asset List" })).toHaveAttribute(
             "aria-selected",
             "true"
         );

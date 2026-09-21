@@ -843,10 +843,10 @@ For the current viewer catalog, plugin config field reference, and the step-by-s
 
 The search page is a tab strip of **search providers** under `src/searchPlugin/`, built the same way as the viewer plugins: a JSON catalog (`config/searchProviderConfig.json`), a manifest (`providers/manifest.ts`) so Vite sees every provider chunk, a singleton `core/SearchProviderRegistry.ts` (lazy `import.meta.glob` loading; availability read from `appCache` config), a pure `core/providerAvailability.ts` Jest can import, `core/useSearchProvidersReady.ts`, and `components/SearchTabsHost.tsx` (Cloudscape `Tabs`, the active tab in the `?tab=` hash query, lazy bodies that receive `databaseId` and `isActive`). Availability is `{ "always": true }` or `{ "anyOf": [ { "featureEnabled": X } | { "featureDisabled": X } ] }` over `featuresEnabled`; the lowest priority number is the default tab. There is no runtime registration API — adding a provider is a source change in the three places `manifest.ts` lists, plus a row here.
 
-| ID               | Name       | Priority | Availability                                |
-| ---------------- | ---------- | -------- | ------------------------------------------- |
-| `asset-list`     | Asset List | 100      | always                                      |
-| `unified-search` | Search     | 10       | VECTORSEARCH enabled or NOOPENSEARCH absent |
+| ID               | Name             | Priority | Availability                                |
+| ---------------- | ---------------- | -------- | ------------------------------------------- |
+| `asset-list`     | Basic Asset List | 100      | always                                      |
+| `unified-search` | Primary Search   | 10       | VECTORSEARCH enabled or NOOPENSEARCH absent |
 
 `config/searchProviderConfig.test.ts` fails when this table and the catalog disagree. The Search provider offers a `Keyword | Natural language` mode toggle when both engines are enabled, a reduced filter sidebar (database, file type, archived, **Search inside files**) when `NOOPENSEARCH` is present, and relevance as a percentage with a modality popover on natural-language hits. Pipeline, workflow, and trigger records with `isSystem: true` show a **System** badge and open read-only except for their `enabled` switches and template `configBody`/`tagSchema`.
 

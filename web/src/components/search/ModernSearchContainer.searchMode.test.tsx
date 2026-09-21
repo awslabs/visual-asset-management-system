@@ -146,18 +146,41 @@ describe("ModernSearchContainer search modes", () => {
         await screen.findByPlaceholderText("Describe what you are looking for...");
         expect(screen.queryByTestId("nlp")).toBeNull();
         expect(screen.queryByTestId("keyword")).toBeNull();
-        // Reduced sidebar: the mode selector and the NLP filters, none of the OpenSearch panels.
-        expect(screen.getByText("Search Mode")).toBeInTheDocument();
+        // Reduced sidebar: the record-type selector and the NLP filters, none of the OpenSearch panels.
+        expect(screen.getByText("Search for")).toBeInTheDocument();
         expect(screen.getByLabelText("Include archived items")).toBeInTheDocument();
         expect(screen.getByLabelText("Search inside files")).toBeChecked();
+        expect(
+            screen.getByText("Also matches file contents, including image and video scenes.")
+        ).toBeInTheDocument();
         expect(screen.queryByText("Basic Filters")).toBeNull();
         expect(screen.queryByText("Metadata Search")).toBeNull();
-        // An empty query has nothing to embed: the empty state renders without a request, and the
-        // "Search completed" toast is not announced for a search that never ran.
-        await screen.findByText("No matches");
+        // An empty query has nothing to embed: no request is sent, and the table explains what to
+        // type instead of reporting no matches or offering to clear filters that are not the cause.
+        // The count badge is withheld too: "0 results" would describe a search that never ran.
+        await screen.findByText("Describe what you are looking for");
+        expect(screen.queryByText("No matches")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Clear filter" })).toBeNull();
+        expect(screen.queryByText(/\d+ results$/)).toBeNull();
         expect(searchNlp).not.toHaveBeenCalled();
         expect(searchAssets).not.toHaveBeenCalled();
         expect(screen.queryByText("Search completed")).toBeNull();
+    });
+
+    it("a natural-language search that ran but matched nothing reports No matches and its count", async () => {
+        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+        (searchNlp as jest.Mock).mockResolvedValue([
+            true,
+            { ...nlpEnvelope(false), hits: { total: { value: 0, relation: "eq" }, hits: [] } },
+        ]);
+        renderContainer();
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        await userEvent.type(input, "purple submarine");
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+        await screen.findByText("No matches");
+        expect(screen.queryByText("Describe what you are looking for")).toBeNull();
+        expect(screen.getByText("0 results")).toBeInTheDocument();
     });
 
     it("sends the natural-language body with size 100 and shows the truncated footer", async () => {

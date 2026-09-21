@@ -51,7 +51,7 @@ flowchart TD
 2. `openPipeline` checks the extension against the allow list, starts the sub-state-machine, and registers the sub-execution and its log group with VAMS so the execution detail page can show and abort it.
 3. `ConstructPipelineTask` classifies the file into a `fileClass`, applies the size gates, and chooses a render branch. For a file no library can read (`NONE`) it writes the analysis manifest itself.
 4. The branch task downloads the file to the function's `/tmp`, extracts attributes, and renders stills or keyframes. A render fault routes through `RenderDegradePass` to `GenerateMetadataTask`, which records the render as skipped (`renderSkipped: "error"`) and continues attributes-only — a render failure never fails the execution.
-5. `GenerateMetadataTask` writes the file's attributes first, promotes the typed `ext_*` metadata and the GeoJSON `location` from them, then calls the analysis model with the renders, text excerpt, attributes, asset context, the existing metadata when `SEED_WITH_EXISTING_METADATA` is `true`, and the classification vocabulary, and writes the file's metadata.
+5. `GenerateMetadataTask` writes the file's attributes first — the `sys_*` groups, the `ext_*` facts promoted from them, and the run's `genai_*` provenance — promotes the GeoJSON `location`, then calls the analysis model with the renders, text excerpt, attributes, asset context, the existing metadata when `SEED_WITH_EXISTING_METADATA` is `true`, and the classification vocabulary, and writes the file's metadata.
 6. When vector search is enabled and the analysis succeeded, `GenerateEmbeddingTask` composes the embedding text, calls the embeddings model, writes the embedding document, and publishes `vector.embedding.ready` — and, for document, text, and data files with `CONTENT_CHUNKING` on, one more document and event per [content chunk](#content-chunks).
 7. When the media branch produced a window plan (a video with `VIDEO_SEGMENT_SECONDS` above 0) and the embedding succeeded, `VideoSegmentMap` runs one child execution per [video window](#video-windows) — `SegmentAnalyzeTask`, the media image's second function — eight at a time, and writes its own result manifest under the execution's auxiliary prefix.
 8. `PipelineEndTask` reports success or failure to the workflow through the task token. The workflow's process-output step then applies the metadata and attribute files to the asset.
@@ -103,9 +103,9 @@ The Physna add-on's proprietary CAD extensions are allow-listed so that every vi
 
 The pipeline writes two layers per file to the execution's metadata output prefix, and the workflow's process-output step applies the files to the asset as `SYSTEM_USER`.
 
-**File attributes** — `<relativePath>.attribute.json`: the complete technical record, one `sys_*` key per attribute group, each value a JSON string (file attributes are string-typed). Attributes are written before the analysis model is called, so they land even when the model call fails.
+**File attributes** — `<relativePath>.attribute.json`: the complete technical record. One `sys_*` key per attribute group, each value a JSON string; the deterministic `ext_*` facts promoted from those groups; and the run's provenance — `genai_model`, `genai_generated_at`, `genai_source_modalities`, the model's `genai_complexity` grade, and, after embedding, `genai_content_chunk_count`. File attributes are string-typed, so a promoted number, flag, or triple is carried as its rendered text (`"1200"`, `"true"`, `{"x": 1.0, ...}`). The attributes are written before the analysis model is called, so they land even when the model call fails; the complexity grade is added once the model has answered.
 
-**File metadata** — `<relativePath>.metadata.json` (`updateType: update`): a typed, deterministic promotion of the attributes under the `ext_*` prefix, a GeoJSON `location` when the file has none, and the `genai_*` block the analysis model produces. Every `ext_*` and `genai_*` key is pipeline-owned and rewritten on each run; keys you author yourself are untouched because `replace_all` is never used. A promoted key whose source disappears in a later file version (a re-export without textures, for example) keeps its previous value until the next run writes it. List-valued keys are written as `string` rather than `inline_controlled_list` because the web interface's inline controlled list field holds a single value. Every key, its type, and its source are catalogued in [Fields written](#fields-written).
+**File metadata** — `<relativePath>.metadata.json` (`updateType: update`): a GeoJSON `location` when the file has none, and the descriptive `genai_*` block the analysis model produces (title, description, keywords, category, and the rest). Every `ext_*` and `genai_*` key is pipeline-owned and rewritten on each run; keys you author yourself are untouched because `replace_all` is never used. A promoted key whose source disappears in a later file version (a re-export without textures, for example) keeps its previous value until the next run writes it. List-valued keys are written as `string` rather than `inline_controlled_list` because the web interface's inline controlled list field holds a single value. Every key, its type, and its source are catalogued in [Fields written](#fields-written).
 
 **Asset metadata** — `asset.metadata.json` (`updateType: update`) with `genai_asset_keywords` (the union of the asset's file keywords) and `genai_asset_categories` (the distinct file categories), both `string` joined with `", "`, is written only when the template tag `WRITE_ASSET_KEYWORDS` is `true`.
 
@@ -113,7 +113,7 @@ The pipeline writes two layers per file to the execution's metadata output prefi
 
 ## Fields written
 
-The three tables below are the complete list of keys the pipeline writes. One prefix identifies each layer — `sys_*` for attributes, `ext_*` for metadata promoted from them, `genai_*` for metadata the model generates — so the fields are easy to recognise on the file's **Metadata** tab, in search columns, and in a metadata schema. A file has one class, so a key such as `ext_width` is never ambiguous within a file.
+The three tables below are the complete list of keys the pipeline writes. One prefix identifies each layer — `sys_*` for the attribute groups, `ext_*` for the facts promoted from them, `genai_*` for what the model generates — so the fields are easy to recognise on the file's **Attributes** and **Metadata** tabs, in search columns, and in a metadata schema. Facts about the file and about the run are attributes; descriptions of the file's content are metadata. A file has one class, so a key such as `ext_width` is never ambiguous within a file.
 
 ### Attribute groups
 
@@ -138,9 +138,9 @@ Attributes are string-valued JSON documents. A group is written when its class a
 | `sys_pointcloud` | `pointCount`, `hasColor`, `boundsMin`, `boundsMax`, `crs` (`epsg`, `name`, `geographic`)                                                                                    | `pointcloud`, `splat`                                                                    |
 | `sys_ifc`        | `schema`, `projectName`, `storeyCount`, `elementCount`, `site` (`latitude`, `longitude`, `elevation`)                                                                       | `ifc`                                                                                    |
 
-### Promoted metadata
+### Promoted attributes
 
-When the template tag `WRITE_EXTRACTED_METADATA` is `true` (the default), the pipeline maps the attributes to typed metadata through a fixed catalogue, with no model involved. A field is written only when its source is present and non-null. Numbers become `number`, flags `boolean`, timestamps `date` (ISO 8601), triples `xyz` (`{"x", "y", "z"}`), and lists `string` joined with `", "`. Where a key has two sources, the first one present wins.
+When the template tag `WRITE_EXTRACTED_METADATA` is `true` (the default), the pipeline derives the `ext_*` facts from the attribute groups through a fixed catalogue, with no model involved, and writes them as file attributes beside the groups. A field is written only when its source is present and non-null. The catalogue renders each value by the type in the table — a number as digits, a flag as `true`/`false`, a timestamp as ISO 8601, a triple as `{"x", "y", "z"}` JSON, a list joined with `", "` — and the attribute row carries that text (attributes are string-typed). Where a key has two sources, the first one present wins. The `location` row is the exception: it is a `geojson` **metadata** item, because the geospatial index and the map view read it from metadata.
 
 | Key                     | Type      | Source                                                                                                                                                                                     | Classes                                                  |
 | ----------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
@@ -225,18 +225,23 @@ The analysis model receives the renders or keyframes, the text excerpt, the attr
 | `genai_colors`                   | `string`           | Colors, primary first, joined with `", "`                                                                                                                                                                      |
 | `genai_primary_color`            | `string`           | The first entry of `genai_colors`                                                                                                                                                                              |
 | `genai_objects`                  | `string`           | Objects detected in the renders, keyframes, or image, joined with `", "`                                                                                                                                       |
-| `genai_complexity`               | `string`           | `low`, `medium`, or `high`                                                                                                                                                                                     |
 | `genai_orientation`              | `string`           | 3D files: the up axis and facing direction (for example `Z-up, front faces -Y`)                                                                                                                                |
 | `genai_size_estimate`            | `string`           | Estimated real-world size in words, because most formats carry no units                                                                                                                                        |
 | `genai_text_summary`             | `multiline_string` | Summary of extracted text, when the file carried text                                                                                                                                                          |
-| `genai_model`                    | `string`           | The analysis model id                                                                                                                                                                                          |
-| `genai_generated_at`             | `date`             | Generation timestamp                                                                                                                                                                                           |
-| `genai_source_modalities`        | `string`           | What the model saw, joined with `", "`: `renders`, `keyframes`, `image`, `pages`, `file-text`, `file-attributes`, `asset-metadata`, `seed-metadata`                                                            |
 | `genai_segment_count`            | `number`           | Video files analyzed in windows: the number of time windows (see [Video windows](#video-windows))                                                                                                              |
 | `genai_segment_interval_seconds` | `number`           | Video files analyzed in windows: the effective window length in seconds — the duration divided into equal windows, so at most the tag value and usually slightly shorter (see [Video windows](#video-windows)) |
-| `genai_content_chunk_count`      | `number`           | Document, text, and data files with `CONTENT_CHUNKING` on: the number of content chunks embedded (see [Content chunks](#content-chunks))                                                                       |
 | `genai_asset_keywords`           | `string`           | Asset level, with `WRITE_ASSET_KEYWORDS`: the union of the asset's file keywords, joined with `", "`                                                                                                           |
 | `genai_asset_categories`         | `string`           | Asset level, with `WRITE_ASSET_KEYWORDS`: the distinct file categories, joined with `", "`                                                                                                                     |
+
+The run's provenance rows are file **attributes**, written beside the `ext_*` facts. File attributes are string-typed, so every row's type is `string`; the timestamp is ISO 8601 text and the chunk count is digits.
+
+| Key                         | Type     | Meaning                                                                                                                                             |
+| --------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `genai_model`               | `string` | The analysis model id                                                                                                                               |
+| `genai_generated_at`        | `string` | Generation timestamp, ISO 8601 text                                                                                                                 |
+| `genai_source_modalities`   | `string` | What the model saw, joined with `", "`: `renders`, `keyframes`, `image`, `pages`, `file-text`, `file-attributes`, `asset-metadata`, `seed-metadata` |
+| `genai_complexity`          | `string` | `low`, `medium`, or `high`, once the model has answered                                                                                             |
+| `genai_content_chunk_count` | `string` | Document, text, and data files with `CONTENT_CHUNKING` on: the number of content chunks embedded (see [Content chunks](#content-chunks))            |
 
 ### Location
 
@@ -288,10 +293,10 @@ Editing the configuration body is one of the two changes a [system template](sys
 A database with **Restrict metadata outside schemas** enabled rejects any metadata key its schemas do not define. The pipeline does not read schemas and does not drop fields, so on such a database the process-output metadata write fails after the attributes have landed, and the execution is recorded **FAILED** with the metadata service's message as its error:
 
 ```text
-Field 'ext_width' is not defined in the metadata schema. Only schema-defined fields are allowed when restrictMetadataOutsideSchemas is enabled.
+Field 'genai_title' is not defined in the metadata schema. Only schema-defined fields are allowed when restrictMetadataOutsideSchemas is enabled.
 ```
 
-Declare the pipeline's fields in a schema once. The two arrays below list every field with its `metadataFieldValueType`; the first is a `fileMetadata` schema, the second an `assetMetadata` schema. Save each as a file and create the schemas — no field is required, so files the pipeline has not analyzed still validate:
+Declare the pipeline's metadata fields in a schema once. The two arrays below list every **metadata** field with its `metadataFieldValueType` — the `ext_*` facts and the run's provenance rows are attributes, which schemas do not govern; the first is a `fileMetadata` schema, the second an `assetMetadata` schema. Save each as a file and create the schemas — no field is required, so files the pipeline has not analyzed still validate:
 
 ```bash
 vamscli metadata-schema create -d <databaseId> -e fileMetadata -n "SYSTEM GenAI file metadata" -f genai-file-fields.json
@@ -304,69 +309,6 @@ The same arrays go under `fields.fields` in a `POST /metadataschema` request bod
 
 ```json
 [
-    { "metadataFieldKeyName": "ext_dimensions", "metadataFieldValueType": "xyz" },
-    { "metadataFieldKeyName": "ext_bounds_min", "metadataFieldValueType": "xyz" },
-    { "metadataFieldKeyName": "ext_bounds_max", "metadataFieldValueType": "xyz" },
-    { "metadataFieldKeyName": "ext_units", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_extent_max", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_volume", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_surface_area", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_size_category", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_vertex_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_face_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_triangle_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_mesh_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_watertight", "metadataFieldValueType": "boolean" },
-    { "metadataFieldKeyName": "ext_material_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_texture_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_has_textures", "metadataFieldValueType": "boolean" },
-    { "metadataFieldKeyName": "ext_has_uv", "metadataFieldValueType": "boolean" },
-    { "metadataFieldKeyName": "ext_has_vertex_colors", "metadataFieldValueType": "boolean" },
-    { "metadataFieldKeyName": "ext_object_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_has_animation", "metadataFieldValueType": "boolean" },
-    { "metadataFieldKeyName": "ext_has_armature", "metadataFieldValueType": "boolean" },
-    { "metadataFieldKeyName": "ext_solid_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_edge_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_assembly_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_point_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_has_color", "metadataFieldValueType": "boolean" },
-    { "metadataFieldKeyName": "ext_crs", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_ifc_schema", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_project_name", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_storey_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_element_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_geometric_error", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_tile_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_width", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_height", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_color_mode", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_camera", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_captured_at", "metadataFieldValueType": "date" },
-    { "metadataFieldKeyName": "ext_duration_seconds", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_frame_rate", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_bitrate_kbps", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_channels", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_sample_rate", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_resolution", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_video_codec", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_audio_codec", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_title", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_artist", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_album", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_year", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_page_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_author", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_created_at", "metadataFieldValueType": "date" },
-    { "metadataFieldKeyName": "ext_has_text", "metadataFieldValueType": "boolean" },
-    { "metadataFieldKeyName": "ext_language", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_encoding", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_line_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_word_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_row_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_column_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_columns", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "ext_feature_count", "metadataFieldValueType": "number" },
-    { "metadataFieldKeyName": "ext_geometry_types", "metadataFieldValueType": "string" },
     { "metadataFieldKeyName": "location", "metadataFieldValueType": "geojson" },
     { "metadataFieldKeyName": "genai_title", "metadataFieldValueType": "string" },
     { "metadataFieldKeyName": "genai_description", "metadataFieldValueType": "multiline_string" },
@@ -378,19 +320,14 @@ The same arrays go under `fields.fields` in a `POST /metadataschema` request bod
     { "metadataFieldKeyName": "genai_colors", "metadataFieldValueType": "string" },
     { "metadataFieldKeyName": "genai_primary_color", "metadataFieldValueType": "string" },
     { "metadataFieldKeyName": "genai_objects", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "genai_complexity", "metadataFieldValueType": "string" },
     { "metadataFieldKeyName": "genai_orientation", "metadataFieldValueType": "string" },
     { "metadataFieldKeyName": "genai_size_estimate", "metadataFieldValueType": "string" },
     { "metadataFieldKeyName": "genai_text_summary", "metadataFieldValueType": "multiline_string" },
-    { "metadataFieldKeyName": "genai_model", "metadataFieldValueType": "string" },
-    { "metadataFieldKeyName": "genai_generated_at", "metadataFieldValueType": "date" },
-    { "metadataFieldKeyName": "genai_source_modalities", "metadataFieldValueType": "string" },
     { "metadataFieldKeyName": "genai_segment_count", "metadataFieldValueType": "number" },
     {
         "metadataFieldKeyName": "genai_segment_interval_seconds",
         "metadataFieldValueType": "number"
-    },
-    { "metadataFieldKeyName": "genai_content_chunk_count", "metadataFieldValueType": "number" }
+    }
 ]
 ```
 
@@ -443,7 +380,7 @@ Three images per window are about 5,000 input tokens: about $0.005 per window wi
 
 ### Content chunks
 
-On by default. For document, text, and data files (including the ‡ office formats), the media branch captures the full extracted text — up to 2,000,000 characters — together with the page, slide, or sheet boundaries, and `GenerateEmbeddingTask` embeds it in windows of 1,600 characters with 200 characters of overlap, each end snapped to the last paragraph or sentence break inside the final fifth of the window, at most 1,000 chunks per file version (text beyond that is not chunked, and the dropped count is logged). Each chunk is published as its own vector with `segmentKind` `textChunk`, a key of `c` plus the chunk's 1-based ordinal zero-padded to 6 digits (`c000001` is the first chunk), and a label of the form `chunk 12/200 · page 7` (the page, slide, or sheet where the chunk starts; omitted when the file has none), embedding the asset name, the file path, the file's `genai_title`, the label, and the chunk text; its `sourceModalities` are `asset-metadata`, `file-identity`, `genai-metadata`, and `file-text`. The file's metadata records `genai_content_chunk_count`. Content chunks are produced for files up to 50 MiB. A larger document, text, or data file keeps its whole-file vector, built from the first 12,000 characters of its text and the generated summary, and produces no chunks; the run records the skip in its results and writes no `genai_content_chunk_count`. A thousand chunks cost about a thousand embedding calls — well under a cent with Amazon Titan Text Embeddings V2 — so the feature is on by default; set `CONTENT_CHUNKING` to `false` for whole-file vectors only. A failure while chunking is recorded like any other embedding failure (`BedrockAccessDenied`, `BedrockThrottled`, or `BedrockEmbeddingError`), and a chunk event that cannot be published is recorded as `SegmentPublishError`; in every case the chunks already published stay indexed.
+On by default. For document, text, and data files (including the ‡ office formats), the media branch captures the full extracted text — up to 2,000,000 characters — together with the page, slide, or sheet boundaries, and `GenerateEmbeddingTask` embeds it in windows of 1,600 characters with 200 characters of overlap, each end snapped to the last paragraph or sentence break inside the final fifth of the window, at most 1,000 chunks per file version (text beyond that is not chunked, and the dropped count is logged). Each chunk is published as its own vector with `segmentKind` `textChunk`, a key of `c` plus the chunk's 1-based ordinal zero-padded to 6 digits (`c000001` is the first chunk), and a label of the form `chunk 12/200 · page 7` (the page, slide, or sheet where the chunk starts; omitted when the file has none), embedding the asset name, the file path, the file's `genai_title`, the label, and the chunk text; its `sourceModalities` are `asset-metadata`, `file-identity`, `genai-metadata`, and `file-text`. The file's attributes record `genai_content_chunk_count`. Content chunks are produced for files up to 50 MiB. A larger document, text, or data file keeps its whole-file vector, built from the first 12,000 characters of its text and the generated summary, and produces no chunks; the run records the skip in its results and writes no `genai_content_chunk_count`. A thousand chunks cost about a thousand embedding calls — well under a cent with Amazon Titan Text Embeddings V2 — so the feature is on by default; set `CONTENT_CHUNKING` to `false` for whole-file vectors only. A failure while chunking is recorded like any other embedding failure (`BedrockAccessDenied`, `BedrockThrottled`, or `BedrockEmbeddingError`), and a chunk event that cannot be published is recorded as `SegmentPublishError`; in every case the chunks already published stay indexed.
 
 ## Prerequisites
 

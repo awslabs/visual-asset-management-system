@@ -69,11 +69,14 @@ EMBEDDING_READY_DETAIL_TYPE = "vector.embedding.ready"
 EMBEDDING_DOCUMENT_PREFIX = "embedding/"
 SOURCE_TEXT_STORED_MAX_CHARS = 8000
 METADATA_FILE_SUFFIX = ".metadata.json"
+ATTRIBUTE_FILE_SUFFIX = ".attribute.json"
+ANALYSIS_MODEL_ATTRIBUTE_KEY = "genai_model"
 EMBEDDING_SUMMARY_FILENAME = "summary.json"
 # EventBridge accepts at most ten entries per PutEvents call.
 PUT_EVENTS_BATCH_SIZE = 10
 CONTENT_CHUNK_COUNT_KEY = "genai_content_chunk_count"
 TYPE_NUMBER = "number"
+TYPE_STRING = "string"
 # The code the segment child records for a failed PutEvents; the chunk loop records its own the same way,
 # and only the whole-file event raises.
 ERROR_SEGMENT_PUBLISH = "SegmentPublishError"
@@ -156,7 +159,8 @@ def embedding_document_key(aux_temp_prefix, relative_path, version_id, segment_k
 
 
 def genai_values(metadata_file_body):
-    """``{metadataKey: metadataValue}`` from the .metadata.json body the analysis step wrote."""
+    """``{metadataKey: metadataValue}`` from a .metadata.json or .attribute.json body the analysis step
+    wrote (both carry their rows under ``metadata``)."""
     return {row.get("metadataKey"): row.get("metadataValue")
             for row in (metadata_file_body or {}).get("metadata") or [] if row.get("metadataKey")}
 
@@ -247,17 +251,27 @@ def segment_document(document, *, embedding, source_text, modalities, segment_ke
     }
 
 
-def append_metadata_row(metadata_file_uri, row):
-    """Appends one row to the .metadata.json the analysis step wrote (replacing an earlier row of the same key);
-    a missing file is created with that row alone."""
+def append_output_row(file_uri, row, body_type="metadata"):
+    """Appends one row to a .metadata.json or .attribute.json the analysis step wrote (replacing an
+    earlier row of the same key); a missing file is created with that row alone."""
     try:
-        body = common.read_json(s3_client, metadata_file_uri)
+        body = common.read_json(s3_client, file_uri)
     except (ClientError, ValueError):
-        body = {"type": "metadata", "updateType": "update", "metadata": []}
+        body = {"type": body_type, "updateType": "update", "metadata": []}
     rows = [existing for existing in body.get("metadata") or [] if existing.get("metadataKey") != row["metadataKey"]]
     rows.append(row)
     body["metadata"] = rows
-    common.write_json(s3_client, metadata_file_uri, body)
+    common.write_json(s3_client, file_uri, body)
+
+
+def append_metadata_row(metadata_file_uri, row):
+    append_output_row(metadata_file_uri, row, "metadata")
+
+
+def append_attribute_row(attribute_file_uri, row):
+    """File attributes hold strings only; the row is written string-typed whatever type it names."""
+    append_output_row(attribute_file_uri, {**row, "metadataValue": str(row["metadataValue"]),
+                                           "metadataValueType": TYPE_STRING}, "attribute")
 
 
 def write_embedding_summary(aux_bucket, aux_prefix, body):
@@ -397,11 +411,20 @@ def lambda_handler(event, context):
 
     metadata_file_uri = event.get("metadataFileS3Location") or common.uri_join(
         event["outputS3AssetMetadataPath"], relative_path.lstrip("/") + METADATA_FILE_SUFFIX)
+    attribute_file_uri = event.get("attributeFileS3Location") or common.uri_join(
+        event["outputS3AssetMetadataPath"], relative_path.lstrip("/") + ATTRIBUTE_FILE_SUFFIX)
     genai = {}
     try:
         genai = genai_values(common.read_json(s3_client, metadata_file_uri))
     except Exception as e:
         logger.warning(f"No genai metadata to embed ({metadata_file_uri}): {e}")
+    # The run's provenance (which analysis model) is an attribute row, not a metadata row.
+    analysis_model_id = ""
+    try:
+        analysis_model_id = genai_values(common.read_json(s3_client, attribute_file_uri)).get(
+            ANALYSIS_MODEL_ATTRIBUTE_KEY, "") or ""
+    except Exception as e:
+        logger.warning(f"No genai attributes to read the analysis model from ({attribute_file_uri}): {e}")
 
     include_excerpt = common.as_bool(config.get("embeddingIncludeTextExcerpt"), True)
     text_excerpt = (manifest.get("textExcerpt") or "") if include_excerpt else ""
@@ -474,7 +497,7 @@ def lambda_handler(event, context):
         "contentType": event.get("contentType", "") or "",
         "embeddingModelId": EMBEDDING_MODEL_ID,
         "embeddingDimensions": EMBEDDING_DIMENSIONS,
-        "analysisModelId": genai.get("genai_model", "") or "",
+        "analysisModelId": analysis_model_id,
         "embedding": vector,
         # The embedded text — the guardrail's masked output when one is configured — cut to the stored cap.
         "sourceText": screened.text[:SOURCE_TEXT_STORED_MAX_CHARS],
@@ -584,7 +607,8 @@ def lambda_handler(event, context):
         "generatedAt": generated_at,
     })
     if published_chunks:
-        append_metadata_row(metadata_file_uri, {"metadataKey": CONTENT_CHUNK_COUNT_KEY,
-                                                "metadataValue": str(published_chunks), "metadataValueType": TYPE_NUMBER})
+        # How many content chunks were embedded describes the run: an attribute, beside genai_model.
+        append_attribute_row(attribute_file_uri, {"metadataKey": CONTENT_CHUNK_COUNT_KEY,
+                                                  "metadataValue": str(published_chunks), "metadataValueType": TYPE_STRING})
     event["embeddingStatus"] = common.STATUS_FAILED if chunk_error else common.STATUS_SUCCEEDED
     return event

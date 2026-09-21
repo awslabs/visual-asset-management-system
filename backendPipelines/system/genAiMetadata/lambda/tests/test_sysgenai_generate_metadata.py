@@ -222,7 +222,9 @@ class TestAttributesFirst:
         body = s3.json_at("abkt", ATTRIBUTE_KEY)
         assert body["type"] == "attribute" and body["updateType"] == "update"
         rows = {row["metadataKey"]: row for row in body["metadata"]}
-        assert list(rows) == ["sys_file", "sys_geometry", "sys_statistics"]
+        # sys_* groups, then the ext_* facts promoted from them, then the run's genai_* provenance.
+        assert list(rows) == ["sys_file", "sys_geometry", "sys_statistics"] + MESH_EXT_KEYS + [
+            "genai_model", "genai_generated_at", "genai_source_modalities", "genai_complexity"]
         assert all(row["metadataValueType"] == "string" for row in rows.values())
         assert json.loads(rows["sys_geometry"]["metadataValue"]) == MESH_ATTRIBUTES["sys_geometry"]
         assert json.loads(rows["sys_file"]["metadataValue"])["etag"] == "abc123"
@@ -232,7 +234,7 @@ class TestAttributesFirst:
         manifest = _manifest(attributes={"sys_file": dict(SYS_FILE), "sys_probe": None, "sys_blank": ""})
         s3 = _seed(h.FakeS3(), manifest=manifest)
         _run(_state(), s3, h.FakeBedrock([_reply()]))
-        assert list(_rows(s3, ATTRIBUTE_KEY)) == ["sys_file"]
+        assert [key for key in _rows(s3, ATTRIBUTE_KEY) if key.startswith("sys_")] == ["sys_file"]
 
     @pytest.mark.parametrize("file_class", fc.FILE_CLASSES)
     def test_attributes_land_for_every_class_when_bedrock_is_denied(self, file_class):
@@ -245,7 +247,9 @@ class TestAttributesFirst:
         bedrock = h.FakeBedrock([h.client_error("AccessDeniedException", "no model access")])
         _mod, state = _run(_state(fileClass=file_class, renderBranch="NONE"), s3, bedrock)
         rows = _rows(s3, ATTRIBUTE_KEY)
-        assert set(rows) == set(attributes)
+        # The provenance rows land whatever the model does; the complexity grade needs a reply.
+        assert set(rows) == set(attributes) | set(["genai_model", "genai_generated_at", "genai_source_modalities"])
+        assert "genai_complexity" not in rows
         assert state["analysisStatus"] == "FAILED"
         assert ("abkt", STATUS_KEY) in s3.puts
         # A probe key promotes nothing, so there is no deterministic layer and no metadata file at all.
@@ -253,38 +257,44 @@ class TestAttributesFirst:
         assert s3.json_at("abkt", SUMMARY_KEY)["promotedFieldCount"] == 0
 
     def test_the_deterministic_layer_lands_when_bedrock_is_denied(self):
-        """ext_* and location do not depend on the model: with attributes that promote, the metadata
-        file is written without genai_* rows and the execution is still recorded FAILED."""
+        """ext_* facts do not depend on the model: with attributes that promote, they land in the
+        attribute file; a mesh has no location and no window rows, so no metadata file is written, and
+        the execution is still recorded FAILED."""
         s3 = _seed(h.FakeS3())
         bedrock = h.FakeBedrock([h.client_error("AccessDeniedException", "no model access")])
         _mod, state = _run(_state(), s3, bedrock)
         assert state["analysisStatus"] == "FAILED"
-        assert _keys(s3, METADATA_FILE_KEY) == MESH_EXT_KEYS
-        assert state["metadataFileS3Location"] == f"s3://abkt/{METADATA_FILE_KEY}"
+        keys = _keys(s3, ATTRIBUTE_KEY)
+        assert [key for key in keys if key.startswith("ext_")] == MESH_EXT_KEYS
+        assert ("abkt", METADATA_FILE_KEY) not in s3.puts and "metadataFileS3Location" not in state
         summary = s3.json_at("abkt", SUMMARY_KEY)
-        assert summary["metadataFile"] == f"s3://abkt/{METADATA_FILE_KEY}"
+        assert summary["metadataFile"] is None
         assert summary["promotedFieldCount"] == 11 and summary["vocabularyCorrections"] == []
         assert s3.json_at("abkt", STATUS_KEY)["error"] == "BedrockAccessDenied"
 
 
 @pytest.mark.unit
 class TestPromotedMetadata:
-    def test_ext_rows_come_first_in_catalogue_order_with_their_types(self):
+    def test_ext_rows_are_attributes_in_catalogue_order_typed_as_strings(self):
+        """The ext_* facts are file attributes: they follow the sys_* groups in catalogue order and, as
+        attributes hold strings only, each typed value is carried as its rendered text."""
         s3 = _seed(h.FakeS3())
         _run(_state(), s3, h.FakeBedrock([_reply()]))
-        keys = _keys(s3, METADATA_FILE_KEY)
-        assert keys[:len(MESH_EXT_KEYS)] == MESH_EXT_KEYS
-        assert all(key.startswith("genai_") for key in keys[len(MESH_EXT_KEYS):])
-        rows = _rows(s3, METADATA_FILE_KEY)
-        assert rows["ext_dimensions"]["metadataValueType"] == "xyz"
+        keys = _keys(s3, ATTRIBUTE_KEY)
+        first_ext = keys.index(MESH_EXT_KEYS[0])
+        assert all(key.startswith("sys_") for key in keys[:first_ext])
+        assert keys[first_ext:first_ext + len(MESH_EXT_KEYS)] == MESH_EXT_KEYS
+        rows = _rows(s3, ATTRIBUTE_KEY)
         assert json.loads(rows["ext_dimensions"]["metadataValue"]) == {"x": 1.0, "y": 2.0, "z": 3.0}
         assert rows["ext_units"] == {"metadataKey": "ext_units", "metadataValue": "m", "metadataValueType": "string"}
         assert rows["ext_size_category"]["metadataValue"] == "large"
         assert rows["ext_triangle_count"] == {"metadataKey": "ext_triangle_count", "metadataValue": "1200",
-                                              "metadataValueType": "number"}
+                                              "metadataValueType": "string"}
         assert rows["ext_watertight"] == {"metadataKey": "ext_watertight", "metadataValue": "true",
-                                          "metadataValueType": "boolean"}
-        assert all("metadataValueType" in row for row in rows.values())
+                                          "metadataValueType": "string"}
+        assert all(row["metadataValueType"] == "string" for row in rows.values())
+        # The metadata file carries the descriptive genai_* rows and no ext_* row.
+        assert not any(key.startswith("ext_") for key in _keys(s3, METADATA_FILE_KEY))
         assert s3.json_at("abkt", SUMMARY_KEY)["promotedFieldCount"] == 11
 
     def test_write_extracted_metadata_false_writes_no_ext_rows(self):
@@ -292,6 +302,7 @@ class TestPromotedMetadata:
         _mod, state = _run(_state(), s3, h.FakeBedrock([_reply()]))
         keys = _keys(s3, METADATA_FILE_KEY)
         assert keys and all(key.startswith("genai_") for key in keys)
+        assert not any(key.startswith("ext_") for key in _keys(s3, ATTRIBUTE_KEY))
         assert s3.json_at("abkt", SUMMARY_KEY)["promotedFieldCount"] == 0
         assert state["analysisStatus"] == "SUCCEEDED"
 
@@ -300,9 +311,13 @@ class TestPromotedMetadata:
         _run(_state(fileClass="image", renderBranch="MEDIA"), s3, h.FakeBedrock([_reply()]))
         rows = s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]
         known = {member.value for member in backend.MetadataValueType}
-        # An image promotes numbers, strings, a date and the geojson location (no xyz row: that is a 3D-only type).
-        assert {row["metadataValueType"] for row in rows} == {"string", "date", "number", "geojson",
-                                                              "multiline_string"} <= known
+        # The metadata file carries the geojson location and the descriptive genai_* rows; the typed
+        # ext_* facts are attributes now, so no number or date row remains here.
+        assert {row["metadataValueType"] for row in rows} == {"string", "geojson", "multiline_string"} <= known
+        # Every attribute row is string-typed, the only type file attributes accept.
+        attribute_rows = s3.json_at("abkt", ATTRIBUTE_KEY)["metadata"]
+        assert attribute_rows and all(row["metadataValueType"] == "string" for row in attribute_rows)
+        assert any(row["metadataKey"].startswith("ext_") for row in attribute_rows)
         for row in rows:
             assert backend.validate_metadata_value_common(row["metadataValue"], row["metadataValueType"]) == \
                 row["metadataValue"], row
@@ -310,12 +325,12 @@ class TestPromotedMetadata:
 
 @pytest.mark.unit
 class TestLocation:
-    def test_exif_gps_writes_a_geojson_point_between_the_ext_and_genai_rows(self):
+    def test_exif_gps_writes_a_geojson_point_ahead_of_the_genai_rows(self):
         s3 = _seed(h.FakeS3(), manifest=_image_manifest())
         _run(_state(fileClass="image", renderBranch="MEDIA"), s3, h.FakeBedrock([_reply()]))
         keys = _keys(s3, METADATA_FILE_KEY)
-        assert keys[:len(IMAGE_EXT_KEYS) + 1] == IMAGE_EXT_KEYS + ["location"]
-        assert keys[len(IMAGE_EXT_KEYS) + 1].startswith("genai_")
+        assert keys[0] == "location" and keys[1].startswith("genai_")
+        assert [key for key in _keys(s3, ATTRIBUTE_KEY) if key.startswith("ext_")] == IMAGE_EXT_KEYS
         row = _rows(s3, METADATA_FILE_KEY)["location"]
         assert row["metadataValueType"] == "geojson"
         assert json.loads(row["metadataValue"]) == {"type": "Point", "coordinates": [8.54, 47.37, 408.0]}
@@ -326,20 +341,21 @@ class TestLocation:
         s3 = _seed(h.FakeS3(), manifest=_image_manifest(), envelope=_envelope(file_metadata=existing))
         _run(_state(fileClass="image", renderBranch="MEDIA"), s3, h.FakeBedrock([_reply()]))
         assert "location" not in _keys(s3, METADATA_FILE_KEY)
-        assert _keys(s3, METADATA_FILE_KEY)[:len(IMAGE_EXT_KEYS)] == IMAGE_EXT_KEYS
+        assert [key for key in _keys(s3, ATTRIBUTE_KEY) if key.startswith("ext_")] == IMAGE_EXT_KEYS
         assert s3.json_at("abkt", SUMMARY_KEY)["promotedFieldCount"] == 5
 
     def test_extract_geo_location_false_writes_no_location_but_keeps_ext_rows(self):
         s3 = _seed(h.FakeS3(), manifest=_image_manifest(), config=dict(DEFAULT_CONFIG, extractGeoLocation=False))
         _run(_state(fileClass="image", renderBranch="MEDIA"), s3, h.FakeBedrock([_reply()]))
-        keys = _keys(s3, METADATA_FILE_KEY)
-        assert "location" not in keys and keys[:len(IMAGE_EXT_KEYS)] == IMAGE_EXT_KEYS
+        assert "location" not in _keys(s3, METADATA_FILE_KEY)
+        assert [key for key in _keys(s3, ATTRIBUTE_KEY) if key.startswith("ext_")] == IMAGE_EXT_KEYS
 
     def test_location_is_independent_of_the_ext_switch(self):
         s3 = _seed(h.FakeS3(), manifest=_image_manifest(), config=dict(DEFAULT_CONFIG, writeExtractedMetadata=False))
         _run(_state(fileClass="image", renderBranch="MEDIA"), s3, h.FakeBedrock([_reply()]))
         keys = _keys(s3, METADATA_FILE_KEY)
         assert keys[0] == "location" and not any(key.startswith("ext_") for key in keys)
+        assert not any(key.startswith("ext_") for key in _keys(s3, ATTRIBUTE_KEY))
         assert s3.json_at("abkt", SUMMARY_KEY)["promotedFieldCount"] == 1
 
     def test_a_class_without_a_positional_source_has_no_location(self):
@@ -436,7 +452,7 @@ class TestConverseRequest:
         text = _user_text(bedrock)
         assert "PART_NO" not in text and "SITE: Plant 7" not in text and "SOURCE_SCANNER" not in text
         assert not any(header in text for header in mod.EXISTING_SECTION_HEADERS.values())
-        assert "seed-metadata" not in _rows(s3, METADATA_FILE_KEY)["genai_source_modalities"]["metadataValue"]
+        assert "seed-metadata" not in _rows(s3, ATTRIBUTE_KEY)["genai_source_modalities"]["metadataValue"]
 
     def test_database_metadata_and_a_file_attribute_reach_the_prompt(self):
         """The database's metadata and the file's non-sys_ attribute are existing metadata too, each under
@@ -480,7 +496,7 @@ class TestConverseRequest:
         _run(_state(fileClass="text", renderBranch="MEDIA"), s3, bedrock)
         text = _user_text(bedrock)
         assert "x" * 100 in text and "x" * 101 not in text
-        assert "file-text" in _rows(s3, METADATA_FILE_KEY)["genai_source_modalities"]["metadataValue"]
+        assert "file-text" in _rows(s3, ATTRIBUTE_KEY)["genai_source_modalities"]["metadataValue"]
 
     def test_a_render_error_marks_the_manifest_and_sends_no_images(self):
         s3 = _seed(h.FakeS3())
@@ -502,7 +518,7 @@ class TestConverseRequest:
         s3 = _seed(h.FakeS3(), manifest=_manifest(fileClass=file_class))
         bedrock = h.FakeBedrock([_reply()])
         _run(_state(fileClass=file_class), s3, bedrock)
-        assert modality in _rows(s3, METADATA_FILE_KEY)["genai_source_modalities"]["metadataValue"]
+        assert modality in _rows(s3, ATTRIBUTE_KEY)["genai_source_modalities"]["metadataValue"]
 
 
 @pytest.mark.unit
@@ -648,10 +664,11 @@ class TestGuardrail:
         assert status["status"] == "FAILED" and status["error"] == "BedrockGuardrailIntervened"
         assert "PROMPT_ATTACK" in status["cause"] and "Blocked by the guardrail." in status["cause"]
         assert ("abkt", ATTRIBUTE_KEY) in s3.puts
-        assert _keys(s3, METADATA_FILE_KEY) == MESH_EXT_KEYS
+        assert [key for key in _keys(s3, ATTRIBUTE_KEY) if key.startswith("ext_")] == MESH_EXT_KEYS
+        assert ("abkt", METADATA_FILE_KEY) not in s3.puts
         summary = s3.json_at("abkt", SUMMARY_KEY)
         assert summary["status"] == "FAILED" and summary["error"] == "BedrockGuardrailIntervened"
-        assert summary["metadataFile"] == f"s3://abkt/{METADATA_FILE_KEY}" and summary["promotedFieldCount"] == 11
+        assert summary["metadataFile"] is None and summary["promotedFieldCount"] == 11
         assert summary["guardrailMasked"] is False and summary["guardrailMaskedTypes"] == []
 
     def test_an_anonymized_only_reply_is_a_masked_success(self):
@@ -703,7 +720,8 @@ class TestGuardrail:
         status = s3.json_at("abkt", STATUS_KEY)
         assert status["error"] == "BedrockGuardrailIntervened"
         assert "BLOCKED" in status["cause"] and "ANONYMIZED" in status["cause"] and "x@example.com" not in status["cause"]
-        assert _keys(s3, METADATA_FILE_KEY) == MESH_EXT_KEYS
+        assert [key for key in _keys(s3, ATTRIBUTE_KEY) if key.startswith("ext_")] == MESH_EXT_KEYS
+        assert ("abkt", METADATA_FILE_KEY) not in s3.puts
 
     def test_the_stop_reason_without_a_trace_is_an_intervention(self):
         """With nothing to say what the guardrail did, the reply is not trusted as an answer."""
@@ -713,7 +731,8 @@ class TestGuardrail:
         _mod, state = _run(_state(), s3, h.FakeBedrock([response]), env=GUARDRAIL_ENV)
         assert state["analysisStatus"] == "FAILED"
         assert s3.json_at("abkt", STATUS_KEY)["error"] == "BedrockGuardrailIntervened"
-        assert _keys(s3, METADATA_FILE_KEY) == MESH_EXT_KEYS
+        assert [key for key in _keys(s3, ATTRIBUTE_KEY) if key.startswith("ext_")] == MESH_EXT_KEYS
+        assert ("abkt", METADATA_FILE_KEY) not in s3.puts
 
     def test_an_ordinary_reply_records_no_masking(self):
         s3 = _seed(h.FakeS3())
@@ -772,11 +791,12 @@ class TestMetadataOutput:
         rows = _rows(s3, METADATA_FILE_KEY)
         body = s3.json_at("abkt", METADATA_FILE_KEY)
         assert body["type"] == "metadata" and body["updateType"] == "update"
-        genai = [key for key in _keys(s3, METADATA_FILE_KEY) if key.startswith("genai_")]
-        assert genai == ["genai_title", "genai_description", "genai_keywords", "genai_category", "genai_subcategory",
-                         "genai_style", "genai_materials", "genai_colors", "genai_primary_color", "genai_objects",
-                         "genai_complexity", "genai_orientation", "genai_size_estimate", "genai_model",
-                         "genai_generated_at", "genai_source_modalities"]
+        # The descriptive rows are metadata; the run's provenance (model, timestamp, modalities) and the
+        # complexity grade are attributes and are absent here.
+        assert _keys(s3, METADATA_FILE_KEY) == [
+            "genai_title", "genai_description", "genai_keywords", "genai_category", "genai_subcategory",
+            "genai_style", "genai_materials", "genai_colors", "genai_primary_color", "genai_objects",
+            "genai_orientation", "genai_size_estimate"]
         assert rows["genai_title"] == {"metadataKey": "genai_title", "metadataValue": "Brass gear pump",
                                        "metadataValueType": "string"}
         assert rows["genai_description"] == {"metadataKey": "genai_description",
@@ -792,19 +812,22 @@ class TestMetadataOutput:
         assert rows["genai_colors"]["metadataValue"] == "gold, gray"
         assert rows["genai_primary_color"]["metadataValue"] == "gold"
         assert rows["genai_objects"]["metadataValue"] == "pump housing, inlet flange"
-        assert rows["genai_complexity"]["metadataValue"] == "medium"
         assert rows["genai_orientation"]["metadataValue"] == "Z-up, front faces -Y"
         assert rows["genai_size_estimate"]["metadataValue"] == "about 30 cm long"
         assert "genai_text_summary" not in rows
-        assert rows["genai_model"] == {"metadataKey": "genai_model",
-                                       "metadataValue": h.DEFAULT_ENV["BEDROCK_ANALYSIS_MODEL_ID"],
-                                       "metadataValueType": "string"}
-        assert rows["genai_generated_at"]["metadataValueType"] == "date"
-        assert rows["genai_generated_at"]["metadataValue"].endswith("Z")
-        assert rows["genai_source_modalities"]["metadataValueType"] == "string"
-        assert rows["genai_source_modalities"]["metadataValue"].split(", ") == [
-            "file-attributes", "asset-metadata", "seed-metadata", "renders"]
         assert all(set(row) == {"metadataKey", "metadataValue", "metadataValueType"} for row in rows.values())
+        attribute_rows = _rows(s3, ATTRIBUTE_KEY)
+        assert attribute_rows["genai_complexity"] == {"metadataKey": "genai_complexity", "metadataValue": "medium",
+                                                      "metadataValueType": "string"}
+        assert attribute_rows["genai_model"] == {"metadataKey": "genai_model",
+                                                 "metadataValue": h.DEFAULT_ENV["BEDROCK_ANALYSIS_MODEL_ID"],
+                                                 "metadataValueType": "string"}
+        # The timestamp is ISO-8601 text: attributes have no date type.
+        assert attribute_rows["genai_generated_at"]["metadataValueType"] == "string"
+        assert attribute_rows["genai_generated_at"]["metadataValue"].endswith("Z")
+        assert attribute_rows["genai_source_modalities"]["metadataValueType"] == "string"
+        assert attribute_rows["genai_source_modalities"]["metadataValue"].split(", ") == [
+            "file-attributes", "asset-metadata", "seed-metadata", "renders"]
         assert state["analysisStatus"] == "SUCCEEDED"
         assert state["metadataFileS3Location"] == f"s3://abkt/{METADATA_FILE_KEY}"
         assert ("abkt", ASSET_METADATA_KEY) not in s3.puts
@@ -1024,11 +1047,12 @@ class TestCaughtBedrockFailures:
         assert status["status"] == "FAILED" and status["error"] == "BedrockAccessDenied"
         assert "AccessDeniedException" in status["cause"] and len(status["cause"]) <= 1024
         assert ("abkt", ATTRIBUTE_KEY) in s3.puts
-        # The deterministic layer is written; no genai_* row is.
-        assert _keys(s3, METADATA_FILE_KEY) == MESH_EXT_KEYS
+        # The deterministic layer (the ext_* attributes) is written; no genai_* metadata row is.
+        assert [key for key in _keys(s3, ATTRIBUTE_KEY) if key.startswith("ext_")] == MESH_EXT_KEYS
+        assert ("abkt", METADATA_FILE_KEY) not in s3.puts
         summary = s3.json_at("abkt", SUMMARY_KEY)
         assert summary["status"] == "FAILED" and summary["error"] == "BedrockAccessDenied"
-        assert summary["metadataFile"] == f"s3://abkt/{METADATA_FILE_KEY}" and summary["vocabularyCorrections"] == []
+        assert summary["metadataFile"] is None and summary["vocabularyCorrections"] == []
         assert len(bedrock.calls) == 1
 
     def test_a_use_case_form_rejection_is_access_denied(self):
@@ -1089,7 +1113,8 @@ class TestVideoSegmentRows:
                                                           "metadataValue": "9.248", "metadataValueType": "number"}
         keys = _keys(s3, METADATA_FILE_KEY)
         assert keys[-2:] == ["genai_segment_count", "genai_segment_interval_seconds"]
-        assert keys.index("genai_source_modalities") < keys.index("genai_segment_count")
+        assert keys.index("genai_size_estimate") < keys.index("genai_segment_count")
+        assert "genai_source_modalities" in _rows(s3, ATTRIBUTE_KEY)
         assert backend.validate_metadata_value_common("10", "number") == "10"
         assert state["analysisStatus"] == "SUCCEEDED"
 

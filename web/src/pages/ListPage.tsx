@@ -36,6 +36,14 @@ export default function ListPage(props: any) {
         editEnabled,
         hideDeleteButton = false,
         customFilterControls,
+        customHeaderActions,
+        onSelectionChange,
+        // Extra arguments for fetchElements / fetchAllElements (e.g. showArchived); a change refetches.
+        fetchOptions,
+        // Whether rows from an archived partition (databaseId ending in #deleted) are kept.
+        includeArchived = false,
+        // Receives the reload trigger so a caller's own modals can refresh the list.
+        onReloadReady,
     } = props;
     usePageTitle(databaseId || null, pluralNameTitleCase);
     const [reload, setReload] = useState(true);
@@ -53,16 +61,21 @@ export default function ListPage(props: any) {
                 let items;
                 if (databaseId !== undefined) {
                     // This handles both specific database IDs and Global
-                    items = await fetchElements({ databaseId: databaseId });
+                    items = await fetchElements({
+                        databaseId: databaseId,
+                        ...(fetchOptions || {}),
+                    });
                 } else {
                     // This is for the main pipelines page showing all pipelines
-                    items = await fetchAllElements();
+                    items = await fetchAllElements(fetchOptions || {});
                 }
 
                 if (items !== false && Array.isArray(items)) {
                     setAllItems(
                         //@todo fix workflow delete return
-                        items.filter((item) => item.databaseId.indexOf("#deleted") === -1)
+                        includeArchived
+                            ? items
+                            : items.filter((item) => item.databaseId.indexOf("#deleted") === -1)
                     );
                 } else if (typeof items === "string" && items.trim() !== "") {
                     // The service layer returns the API error message string on failure.
@@ -83,7 +96,16 @@ export default function ListPage(props: any) {
         if (reload) {
             getData();
         }
-    }, [reload, databaseId, fetchAllElements, fetchElements]);
+    }, [reload, databaseId, fetchAllElements, fetchElements, fetchOptions, includeArchived]);
+
+    // A fetch-option change (e.g. Show archived) refetches.
+    useEffect(() => {
+        setReload(true);
+    }, [fetchOptions, includeArchived]);
+
+    useEffect(() => {
+        if (onReloadReady) onReloadReady(() => setReload(true));
+    }, [onReloadReady]);
 
     const handleOpenNewElement = () => {
         if (onCreateCallback) onCreateCallback();
@@ -147,6 +169,8 @@ export default function ListPage(props: any) {
                         UpdateSelectedElement={CreateNewElement}
                         hideDeleteButton={hideDeleteButton}
                         customFilterControls={customFilterControls}
+                        customHeaderActions={customHeaderActions}
+                        onSelectionChange={onSelectionChange}
                         createNewElement={
                             (CreateNewElement || onCreateCallback) && (
                                 <div style={{ float: "right" }}>
@@ -187,4 +211,9 @@ ListPage.propTypes = {
     editEnabled: PropTypes.bool,
     hideDeleteButton: PropTypes.bool,
     customFilterControls: PropTypes.element,
+    customHeaderActions: PropTypes.node,
+    onSelectionChange: PropTypes.func,
+    fetchOptions: PropTypes.object,
+    includeArchived: PropTypes.bool,
+    onReloadReady: PropTypes.func,
 };

@@ -37,10 +37,10 @@ const ModeSelector: React.FC<ModeSelectorProps> = ({
             <FormField
                 label={
                     <Box fontSize="heading-s" fontWeight="bold">
-                        Search Mode
+                        Search for
                     </Box>
                 }
-                description="Select what type of records to search"
+                description={`Return matching ${Synonyms.assets}, or the individual files inside them`}
             >
                 <SpaceBetween direction="vertical" size="m">
                     <fieldset disabled={disabled} style={{ border: "none", padding: 0, margin: 0 }}>

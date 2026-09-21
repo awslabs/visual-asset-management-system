@@ -105,7 +105,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
             onChange={({ detail }) => onFilterChange("includeSegments", detail.checked)}
             checked={filters.includeSegments !== false}
             disabled={loading}
-            description="Also match individual video windows and document chunks"
+            description="Also matches file contents, including image and video scenes."
         >
             Search inside files
         </Checkbox>

@@ -24,6 +24,7 @@ RESULTS_PREFIX = "pipelines/sgm/sgm/output/E1/results/"
 CONFIG_KEY = "pipelines/workflowExecutionInputs/E1/pipeline1/config.json"
 METADATA_KEY = "pipelines/workflowExecutionInputs/E1/metadata.json"
 METADATA_FILE_KEY = META_PREFIX + "docs/contacts.pdf.metadata.json"
+ATTRIBUTE_FILE_KEY = META_PREFIX + "docs/contacts.pdf.attribute.json"
 STATUS_KEY = RESULTS_PREFIX + "execution.status.json"
 SUMMARY_KEY = AUX_PREFIX + "embedding/summary.json"
 FULL_TEXT_KEY = AUX_PREFIX + "text/full.txt"
@@ -75,6 +76,8 @@ def _seed(s3, full_text=None, excerpt=EXCERPT):
         {"metadataKey": "genai_title", "metadataValue": "Contractor contact sheet", "metadataValueType": "string"},
         {"metadataKey": "genai_description", "metadataValue": "A contact sheet listing {NAME} for the boiler service.",
          "metadataValueType": "string"}]})
+    s3.put_json("abkt", ATTRIBUTE_FILE_KEY, {"type": "attribute", "updateType": "update", "metadata": [
+        {"metadataKey": "genai_model", "metadataValue": "analysis-model", "metadataValueType": "string"}]})
     return s3
 
 
@@ -352,7 +355,7 @@ class TestContentChunks:
         assert "PROMPT_ATTACK" in status["cause"] and "Ignore all" not in status["cause"]
         summary = s3.json_at(AUX, SUMMARY_KEY)
         assert summary["contentChunks"] == {"count": 2, "dropped": 0, "skipped": None}
-        rows = {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        rows = {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", ATTRIBUTE_FILE_KEY)["metadata"]}
         assert rows["genai_content_chunk_count"] == "2"
         assert any("2 published, 1 blocked" in str(call) for call in mod.logger.info.call_args_list)
 

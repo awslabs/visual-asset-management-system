@@ -120,6 +120,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     const [sidebarWidth, setSidebarWidth] = useState(preferences.sidebarWidth || 400);
     // The full natural-language result (at most 100 hits); the table pages within it client-side.
     const [nlpResult, setNlpResult] = useState<NlpSearchResponse | null>(null);
+    // Whether the last submit reached an engine. False before the first search and while natural-
+    // language mode idles on an empty query, so the count badge and the "No matches" state are not
+    // shown for a search that never ran.
+    const [searchIssued, setSearchIssued] = useState(false);
 
     // Initialize search query if provided
     useEffect(() => {
@@ -178,9 +182,11 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         if (searchMode === "nlp") {
             if (!searchQuery.query.trim()) {
                 setNlpResult(null);
+                setSearchIssued(false);
                 searchState.setResult(EMPTY_NLP_RESPONSE);
                 return null;
             }
+            setSearchIssued(true);
             const result = await searchAPI.executeNlpSearch(searchQuery, {
                 databaseId,
                 metadataSearchMode,
@@ -196,6 +202,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
             return result;
         }
         setNlpResult(null);
+        setSearchIssued(true);
         const result = await searchAPI.executeSearch(
             searchQuery,
             databaseId,
@@ -616,6 +623,9 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         showPreviewThumbnails: preferences.showThumbnails,
         showMapThumbnails: preferences.showMapThumbnails,
         useMapView: useMapView,
+        // Natural-language mode with no query: nothing was searched, so the table explains what to
+        // type rather than reporting no matches.
+        nlpIdle: searchMode === "nlp" && !searchIssued,
     };
 
     // Render main content
@@ -684,7 +694,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 onSearch={handleExplicitSearch}
                 onClearAll={handleClearSearch}
                 loading={searchState.loading}
-                resultCount={totalResults}
+                resultCount={searchIssued ? totalResults : undefined}
                 hasActiveFilters={searchState.hasActiveFilters()}
                 title={
                     embedded?.title ||

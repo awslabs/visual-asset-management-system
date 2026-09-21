@@ -2,7 +2,7 @@
     "providers": [
         {
             "id": "asset-list",
-            "name": "Asset List",
+            "name": "Basic Asset List",
             "description": "Every asset the caller can see, listed from the asset API without a search engine.",
             "componentPath": "AssetListProvider/AssetListProviderComponent",
             "priority": 100,
@@ -11,7 +11,7 @@
         },
         {
             "id": "unified-search",
-            "name": "Search",
+            "name": "Primary Search",
             "description": "Keyword search through OpenSearch and natural-language search over file embeddings.",
             "componentPath": "UnifiedSearchProvider/UnifiedSearchProviderComponent",
             "priority": 10,

@@ -92,7 +92,8 @@ SEGMENT_COUNT_KEY = "genai_segment_count"
 SEGMENT_INTERVAL_KEY = "genai_segment_interval_seconds"
 
 # (model result key, metadata key, metadataValueType) in the order the rows are written. List-valued
-# results are ", "-joined strings: the web's inline_controlled_list widget holds one value.
+# results are ", "-joined strings: the web's inline_controlled_list widget holds one value. These are
+# the descriptive rows and land as file METADATA.
 GENAI_KEY_TYPES = (
     ("title", "genai_title", TYPE_STRING),
     ("description", "genai_description", TYPE_MULTILINE_STRING),
@@ -104,11 +105,19 @@ GENAI_KEY_TYPES = (
     ("colors", "genai_colors", TYPE_STRING),
     ("primaryColor", "genai_primary_color", TYPE_STRING),
     ("objects", "genai_objects", TYPE_STRING),
-    ("complexity", "genai_complexity", TYPE_STRING),
     ("orientation", "genai_orientation", TYPE_STRING),
     ("sizeEstimate", "genai_size_estimate", TYPE_STRING),
     ("textSummary", "genai_text_summary", TYPE_MULTILINE_STRING),
 )
+
+# The genai_* rows that describe the run rather than the file — which model, when, from what, and the
+# model's complexity grade — land as file ATTRIBUTES beside the ext_* facts. Attributes hold strings.
+GENAI_ATTRIBUTE_MODEL_KEY = "genai_model"
+GENAI_ATTRIBUTE_GENERATED_AT_KEY = "genai_generated_at"
+GENAI_ATTRIBUTE_MODALITIES_KEY = "genai_source_modalities"
+GENAI_ATTRIBUTE_COMPLEXITY_KEY = "genai_complexity"
+GENAI_ATTRIBUTE_KEYS = (GENAI_ATTRIBUTE_MODEL_KEY, GENAI_ATTRIBUTE_GENERATED_AT_KEY,
+                        GENAI_ATTRIBUTE_MODALITIES_KEY, GENAI_ATTRIBUTE_COMPLEXITY_KEY)
 
 MODALITY_FILE_ATTRIBUTES = "file-attributes"
 MODALITY_ASSET_METADATA = "asset-metadata"
@@ -172,9 +181,11 @@ def _row(key, value, value_type):
     return {"metadataKey": key, "metadataValue": value, "metadataValueType": value_type}
 
 
-def attribute_file_body(attributes):
+def attribute_file_body(attributes, promoted_items=(), genai_attribute_rows=()):
     """The ``.attribute.json`` body: one string-typed row per ``sys_*`` key, structured values
-    JSON-encoded (file attributes accept only the string type); a null or blank group produces no row."""
+    JSON-encoded (file attributes accept only the string type), then the ``ext_*`` items promoted from
+    them and the run's ``genai_*`` attribute rows, both re-typed as strings; a null or blank group
+    produces no row."""
     rows = []
     for key, value in sorted((attributes or {}).items()):
         if isinstance(value, (dict, list)):
@@ -184,12 +195,17 @@ def attribute_file_body(attributes):
                 continue
             rendered = str(value)
         rows.append(_row(key, rendered, TYPE_STRING))
+    for item in promoted_items or ():
+        rows.append(_row(item["metadataKey"], str(item["metadataValue"]), TYPE_STRING))
+    for row in genai_attribute_rows or ():
+        rows.append(_row(row["metadataKey"], str(row["metadataValue"]), TYPE_STRING))
     return {"type": "attribute", "updateType": "update", "metadata": rows}
 
 
-def write_attribute_file(manifest, metadata_prefix_uri, relative_path):
+def write_attribute_file(manifest, metadata_prefix_uri, relative_path, promoted_items=(), genai_attribute_rows=()):
     uri = common.uri_join(metadata_prefix_uri, relative_key(relative_path) + ATTRIBUTE_FILE_SUFFIX)
-    common.write_json(s3_client, uri, attribute_file_body(manifest.get("attributes") or {}))
+    common.write_json(s3_client, uri,
+                      attribute_file_body(manifest.get("attributes") or {}, promoted_items, genai_attribute_rows))
     return uri
 
 
@@ -440,9 +456,9 @@ def analyze(user_blocks, image_blocks):
         f"model returned no parsable JSON after {MAX_ATTEMPTS} attempts: {last_parse_error}")
 
 
-def genai_rows(result, modalities, generated_at):
-    """The ``genai_*`` rows in GENAI_KEY_TYPES order plus the model, timestamp and modalities rows;
-    a null or blank value produces no row, lists are ", "-joined."""
+def genai_rows(result):
+    """The descriptive ``genai_*`` metadata rows in GENAI_KEY_TYPES order; a null or blank value
+    produces no row, lists are ", "-joined."""
     values = dict(result)
     values["primaryColor"] = (result.get("colors") or [None])[0]
     rows = []
@@ -453,9 +469,20 @@ def genai_rows(result, modalities, generated_at):
         if value is None or str(value).strip() == "":
             continue
         rows.append(_row(metadata_key, str(value), value_type))
-    rows.append(_row("genai_model", BEDROCK_ANALYSIS_MODEL_ID, TYPE_STRING))
-    rows.append(_row("genai_generated_at", generated_at, TYPE_DATE))
-    rows.append(_row("genai_source_modalities", LIST_SEPARATOR.join(modalities), TYPE_STRING))
+    return rows
+
+
+def genai_attribute_rows(modalities, generated_at, result=None):
+    """The run's ``genai_*`` attribute rows: model, timestamp (ISO-8601 text), modalities, and — once
+    the analysis has produced one — the complexity grade. All string-typed, as file attributes are."""
+    rows = [
+        _row(GENAI_ATTRIBUTE_MODEL_KEY, BEDROCK_ANALYSIS_MODEL_ID, TYPE_STRING),
+        _row(GENAI_ATTRIBUTE_GENERATED_AT_KEY, generated_at, TYPE_STRING),
+        _row(GENAI_ATTRIBUTE_MODALITIES_KEY, LIST_SEPARATOR.join(modalities), TYPE_STRING),
+    ]
+    complexity = (result or {}).get("complexity")
+    if complexity is not None and str(complexity).strip():
+        rows.append(_row(GENAI_ATTRIBUTE_COMPLEXITY_KEY, str(complexity), TYPE_STRING))
     return rows
 
 
@@ -482,9 +509,10 @@ def segment_rows(plan):
     return rows
 
 
-def metadata_file_body(promoted_items, location_row, genai):
-    """The ``.metadata.json`` body: the ext_* items, then location, then the genai_* rows."""
-    rows = list(promoted_items or [])
+def metadata_file_body(location_row, genai):
+    """The ``.metadata.json`` body: the location item, then the descriptive genai_* rows (and the
+    video window rows). The ext_* facts and the run's genai_* provenance are attributes, not metadata."""
+    rows = []
     if location_row:
         rows.append(location_row)
     rows.extend(genai or [])
@@ -510,9 +538,10 @@ def asset_metadata_body(existing_keywords, keywords, existing_categories, catego
 def lambda_handler(event, context):
     """
     GenerateMetadata
-    Writes the file's attributes, promotes the typed ext_* metadata and location, analyses the file with
-    the Bedrock model against the template's vocabulary, writes the genai_* metadata, and records the
-    outcome on the results prefix.
+    Writes the file's attributes (the sys_* groups, the ext_* facts promoted from them, and the run's
+    genai_* provenance), promotes the location, analyses the file with the Bedrock model against the
+    template's vocabulary, writes the descriptive genai_* metadata, and records the outcome on the
+    results prefix.
     """
 
     # Identifiers only: the state carries externalSfnTaskToken, so it is never rendered whole.
@@ -550,10 +579,6 @@ def lambda_handler(event, context):
     vams = view.get("VAMS") or {}
     asset_data = vams.get("assetData") or {}
     attributes = manifest.get("attributes") or {}
-
-    attribute_uri = write_attribute_file(manifest, event["outputS3AssetMetadataPath"], event["relativePath"])
-    event["attributeFileS3Location"] = attribute_uri
-    logger.info(f"Attributes written: {attribute_uri}")
 
     seed_on = common.as_bool(config.get("seedWithExistingMetadata"), True)
     max_text_chars = common.as_int(config.get("maxTextChars"), DEFAULT_MAX_TEXT_CHARS)
@@ -595,6 +620,13 @@ def lambda_handler(event, context):
         modalities.append(image_modality(file_class))
 
     generated_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # The deterministic attributes land before the model runs, so they are durable whatever it does.
+    attribute_uri = write_attribute_file(manifest, event["outputS3AssetMetadataPath"], event["relativePath"],
+                                         promoted, genai_attribute_rows(modalities, generated_at))
+    event["attributeFileS3Location"] = attribute_uri
+    logger.info(f"Attributes written: {attribute_uri} ({len(promoted)} promoted)")
+
     summary = {
         "schemaVersion": common.ANALYSIS_SUMMARY_SCHEMA_VERSION,
         "status": None,
@@ -627,9 +659,11 @@ def lambda_handler(event, context):
         result, usage, masked_types = analyze(user_blocks, image_blocks)
         result, corrections = vocabulary.validate_against_vocabulary(result, vocab)
         common.write_json(s3_client, metadata_uri,
-                          metadata_file_body(promoted, location_row,
-                                             genai_rows(result, modalities, generated_at) + segments))
+                          metadata_file_body(location_row, genai_rows(result) + segments))
         event["metadataFileS3Location"] = metadata_uri
+        # The complexity grade is the one attribute the model supplies: rewrite the file with it.
+        write_attribute_file(manifest, event["outputS3AssetMetadataPath"], event["relativePath"],
+                             promoted, genai_attribute_rows(modalities, generated_at, result))
         if write_asset_keywords and (result["keywords"] or result["category"]):
             asset_metadata = vams.get("assetMetadata") or {}
             common.write_json(
@@ -650,9 +684,9 @@ def lambda_handler(event, context):
         logger.info(f"Metadata written: {metadata_uri} ({promoted_count} promoted, {len(corrections)} corrections)")
     except BedrockAnalysisFailure as failure:
         logger.error(f"Bedrock analysis failed ({failure.code}): {failure.cause}")
-        if promoted or location_row or segments:
+        if location_row or segments:
             # The deterministic layer does not depend on the model; like the attributes, it lands.
-            common.write_json(s3_client, metadata_uri, metadata_file_body(promoted, location_row, segments))
+            common.write_json(s3_client, metadata_uri, metadata_file_body(location_row, segments))
             event["metadataFileS3Location"] = metadata_uri
             summary["metadataFile"] = metadata_uri
         common.write_execution_status(s3_client, event["outputS3AssetResultsPath"], failure.code, failure.cause)
