@@ -61,6 +61,18 @@ jobs:
                   name: automated-security-helper-report
                   path: ash/aggregated_results.txt
 
+            # `npm install` below tolerates a package-lock.json that has drifted from its
+            # package.json and silently rewrites it, so drift only surfaces for consumers who run
+            # `npm ci`. This dry run is the same check `npm ci` performs and fails the build instead.
+            - name: Check package-lock.json files are in sync
+              working-directory: vams
+              run: |
+                  for dir in . web infra documentation/docusaurus-site; do
+                      echo "::group::npm ci --dry-run ($dir)"
+                      (cd "$dir" && npm ci --dry-run --ignore-scripts --no-audit --no-fund)
+                      echo "::endgroup::"
+                  done
+
             - name: Npm install root directory
               working-directory: vams
               run: npm install

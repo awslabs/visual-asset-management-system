@@ -6,15 +6,25 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
+-   Hotfix release: build-from-source repair for the web and infrastructure npm lockfiles, and a documentation-site dependency security update.
+
 ### ⚠ BREAKING CHANGES
 
 ### Features
 
 ### Bug Fixes
 
+-   **Web / CDK** `web/package-lock.json` and `infra/package-lock.json` now record the full set of optional platform-specific native bindings (`esbuild`, `rolldown`, `lightningcss`, `@napi-rs/canvas`, `@parcel/watcher`, `@unrs/resolver-binding` and their transitives), so `npm ci` installs both packages instead of failing with `EUSAGE` because the lockfile was out of sync with `package.json`.
+    -   Note: No dependency version changes; only the missing lockfile entries were added. `npm install` was unaffected, which is why the drift was not caught earlier.
+-   **Deployment** The build workflow checks every `package-lock.json` against its `package.json` with `npm ci --dry-run` before installing, so lockfile drift fails the build rather than being silently rewritten by `npm install`.
+
 ### Chores
 
+-   **Documentation** Documentation site: `image-size` updated to 2.0.4 (resolves the ICNS / JXL / HEIF parser denial-of-service advisories GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq); `npm audit` reports no vulnerabilities for the site.
+
 ### Known Outstanding Issues
+
+-   **Web** `npm audit` reports six low-severity findings under `vite-plugin-node-polyfills` → `node-stdlib-browser` → `crypto-browserify` → `elliptic` (GHSA-848j-6mx2-7j84). No patched `elliptic` release exists, every package in the chain is at its latest version, and the only change npm offers is a semver-major downgrade of the plugin. The affected `crypto` polyfill is not enabled in the web build (`vite.config.ts` polyfills only `buffer`, `process`, and `stream`), so the code is not bundled into the application.
 
 ### Troubleshooting
 
