@@ -38,6 +38,8 @@ PIPELINES = (
     ("metadata3dLabeling", "backendPipelines/genAi/metadata3dLabeling",
      "infra/lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/"
      "metadata3dLabeling-construct.ts"),
+    ("cadStepAgent", "backendPipelines/genAi/cadStepAgent",
+     "infra/lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct.ts"),
     ("modelOps", "backendPipelines/multi/modelOps",
      "infra/lib/nestedStacks/pipelines/multi/modelOps/constructs/modelOps-construct.ts"),
     ("rapidPipeline", "backendPipelines/multi/rapidPipeline",

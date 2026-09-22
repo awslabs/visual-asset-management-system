@@ -10,7 +10,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, and more
+-   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, GenAI CAD STEP agent (Strands), Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, and more
 
 ### **Version Info**
 
@@ -62,6 +62,7 @@ root/
 │   │   │   │   ├── reason/    # NVIDIA Cosmos Reason (video captioning)
 │   │   │   │   └── transfer/  # NVIDIA Cosmos Transfer (control-signal video restyle)
 │   │   │   └── gr00t/         # NVIDIA GR00T N1.5 fine-tuning
+│   │   ├── cadStepAgent/      # GenAI CAD STEP agent (Strands; AgentCore Runtime or Batch Fargate)
 │   │   └── metadata3dLabeling/
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates

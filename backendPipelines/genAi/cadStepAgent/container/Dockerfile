@@ -1,0 +1,45 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# One image serves both runtimes. The build platform is supplied by the CodeBuild project
+# (linux/arm64 for the AgentCore Runtime, linux/amd64 for AWS Batch on Fargate). Pinned by digest to
+# the multi-arch image index; the tag records which release the digest resolves to (3.12-slim-trixie),
+# so either platform builds from the same release.
+FROM public.ecr.aws/docker/library/python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
+
+# Sonames the OCP (OpenCascade) wheel links that the slim base does not carry.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglu1-mesa \
+    libxrender1 \
+    libxext6 \
+    libx11-6 \
+    libgomp1 \
+    libfontconfig1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY ./requirements.txt ./requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+COPY ./cad_step_agent/ ./cad_step_agent/
+
+# Two accounts. The agent runs as cadagent, never root. A generated script runs in a subprocess with a
+# scrubbed environment (no credential variables, no task token, no API key), an isolated interpreter
+# (-I), a per-attempt working directory and a timeout (sandbox.py); where the runtime starts the
+# container as root the script is additionally switched to the sandboxrunner uid.
+RUN useradd --create-home --uid 10001 --user-group cadagent \
+    && useradd --create-home --uid 10002 --user-group sandboxrunner \
+    && mkdir -p /work && chown cadagent:cadagent /work && chmod 1777 /work
+ENV CAD_AGENT_SANDBOX_USER=sandboxrunner
+ENV TMPDIR=/work
+USER cadagent
+
+# AgentCore Runtime protocol: HTTP on 8080 (/invocations, /ping). The Batch job definition overrides
+# the command with `python3 -m cad_step_agent.batch_main <definition>`.
+EXPOSE 8080
+CMD ["python3", "-m", "cad_step_agent.agentcore_app"]

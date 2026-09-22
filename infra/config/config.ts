@@ -895,6 +895,47 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    if (config.app.pipelines.useGenAiCadStepAgent == undefined) {
+        config.app.pipelines.useGenAiCadStepAgent = {
+            enabled: false,
+            runtime: "agentcore",
+            useCodeBuild: true,
+            autoRegisterWithVAMS: false,
+            autoRegisterAutoTriggerOnFileUpload: false,
+            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            openAi: { modelId: "", apiKeySecretArn: "" },
+            allowInternetResearch: true,
+            agentCore: {
+                warmSessionSlots: 0,
+                idleRuntimeSessionTimeoutSeconds: 900,
+                maxLifetimeSeconds: 28800,
+            },
+            maxRunSeconds: 3600,
+        };
+    }
+    {
+        const cad = config.app.pipelines.useGenAiCadStepAgent;
+        if (cad.runtime == undefined) cad.runtime = "agentcore";
+        if (cad.useCodeBuild == undefined) cad.useCodeBuild = true;
+        if (cad.bedrockModelId == undefined)
+            cad.bedrockModelId = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+        if (cad.openAi == undefined) cad.openAi = { modelId: "", apiKeySecretArn: "" };
+        if (cad.openAi.modelId == undefined) cad.openAi.modelId = "";
+        if (cad.openAi.apiKeySecretArn == undefined) cad.openAi.apiKeySecretArn = "";
+        if (cad.allowInternetResearch == undefined) cad.allowInternetResearch = true;
+        if (cad.agentCore == undefined)
+            cad.agentCore = {
+                warmSessionSlots: 0,
+                idleRuntimeSessionTimeoutSeconds: 900,
+                maxLifetimeSeconds: 28800,
+            };
+        if (cad.agentCore.warmSessionSlots == undefined) cad.agentCore.warmSessionSlots = 0;
+        if (cad.agentCore.idleRuntimeSessionTimeoutSeconds == undefined)
+            cad.agentCore.idleRuntimeSessionTimeoutSeconds = 900;
+        if (cad.agentCore.maxLifetimeSeconds == undefined) cad.agentCore.maxLifetimeSeconds = 28800;
+        if (cad.maxRunSeconds == undefined) cad.maxRunSeconds = 3600;
+    }
+
     // Pipeline constructs gate the VamsSchemaRegistration custom resource on
     // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
     // would deploy the pipeline stack with no VAMS registration. A partially-specified block
@@ -917,6 +958,7 @@ export function getConfig(app: cdk.App): Config {
     defaultAutoRegisterFlags(config.app.pipelines.useConversion3dBasic);
     defaultAutoRegisterFlags(config.app.pipelines.useConversionCadMeshMetadataExtraction, true);
     defaultAutoRegisterFlags(config.app.pipelines.useConversionCoordinateTransform, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiCadStepAgent, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
     defaultAutoRegisterFlags(config.app.pipelines.useGenAiMetadata3dLabeling, true);
@@ -948,6 +990,7 @@ export function getConfig(app: cdk.App): Config {
         useConversionCadMeshMetadataExtraction:
             config.app.pipelines.useConversionCadMeshMetadataExtraction,
         useConversionCoordinateTransform: config.app.pipelines.useConversionCoordinateTransform,
+        useGenAiCadStepAgent: config.app.pipelines.useGenAiCadStepAgent,
         usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
         usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
         useGenAiMetadata3dLabeling: config.app.pipelines.useGenAiMetadata3dLabeling,
@@ -1292,6 +1335,7 @@ export function getConfig(app: cdk.App): Config {
         >;
         const codeBuildPipelinePaths = [
             "useConversionCoordinateTransform",
+            "useGenAiCadStepAgent",
             "useSplatToolbox",
             "useIsaacLabTraining",
             "useNvidiaCosmos",
@@ -1404,6 +1448,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
+    if (config.app.pipelines.useGenAiCadStepAgent.enabled)
+        vpcRequiringFeatures.push("pipelines.useGenAiCadStepAgent");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -1773,6 +1819,109 @@ export function getConfig(app: cdk.App): Config {
                     `prefix exists only in the commercial partition. This deployment targets ` +
                     `${config.env.partition}. Use a model id or inference profile offered there ` +
                     `(GovCloud uses the "us-gov." prefix).`
+            );
+        }
+    }
+
+    // GenAI CAD STEP agent pipeline. The AgentCore runtime exists only in the commercial partition
+    // and needs the CodeBuild-built arm64 image; OpenAI is opt-in through a Secrets Manager secret so
+    // the API key never sits in config.json.
+    if (config.app.pipelines.useGenAiCadStepAgent?.enabled) {
+        const cad = config.app.pipelines.useGenAiCadStepAgent;
+        if (cad.runtime !== "agentcore" && cad.runtime !== "fargate") {
+            throw new Error(
+                `Configuration Error: pipelines.useGenAiCadStepAgent.runtime must be "agentcore" or ` +
+                    `"fargate" (got "${cad.runtime}").`
+            );
+        }
+        if (cad.runtime === "agentcore" && resolvedPartition !== "aws") {
+            throw new Error(
+                'Configuration Error: pipelines.useGenAiCadStepAgent.runtime is "agentcore", but ' +
+                    "Amazon Bedrock AgentCore Runtime is offered only in the commercial (aws) " +
+                    `partition. This deployment targets ${resolvedPartition}; set runtime to ` +
+                    '"fargate".'
+            );
+        }
+        if (cad.runtime === "agentcore" && cad.useCodeBuild !== true) {
+            throw new Error(
+                'Configuration Error: pipelines.useGenAiCadStepAgent.runtime "agentcore" requires ' +
+                    "useCodeBuild to be true. The AgentCore Runtime pulls an arm64 image from Amazon " +
+                    "ECR, which the CodeBuild project produces; a local Docker asset build is " +
+                    "supported only for the fargate runtime."
+            );
+        }
+        const bedrockModelId = cad.bedrockModelId ?? "";
+        if (bedrockModelId.trim() === "") {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent is enabled but bedrockModelId " +
+                    "is empty. Set a model id available in this partition and Region."
+            );
+        }
+        const cadCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
+            bedrockModelId.startsWith(prefix)
+        );
+        if (cadCommercialOnlyPrefix && config.env.partition !== "aws") {
+            throw new Error(
+                `Configuration Error: pipelines.useGenAiCadStepAgent.bedrockModelId is ` +
+                    `"${bedrockModelId}", whose "${cadCommercialOnlyPrefix}" cross-Region ` +
+                    `inference-profile prefix exists only in the commercial partition. This ` +
+                    `deployment targets ${config.env.partition}.`
+            );
+        }
+        const openAiSecret = cad.openAi?.apiKeySecretArn ?? "";
+        const openAiModel = cad.openAi?.modelId ?? "";
+        if (openAiSecret.trim() !== "" || openAiModel.trim() !== "") {
+            const secretArnPattern =
+                /^arn:(aws|aws-us-gov|aws-cn|aws-eusc|aws-iso(-[a-z])?):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$/;
+            if (!secretArnPattern.test(openAiSecret)) {
+                throw new Error(
+                    "Configuration Error: pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn must be " +
+                        "an AWS Secrets Manager secret ARN when the OpenAI provider is configured."
+                );
+            }
+            if (openAiModel.trim() === "") {
+                throw new Error(
+                    "Configuration Error: pipelines.useGenAiCadStepAgent.openAi.modelId must be set " +
+                        "when openAi.apiKeySecretArn is set."
+                );
+            }
+        }
+        const inRange = (value: number, min: number, max: number) =>
+            Number.isInteger(value) && value >= min && value <= max;
+        if (!inRange(cad.agentCore.warmSessionSlots, 0, 20)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore.warmSessionSlots must " +
+                    "be an integer between 0 and 20."
+            );
+        }
+        if (!inRange(cad.agentCore.idleRuntimeSessionTimeoutSeconds, 60, 28800)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore." +
+                    "idleRuntimeSessionTimeoutSeconds must be an integer between 60 and 28800."
+            );
+        }
+        if (!inRange(cad.agentCore.maxLifetimeSeconds, 60, 28800)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds " +
+                    "must be an integer between 60 and 28800."
+            );
+        }
+        if (cad.agentCore.idleRuntimeSessionTimeoutSeconds > cad.agentCore.maxLifetimeSeconds) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.agentCore." +
+                    "idleRuntimeSessionTimeoutSeconds cannot exceed maxLifetimeSeconds."
+            );
+        }
+        if (!inRange(cad.maxRunSeconds, 300, 7200)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.maxRunSeconds must be an integer " +
+                    "between 300 and 7200."
+            );
+        }
+        if (cad.runtime === "agentcore" && cad.maxRunSeconds > cad.agentCore.maxLifetimeSeconds) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.maxRunSeconds cannot exceed " +
+                    "agentCore.maxLifetimeSeconds; the runtime session would end before the run does."
             );
         }
     }
@@ -3223,6 +3372,33 @@ export interface ConfigPublic {
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
+            };
+            useGenAiCadStepAgent: {
+                enabled: boolean;
+                // Where the agent container runs. "agentcore" is Amazon Bedrock AgentCore Runtime
+                // (commercial partition only, CodeBuild-built arm64 image, warm sessions);
+                // "fargate" is AWS Batch on Fargate in the private pipeline subnets.
+                runtime: "agentcore" | "fargate";
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+                bedrockModelId: string;
+                // OpenAI is opt-in: both empty disables the "openai" model provider for every run.
+                openAi: {
+                    modelId: string;
+                    apiKeySecretArn: string;
+                };
+                // Deployment master switch for the agent's web search / page fetch tools.
+                allowInternetResearch: boolean;
+                agentCore: {
+                    // Fixed runtime session ids reused across runs so a session stays warm; 0 uses a
+                    // fresh session per run.
+                    warmSessionSlots: number;
+                    idleRuntimeSessionTimeoutSeconds: number;
+                    maxLifetimeSeconds: number;
+                };
+                // Wall-clock bound for one agent run, enforced by the container.
+                maxRunSeconds: number;
             };
             usePreviewPcPotreeViewer: {
                 enabled: boolean;

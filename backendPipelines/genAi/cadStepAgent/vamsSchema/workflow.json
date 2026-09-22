@@ -1,0 +1,33 @@
+{
+    "workflowName": "GenAI CAD STEP Agent - Modify",
+    "category": "GenAI",
+    "description": "Apply a described change to one CAD STEP file (.stp, .step) with a GenAI agent",
+    "specifiedPipelines": [
+        {
+            "pipelineDatabaseId": "GLOBAL",
+            "pipelineId": "genai-cad-step-agent",
+            "defaultTemplateId": "cad-step-agent-modify"
+        }
+    ],
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.stp", "*.step"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:genai-cad-step-agent": "cad-step-agent-modify"
+            },
+            "enabled": false
+        }
+    ],
+    "systemConfig": {
+        "inputFileArity": "one",
+        "inputFileFilters": {
+            "allow": ["*.stp", "*.step"],
+            "exclude": []
+        },
+        "allowWorkflowTriggerChaining": false
+    }
+}

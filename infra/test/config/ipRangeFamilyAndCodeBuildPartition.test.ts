@@ -224,6 +224,7 @@ const CODEBUILD_WARNING = /useCodeBuild is true for .* while deploying to the '[
 
 const CODEBUILD_PIPELINES = [
     "useConversionCoordinateTransform",
+    "useGenAiCadStepAgent",
     "useSplatToolbox",
     "useIsaacLabTraining",
     "useNvidiaCosmos",

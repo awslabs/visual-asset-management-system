@@ -107,6 +107,25 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": false
             },
+            "useGenAiCadStepAgent": {
+                "enabled": false,
+                "runtime": "fargate",
+                "useCodeBuild": true,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false,
+                "bedrockModelId": "",
+                "openAi": {
+                    "modelId": "",
+                    "apiKeySecretArn": ""
+                },
+                "allowInternetResearch": true,
+                "agentCore": {
+                    "warmSessionSlots": 0,
+                    "idleRuntimeSessionTimeoutSeconds": 900,
+                    "maxLifetimeSeconds": 28800
+                },
+                "maxRunSeconds": 3600
+            },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
