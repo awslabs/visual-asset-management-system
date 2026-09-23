@@ -81,6 +81,59 @@ function actionsOf(statement: any): string[] {
     return Array.isArray(a) ? a : a ? [a] : [];
 }
 
+/** The custom resource whose completion means the CodeBuild image build has pushed the tag. */
+function imageBuildCustomResource(synth: SynthResult) {
+    const builds = synth
+        .ofType("AWS::CloudFormation::CustomResource")
+        .filter((r) => /CadStepAgent.*BuildTriggerCR/.test(r.logicalId));
+    expect(builds).toHaveLength(1);
+    return builds[0];
+}
+
+/**
+ * The image build is synchronous from CloudFormation's point of view: the Provider has an isComplete
+ * handler (the framework's own isComplete Lambda plus its waiter state machine), the handler that
+ * polls the build may read the builds of exactly the pipeline's project, and the resource is the
+ * one the CodeBuild project's consumers depend on.
+ */
+function expectSynchronousImageBuild(synth: SynthResult) {
+    const cadStepAgentStack = imageBuildCustomResource(synth).stack;
+    const frameworkHandlers = synth
+        .ofType("AWS::Lambda::Function")
+        .filter(
+            (f) => f.stack === cadStepAgentStack && /BuildProvider.*CadStepAgent/.test(f.logicalId)
+        )
+        .map((f) => (f.properties as any).Handler);
+    expect(frameworkHandlers).toEqual(
+        expect.arrayContaining(["framework.onEvent", "framework.isComplete", "framework.onTimeout"])
+    );
+    expect(
+        synth
+            .ofType("AWS::StepFunctions::StateMachine")
+            .filter(
+                (s) =>
+                    s.stack === cadStepAgentStack && /BuildProvider.*CadStepAgent/.test(s.logicalId)
+            )
+    ).toHaveLength(1);
+    const polls = policyStatements(synth).filter((s) =>
+        actionsOf(s.statement).includes("codebuild:BatchGetBuilds")
+    );
+    expect(polls).toHaveLength(1);
+    const resources = polls[0].statement.Resource;
+    expect(JSON.stringify(resources)).not.toBe('"*"');
+    expect(JSON.stringify(resources)).toMatch(/CodeBuildCadStepAgent[A-Za-z0-9]*.*Arn/);
+    const handlers = synth
+        .ofType("AWS::Lambda::Function")
+        .filter((f) => f.stack === cadStepAgentStack)
+        .map((f) => (f.properties as any).Handler);
+    expect(handlers).toEqual(
+        expect.arrayContaining([
+            "imageBuildCustomResource.on_event",
+            "imageBuildCustomResource.is_complete",
+        ])
+    );
+}
+
 describe("CAD STEP agent on the AgentCore runtime", () => {
     let synth: SynthResult;
 
@@ -138,6 +191,18 @@ describe("CAD STEP agent on the AgentCore runtime", () => {
         const vars = env.EnvironmentVariables as Array<{ Name: string; Value: string }>;
         expect(vars.find((v) => v.Name === "TARGET_PLATFORM")?.Value).toBe("linux/arm64");
         expect(vars.find((v) => v.Name === "IMAGE_TAG")?.Value).toMatch(/^[0-9a-f]{32}$/);
+    });
+
+    test("the runtime is created only after the image build custom resource completes", () => {
+        const runtime = synth.ofType("AWS::BedrockAgentCore::Runtime")[0];
+        const build = imageBuildCustomResource(synth);
+        expect(runtime.raw.DependsOn ?? []).toContain(build.logicalId);
+        // The same custom resource is the one that names the project the build runs in.
+        expect(SynthResult.flatten((build.properties as any).ProjectName)).toMatch(/CadStepAgent/);
+    });
+
+    test("the build custom resource waits on the build through an isComplete handler", () => {
+        expectSynchronousImageBuild(synth);
     });
 
     test("no Batch compute, NAT gateway or public subnet is created for it", () => {
@@ -247,6 +312,14 @@ describe("CAD STEP agent on the Fargate runtime", () => {
             /cadstepagent.*:[0-9a-f]{32}$/i
         );
         expect((jobDef.properties as any).Timeout.AttemptDurationSeconds).toBe(7200);
+    });
+
+    test("the job definition is created only after the image build custom resource completes", () => {
+        const jobDef = synth
+            .ofType("AWS::Batch::JobDefinition")
+            .find((j) => /CadStepAgent/.test(j.logicalId))!;
+        expect(jobDef.raw.DependsOn ?? []).toContain(imageBuildCustomResource(synth).logicalId);
+        expectSynchronousImageBuild(synth);
     });
 });
 

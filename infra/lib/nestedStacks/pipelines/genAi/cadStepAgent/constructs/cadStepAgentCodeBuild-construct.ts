@@ -9,6 +9,7 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
@@ -18,6 +19,12 @@ import { contentImageTag } from "../../../../../helper/containerImageTag";
 
 /** The Docker platform the image is built for; decided by the runtime that will run it. */
 export type CadStepAgentImagePlatform = "linux/arm64" | "linux/amd64";
+
+/** The pipeline's Lambda sources; the image-build custom resource handlers live beside the pipeline Lambdas. */
+const LAMBDA_CODE_PATH = path.join(
+    __dirname,
+    "../../../../../../../backendPipelines/genAi/cadStepAgent/lambda"
+);
 
 export interface CadStepAgentCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -30,6 +37,11 @@ export class CadStepAgentCodeBuildConstruct extends Construct {
     /** Content-addressed tag the build pushes and the runtime consumes. */
     public readonly imageTag: string;
     public readonly codeBuildProjectName: string;
+    /**
+     * The custom resource that completes only once the image at `imageTag` has been pushed. Anything
+     * that names the image (the AgentCore Runtime, the Batch job definition) depends on it.
+     */
+    public readonly imageBuild: cdk.CustomResource;
 
     constructor(parent: Construct, name: string, props: CadStepAgentCodeBuildConstructProps) {
         super(parent, name);
@@ -133,45 +145,51 @@ export class CadStepAgentCodeBuildConstruct extends Construct {
             })
         );
 
-        const triggerFunction = new cdk.aws_lambda.Function(this, "BuildTrigger-CadStepAgent", {
+        // The build is synchronous from CloudFormation's point of view: the onEvent handler starts it
+        // and names the build id as the physical id, and the isComplete handler is polled until that
+        // build is terminal. Amazon Bedrock AgentCore validates the image at CreateAgentRuntime time,
+        // so the Runtime (and the Batch job definition) depend on this resource and are created only
+        // once the content-addressed tag exists in the repository.
+        const startBuildFunction = new lambda.Function(this, "BuildTrigger-CadStepAgent", {
             runtime: Config.LAMBDA_PYTHON_RUNTIME,
-            handler: "index.handler",
+            handler: "imageBuildCustomResource.on_event",
             timeout: Duration.minutes(1),
-            code: cdk.aws_lambda.Code.fromInline(`
-import boto3
-import cfnresponse
-
-def handler(event, context):
-    try:
-        request_type = event.get("RequestType", "")
-        if request_type in ("Create", "Update"):
-            project_name = event["ResourceProperties"]["ProjectName"]
-            client = boto3.client("codebuild")
-            response = client.start_build(projectName=project_name)
-            build_id = response["build"]["id"]
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {"BuildId": build_id})
-        else:
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-    except Exception as e:
-        cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
-`),
+            code: lambda.Code.fromAsset(LAMBDA_CODE_PATH),
         });
-        triggerFunction.addToRolePolicy(
+        startBuildFunction.addToRolePolicy(
             new iam.PolicyStatement({
                 actions: ["codebuild:StartBuild"],
                 resources: [project.projectArn],
             })
         );
 
-        const triggerProvider = new cr.Provider(this, "BuildProvider-CadStepAgent", {
-            onEventHandler: triggerFunction,
+        const waitForBuildFunction = new lambda.Function(this, "BuildWait-CadStepAgent", {
+            runtime: Config.LAMBDA_PYTHON_RUNTIME,
+            handler: "imageBuildCustomResource.is_complete",
+            timeout: Duration.minutes(1),
+            code: lambda.Code.fromAsset(LAMBDA_CODE_PATH),
+        });
+        waitForBuildFunction.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: ["codebuild:BatchGetBuilds"],
+                resources: [project.projectArn],
+            })
+        );
+
+        // The wait outlasts the project's own build timeout so a build that CodeBuild times out is
+        // reported by status (with its build id) rather than by the framework giving up first.
+        const buildProvider = new cr.Provider(this, "BuildProvider-CadStepAgent", {
+            onEventHandler: startBuildFunction,
+            isCompleteHandler: waitForBuildFunction,
+            queryInterval: Duration.seconds(30),
+            totalTimeout: Duration.hours(2),
         });
 
         // The repository URI is a trigger input: a repository rename is a replacement that leaves an
         // empty repository while ProjectName and SourceHash stay identical, so including it re-fires
         // the build on exactly that change.
-        new cdk.CustomResource(this, "BuildTriggerCR-CadStepAgent", {
-            serviceToken: triggerProvider.serviceToken,
+        this.imageBuild = new cdk.CustomResource(this, "BuildTriggerCR-CadStepAgent", {
+            serviceToken: buildProvider.serviceToken,
             properties: {
                 ProjectName: project.projectName,
                 SourceHash: sourceAsset.assetHash,
@@ -203,7 +221,7 @@ def handler(event, context):
         );
 
         NagSuppressions.addResourceSuppressions(
-            triggerProvider,
+            buildProvider,
             [
                 {
                     id: "AwsSolutions-IAM4",
@@ -211,29 +229,39 @@ def handler(event, context):
                 },
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "Custom resource provider framework requires wildcard permissions for log group creation. This is CDK-managed infrastructure.",
+                    reason: "Custom resource provider framework requires wildcard permissions for log group creation and for invoking its own onEvent/isComplete handlers and waiter state machine. This is CDK-managed infrastructure.",
                 },
                 {
                     id: "AwsSolutions-L1",
                     reason: "Custom resource provider framework Lambda runtime is managed by CDK and may not use the latest runtime version.",
                 },
+                {
+                    id: "AwsSolutions-SF1",
+                    reason: "The provider framework's isComplete waiter state machine is CDK-managed infrastructure; it carries no data worth logging beyond the build id.",
+                },
+                {
+                    id: "AwsSolutions-SF2",
+                    reason: "The provider framework's isComplete waiter state machine is CDK-managed infrastructure; X-Ray tracing is not exposed on it.",
+                },
             ],
             true
         );
 
-        NagSuppressions.addResourceSuppressions(
-            triggerFunction,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "Build trigger Lambda uses AWSLambdaBasicExecutionRole managed policy for CloudWatch logging.",
-                },
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Build trigger Lambda role requires wildcard for log stream creation under its log group.",
-                },
-            ],
-            true
-        );
+        for (const handler of [startBuildFunction, waitForBuildFunction]) {
+            NagSuppressions.addResourceSuppressions(
+                handler,
+                [
+                    {
+                        id: "AwsSolutions-IAM4",
+                        reason: "Image build custom resource Lambda uses AWSLambdaBasicExecutionRole managed policy for CloudWatch logging.",
+                    },
+                    {
+                        id: "AwsSolutions-IAM5",
+                        reason: "Image build custom resource Lambda role requires wildcard for log stream creation under its log group.",
+                    },
+                ],
+                true
+            );
+        }
     }
 }

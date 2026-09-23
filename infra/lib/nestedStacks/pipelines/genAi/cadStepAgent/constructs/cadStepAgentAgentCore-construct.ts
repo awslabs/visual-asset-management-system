@@ -17,8 +17,11 @@ export interface CadStepAgentAgentCoreConstructProps extends cdk.StackProps {
     config: Config.Config;
     /** The role the runtime's container assumes; the S3, Bedrock, Step Functions and secret grants are on it. */
     executionRole: iam.Role;
-    /** The CodeBuild-built arm64 image (repository + content-addressed tag). */
-    image: { repository: ecr.IRepository; tag: string };
+    /**
+     * The CodeBuild-built arm64 image (repository + content-addressed tag) and the custom resource that
+     * completes once that tag has been pushed. AgentCore validates the image when the runtime is created.
+     */
+    image: { repository: ecr.IRepository; tag: string; build: cdk.CustomResource };
     /** Environment the agent container reads (model ids, secret ARN, region); never a credential value. */
     environment: { [key: string]: string };
 }
@@ -121,6 +124,9 @@ export class CadStepAgentAgentCoreConstruct extends Construct {
         });
         // The trust policy must exist before the runtime validates it.
         this.runtime.node.addDependency(props.executionRole);
+        // The image tag must exist in the repository before the runtime validates it, on creation and
+        // on every update that names a new tag.
+        this.runtime.node.addDependency(props.image.build);
 
         this.endpoint = new bedrockagentcore.CfnRuntimeEndpoint(this, "Endpoint", {
             agentRuntimeId: this.runtime.attrAgentRuntimeId,

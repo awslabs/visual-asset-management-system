@@ -251,6 +251,7 @@ export class CadStepAgentConstruct extends Construct {
                 image: {
                     repository: codeBuildConstruct.repository,
                     tag: codeBuildConstruct.imageTag,
+                    build: codeBuildConstruct.imageBuild,
                 },
                 environment: containerEnvironment,
             });
@@ -361,6 +362,11 @@ export class CadStepAgentConstruct extends Construct {
                         : undefined,
                 }
             );
+            // A Batch job definition accepts a tag that does not exist yet (the job fails at start
+            // instead); depending on the build keeps the first job from racing the image push.
+            if (codeBuildConstruct) {
+                batchPipeline.batchJobDefinition.node.addDependency(codeBuildConstruct.imageBuild);
+            }
 
             runAgentFunction = buildExecuteBatchJobFunction(
                 this,
