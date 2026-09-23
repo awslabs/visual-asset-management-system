@@ -242,10 +242,7 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         # The caller's instruction is the first thing the guardrail sees, whichever provider runs it;
         # an intervention ends the run here with its reason rather than as an empty agent turn.
         guard = guardrail or guardrail_module.Guardrail.from_env()
-        try:
-            guard.screen(str(agent_cfg.get("prompt", "")), "instruction")
-        except guardrail_module.GuardrailBlocked as exc:
-            raise RunFailed(str(exc)) from exc
+        guard.screen(str(agent_cfg.get("prompt", "")), "instruction")
 
         state = tools.RunState(
             work_root=work_root,
@@ -289,6 +286,11 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         # already recorded its outcome.
         logger.info("run cancelled by %s", exc)
         raise
+    except guardrail_module.GuardrailBlocked as exc:
+        # The guardrail logged the intervention at WARNING; it is the filter doing its job, not a fault
+        # of the run, so the reason travels on the token without a traceback.
+        report_failure(str(exc))
+        raise RunFailed(str(exc)) from None
     except Exception as exc:
         logger.exception("run failed")
         report_failure(str(exc))

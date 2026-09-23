@@ -487,3 +487,29 @@ class TestPipelineEnd:
             mod.lambda_handler({"externalSfnTaskToken": _TOKEN, "error": {"Error": "X"}}, MagicMock())
         ok.assert_not_called()
         assert fail.call_args.kwargs["taskToken"] == _TOKEN
+
+    def test_the_recorded_cause_reaches_the_outer_token(self):
+        mod = _load("pipelineEnd.py")
+        cause = "The instruction was blocked by the guardrail's input filter"
+        with patch.object(mod.sfn, "send_task_failure", MagicMock()) as fail:
+            mod.lambda_handler({"externalSfnTaskToken": _TOKEN,
+                                "error": {"Error": "CadStepAgentRunFailed", "Cause": cause}}, MagicMock())
+        assert fail.call_args.kwargs["error"] == "Pipeline Failure: CadStepAgentRunFailed"
+        assert fail.call_args.kwargs["cause"] == cause
+
+    @pytest.mark.parametrize("error, expected", [
+        ({"Error": "X"}, "See AWS cloudwatch logs for error cause."),
+        ({"Error": "X", "Cause": "   "}, "See AWS cloudwatch logs for error cause."),
+        ({"Error": "Lambda.Unknown", "Cause": json.dumps({"errorMessage": "Agent runtime did not accept the run",
+                                                          "errorType": "RuntimeError", "stackTrace": ["a", "b"]})},
+         "Agent runtime did not accept the run"),
+        ({"Error": "X", "Cause": "not json {"}, "not json {"),
+        ({"Error": "X", "Cause": "c" * 1000}, "c" * 256),
+    ])
+    def test_the_cause_is_the_recorded_sentence_bounded_or_the_default(self, error, expected):
+        mod = _load("pipelineEnd.py")
+        assert mod.failure_cause(error) == expected
+        with patch.object(mod.sfn, "send_task_failure", MagicMock()) as fail:
+            mod.lambda_handler({"externalSfnTaskToken": _TOKEN, "error": error}, MagicMock())
+        assert fail.call_args.kwargs["cause"] == expected
+        assert len(fail.call_args.kwargs["cause"]) <= 256

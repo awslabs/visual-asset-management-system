@@ -21,6 +21,29 @@ sfn = boto3.client(
     config=retry_config
 )
 
+# Step Functions caps a task failure's cause at 256 characters.
+CAUSE_MAX_CHARS = 256
+DEFAULT_CAUSE = "See AWS cloudwatch logs for error cause."
+
+
+def failure_cause(error):
+    """The cause reported on the outer token for the error the state machine recorded.
+
+    A task token failure carries the reporter's own sentence (the container's failure message, the
+    guardrail's reason) and is passed through; a Lambda function error carries a JSON document, whose
+    ``errorMessage`` is the sentence worth showing. Bounded to the Step Functions limit.
+    """
+    cause = error.get("Cause") if isinstance(error, dict) else None
+    if isinstance(cause, str) and cause.strip():
+        try:
+            parsed = json.loads(cause)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("errorMessage"):
+            cause = str(parsed["errorMessage"])
+        return cause.strip()[:CAUSE_MAX_CHARS]
+    return DEFAULT_CAUSE
+
 
 def lambda_handler(event, context):
     """
@@ -50,7 +73,7 @@ def lambda_handler(event, context):
                 sfn.send_task_failure(
                     taskToken=externalSfnTaskToken,
                     error='Pipeline Failure: ' + event["error"].get("Error", "Unknown"),
-                    cause='See AWS cloudwatch logs for error cause.'
+                    cause=failure_cause(event["error"])
                 )
                 logger.info("Sent external task token: error")
             except Exception as e:
