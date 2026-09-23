@@ -337,6 +337,14 @@ class TestModelResolution:
                                             "outputFiles": {"fileName": "a.step"}})
         assert ("is an ASSUMPTION" in framing) is expected
         assert ("Internet research: allowed" in framing) is research
+        # With research the framing carries the source rule instead: a forum-sourced figure is assumed.
+        assert ("Research sources: a figure found only on a forum" in framing) is research
+
+    def test_the_finish_tool_asks_for_forum_sourced_figures_under_unresolved(self, tmp_path):
+        fns = _tool_map(tools.build_tools(_state(tmp_path, research=False)))
+        doc = " ".join(fns["finish"].__doc__.split())
+        assert "every figure whose only source is a forum, Q&A site, user post or blog" in doc
+        assert "no figure rests on an assumption or an unconfirmed source" in doc
 
 
 # ---------------------------------------------------------------------------------------------------

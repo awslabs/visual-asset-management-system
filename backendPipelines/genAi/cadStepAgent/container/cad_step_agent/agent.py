@@ -191,6 +191,11 @@ _NO_RESEARCH_REMINDER = (
     "depends on it (its outline, hole pattern, hole spacing, connector positions) is an ASSUMPTION - use "
     "your best value, list every assumed figure in unresolved, and finish with status \"partial\"."
 )
+_RESEARCH_SOURCE_REMINDER = (
+    "Research sources: a figure found only on a forum, Q&A site, user post or blog, or taken from \"common "
+    "practice\", counts as assumed - list it in unresolved and finish with status \"partial\" unless a "
+    "manufacturer, vendor or standards page confirms it."
+)
 
 
 def names_external_reference(prompt):
@@ -210,8 +215,9 @@ def names_external_reference(prompt):
 
 
 def run_framing(definition):
-    """The fixed part of the user turn: the run's mode, output name, budgets and, when the instruction leans
-    on a named product without research, the reminder that such figures are assumptions."""
+    """The fixed part of the user turn: the run's mode, output name, budgets and one reminder about
+    figures the model cannot measure: with research, that a forum-sourced figure is an assumption; without
+    it, that every figure a named product implies is one."""
     agent_cfg = definition.get("agent", {}) or {}
     mode = definition.get("mode", "modify")
     research = bool(agent_cfg.get("allowInternetResearch"))
@@ -224,7 +230,9 @@ def run_framing(definition):
         "compare the geometry summary against the spec item by item; finish() must carry one check line per spec item "
         "and a summary that states the final bounding box, volume and feature counts in numbers.",
     ]
-    if not research and names_external_reference(agent_cfg.get("prompt", "")):
+    if research:
+        lines.append(_RESEARCH_SOURCE_REMINDER)
+    elif names_external_reference(agent_cfg.get("prompt", "")):
         lines.append(_NO_RESEARCH_REMINDER)
     return "\n".join(lines + ["", "Instruction:"])
 

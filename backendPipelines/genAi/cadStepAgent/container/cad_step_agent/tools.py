@@ -229,8 +229,11 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
                 numbers (for example "100 x 60 x 15 mm, 89046 mm^3, 4 through holes D4.5").
             unresolved: Each requested element that could NOT be completed or could not be verified,
                 one entry per item, or an empty list. Include figures you assumed because they could not
-                be found online or measured from the input.
-            status: "succeeded" when every check below is "ok", otherwise "partial".
+                be found online or measured from the input, and every figure whose only source is a
+                forum, Q&A site, user post or blog (a manufacturer, vendor or standards page confirms a
+                figure; a forum thread or "common practice" does not).
+            status: "succeeded" when every check below is "ok" and no figure rests on an assumption or
+                an unconfirmed source; otherwise "partial".
             checks: One entry per requested feature or dimension, comparing the instruction with the
                 LAST accepted run_cad_script geometry summary, in the form
                 "<feature>: expected <value> - measured <value> - ok" or "... - mismatch". Cover overall
