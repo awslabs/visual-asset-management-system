@@ -195,7 +195,7 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
                                   cause=report.failure_cause(message))
         except Exception as exc:  # the failure is already logged; a stale token must not mask it
             if _token_gone(exc):
-                logger.info("task token no longer accepted (%s): the run was aborted upstream",
+                logger.info("the workflow task has already ended (%s): the run was aborted upstream",
                             exc.response["Error"]["Code"])
             else:
                 logger.error("send_task_failure failed: %s", exc)
