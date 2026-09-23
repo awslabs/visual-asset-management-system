@@ -4,6 +4,7 @@
 """Container behaviour for the GenAI CAD STEP agent, with Strands, CadQuery, S3 and Step Functions
 replaced at their boundaries."""
 
+import importlib.util
 import json
 import os
 import resource
@@ -266,8 +267,11 @@ class TestModelResolution:
             agent_module.resolve_model("anthropic-direct", env={})
 
     def test_the_system_prompt_names_the_sandbox_contract(self):
-        for token in ("CAD_INPUT_STEP", "CAD_OUTPUT_STEP", "finish", "partial", "no network"):
+        for token in ("CAD_INPUT_STEP", "CAD_OUTPUT_STEP", "finish", "partial", "no network",
+                      "pushPoints", "polarArray", "checks", "mismatch", "importStep"):
             assert token in agent_module.SYSTEM_PROMPT
+        assert "check line per spec item" in agent_module.run_instruction(
+            {"mode": "generate", "agent": {"prompt": "a plate"}, "outputFiles": {"fileName": "a.step"}})
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -367,9 +371,33 @@ class TestTools:
     def test_finish_records_the_outcome(self, tmp_path):
         state = _state(tmp_path, research=False)
         fns = _tool_map(tools.build_tools(state))
-        assert fns["finish"]("built it", ["no datasheet found", " "], "Partial") == "recorded"
+        assert fns["finish"]("built it", ["no datasheet found", " "], "Partial",
+                             ["size: expected 40x40x10 - measured 40x40x10 - ok"]) == "recorded"
         assert state.finished and state.final_unresolved == ["no datasheet found"]
         assert state.final_status_hint == "partial"
+        assert state.final_checks == ["size: expected 40x40x10 - measured 40x40x10 - ok"]
+
+    def test_finish_with_a_mismatch_check_and_a_succeeded_status_is_flagged(self, tmp_path):
+        state = _state(tmp_path, research=False)
+        fns = _tool_map(tools.build_tools(state))
+        reply = json.loads(fns["finish"]("built it", [], "succeeded",
+                                         ["holes: expected 6 x D6.6 - measured 2 x D6.6 - MISMATCH", "x" * 1000]))
+        assert reply["recorded"] and "1 check(s)" in reply["note"]
+        assert len(state.final_checks) == 2 and len(state.final_checks[1]) == tools.CHECKS_MAX_CHARS
+
+    def test_research_budget_is_enforced(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: ["93.184.216.34"])
+        state = _state(tmp_path)
+        fns = _tool_map(tools.build_tools(state, search_fn=lambda q, n: [{"title": "T", "href": "https://x.test", "body": "B"}],
+                                          fetch_fn=lambda u: "text", screen_fn=_pass_screen))
+        for i in range(tools.SEARCH_BUDGET):
+            assert json.loads(fns["web_search"]("q"))["searchesLeft"] == tools.SEARCH_BUDGET - i - 1
+        refused = json.loads(fns["web_search"]("q"))
+        assert refused["ok"] is False and "budget" in refused["error"]
+        for _ in range(tools.FETCH_BUDGET):
+            assert json.loads(fns["fetch_url"]("https://x.test/p"))["ok"]
+        assert json.loads(fns["fetch_url"]("https://x.test/q"))["ok"] is False
+        assert state.search_calls == tools.SEARCH_BUDGET and state.fetch_calls == tools.FETCH_BUDGET
 
     def test_fetch_url_records_sources_and_strips_html(self, tmp_path, monkeypatch):
         monkeypatch.setattr(tools, "resolve_host", lambda host, port: ["93.184.216.34"])
@@ -619,9 +647,10 @@ class TestRunJob:
         guard = _FakeGuardrail()
         with patch.object(cad_io, "inspect_step", return_value=VALID):
             payload = run.run_job(json.dumps(_definition()), "inner-token", s3=s3, sfn=sfn,
-                                  agent_factory=_agent_that(finish_args=("Added holes", [], "succeeded")),
+                                  agent_factory=_agent_that(finish_args=("Added holes", [], "succeeded", ["holes: expected 4 - measured 4 - ok"])),
                                   guardrail=guard)
         assert payload["status"] == "succeeded" and payload["outputKey"] == "xasset1/sub/part.stp"
+        assert "## Verification" in s3.objects[("abkt", "xasset1/sub/part.stp.cad-agent-report.md")].decode()
         assert ("abkt", "xasset1/sub/part.stp") in s3.objects
         assert ("abkt", "xasset1/sub/part.stp.cad-agent-report.md") in s3.objects
         meta = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.metadata.json")])
@@ -684,11 +713,31 @@ class TestRunJob:
         s3, sfn = _FakeS3(), MagicMock()
         with patch.object(cad_io, "inspect_step", return_value=VALID):
             payload = run.run_job(_definition("generate"), "inner-token", s3=s3, sfn=sfn,
-                                  agent_factory=_agent_that(finish_args=("Built board", ["could not find the connector datasheet"], "partial")),
+                                  agent_factory=_agent_that(finish_args=("Built board", ["could not find the connector datasheet"], "partial", ["size: ok"])),
                                   guardrail=_FakeGuardrail())
         assert payload["status"] == "partial" and payload["unresolvedCount"] == 1
         assert ("abkt", "xasset1/board-20260922-185500.step") in s3.objects
         sfn.send_task_success.assert_called_once()
+
+    def test_a_mismatch_check_makes_a_claimed_success_partial(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        with patch.object(cad_io, "inspect_step", return_value=VALID):
+            payload = run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn, agent_factory=_agent_that(
+                finish_args=("All good", [], "succeeded", ["holes: expected 6 x D6.6 - measured 2 x D6.6 - mismatch"])),
+                guardrail=_FakeGuardrail())
+        assert payload["status"] == "partial" and payload["unresolvedCount"] == 1
+        report_text = s3.objects[("abkt", "xasset1/sub/part.stp.cad-agent-report.md")].decode()
+        assert "Verification mismatch: holes: expected 6" in report_text
+
+    def test_finishing_without_checks_is_partial(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        with patch.object(cad_io, "inspect_step", return_value=VALID):
+            payload = run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn,
+                                  agent_factory=_agent_that(finish_args=("done", [], "succeeded", [])), guardrail=_FakeGuardrail())
+        assert payload["status"] == "partial" and "no per-feature verification" in \
+            s3.objects[("abkt", "xasset1/sub/part.stp.cad-agent-report.md")].decode()
 
     def test_no_valid_step_fails_the_token_with_a_bounded_cause(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
@@ -904,3 +953,49 @@ class TestBatchMain:
         with patch.object(batch_main.sandbox, "harden_agent_process", lambda: True), \
                 patch.object(batch_main.run, "run_job", MagicMock(side_effect=run.RunFailed("no step"))):
             assert batch_main.main({"CAD_AGENT_DEFINITION": "{}"}) == 1
+
+
+# ---------------------------------------------------------------------------------------------------
+# cad_io feature summary (needs the OCP wheel; these tests alone are skipped where CadQuery is absent,
+# the rest of the module still runs, as cad_io's lazy import intends)
+# ---------------------------------------------------------------------------------------------------
+@pytest.mark.unit
+@pytest.mark.skipif(importlib.util.find_spec("cadquery") is None, reason="cadquery/OCP wheel not installed")
+class TestFeatureSummary:
+    def test_holes_bosses_and_fillets_are_counted(self, tmp_path):
+        import cadquery as cq
+        path = str(tmp_path / "disc.step")
+        disc = (cq.Workplane("XY").circle(60).extrude(8).faces(">Z").workplane()
+                .hole(30).faces(">Z").workplane().polarArray(50, 0, 360, 6).hole(6.6)
+                .faces(">Z").workplane().center(40, 0).hole(4, depth=3))
+        cq.exporters.export(disc, path)
+        summary = cad_io.inspect_step(path)
+        holes = {(h["diameter_mm"], h["through"]): h["count"] for h in summary.features["holes"]}
+        assert holes == {(6.6, True): 6, (30.0, True): 1, (4.0, False): 1}
+        assert summary.features["cylindrical_bosses"] == [{"diameter_mm": 120.0, "count": 1}]
+        assert summary.features["fillet_like_faces"] == []
+        text = summary.describe()
+        assert "6 x D6.60 (through)" in text and "1 x D4.00 (not full depth" in text
+        assert "holes" in summary.to_dict()["features"]
+
+    def test_fillets_and_slot_ends(self, tmp_path):
+        import cadquery as cq
+        path = str(tmp_path / "block.step")
+        block = (cq.Workplane("XY").box(60, 40, 20).edges("|Z").fillet(3)
+                 .faces(">Z").workplane().slot2D(20, 6).cutThruAll())
+        cq.exporters.export(block, path)
+        features = cad_io.inspect_step(path).features
+        assert features["fillet_like_faces"] == [{"radius_mm": 3.0, "count": 4}]
+        assert features["partial_round_cuts"] == [{"radius_mm": 3.0, "count": 2}]
+        assert features["holes"] == []
+
+    def test_feature_summary_never_breaks_validity(self, tmp_path, monkeypatch):
+        import cadquery as cq
+        path = str(tmp_path / "box.step")
+        cq.exporters.export(cq.Workplane("XY").box(10, 10, 10), path)
+        monkeypatch.setattr(cad_io, "summarize_features", lambda shape, bbox: (_ for _ in ()).throw(RuntimeError("x")))
+        with pytest.raises(RuntimeError):
+            cad_io.summarize_features(None, None)
+        monkeypatch.setattr(cad_io, "summarize_features", lambda shape, bbox: None)
+        summary = cad_io.inspect_step(path)
+        assert summary.valid and "features" not in summary.to_dict()

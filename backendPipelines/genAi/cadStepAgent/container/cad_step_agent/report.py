@@ -56,6 +56,7 @@ class RunOutcome:
     geometry: Optional[Dict] = None
     wall_seconds: float = 0.0
     research_allowed: bool = True
+    checks: List[str] = field(default_factory=list)  # per-feature "expected - measured - ok|mismatch" lines
 
 
 def _clip(text, limit):
@@ -117,6 +118,8 @@ def markdown_report(outcome):
         "",
     ]
     lines += [f"- {_clip(item, 500)}" for item in outcome.unresolved[:MAX_LIST_ITEMS]] or ["- (nothing outstanding)"]
+    lines += ["", "## Verification (agent's per-feature checks)", ""]
+    lines += [f"- {_clip(item, 500)}" for item in outcome.checks[:MAX_LIST_ITEMS]] or ["- (the agent recorded no checks)"]
     lines += ["", "## Sources consulted", ""]
     lines += [f"- {_clip(src, 500)}" for src in outcome.sources[:MAX_LIST_ITEMS]] or ["- (none)"]
     lines += ["", "## Attempts", ""]

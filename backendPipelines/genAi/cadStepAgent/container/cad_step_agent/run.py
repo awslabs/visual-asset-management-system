@@ -89,6 +89,13 @@ def derive_outcome(state, definition, model_label, run_id, wall_seconds):
     unresolved = list(state.final_unresolved)
     if not state.finished:
         unresolved.append("The agent ended without recording a final summary; review the output before use.")
+    # A check the agent itself marked as a mismatch outranks its status word: the outcome comes from the
+    # tool state, never from the prose.
+    for check in state.final_checks:
+        if tools.MISMATCH_MARKER in check.lower() and check not in unresolved:
+            unresolved.append(f"Verification mismatch: {check}")
+    if state.finished and not state.final_checks:
+        unresolved.append("The agent recorded no per-feature verification checks; review the output before use.")
     status = report.STATUS_PARTIAL if (unresolved or state.final_status_hint == report.STATUS_PARTIAL) \
         else report.STATUS_SUCCEEDED
     summary = state.final_summary or (state.attempts[-1].summary if state.attempts else "")
@@ -106,6 +113,7 @@ def derive_outcome(state, definition, model_label, run_id, wall_seconds):
         geometry=state.best_geometry,
         wall_seconds=wall_seconds,
         research_allowed=state.research_allowed,
+        checks=list(state.final_checks),
     )
 
 

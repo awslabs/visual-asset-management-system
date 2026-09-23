@@ -22,6 +22,13 @@ from urllib.parse import urljoin, urlsplit
 from . import cad_io, report, sandbox
 
 SEARCH_MAX_RESULTS = 6
+# Research budget per run: once it is spent, web_search / fetch_url refuse and tell the model to record
+# what it could not verify. Every result reports how much of the budget remains.
+SEARCH_BUDGET = 6
+FETCH_BUDGET = 4
+CHECKS_MAX_ITEMS = 25
+CHECKS_MAX_CHARS = 300
+MISMATCH_MARKER = "mismatch"
 FETCH_MAX_BYTES = 400_000
 FETCH_MAX_TEXT_CHARS = 12_000
 FETCH_TIMEOUT_SECONDS = 20
@@ -109,6 +116,9 @@ class RunState:
     final_summary: str = ""
     final_unresolved: List[str] = field(default_factory=list)
     final_status_hint: str = ""
+    final_checks: List[str] = field(default_factory=list)
+    search_calls: int = 0
+    fetch_calls: int = 0
 
     @property
     def attempts_left(self):
@@ -203,20 +213,30 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         })
 
     @tool
-    def finish(summary: str, unresolved: List[str], status: str) -> str:
+    def finish(summary: str, unresolved: List[str], status: str, checks: List[str]) -> str:
         """Record the run's outcome. Call this exactly once when done.
 
         Args:
             summary: What was built or changed and how it was verified (a few sentences).
-            unresolved: Each requested element that could NOT be completed, one entry per item, or
-                an empty list. Include things that could not be found online.
-            status: "succeeded" when every requested element is present in the output, otherwise
-                "partial".
+            unresolved: Each requested element that could NOT be completed or could not be verified,
+                one entry per item, or an empty list. Include figures you assumed because they could not
+                be found online or measured from the input.
+            status: "succeeded" when every check below is "ok", otherwise "partial".
+            checks: One entry per requested feature or dimension, comparing the instruction with the
+                LAST accepted run_cad_script geometry summary, in the form
+                "<feature>: expected <value> - measured <value> - ok" or "... - mismatch". Cover overall
+                size, every hole/slot/pocket (count, diameter, depth or through), fillets/chamfers, and
+                for a modify run the elements of the input that had to stay unchanged.
         """
         state.finished = True
         state.final_summary = str(summary or "")
         state.final_unresolved = [str(u) for u in (unresolved or []) if str(u).strip()]
         state.final_status_hint = str(status or "").strip().lower()
+        state.final_checks = [str(c)[:CHECKS_MAX_CHARS] for c in (checks or []) if str(c).strip()][:CHECKS_MAX_ITEMS]
+        mismatches = [c for c in state.final_checks if MISMATCH_MARKER in c.lower()]
+        if mismatches and state.final_status_hint != report.STATUS_PARTIAL:
+            return json.dumps({"recorded": True, "note": f"{len(mismatches)} check(s) report a mismatch; the run is "
+                                                         f"recorded as partial and they are listed as unresolved."})
         return "recorded"
 
     tools = [inspect_input_step, run_cad_script, finish]
@@ -228,24 +248,30 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         @tool
         def web_search(query: str) -> str:
             """Search the web for reference material about a design (dimensions, datasheets, published
-            board layouts, standard part sizes). Returns titles, URLs and snippets.
+            board layouts, standard part sizes). Returns titles, URLs and snippets. A run may make a
+            limited number of searches; the result says how many remain.
 
             Args:
                 query: The search query.
             """
+            if state.search_calls >= SEARCH_BUDGET:
+                return json.dumps({"ok": False, "error": f"Refused: the research budget of {SEARCH_BUDGET} searches is spent. "
+                                                         "Continue with the figures you have and list every unverified one in finish()."})
+            state.search_calls += 1
             try:
                 results = _search(query, SEARCH_MAX_RESULTS)
             except Exception as exc:
                 return json.dumps({"ok": False, "error": f"search failed: {str(exc)[:300]}"})
             trimmed = [{"title": str(r.get("title", ""))[:200], "url": str(r.get("href") or r.get("url", ""))[:500],
                         "snippet": str(r.get("body") or r.get("snippet", ""))[:500]} for r in results]
-            return json.dumps({"ok": True, "results": trimmed})
+            return json.dumps({"ok": True, "searchesLeft": SEARCH_BUDGET - state.search_calls, "results": trimmed})
 
         @tool
         def fetch_url(url: str) -> str:
-            """Fetch a public web page and return its readable text (bounded). Only http(s) URLs of
-            publicly routable hosts can be fetched. Record-keeping: every URL fetched is listed as a
-            source in the run's report.
+            """Fetch a public web page and return its readable text (bounded; images and drawings in a page
+            are NOT readable, only its text). Only http(s) URLs of publicly routable hosts can be fetched.
+            Record-keeping: every URL fetched is listed as a source in the run's report. A run may fetch a
+            limited number of pages; the result says how many remain.
 
             Args:
                 url: The http(s) URL to fetch.
@@ -254,6 +280,10 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
                 validate_fetch_url(url)
             except UnsafeUrl as exc:
                 return json.dumps({"ok": False, "error": str(exc)})
+            if state.fetch_calls >= FETCH_BUDGET:
+                return json.dumps({"ok": False, "error": f"Refused: the research budget of {FETCH_BUDGET} page fetches is spent. "
+                                                         "Continue with the figures you have and list every unverified one in finish()."})
+            state.fetch_calls += 1
             try:
                 text = _fetch(url)
             except Exception as exc:
@@ -266,7 +296,7 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
                 return json.dumps({"ok": False, "error": f"page not returned: {str(exc)[:300]}"})
             if url not in state.sources:
                 state.sources.append(url)
-            return json.dumps({"ok": True, "url": url, "text": text})
+            return json.dumps({"ok": True, "url": url, "fetchesLeft": FETCH_BUDGET - state.fetch_calls, "text": text})
 
         tools += [web_search, fetch_url]
 
