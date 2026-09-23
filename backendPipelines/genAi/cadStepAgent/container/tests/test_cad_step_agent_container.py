@@ -284,6 +284,30 @@ class TestModelResolution:
         assert 'faces("<Z").wires().toPending().extrude(t, combine=False)' in prompt
         assert "measured from the bounding box's minimum corner" in prompt
 
+    @pytest.mark.parametrize("prompt, named", [
+        ("Create a flat 4 mm carrier plate for the NVIDIA Jetson Nano Developer Kit carrier board.", True),
+        ("Make a bracket for the Raspberry Pi 4B.", True),
+        ("Drill holes to the DIN 912 M4 standard.", True),
+        ("Create a 100 x 60 x 10 mm rectangular mounting plate with four 4.5 mm clearance holes.", False),
+        ("Increase this plate's thickness from 10 mm to 15 mm. Keep the outline and the four holes.", False),
+        ("Create a plate. Keep it flat.", False),
+        ("", False),
+    ])
+    def test_a_named_product_or_standard_is_detected(self, prompt, named):
+        assert agent_module.names_external_reference(prompt) is named
+
+    @pytest.mark.parametrize("research, prompt, expected", [
+        (False, "A carrier plate for the NVIDIA Jetson Nano Developer Kit board.", True),
+        (True, "A carrier plate for the NVIDIA Jetson Nano Developer Kit board.", False),
+        (False, "Create a 100 x 60 x 10 mm plate with four 4.5 mm holes.", False),
+        (True, "Create a 100 x 60 x 10 mm plate with four 4.5 mm holes.", False),
+    ])
+    def test_the_no_research_reminder_appears_only_without_research_and_with_a_named_product(self, research, prompt, expected):
+        framing = agent_module.run_framing({"mode": "generate", "agent": {"prompt": prompt, "allowInternetResearch": research},
+                                            "outputFiles": {"fileName": "a.step"}})
+        assert ("is an ASSUMPTION" in framing) is expected
+        assert ("Internet research: allowed" in framing) is research
+
 
 # ---------------------------------------------------------------------------------------------------
 # tools

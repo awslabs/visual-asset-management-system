@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 
 PROVIDER_BEDROCK = "bedrock"
 PROVIDER_OPENAI = "openai"
@@ -159,21 +160,52 @@ def build_agent(model, tools):
     return Agent(model=model, tools=tools, system_prompt=SYSTEM_PROMPT)
 
 
+# A capitalised multi-token run ("Jetson Nano Developer Kit", "Raspberry Pi 4B") or a word that announces a
+# published reference: the cheap, deterministic sign that the instruction depends on figures the model
+# cannot measure from the input and, without research, cannot look up.
+_PRODUCT_NAME = re.compile(r"\b[A-Z][A-Za-z0-9\-]*(?:\s+(?:[A-Z][A-Za-z0-9\-]*|\d[A-Za-z0-9\-]*)){1,}\b")
+_REFERENCE_WORD = re.compile(r"\b(standard|specification|spec|datasheet|data sheet|drawing|footprint)s?\b", re.IGNORECASE)
+_NO_RESEARCH_REMINDER = (
+    "No research is available and the instruction names a product, board or standard: any figure that "
+    "depends on it (its outline, hole pattern, hole spacing, connector positions) is an ASSUMPTION - use "
+    "your best value, list every assumed figure in unresolved, and finish with status \"partial\"."
+)
+
+
+def names_external_reference(prompt):
+    """True when the instruction names a product, board or standard whose figures would have to be looked up:
+    a capitalised multi-token name that is not the start of a sentence, or a reference word such as
+    "standard", "datasheet" or "footprint"."""
+    text = str(prompt or "")
+    if _REFERENCE_WORD.search(text):
+        return True
+    for match in _PRODUCT_NAME.finditer(text):
+        start = match.start()
+        preceding = text[:start].rstrip()
+        sentence_start = not preceding or preceding[-1] in ".!?:;"
+        if not sentence_start:
+            return True
+    return False
+
+
 def run_framing(definition):
-    """The fixed part of the user turn: the run's mode, output name and budgets."""
+    """The fixed part of the user turn: the run's mode, output name, budgets and, when the instruction leans
+    on a named product without research, the reminder that such figures are assumptions."""
     agent_cfg = definition.get("agent", {}) or {}
     mode = definition.get("mode", "modify")
-    return "\n".join([
+    research = bool(agent_cfg.get("allowInternetResearch"))
+    lines = [
         f"Mode: {mode}.",
         f"Output file name: {definition.get('outputFiles', {}).get('fileName', 'output.step')}.",
         f"Attempt budget: {agent_cfg.get('maxAttempts', 4)} script attempts.",
-        "Internet research: " + ("allowed" if agent_cfg.get("allowInternetResearch") else "not available in this run") + ".",
+        "Internet research: " + ("allowed" if research else "not available in this run") + ".",
         "Method: before coding, write the numbered spec (every feature with its numbers, in mm); after each attempt "
         "compare the geometry summary against the spec item by item; finish() must carry one check line per spec item "
         "and a summary that states the final bounding box, volume and feature counts in numbers.",
-        "",
-        "Instruction:",
-    ])
+    ]
+    if not research and names_external_reference(agent_cfg.get("prompt", "")):
+        lines.append(_NO_RESEARCH_REMINDER)
+    return "\n".join(lines + ["", "Instruction:"])
 
 
 def run_instruction(definition, tag_prompt=False):
