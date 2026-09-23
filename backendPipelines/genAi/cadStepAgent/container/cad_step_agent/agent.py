@@ -42,8 +42,10 @@ How a run works:
    there is no input you GENERATE the part.
 4. Research (only when web_search/fetch_url exist): use it only for figures that come from a named external
    artefact (a product, board, standard) and that you cannot verify otherwise. The budget is small; a
-   fetched page yields text only, never its drawings. If a figure stays unconfirmed, use your best value,
-   say so in unresolved, and set status "partial" - never present an assumed figure as a published one.
+   fetched page yields text only, never its drawings. A figure whose only source is a forum, Q&A site, user
+   post or blog is an ASSUMPTION unless a manufacturer, vendor or standards page confirms it. If a figure
+   stays unconfirmed, use your best value, say so in unresolved, and set status "partial" - never present
+   an assumed figure as a published one.
 5. Write ONE complete script per run_cad_script call. It must import os and cadquery as cq, build ONE
    solid, and export it with cq.exporters.export(result, os.environ["CAD_OUTPUT_STEP"]). Only the Python
    standard library and cadquery are available; there is no network. Place the part with its base on z=0

@@ -301,6 +301,12 @@ class TestModelResolution:
         for text in (agent_module.SYSTEM_PROMPT, agent_module.run_framing({"mode": "modify", "agent": {}})):
             assert "bounding box, volume and feature counts in numbers" in " ".join(text.split())
 
+    def test_the_prompt_treats_a_forum_sourced_figure_as_an_assumption(self):
+        research_rule = " ".join(agent_module.SYSTEM_PROMPT.split("4. Research")[1].split("5. Write ONE")[0].split())
+        assert "forum, Q&A site, user post or blog is an ASSUMPTION" in research_rule
+        assert "manufacturer, vendor or standards page confirms it" in research_rule
+        assert 'set status "partial"' in research_rule
+
     def test_the_recipe_sheet_separates_modify_from_generate(self):
         prompt = agent_module.SYSTEM_PROMPT
         modify_at, generate_at = prompt.index("recipes for MODIFY runs"), prompt.index("GENERATE recipes")
