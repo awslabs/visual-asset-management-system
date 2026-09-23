@@ -27,8 +27,10 @@ export interface CadStepAgentAgentCoreConstructProps extends cdk.StackProps {
 }
 
 /**
- * Amazon Bedrock AgentCore Runtime hosting the CAD STEP agent container, with its DEFAULT endpoint.
+ * Amazon Bedrock AgentCore Runtime hosting the CAD STEP agent container.
  *
+ * The service provisions the runtime's `DEFAULT` endpoint together with the runtime itself, so no
+ * endpoint resource is declared here; the invoke Lambda addresses the runtime through that qualifier.
  * The runtime is created in PUBLIC network mode: the agent's research tools reach the internet directly,
  * and the runtime's own calls to Amazon Bedrock, Amazon S3 and AWS Step Functions travel over the
  * service's managed network. The lifecycle configuration is what "warm sessions" means here: a runtime
@@ -37,7 +39,6 @@ export interface CadStepAgentAgentCoreConstructProps extends cdk.StackProps {
  */
 export class CadStepAgentAgentCoreConstruct extends Construct {
     public readonly runtime: bedrockagentcore.CfnRuntime;
-    public readonly endpoint: bedrockagentcore.CfnRuntimeEndpoint;
     public readonly runtimeArn: string;
 
     constructor(parent: Construct, name: string, props: CadStepAgentAgentCoreConstructProps) {
@@ -128,11 +129,6 @@ export class CadStepAgentAgentCoreConstruct extends Construct {
         // on every update that names a new tag.
         this.runtime.node.addDependency(props.image.build);
 
-        this.endpoint = new bedrockagentcore.CfnRuntimeEndpoint(this, "Endpoint", {
-            agentRuntimeId: this.runtime.attrAgentRuntimeId,
-            name: "DEFAULT",
-            description: "Default endpoint of the VAMS CAD STEP agent runtime",
-        });
         this.runtimeArn = this.runtime.attrAgentRuntimeArn;
 
         NagSuppressions.addResourceSuppressions(

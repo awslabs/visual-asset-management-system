@@ -151,7 +151,7 @@ describe("CAD STEP agent on the AgentCore runtime", () => {
         expect(names.some((n) => /executeBatchJob/.test(n))).toBe(false);
     });
 
-    test("an AgentCore Runtime and its DEFAULT endpoint are created, PUBLIC and HTTP", () => {
+    test("an AgentCore Runtime is created, PUBLIC and HTTP", () => {
         const runtimes = synth.ofType("AWS::BedrockAgentCore::Runtime");
         expect(runtimes).toHaveLength(1);
         const props = runtimes[0].properties as any;
@@ -164,9 +164,21 @@ describe("CAD STEP agent on the AgentCore runtime", () => {
         expect(
             SynthResult.flatten(props.AgentRuntimeArtifact.ContainerConfiguration.ContainerUri)
         ).toMatch(/cadstepagent.*:[0-9a-f]{32}$/i);
+    });
+
+    test("no RuntimeEndpoint resource is declared; the service provisions DEFAULT with the runtime", () => {
+        // The service creates an endpoint named DEFAULT together with every runtime, so a declared
+        // endpoint of that name fails with 409 on every fresh deploy. The runtime assertion above is
+        // the positive control: the template does hold the runtime this endpoint would belong to.
+        expect(synth.ofType("AWS::BedrockAgentCore::Runtime")).toHaveLength(1);
         const endpoints = synth.ofType("AWS::BedrockAgentCore::RuntimeEndpoint");
-        expect(endpoints).toHaveLength(1);
-        expect((endpoints[0].properties as any).Name).toBe("DEFAULT");
+        expect(endpoints.filter((e) => (e.properties as any).Name === "DEFAULT")).toEqual([]);
+        expect(endpoints).toEqual([]);
+        // The invoke Lambda addresses the service-provisioned endpoint by that qualifier.
+        const invoke = pipelineLambdas(synth).find((f) => /invokeAgentRuntime/.test(f.logicalId))!;
+        expect((invoke.properties as any).Environment.Variables.AGENT_RUNTIME_QUALIFIER).toBe(
+            "DEFAULT"
+        );
     });
 
     test("the runtime environment carries model pointers and never a credential value", () => {
