@@ -32,6 +32,11 @@ MISMATCH_MARKER = "mismatch"
 FETCH_MAX_BYTES = 400_000
 FETCH_MAX_TEXT_CHARS = 12_000
 FETCH_TIMEOUT_SECONDS = 20
+# Content types the fetch tool reads: text the model can use. Anything else (a PDF, an image, an
+# archive) has no readable text at this layer and is refused before its body is read.
+FETCH_TEXT_CONTENT_TYPES = ("text/", "application/json", "application/xml", "application/xhtml")
+# A body that starts like one of these is a binary document even when the server calls it text.
+FETCH_BINARY_SIGNATURES = (b"%PDF-", b"\x89PNG", b"\xff\xd8\xff", b"PK\x03\x04", b"GIF8")
 # Redirects are followed one hop at a time, each hop validated like the first URL.
 FETCH_MAX_REDIRECTS = 3
 FETCH_SCHEMES = ("http", "https")
@@ -43,6 +48,10 @@ _BLANK_RE = re.compile(r"\n\s*\n+")
 
 class UnsafeUrl(ValueError):
     """The URL names something the fetch tool must not reach."""
+
+
+class UnreadableDocument(ValueError):
+    """The response is not text the model can read (a PDF, an image, an archive)."""
 
 
 def resolve_host(host, port):
@@ -283,7 +292,8 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         @tool
         def fetch_url(url: str) -> str:
             """Fetch a public web page and return its readable text (bounded; images and drawings in a page
-            are NOT readable, only its text). Only http(s) URLs of publicly routable hosts can be fetched.
+            are NOT readable, only its text, and a PDF or other binary document is refused). Only http(s)
+            URLs of publicly routable hosts can be fetched.
             Record-keeping: every URL fetched is listed as a source in the run's report. A run may fetch a
             limited number of pages; the result says how many remain.
 
@@ -343,10 +353,19 @@ def _peer_address(response):
     return peer[0] if isinstance(peer, (tuple, list)) and peer else None
 
 
+def _is_text_content_type(content_type):
+    media = content_type.split(";")[0].strip().lower()
+    return media == "" or media.startswith(FETCH_TEXT_CONTENT_TYPES)
+
+
 def _read_bounded(response):
     content_type = response.headers.get("content-type", "")
+    if not _is_text_content_type(content_type):
+        raise UnreadableDocument(f"the page is {content_type.split(';')[0].strip()}, not readable text")
     chunks, size = [], 0
     for chunk in response.iter_bytes():
+        if not chunks and chunk.lstrip().startswith(FETCH_BINARY_SIGNATURES):
+            raise UnreadableDocument("the page is a binary document, not readable text")
         chunks.append(chunk)
         size += len(chunk)
         if size >= FETCH_MAX_BYTES:

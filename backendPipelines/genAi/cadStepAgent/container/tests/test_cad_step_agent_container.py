@@ -694,6 +694,39 @@ class TestFetchUrlSsrfGuard:
         client = _FakeClient({"https://vendor.example/": _FakeResponse(200, body=b"x" * 1000)})
         assert len(tools._httpx_fetch("https://vendor.example/", client_factory=lambda: client)) <= 1000
 
+    @pytest.mark.parametrize("headers, body", [
+        ({"Content-Type": "application/pdf"}, b"%PDF-1.5 binary"),
+        ({"Content-Type": "application/octet-stream"}, b"\x89PNG\r\n"),
+        ({"Content-Type": "text/plain"}, b"%PDF-1.5\r%\xe2\xe3\xcf\xd3 279 0 obj"),
+        ({"Content-Type": "application/pdf"}, b"PK\x03\x04 zipped"),
+    ])
+    def test_a_binary_document_is_refused_as_unreadable_not_returned_as_text(self, monkeypatch, headers, body):
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: [PUBLIC])
+        client = _FakeClient({"https://vendor.example/doc": _FakeResponse(200, headers=headers, body=body)})
+        with pytest.raises(tools.UnreadableDocument, match="not readable text"):
+            tools._httpx_fetch("https://vendor.example/doc", client_factory=lambda: client)
+
+    @pytest.mark.parametrize("headers, body, expected", [
+        ({"Content-Type": "text/html; charset=utf-8"}, b"<p>Board is 100 x 80 mm</p>", "Board is 100 x 80 mm"),
+        ({"Content-Type": "application/json"}, b'{"w": 100}', '{"w": 100}'),
+        ({}, b"plain text with no content type", "plain text with no content type"),
+    ])
+    def test_text_documents_are_read(self, monkeypatch, headers, body, expected):
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: [PUBLIC])
+        client = _FakeClient({"https://vendor.example/doc": _FakeResponse(200, headers=headers, body=body)})
+        assert tools._httpx_fetch("https://vendor.example/doc", client_factory=lambda: client) == expected
+
+    def test_the_tool_reports_an_unreadable_document_as_a_failed_fetch_without_recording_a_source(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: [PUBLIC])
+        state = _state(tmp_path)
+
+        def pdf(url):
+            raise tools.UnreadableDocument("the page is application/pdf, not readable text")
+        fns = _tool_map(tools.build_tools(state, search_fn=lambda q, n: [], fetch_fn=pdf, screen_fn=_pass_screen))
+        reply = json.loads(fns["fetch_url"]("https://vendor.example/datasheet.pdf"))
+        assert reply["ok"] is False and "not readable text" in reply["error"]
+        assert state.sources == []
+
 
 # ---------------------------------------------------------------------------------------------------
 # run_job
