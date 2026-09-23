@@ -34,7 +34,7 @@ export interface CadStepAgentCodeBuildConstructProps extends cdk.StackProps {
 
 export class CadStepAgentCodeBuildConstruct extends Construct {
     public readonly repository: ecr.Repository;
-    /** Content-addressed tag the build pushes and the runtime consumes. */
+    /** Content-addressed tag the build pushes and the runtime consumes; carries the image's architecture. */
     public readonly imageTag: string;
     public readonly codeBuildProjectName: string;
     /**
@@ -90,10 +90,11 @@ export class CadStepAgentCodeBuildConstruct extends Construct {
         });
 
         // Content-addressed image tag, supplied to the build and consumed by the runtime from this
-        // one literal so the two sides cannot name different images. A deployment builds one platform;
-        // the build trigger below carries the platform as a property, so switching runtimes re-fires
-        // the build and the tag is re-pushed for the new architecture.
-        const imageTag = contentImageTag(sourceAsset.assetHash);
+        // one literal so the two sides cannot name different images. A deployment builds one platform
+        // and the tag carries its architecture, so the arm64 and amd64 images of the same sources
+        // never share a tag; the build trigger below carries the platform as a property, so switching
+        // runtimes re-fires the build for the new architecture.
+        const imageTag = contentImageTag(sourceAsset.assetHash, props.platform);
 
         const project = new codebuild.Project(this, "CodeBuild-CadStepAgent", {
             description: `Build the CAD STEP agent container image (${props.platform}) and push to ECR`,

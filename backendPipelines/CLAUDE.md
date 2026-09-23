@@ -672,7 +672,11 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     supplies `IMAGE_TAG` to the project's `environmentVariables` from `sourceAsset.assetHash`, and the
     pull site names that same value — a shared compute construct takes it as one prop together with the
     repository (`ecrImage` on `batch-fargate-pipeline.ts`, `codeBuildImage` on `batch-gpu-pipeline.ts`)
-    so the tag cannot be omitted while the repository is supplied. The buildspec must NOT default
+    so the tag cannot be omitted while the repository is supplied. A construct that builds one source
+    tree for more than one architecture (the CAD STEP agent: arm64 for the AgentCore Runtime, amd64 for
+    Fargate) passes the build platform as `contentImageTag`'s second argument, so the tag carries the
+    architecture (`<hash>-arm64`, `<hash>-amd64`) and a runtime switch cannot replace the digest behind
+    a tag the previous consumer still names. The buildspec must NOT default
     `IMAGE_TAG`; it fails the build when the project supplied none, because a default pushes a tag the
     Batch job definition does not name and the deploy still reports success. `:latest` is pushed
     alongside solely as the `--cache-from` alias, since a content-addressed tag never pre-exists and a

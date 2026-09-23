@@ -163,7 +163,7 @@ describe("CAD STEP agent on the AgentCore runtime", () => {
         });
         expect(
             SynthResult.flatten(props.AgentRuntimeArtifact.ContainerConfiguration.ContainerUri)
-        ).toMatch(/cadstepagent.*:[0-9a-f]{32}$/i);
+        ).toMatch(/cadstepagent.*:[0-9a-f]{32}-arm64$/i);
     });
 
     test("no RuntimeEndpoint resource is declared; the service provisions DEFAULT with the runtime", () => {
@@ -263,7 +263,7 @@ describe("CAD STEP agent on the AgentCore runtime", () => {
         expect(env.Type).toMatch(/ARM/);
         const vars = env.EnvironmentVariables as Array<{ Name: string; Value: string }>;
         expect(vars.find((v) => v.Name === "TARGET_PLATFORM")?.Value).toBe("linux/arm64");
-        expect(vars.find((v) => v.Name === "IMAGE_TAG")?.Value).toMatch(/^[0-9a-f]{32}$/);
+        expect(vars.find((v) => v.Name === "IMAGE_TAG")?.Value).toMatch(/^[0-9a-f]{32}-arm64$/);
     });
 
     test("the runtime is created only after the image build custom resource completes", () => {
@@ -384,7 +384,7 @@ describe("CAD STEP agent on the Fargate runtime", () => {
             ])
         );
         expect(SynthResult.flatten((jobDef.properties as any).ContainerProperties.Image)).toMatch(
-            /cadstepagent.*:[0-9a-f]{32}$/i
+            /cadstepagent.*:[0-9a-f]{32}-amd64$/i
         );
         // The attempt duration equals the run state's wait on the inner token.
         expect((jobDef.properties as any).Timeout.AttemptDurationSeconds).toBe(6600);
