@@ -10,11 +10,14 @@ result of a run never depends on parsing the model's prose.
 """
 
 import html
+import ipaddress
 import json
 import re
+import socket
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
+from urllib.parse import urljoin, urlsplit
 
 from . import cad_io, report, sandbox
 
@@ -22,10 +25,70 @@ SEARCH_MAX_RESULTS = 6
 FETCH_MAX_BYTES = 400_000
 FETCH_MAX_TEXT_CHARS = 12_000
 FETCH_TIMEOUT_SECONDS = 20
+# Redirects are followed one hop at a time, each hop validated like the first URL.
+FETCH_MAX_REDIRECTS = 3
+FETCH_SCHEMES = ("http", "https")
 USER_AGENT = "vams-cad-step-agent/1.0 (+https://github.com/awslabs/visual-asset-management-system)"
 _TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>|<[^>]+>", re.S | re.I)
 _WS_RE = re.compile(r"[ \t\r\f\v]+")
 _BLANK_RE = re.compile(r"\n\s*\n+")
+
+
+class UnsafeUrl(ValueError):
+    """The URL names something the fetch tool must not reach."""
+
+
+def resolve_host(host, port):
+    """Every address ``host`` resolves to right now (IPv4 and IPv6), as strings."""
+    infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    return sorted({info[4][0] for info in infos})
+
+
+def is_public_address(address):
+    """True for a globally routable unicast address.
+
+    Everything else is refused: RFC 1918 and the other private ranges, loopback, link-local (which
+    holds the 169.254.169.254 instance metadata endpoint), the fc00::/7 unique-local block (which
+    holds fd00:ec2::254), multicast, unspecified and reserved space. An IPv4-mapped IPv6 address is
+    judged by the IPv4 address it carries.
+    """
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return ip.is_global and not ip.is_multicast
+
+
+def validate_fetch_url(url, resolver=None):
+    """The split URL when it may be fetched; raises UnsafeUrl otherwise.
+
+    Per the SSRF guidance the check is on the ADDRESSES the host resolves to, not on the host name:
+    a public-looking name that resolves to a private, loopback, link-local or metadata address is
+    refused before any connection is made. The scheme must be http(s) and the URL may carry no
+    user information.
+    """
+    parsed = urlsplit(url or "")
+    if parsed.scheme.lower() not in FETCH_SCHEMES:
+        raise UnsafeUrl("only http(s) URLs can be fetched")
+    if parsed.username is not None or parsed.password is not None:
+        raise UnsafeUrl("URLs with user information cannot be fetched")
+    host = parsed.hostname
+    if not host:
+        raise UnsafeUrl("the URL names no host")
+    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    try:
+        addresses = (resolver or resolve_host)(host, port)
+    except (socket.gaierror, OSError, UnicodeError) as exc:
+        raise UnsafeUrl(f"{host} does not resolve") from exc
+    if not addresses:
+        raise UnsafeUrl(f"{host} does not resolve")
+    for address in addresses:
+        if not is_public_address(address):
+            raise UnsafeUrl(f"{host} resolves to a non-public address")
+    return parsed
 
 
 @dataclass
@@ -173,14 +236,17 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
 
         @tool
         def fetch_url(url: str) -> str:
-            """Fetch a web page and return its readable text (bounded). Record-keeping: every URL fetched
-            is listed as a source in the run's report.
+            """Fetch a public web page and return its readable text (bounded). Only http(s) URLs of
+            publicly routable hosts can be fetched. Record-keeping: every URL fetched is listed as a
+            source in the run's report.
 
             Args:
                 url: The http(s) URL to fetch.
             """
-            if not re.match(r"^https?://", url or ""):
-                return json.dumps({"ok": False, "error": "only http(s) URLs can be fetched"})
+            try:
+                validate_fetch_url(url)
+            except UnsafeUrl as exc:
+                return json.dumps({"ok": False, "error": str(exc)})
             try:
                 text = _fetch(url)
             except Exception as exc:
@@ -200,19 +266,57 @@ def _ddgs_search(query, max_results):
         return list(ddgs.text(query, max_results=max_results))
 
 
-def _httpx_fetch(url):
+def _httpx_client():
     import httpx  # lazy: research is optional per deployment
-    with httpx.Client(follow_redirects=True, timeout=FETCH_TIMEOUT_SECONDS,
-                      headers={"User-Agent": USER_AGENT}) as client:
-        with client.stream("GET", url) as response:
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "")
-            chunks, size = [], 0
-            for chunk in response.iter_bytes():
-                chunks.append(chunk)
-                size += len(chunk)
-                if size >= FETCH_MAX_BYTES:
-                    break
-            raw = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+    # Redirects are not followed by the client: each hop is re-validated below before it is requested.
+    return httpx.Client(follow_redirects=False, timeout=FETCH_TIMEOUT_SECONDS,
+                        headers={"User-Agent": USER_AGENT})
+
+
+def _peer_address(response):
+    """The address the connection actually reached, or None when the transport does not expose it."""
+    stream = (getattr(response, "extensions", None) or {}).get("network_stream")
+    if stream is None:
+        return None
+    try:
+        peer = stream.get_extra_info("server_addr")
+    except Exception:
+        return None
+    return peer[0] if isinstance(peer, (tuple, list)) and peer else None
+
+
+def _read_bounded(response):
+    content_type = response.headers.get("content-type", "")
+    chunks, size = [], 0
+    for chunk in response.iter_bytes():
+        chunks.append(chunk)
+        size += len(chunk)
+        if size >= FETCH_MAX_BYTES:
+            break
+    raw = b"".join(chunks).decode(getattr(response, "encoding", None) or "utf-8", errors="replace")
     return strip_html(raw) if "html" in content_type.lower() or raw.lstrip().startswith("<") else raw
+
+
+def _httpx_fetch(url, client_factory=_httpx_client):
+    """Fetch ``url`` following at most FETCH_MAX_REDIRECTS hops, each validated before it is requested.
+
+    The address the connection reached is checked as well, so a name that resolved to a public
+    address for the pre-flight check and to a private one for the connection (DNS rebinding) is not
+    read either.
+    """
+    current = url
+    with client_factory() as client:
+        for _ in range(FETCH_MAX_REDIRECTS + 1):
+            validate_fetch_url(current)
+            with client.stream("GET", current) as response:
+                peer = _peer_address(response)
+                if peer is not None and not is_public_address(peer):
+                    raise UnsafeUrl("the connection reached a non-public address")
+                location = response.headers.get("location")
+                if 300 <= response.status_code < 400 and location:
+                    current = urljoin(current, location)
+                    continue
+                response.raise_for_status()
+                return _read_bounded(response)
+    raise UnsafeUrl(f"more than {FETCH_MAX_REDIRECTS} redirects")
 

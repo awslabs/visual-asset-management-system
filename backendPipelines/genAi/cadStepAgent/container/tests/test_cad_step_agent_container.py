@@ -332,7 +332,8 @@ class TestTools:
         assert state.finished and state.final_unresolved == ["no datasheet found"]
         assert state.final_status_hint == "partial"
 
-    def test_fetch_url_records_sources_and_strips_html(self, tmp_path):
+    def test_fetch_url_records_sources_and_strips_html(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: ["93.184.216.34"])
         state = _state(tmp_path)
         fns = _tool_map(tools.build_tools(
             state, search_fn=lambda q, n: [{"title": "T", "href": "https://x.test", "body": "B"}],
@@ -349,6 +350,168 @@ class TestTools:
             raise RuntimeError("offline")
         fns = _tool_map(tools.build_tools(_state(tmp_path), search_fn=boom, fetch_fn=lambda u: ""))
         assert json.loads(fns["web_search"]("q"))["ok"] is False
+
+
+# ---------------------------------------------------------------------------------------------------
+# fetch_url SSRF guard
+# ---------------------------------------------------------------------------------------------------
+class _FakeResponse:
+    def __init__(self, status=200, headers=None, body=b"<p>ok</p>", peer=None):
+        self.status_code = status
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+        self._body = body
+        self.encoding = "utf-8"
+        self.extensions = {"network_stream": _FakeStream(peer)} if peer else {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def iter_bytes(self):
+        yield self._body
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _FakeStream:
+    def __init__(self, peer):
+        self._peer = peer
+
+    def get_extra_info(self, name):
+        return (self._peer, 443) if name == "server_addr" else None
+
+
+class _FakeClient:
+    """Answers each requested URL from a script of responses and records the order."""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.requested = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def stream(self, method, url):
+        self.requested.append(url)
+        return self.responses[url]
+
+
+PUBLIC = "93.184.216.34"
+
+
+@pytest.mark.unit
+class TestFetchUrlSsrfGuard:
+    @pytest.mark.parametrize("url", [
+        "ftp://example.test/file",
+        "file:///etc/passwd",
+        "gopher://example.test",
+        "https://user:pass@example.test/",
+        "https://user@example.test/",
+        "https:///nohost",
+        "http://10.0.0.8/",
+        "http://172.16.5.5:8080/",
+        "http://192.168.1.1/",
+        "http://127.0.0.1/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://169.254.170.2/v2/credentials/x",
+        "http://[::1]/",
+        "http://[fd00:ec2::254]/latest/meta-data/",
+        "http://[fe80::1]/",
+        "http://[::ffff:10.0.0.1]/",
+        "http://0.0.0.0/",
+        "http://100.64.0.1/",
+    ])
+    def test_every_non_public_or_malformed_target_is_refused_before_any_request(self, url, monkeypatch):
+        resolver_calls = []
+
+        def resolver(host, port):
+            resolver_calls.append(host)
+            return [host.strip("[]")]
+        with pytest.raises(tools.UnsafeUrl):
+            tools.validate_fetch_url(url, resolver=resolver)
+
+    def test_a_public_name_that_resolves_to_a_private_address_is_refused(self):
+        with pytest.raises(tools.UnsafeUrl, match="non-public"):
+            tools.validate_fetch_url("https://vendor.example/spec", resolver=lambda h, p: [PUBLIC, "10.1.2.3"])
+
+    def test_an_unresolvable_name_is_refused(self):
+        def resolver(host, port):
+            import socket
+            raise socket.gaierror("no such host")
+        with pytest.raises(tools.UnsafeUrl, match="does not resolve"):
+            tools.validate_fetch_url("https://nowhere.example/", resolver=resolver)
+        with pytest.raises(tools.UnsafeUrl, match="does not resolve"):
+            tools.validate_fetch_url("https://nowhere.example/", resolver=lambda h, p: [])
+
+    def test_a_public_target_is_accepted_and_the_port_follows_the_scheme(self):
+        seen = []
+
+        def resolver(host, port):
+            seen.append((host, port))
+            return [PUBLIC]
+        parsed = tools.validate_fetch_url("https://vendor.example/spec", resolver=resolver)
+        assert parsed.hostname == "vendor.example" and seen == [("vendor.example", 443)]
+        tools.validate_fetch_url("http://vendor.example:8080/spec", resolver=resolver)
+        assert seen[-1] == ("vendor.example", 8080)
+
+    def test_the_tool_refuses_before_calling_the_fetcher(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: ["10.0.0.5"])
+        fetched = []
+        fns = _tool_map(tools.build_tools(_state(tmp_path), search_fn=lambda q, n: [],
+                                          fetch_fn=lambda u: fetched.append(u) or "text"))
+        out = json.loads(fns["fetch_url"]("https://intranet.example/"))
+        assert out["ok"] is False and "non-public" in out["error"]
+        assert fetched == []
+
+    def test_a_redirect_to_a_private_address_is_refused_at_that_hop(self, monkeypatch):
+        addresses = {"vendor.example": [PUBLIC], "metadata.internal": ["169.254.169.254"]}
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: addresses[host])
+        client = _FakeClient({
+            "https://vendor.example/spec": _FakeResponse(302, {"Location": "http://metadata.internal/latest/"}),
+        })
+        with pytest.raises(tools.UnsafeUrl, match="non-public"):
+            tools._httpx_fetch("https://vendor.example/spec", client_factory=lambda: client)
+        assert client.requested == ["https://vendor.example/spec"]
+
+    def test_a_redirect_chain_to_public_hosts_is_followed_one_validated_hop_at_a_time(self, monkeypatch):
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: [PUBLIC])
+        client = _FakeClient({
+            "https://vendor.example/spec": _FakeResponse(301, {"Location": "/spec/v2"}),
+            "https://vendor.example/spec/v2": _FakeResponse(302, {"Location": "https://docs.vendor.example/spec"}),
+            "https://docs.vendor.example/spec": _FakeResponse(200, {"Content-Type": "text/html"}, b"<h1>69.6 mm</h1>"),
+        })
+        text = tools._httpx_fetch("https://vendor.example/spec", client_factory=lambda: client)
+        assert text == "69.6 mm"
+        assert client.requested == ["https://vendor.example/spec", "https://vendor.example/spec/v2",
+                                    "https://docs.vendor.example/spec"]
+
+    def test_too_many_redirects_are_refused(self, monkeypatch):
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: [PUBLIC])
+        responses = {f"https://v.example/{i}": _FakeResponse(302, {"Location": f"/{i + 1}"}) for i in range(10)}
+        with pytest.raises(tools.UnsafeUrl, match="redirects"):
+            tools._httpx_fetch("https://v.example/0", client_factory=lambda: _FakeClient(responses))
+
+    def test_a_connection_that_reached_a_private_peer_is_not_read(self, monkeypatch):
+        # DNS rebinding: the pre-flight resolution was public, the connection landed elsewhere.
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: [PUBLIC])
+        client = _FakeClient({"https://vendor.example/": _FakeResponse(200, body=b"secret", peer="10.0.0.9")})
+        with pytest.raises(tools.UnsafeUrl, match="reached a non-public"):
+            tools._httpx_fetch("https://vendor.example/", client_factory=lambda: client)
+        public = _FakeClient({"https://vendor.example/": _FakeResponse(200, body=b"fine", peer=PUBLIC)})
+        assert tools._httpx_fetch("https://vendor.example/", client_factory=lambda: public) == "fine"
+
+    def test_the_body_is_bounded(self, monkeypatch):
+        monkeypatch.setattr(tools, "resolve_host", lambda host, port: [PUBLIC])
+        monkeypatch.setattr(tools, "FETCH_MAX_BYTES", 10)
+        client = _FakeClient({"https://vendor.example/": _FakeResponse(200, body=b"x" * 1000)})
+        assert len(tools._httpx_fetch("https://vendor.example/", client_factory=lambda: client)) <= 1000
 
 
 # ---------------------------------------------------------------------------------------------------
