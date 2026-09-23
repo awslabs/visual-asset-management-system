@@ -34,12 +34,18 @@ COPY . /app/
 RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Create non-root user (issue #327) with a real HOME and ownership of paths the entrypoint writes.
-# Isaac Lab does runtime pip installs into site-packages, Omniverse caches under $HOME, and the
-# entrypoint writes to /app and /tmp/assets. /mnt/efs/checkpoints is mounted via access point and
-# already owned by 10000:10000, so it is not chowned here.
+# Isaac Lab does runtime pip installs into Isaac Sim's site-packages (custom environment packages),
+# Omniverse/Kit write caches under $HOME (~/.nvidia-omniverse, ~/.cache/ov, ~/.local/share/ov), and
+# the entrypoint writes to /app and /tmp/assets. /mnt/efs/checkpoints is mounted via the EFS access
+# point and already owned by 10000:10000, so it is not chowned here.
 RUN groupadd -g 10000 vams && \
     useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams && \
     chown -R vams:vams /app /tmp/assets /isaac-sim
+ENV HOME=/home/vams \
+    XDG_CACHE_HOME=/home/vams/.cache \
+    HF_HOME=/home/vams/.cache/huggingface
+RUN mkdir -p /home/vams/.cache /home/vams/.nvidia-omniverse /home/vams/.local/share && \
+    chown -R vams:vams /home/vams
 
 # Set entrypoint
 
