@@ -414,14 +414,37 @@ class TestInvokeAgentRuntime:
         assert len(kwargs["runtimeSessionId"]) >= 33
         send_failure.assert_not_called()
 
+    def test_a_busy_session_fails_the_inner_token_with_the_busy_error_and_returns(self):
+        mod = _load("invokeAgentRuntime.py")
+        invoke = MagicMock(return_value=self._response({"accepted": False, "error": "busy: a run is already active in this session"}))
+        with patch.object(mod.agentcore, "invoke_agent_runtime", invoke), \
+                patch.object(mod.sfn, "send_task_failure", MagicMock()) as send_failure:
+            resp = mod.lambda_handler(self._event(), MagicMock())
+        assert resp["status"] == "BUSY" and resp["jobName"] == "CadStepAgent_x"
+        send_failure.assert_called_once()
+        assert send_failure.call_args.kwargs["taskToken"] == _TOKEN
+        assert send_failure.call_args.kwargs["error"] == "CadStepAgentBusy"
+        assert len(send_failure.call_args.kwargs["cause"]) <= 256
+
     def test_a_rejected_run_fails_the_inner_token_and_raises(self):
         mod = _load("invokeAgentRuntime.py")
-        invoke = MagicMock(return_value=self._response({"accepted": False, "error": "busy"}))
+        invoke = MagicMock(return_value=self._response({"accepted": False, "error": "payload is missing 'taskToken'"}))
         with patch.object(mod.agentcore, "invoke_agent_runtime", invoke), \
                 patch.object(mod.sfn, "send_task_failure", MagicMock()) as send_failure, \
                 pytest.raises(RuntimeError):
             mod.lambda_handler(self._event(), MagicMock())
         assert send_failure.call_args.kwargs["taskToken"] == _TOKEN
+        assert send_failure.call_args.kwargs["error"] == "CadStepAgentInvokeError"
+
+    def test_a_reply_that_is_not_json_is_a_rejection_not_a_busy_slot(self):
+        mod = _load("invokeAgentRuntime.py")
+        stream = MagicMock()
+        stream.read.return_value = b"busy"
+        with patch.object(mod.agentcore, "invoke_agent_runtime", MagicMock(return_value={"response": stream})), \
+                patch.object(mod.sfn, "send_task_failure", MagicMock()) as send_failure, \
+                pytest.raises(RuntimeError):
+            mod.lambda_handler(self._event(), MagicMock())
+        assert send_failure.call_args.kwargs["error"] == "CadStepAgentInvokeError"
 
     def test_an_invoke_error_fails_the_inner_token_and_raises(self):
         mod = _load("invokeAgentRuntime.py")

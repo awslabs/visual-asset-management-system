@@ -220,6 +220,40 @@ describe("CAD STEP agent on the AgentCore runtime", () => {
         expect(run.TimeoutSeconds).toBeGreaterThan(6000);
     });
 
+    test("the run state retries a busy warm slot, bounded so the workflow task still ends first", () => {
+        const asl = JSON.parse(
+            SynthResult.flatten(
+                (
+                    synth
+                        .ofType("AWS::StepFunctions::StateMachine")
+                        .find((s) => /CadStepAgentStateMachine/.test(s.logicalId))!
+                        .properties as any
+                ).DefinitionString
+            )
+        );
+        const run = asl.States.CadStepAgentAgentCoreRun;
+        const busy = (run.Retry ?? []).filter((r: any) =>
+            r.ErrorEquals.includes("CadStepAgentBusy")
+        );
+        expect(busy).toHaveLength(1);
+        expect(busy[0].ErrorEquals).toEqual(["CadStepAgentBusy"]);
+        expect(busy[0].IntervalSeconds).toBe(30);
+        expect(busy[0].BackoffRate).toBe(2);
+        expect(busy[0].MaxAttempts).toBe(5);
+        // Every other error still goes straight to the catch that runs pipelineEnd.
+        expect(run.Catch).toHaveLength(1);
+        expect(run.Catch[0].ErrorEquals).toEqual(["States.ALL"]);
+        // The waits between retries (30 s doubling) plus the largest run budget getConfig accepts
+        // (6000 s) end inside the workflow task's outer bound.
+        let totalWait = 0;
+        for (let i = 0; i < busy[0].MaxAttempts; i++) {
+            totalWait += busy[0].IntervalSeconds * Math.pow(busy[0].BackoffRate, i);
+        }
+        expect(totalWait).toBeGreaterThanOrEqual(15 * 60 - 60);
+        const bundle = JSON.parse(fs.readFileSync(path.join(SCHEMA_DIR, "pipeline.json"), "utf8"));
+        expect(totalWait + 6000).toBeLessThan(Number(bundle.executionConfig.taskTimeout));
+    });
+
     test("the image is built for arm64 by CodeBuild", () => {
         const projects = synth
             .ofType("AWS::CodeBuild::Project")

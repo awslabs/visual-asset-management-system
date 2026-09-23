@@ -62,6 +62,17 @@ export const CAD_STEP_AGENT_PIPELINE_ID = "genai-cad-step-agent";
  * (6000 s), so the container's watchdog reports before the wait does.
  */
 export const RUN_TASK_TIMEOUT = cdk.Duration.seconds(6600);
+/**
+ * Retry of the run state on the agentcore runtime's busy refusal (`CadStepAgentBusy`): a warm session
+ * slot still running an earlier job. Five retries at 30 s doubling wait about 15.5 minutes in all;
+ * with the largest `maxRunSeconds` getConfig accepts (6000 s) the state still ends inside the bundles'
+ * 7200 s workflow task timeout.
+ */
+export const BUSY_RETRY = {
+    interval: cdk.Duration.seconds(30),
+    backoffRate: 2,
+    maxAttempts: 5,
+};
 export const CAD_STEP_AGENT_MODIFY_WORKFLOW_ID = "genai-cad-step-agent-modify";
 export const CAD_STEP_AGENT_GENERATE_WORKFLOW_ID = "genai-cad-step-agent-generate";
 
@@ -535,6 +546,9 @@ export class CadStepAgentConstruct extends Construct {
             resultPath: "$.runResult",
             taskTimeout: sfn.Timeout.duration(RUN_TASK_TIMEOUT),
         })
+            // A busy warm slot is waited for, not routed around: the retry re-invokes the Lambda, which
+            // derives the same session id from the job name and so asks the same slot again.
+            .addRetry({ errors: ["CadStepAgentBusy"], ...BUSY_RETRY })
             .addCatch(handleRunError, {
                 resultPath: "$.error",
             })

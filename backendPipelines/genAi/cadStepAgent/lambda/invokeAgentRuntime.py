@@ -7,8 +7,11 @@ Hands one run to the Amazon Bedrock AgentCore Runtime and passes the task token 
 Called by the internal Step Functions state machine with the WAIT_FOR_TASK_TOKEN integration pattern.
 
 The runtime acknowledges the run immediately (the agent works in a background task and reports the
-token itself), so this Lambda only checks that the run was accepted; a rejected or malformed
-acknowledgement fails the token here, since nothing downstream would.
+token itself), so this Lambda only checks that the run was accepted. A session whose container is still
+running an earlier job answers ``busy``: the token is failed with ``CadStepAgentBusy``, which the run
+state retries, and the retry hashes onto the same session and so waits for that slot. Any other rejected
+or malformed acknowledgement fails the token with ``CadStepAgentInvokeError`` and raises, since nothing
+downstream would report it.
 """
 
 import hashlib
@@ -39,6 +42,11 @@ WARM_SESSION_SLOTS = int(os.environ.get("WARM_SESSION_SLOTS", "0"))
 SESSION_NAMESPACE = os.environ.get("SESSION_NAMESPACE", "vams-cad-step-agent")
 # AgentCore requires a session id of at least 33 characters.
 MIN_SESSION_ID_LENGTH = 33
+# Error names reported on the inner token. The state machine retries the busy one only.
+INVOKE_ERROR = "CadStepAgentInvokeError"
+BUSY_ERROR = "CadStepAgentBusy"
+# How the agent container's reply marks a session that is still running an earlier job.
+BUSY_REPLY_PREFIX = "busy"
 
 
 def session_id_for(job_name, slots=None, namespace=None):
@@ -60,16 +68,29 @@ def session_id_for(job_name, slots=None, namespace=None):
     return base[:100]
 
 
-def _acknowledged(response_body):
-    """True when the runtime accepted the run; the payload is the agent app's own JSON reply."""
+def _reply(response_body):
+    """The agent app's own JSON reply as a dict, or None when the payload is not one."""
     try:
         body = json.loads(response_body) if isinstance(response_body, (str, bytes)) else response_body
     except (json.JSONDecodeError, TypeError):
-        return False
-    return isinstance(body, dict) and body.get("accepted") is True
+        return None
+    return body if isinstance(body, dict) else None
 
 
-def abort_external_workflow(error, task_token):
+def _acknowledged(response_body):
+    """True when the runtime accepted the run."""
+    reply = _reply(response_body)
+    return reply is not None and reply.get("accepted") is True
+
+
+def _busy(response_body):
+    """True when the runtime refused the run because its session container is still running one."""
+    reply = _reply(response_body)
+    return reply is not None and reply.get("accepted") is False \
+        and str(reply.get("error", "")).startswith(BUSY_REPLY_PREFIX)
+
+
+def abort_external_workflow(error, task_token, error_name=INVOKE_ERROR):
     """Fail the inner task token so the sub-state-machine's catch runs pipelineEnd, which reports the
     OUTER token. Never raises: the original error is the one worth reading."""
     if not task_token:
@@ -77,7 +98,7 @@ def abort_external_workflow(error, task_token):
     try:
         sfn.send_task_failure(
             taskToken=task_token,
-            error="CadStepAgentInvokeError",
+            error=error_name,
             cause=str(error)[:256]
         )
     except Exception as e:
@@ -113,6 +134,16 @@ def lambda_handler(event, context):
         )
         raw = response.get("response")
         body = raw.read() if hasattr(raw, "read") else raw
+        if _busy(body):
+            # Failing the token with the busy error is the whole outcome: the state retries on that
+            # error name, and a raise here would race it with a Lambda function error.
+            logger.info(f"Agent session busy: job={job_name} session={session_id}")
+            abort_external_workflow("The agent session is running an earlier job", task_token, BUSY_ERROR)
+            return {
+                "jobName": job_name,
+                "runtimeSessionId": session_id,
+                "status": "BUSY",
+            }
         if not _acknowledged(body):
             raise RuntimeError("Agent runtime did not accept the run")
     except Exception as e:
