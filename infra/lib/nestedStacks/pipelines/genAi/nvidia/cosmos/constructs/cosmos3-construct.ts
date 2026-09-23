@@ -337,7 +337,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/cosmos-models
 mount -t efs -o tls ${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models
 echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
-chown 10000:10000 /mnt/efs/cosmos-models
+chown -R 10000:10000 /mnt/efs/cosmos-models
 
 --==MYBOUNDARY==--
 `;
@@ -496,7 +496,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/cosmos-models
 mount -t efs -o tls ${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models
 echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
-chown 10000:10000 /mnt/efs/cosmos-models
+chown -R 10000:10000 /mnt/efs/cosmos-models
 
 --==MYBOUNDARY==--
 `;
