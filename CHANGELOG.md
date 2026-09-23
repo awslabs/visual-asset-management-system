@@ -15,12 +15,12 @@ All notable changes to this project will be documented in this file. See [standa
 ### Bug Fixes
 
 -   **Web / CDK** `web/package-lock.json` and `infra/package-lock.json` now record the full set of optional platform-specific native bindings (`esbuild`, `rolldown`, `lightningcss`, `@napi-rs/canvas`, `@parcel/watcher`, `@unrs/resolver-binding` and their transitives), so `npm ci` installs both packages instead of failing with `EUSAGE` because the lockfile was out of sync with `package.json`.
-    -   Note: No dependency version changes; only the missing lockfile entries were added. `npm install` was unaffected, which is why the drift was not caught earlier.
--   **Deployment** The build workflow checks every `package-lock.json` against its `package.json` with `npm ci --dry-run` before installing, so lockfile drift fails the build rather than being silently rewritten by `npm install`.
+    -   Note: No dependency version changes; only the missing lockfile entries were added.
+-   **Deployment** The build workflow checks the four package lockfiles (repository root, `web/`, `infra/`, `documentation/docusaurus-site/`) against their `package.json` with `npm ci --dry-run` under npm 11 before installing, so lockfile drift — including missing optional native bindings for other platforms — fails the build rather than being silently rewritten by `npm install`.
 
 ### Chores
 
--   **Documentation** Documentation site: `image-size` updated to 2.0.4 (resolves the ICNS / JXL / HEIF parser denial-of-service advisories GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq); `npm audit` reports no vulnerabilities for the site.
+-   **Documentation** Documentation site: `image-size` updated to 2.0.4 (resolves the ICNS / JXL / HEIF parser denial-of-service advisories GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq).
 
 ### Known Outstanding Issues
 
