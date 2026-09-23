@@ -162,8 +162,10 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
 
     @tool
     def inspect_input_step() -> str:
-        """Summarize the geometry of the input STEP file (solid/face/edge counts, bounding box in mm,
-        volume). Returns a note when the run has no input file."""
+        """Summarize the geometry of the input STEP file: solid/face/edge counts, bounding box in mm, volume
+        and the feature summary (holes by diameter with through/blind and their centres measured from the
+        bounding box's minimum corner, cylindrical outer faces, fillet-like faces, planar faces). Returns
+        a note when the run has no input file."""
         if not state.input_step:
             return json.dumps({"hasInput": False, "note": "This run has no input STEP file; create the geometry from scratch."})
         summary = cad_io.inspect_step(state.input_step)
@@ -217,7 +219,9 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         """Record the run's outcome. Call this exactly once when done.
 
         Args:
-            summary: What was built or changed and how it was verified (a few sentences).
+            summary: What was built or changed and how it was verified (a few sentences). It is shown to
+                the user on its own, so it states the final bounding box, volume and feature counts in
+                numbers (for example "100 x 60 x 15 mm, 89046 mm^3, 4 through holes D4.5").
             unresolved: Each requested element that could NOT be completed or could not be verified,
                 one entry per item, or an empty list. Include figures you assumed because they could not
                 be found online or measured from the input.

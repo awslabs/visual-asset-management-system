@@ -273,6 +273,17 @@ class TestModelResolution:
         assert "check line per spec item" in agent_module.run_instruction(
             {"mode": "generate", "agent": {"prompt": "a plate"}, "outputFiles": {"fileName": "a.step"}})
 
+    def test_the_prompt_requires_the_summary_to_state_the_numbers(self):
+        for text in (agent_module.SYSTEM_PROMPT, agent_module.run_framing({"mode": "modify", "agent": {}})):
+            assert "bounding box, volume and feature counts in numbers" in " ".join(text.split())
+
+    def test_the_recipe_sheet_separates_modify_from_generate(self):
+        prompt = agent_module.SYSTEM_PROMPT
+        modify_at, generate_at = prompt.index("recipes for MODIFY runs"), prompt.index("GENERATE recipes")
+        assert modify_at < generate_at < prompt.index("wp.box(L, W, T")
+        assert 'faces("<Z").wires().toPending().extrude(t, combine=False)' in prompt
+        assert "measured from the bounding box's minimum corner" in prompt
+
 
 # ---------------------------------------------------------------------------------------------------
 # tools
@@ -376,6 +387,11 @@ class TestTools:
         assert state.finished and state.final_unresolved == ["no datasheet found"]
         assert state.final_status_hint == "partial"
         assert state.final_checks == ["size: expected 40x40x10 - measured 40x40x10 - ok"]
+
+    def test_the_tool_descriptions_ask_for_numbers_and_name_the_hole_centres(self, tmp_path):
+        fns = _tool_map(tools.build_tools(_state(tmp_path, research=False)))
+        assert "bounding box, volume and feature counts in numbers" in " ".join(fns["finish"].__doc__.split())
+        assert "centres measured from the bounding box's minimum corner" in " ".join(fns["inspect_input_step"].__doc__.split())
 
     def test_describe_features_lists_hole_centres_per_plane(self):
         features = {"planar_faces": 6, "holes": [
