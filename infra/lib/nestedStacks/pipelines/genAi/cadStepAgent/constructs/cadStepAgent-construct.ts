@@ -4,6 +4,7 @@
  */
 
 import * as cdk from "aws-cdk-lib";
+import * as bedrock from "aws-cdk-lib/aws-bedrock";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
@@ -54,6 +55,13 @@ export interface CadStepAgentConstructProps extends cdk.StackProps {
 }
 
 export const CAD_STEP_AGENT_PIPELINE_ID = "genai-cad-step-agent";
+/**
+ * How long the run state waits on the inner task token, and the Batch job's attempt duration. Below
+ * the 7200 s taskTimeout the vamsSchema bundles put on the workflow task, so the inner wait ends
+ * first and pipelineEnd reports the outer token; above the largest `maxRunSeconds` getConfig accepts
+ * (6000 s), so the container's watchdog reports before the wait does.
+ */
+export const RUN_TASK_TIMEOUT = cdk.Duration.seconds(6600);
 export const CAD_STEP_AGENT_MODIFY_WORKFLOW_ID = "genai-cad-step-agent-modify";
 export const CAD_STEP_AGENT_GENERATE_WORKFLOW_ID = "genai-cad-step-agent-generate";
 
@@ -140,19 +148,78 @@ export class CadStepAgentConstruct extends Construct {
             ],
         });
 
-        // The model grant names the configured model both as the foundation model (cross-Region
-        // inference-profile prefix stripped) and as the inference profile the agent invokes.
+        // The model grant names the inference profile the agent invokes and the foundation model
+        // behind it. A cross-Region profile (global., us., eu., apac., us-gov.) routes requests to
+        // other Regions, and Amazon Bedrock authorizes the foundation-model ARN of the Region it
+        // routed to, so that case grants the model in every Region of the partition; a plain model id
+        // is invoked in the deployment Region only. Never foundation-model/*.
         const bedrockModelId = cad.bedrockModelId;
+        const crossRegionPrefix = /^(global|us-gov|us|eu|apac)\./.exec(bedrockModelId)?.[1];
         const bedrockModelPermissions = bedrockModelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
+        const foundationModelRegion = crossRegionPrefix ? "*" : region;
         const bedrockPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
                     actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
                     resources: [
-                        `arn:${ServiceHelper.Partition()}:bedrock:${region}::foundation-model/${bedrockModelPermissions}`,
-                        `arn:${ServiceHelper.Partition()}:bedrock:::foundation-model/${bedrockModelPermissions}`,
+                        `arn:${ServiceHelper.Partition()}:bedrock:${foundationModelRegion}::foundation-model/${bedrockModelPermissions}`,
                         `arn:${ServiceHelper.Partition()}:bedrock:${region}:${account}:inference-profile/${bedrockModelId}`,
                     ],
+                }),
+            ],
+        });
+
+        // Every model invocation and every fetched page runs through a guardrail with a PROMPT_ATTACK
+        // input filter. The deployment creates one unless the configuration names an existing
+        // guardrail id and version.
+        const configuredGuardrailId = (cad.bedrockGuardrail?.guardrailId ?? "").trim();
+        const configuredGuardrailVersion = (cad.bedrockGuardrail?.guardrailVersion ?? "").trim();
+        let guardrailId: string;
+        let guardrailVersion: string;
+        let guardrailArn: string;
+        if (configuredGuardrailId !== "") {
+            guardrailId = configuredGuardrailId;
+            guardrailVersion = configuredGuardrailVersion;
+            guardrailArn = `arn:${ServiceHelper.Partition()}:bedrock:${region}:${account}:guardrail/${guardrailId}`;
+        } else {
+            // A PROMPT_ATTACK filter applies to inputs only (its output strength must be NONE). LOW is
+            // the starting strength the guidance names; the filter is never disabled.
+            const guardrail = new bedrock.CfnGuardrail(this, "CadStepAgentGuardrail", {
+                name:
+                    "vams-cad-step-agent-" +
+                    generateUniqueNameHash(
+                        props.config.env.coreStackName,
+                        props.config.env.account,
+                        "CadStepAgentGuardrail",
+                        10
+                    ),
+                description:
+                    "VAMS GenAI CAD STEP agent: prompt-attack input filter over the instruction and fetched pages",
+                blockedInputMessaging:
+                    "The instruction or a fetched page was blocked by the prompt-attack filter.",
+                blockedOutputsMessaging: "The model response was blocked by the guardrail.",
+                contentPolicyConfig: {
+                    filtersConfig: [
+                        { type: "PROMPT_ATTACK", inputStrength: "LOW", outputStrength: "NONE" },
+                    ],
+                },
+                kmsKeyArn: props.kmsKey?.keyArn,
+            });
+            // A numbered version pins what the container applies; its description carries the filter
+            // configuration so a change there is a new version rather than a stale one.
+            const version = new bedrock.CfnGuardrailVersion(this, "CadStepAgentGuardrailVersion", {
+                guardrailIdentifier: guardrail.attrGuardrailId,
+                description: "PROMPT_ATTACK input filter, strength LOW",
+            });
+            guardrailId = guardrail.attrGuardrailId;
+            guardrailVersion = version.attrVersion;
+            guardrailArn = guardrail.attrGuardrailArn;
+        }
+        const guardrailPolicy = new iam.PolicyDocument({
+            statements: [
+                new iam.PolicyStatement({
+                    actions: ["bedrock:ApplyGuardrail"],
+                    resources: [guardrailArn],
                 }),
             ],
         });
@@ -162,6 +229,7 @@ export class CadStepAgentConstruct extends Construct {
             OutputBucketPolicy: outputBucketPolicy,
             StateTaskPolicy: stateTaskPolicy,
             BedrockModelPolicy: bedrockPolicy,
+            BedrockGuardrailPolicy: guardrailPolicy,
         };
         if (openAiEnabled) {
             // Read-only on the ONE configured secret; the key never leaves the container process.
@@ -175,10 +243,12 @@ export class CadStepAgentConstruct extends Construct {
             });
         }
 
-        // The environment both runtimes hand the agent container. Model ids and the secret ARN only —
-        // the API key itself is read from Secrets Manager at run start.
+        // The environment both runtimes hand the agent container. Model ids, the guardrail and the
+        // secret ARN only — the API key itself is read from Secrets Manager at run start.
         const containerEnvironment: { [key: string]: string } = {
             BEDROCK_MODEL_ID: bedrockModelId,
+            BEDROCK_GUARDRAIL_ID: guardrailId,
+            BEDROCK_GUARDRAIL_VERSION: guardrailVersion,
             OPENAI_MODEL_ID: openAiEnabled ? cad.openAi.modelId : "",
             OPENAI_API_KEY_SECRET_ARN: openAiEnabled ? cad.openAi.apiKeySecretArn : "",
         };
@@ -325,8 +395,8 @@ export class CadStepAgentConstruct extends Construct {
                 this,
                 "BatchFargatePipeline_CadStepAgent",
                 {
-                    // Matches the 2-hour taskTimeout on the state that waits for this job.
-                    attemptDuration: cdk.Duration.hours(2),
+                    // Matches the taskTimeout on the state that waits for this job.
+                    attemptDuration: RUN_TASK_TIMEOUT,
                     config: props.config,
                     vpc: props.vpc,
                     subnets: props.pipelineSubnets,
@@ -446,8 +516,10 @@ export class CadStepAgentConstruct extends Construct {
         });
 
         // No heartbeatTimeout: the container reports only terminal success/failure on the inner token.
-        // The 2-hour taskTimeout bounds the wait; the container's own maxRunSeconds is validated to be
-        // no longer than that in getConfig.
+        // The taskTimeout bounds the wait and sits inside the workflow task's 7200 s outer bound (the
+        // bundle's taskTimeout), so a hung container reaches pipelineEnd with a States.Timeout on THIS
+        // task, which reports the outer token, rather than the outer token expiring first. The
+        // container's own maxRunSeconds is validated in getConfig to end before this wait does.
         const runAgentTask = new tasks.LambdaInvoke(this, runtimeStateName, {
             lambdaFunction: runAgentFunction,
             integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
@@ -458,7 +530,7 @@ export class CadStepAgentConstruct extends Construct {
                 "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
             }),
             resultPath: "$.runResult",
-            taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(2)),
+            taskTimeout: sfn.Timeout.duration(RUN_TASK_TIMEOUT),
         })
             .addCatch(handleRunError, {
                 resultPath: "$.error",
@@ -483,8 +555,8 @@ export class CadStepAgentConstruct extends Construct {
 
         const stateMachine = new sfn.StateMachine(this, "CadStepAgent-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
-            // Envelopes the 2-hour run taskTimeout so an overrunning agent hits that task's own timeout
-            // and reaches pipelineEnd rather than an execution-level States.Timeout.
+            // Envelopes the run taskTimeout so an overrunning agent hits that task's own timeout and
+            // reaches pipelineEnd rather than an execution-level States.Timeout.
             timeout: cdk.Duration.hours(3),
             logs: {
                 destination: stateMachineLogGroup,

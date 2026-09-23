@@ -213,7 +213,7 @@ describe("useGenAiCadStepAgent getConfig() rules", () => {
                 commercialTemplate,
                 "us-east-1",
                 enableCad("agentcore", (cad) => {
-                    cad.maxRunSeconds = 7200;
+                    cad.maxRunSeconds = 6000;
                     cad.agentCore.maxLifetimeSeconds = 3600;
                     cad.agentCore.idleRuntimeSessionTimeoutSeconds = 900;
                 })
@@ -225,7 +225,7 @@ describe("useGenAiCadStepAgent getConfig() rules", () => {
                 commercialTemplate,
                 "us-east-1",
                 enableCad("fargate", (cad) => {
-                    cad.maxRunSeconds = 7200;
+                    cad.maxRunSeconds = 6000;
                     cad.agentCore.maxLifetimeSeconds = 3600;
                     cad.agentCore.idleRuntimeSessionTimeoutSeconds = 900;
                 })
@@ -246,12 +246,60 @@ describe("useGenAiCadStepAgent getConfig() rules", () => {
             bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
             openAi: { modelId: "", apiKeySecretArn: "" },
             allowInternetResearch: true,
+            bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
             agentCore: {
                 warmSessionSlots: 0,
                 idleRuntimeSessionTimeoutSeconds: 900,
                 maxLifetimeSeconds: 28800,
             },
             maxRunSeconds: 3600,
+        });
+    });
+
+    test("the run budget stops short of the inner task wait", () => {
+        expect(
+            loadConfig(
+                commercialTemplate,
+                "us-east-1",
+                enableCad("fargate", (cad) => (cad.maxRunSeconds = 6000))
+            )
+        ).not.toThrow();
+        expect(
+            loadConfig(
+                commercialTemplate,
+                "us-east-1",
+                enableCad("fargate", (cad) => (cad.maxRunSeconds = 7200))
+            )
+        ).toThrow(/maxRunSeconds must be an integer between 300 and 6000/);
+    });
+
+    test("the guardrail id and version are set together or left empty together", () => {
+        const withGuardrail = (id: string, version: string) =>
+            loadConfig(
+                commercialTemplate,
+                "us-east-1",
+                enableCad("agentcore", (cad) => {
+                    cad.bedrockGuardrail = { guardrailId: id, guardrailVersion: version };
+                })
+            );
+        expect(withGuardrail("", "")).not.toThrow();
+        expect(withGuardrail("abc123def456", "3")).not.toThrow();
+        expect(withGuardrail("abc123def456", "DRAFT")).not.toThrow();
+        expect(withGuardrail("abc123def456", "")).toThrow(/must be set together/);
+        expect(withGuardrail("", "1")).toThrow(/must be set together/);
+        expect(withGuardrail("arn:aws:bedrock:us-east-1:123456789012:guardrail/abc", "1")).toThrow(
+            /guardrailId must be a guardrail id/
+        );
+        expect(withGuardrail("abc123def456", "v1")).toThrow(/guardrailVersion/);
+    });
+
+    test("an older block without bedrockGuardrail is backfilled to the deployment-created guardrail", () => {
+        const config = loadConfig(commercialTemplate, "us-east-1", (c) => {
+            delete c.app.pipelines.useGenAiCadStepAgent.bedrockGuardrail;
+        })();
+        expect(config.app.pipelines.useGenAiCadStepAgent.bedrockGuardrail).toEqual({
+            guardrailId: "",
+            guardrailVersion: "",
         });
     });
 

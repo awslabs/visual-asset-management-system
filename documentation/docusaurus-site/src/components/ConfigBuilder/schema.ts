@@ -1023,6 +1023,24 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
     {
+        path: "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId",
+        label: "CAD STEP agent — Bedrock guardrail id",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Id of an existing Amazon Bedrock guardrail (with a PROMPT_ATTACK input filter) that every model invocation and fetched page runs through. Leave empty with the version empty to have the deployment create one.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion",
+        label: "CAD STEP agent — Bedrock guardrail version",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Numbered version (or DRAFT) of the guardrail named above; set together with the id.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
         path: "app.pipelines.useGenAiCadStepAgent.agentCore.warmSessionSlots",
         label: "CAD STEP agent — AgentCore warm session slots",
         input: "number",
@@ -1065,7 +1083,7 @@ export const FIELDS: FieldMeta[] = [
         section: "pipelines-standard",
         advanced: true,
         min: 300,
-        help: "300–7200 wall-clock bound for one agent run.",
+        help: "300–6000 wall-clock bound for one agent run; the run must report before the workflow task's 6600 s wait ends.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
     {

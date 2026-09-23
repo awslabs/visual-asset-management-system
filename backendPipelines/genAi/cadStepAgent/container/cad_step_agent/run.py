@@ -22,7 +22,7 @@ import boto3
 from botocore.config import Config
 
 from . import agent as agent_module
-from . import cad_step_naming, report, tools
+from . import cad_step_naming, guardrail as guardrail_module, report, tools
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md: the container talks to
 # Amazon S3 and Step Functions for the length of a run.
@@ -150,9 +150,11 @@ class Watchdog:
 
 
 def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, search_fn=None,
-            fetch_fn=None, now=None):
+            fetch_fn=None, guardrail=None, now=None):
     """Run one job end to end and report ``task_token``. Returns the success payload, or raises after
-    reporting a failure. ``agent_factory(model, tools) -> callable`` is injectable for tests."""
+    reporting a failure. ``agent_factory(model, tools) -> callable`` and ``guardrail`` (a
+    ``guardrail.Guardrail``) are injectable for tests; the guardrail otherwise comes from the
+    environment the deployment set, and a run without one does not start."""
     if s3 is None or sfn is None:
         s3_default, sfn_default = _clients()
         s3 = s3 or s3_default
@@ -206,6 +208,14 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
             agent_cfg.get("modelProvider"), agent_cfg.get("modelId", ""))
         model_label = f"{provider}:{model_id}"
 
+        # The caller's instruction is the first thing the guardrail sees, whichever provider runs it;
+        # an intervention ends the run here with its reason rather than as an empty agent turn.
+        guard = guardrail or guardrail_module.Guardrail.from_env()
+        try:
+            guard.screen(str(agent_cfg.get("prompt", "")), "instruction")
+        except guardrail_module.GuardrailBlocked as exc:
+            raise RunFailed(str(exc)) from exc
+
         state = tools.RunState(
             work_root=work_root,
             input_step=input_step,
@@ -215,14 +225,16 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
             deadline_epoch=started + max_run,
             research_allowed=bool(agent_cfg.get("allowInternetResearch", False)),
         )
-        bound_tools = tools.build_tools(state, search_fn=search_fn, fetch_fn=fetch_fn)
+        bound_tools = tools.build_tools(state, search_fn=search_fn, fetch_fn=fetch_fn, screen_fn=guard.screen)
         factory = agent_factory or (lambda m, t: agent_module.build_agent(m, t))
-        model = agent_module.build_model(provider, model_id, api_key) if agent_factory is None else None
+        model = agent_module.build_model(provider, model_id, api_key, guardrail=guard) \
+            if agent_factory is None else None
         agent = factory(model, bound_tools)
-        logger.info("agent run start id=%s mode=%s provider=%s attempts=%s research=%s",
-                    run_id, definition["mode"], provider, state.max_attempts, state.research_allowed)
+        logger.info("agent run start id=%s mode=%s provider=%s attempts=%s research=%s guardrail=%s",
+                    run_id, definition["mode"], provider, state.max_attempts, state.research_allowed,
+                    guard.guardrail_id)
         try:
-            agent(agent_module.run_instruction(definition))
+            agent(agent_module.run_instruction(definition, tag_prompt=provider == agent_module.PROVIDER_BEDROCK))
         except Exception as exc:
             logger.exception("agent loop raised")
             if not state.best_output:

@@ -173,12 +173,39 @@ describe("CAD STEP agent on the AgentCore runtime", () => {
         const env = (synth.ofType("AWS::BedrockAgentCore::Runtime")[0].properties as any)
             .EnvironmentVariables;
         expect(Object.keys(env).sort()).toEqual([
+            "BEDROCK_GUARDRAIL_ID",
+            "BEDROCK_GUARDRAIL_VERSION",
             "BEDROCK_MODEL_ID",
             "OPENAI_API_KEY_SECRET_ARN",
             "OPENAI_MODEL_ID",
         ]);
         expect(env.BEDROCK_MODEL_ID).toBe("global.anthropic.claude-sonnet-4-5-20250929-v1:0");
         expect(env.OPENAI_API_KEY_SECRET_ARN).toBe("");
+        // The deployment-created guardrail's id and numbered version, not literals.
+        expect(JSON.stringify(env.BEDROCK_GUARDRAIL_ID)).toMatch(
+            /CadStepAgentGuardrail.*GuardrailId/
+        );
+        expect(JSON.stringify(env.BEDROCK_GUARDRAIL_VERSION)).toMatch(
+            /CadStepAgentGuardrailVersion.*Version/
+        );
+    });
+
+    test("the run task waits less than the workflow task and longer than any accepted run budget", () => {
+        const asl = JSON.parse(
+            SynthResult.flatten(
+                (
+                    synth
+                        .ofType("AWS::StepFunctions::StateMachine")
+                        .find((s) => /CadStepAgentStateMachine/.test(s.logicalId))!
+                        .properties as any
+                ).DefinitionString
+            )
+        );
+        const run = asl.States.CadStepAgentAgentCoreRun;
+        expect(run.TimeoutSeconds).toBe(6600);
+        const bundle = JSON.parse(fs.readFileSync(path.join(SCHEMA_DIR, "pipeline.json"), "utf8"));
+        expect(Number(bundle.executionConfig.taskTimeout)).toBeGreaterThan(run.TimeoutSeconds);
+        expect(run.TimeoutSeconds).toBeGreaterThan(6000);
     });
 
     test("the image is built for arm64 by CodeBuild", () => {
@@ -304,6 +331,8 @@ describe("CAD STEP agent on the Fargate runtime", () => {
         expect(env.map((e) => e.Name)).toEqual(
             expect.arrayContaining([
                 "BEDROCK_MODEL_ID",
+                "BEDROCK_GUARDRAIL_ID",
+                "BEDROCK_GUARDRAIL_VERSION",
                 "OPENAI_MODEL_ID",
                 "OPENAI_API_KEY_SECRET_ARN",
             ])
@@ -311,7 +340,8 @@ describe("CAD STEP agent on the Fargate runtime", () => {
         expect(SynthResult.flatten((jobDef.properties as any).ContainerProperties.Image)).toMatch(
             /cadstepagent.*:[0-9a-f]{32}$/i
         );
-        expect((jobDef.properties as any).Timeout.AttemptDurationSeconds).toBe(7200);
+        // The attempt duration equals the run state's wait on the inner token.
+        expect((jobDef.properties as any).Timeout.AttemptDurationSeconds).toBe(6600);
     });
 
     test("the job definition is created only after the image build custom resource completes", () => {
@@ -371,6 +401,46 @@ describe("CAD STEP agent grants (either runtime)", () => {
         }
     });
 
+    test("a cross-Region inference profile grants the foundation model in every Region, never regionless", () => {
+        const bedrock = policyStatements(synth).filter((s) =>
+            actionsOf(s.statement).includes("bedrock:InvokeModel")
+        );
+        for (const s of bedrock) {
+            const flat = SynthResult.flatten(s.statement.Resource);
+            // The `global.` profile routes requests out of the deployment Region, and Amazon Bedrock
+            // authorizes the foundation-model ARN of the Region it routed to.
+            expect(flat).toMatch(
+                /:bedrock:\*::foundation-model\/anthropic\.claude-sonnet-4-5-20250929-v1:0/
+            );
+            // `arn:...:bedrock:::foundation-model/<id>` (empty Region segment) matches no real ARN.
+            expect(flat).not.toMatch(/:bedrock:::foundation-model\//);
+        }
+    });
+
+    test("a deployment-created guardrail with a PROMPT_ATTACK input filter exists and only it may be applied", () => {
+        const guardrails = synth.ofType("AWS::Bedrock::Guardrail");
+        expect(guardrails).toHaveLength(1);
+        const filters = (guardrails[0].properties as any).ContentPolicyConfig
+            .FiltersConfig as Array<{
+            Type: string;
+            InputStrength: string;
+            OutputStrength: string;
+        }>;
+        const promptAttack = filters.find((f) => f.Type === "PROMPT_ATTACK");
+        expect(promptAttack).toBeDefined();
+        expect(promptAttack!.InputStrength).not.toBe("NONE");
+        expect(synth.ofType("AWS::Bedrock::GuardrailVersion")).toHaveLength(1);
+        const applies = policyStatements(synth).filter((s) =>
+            actionsOf(s.statement).includes("bedrock:ApplyGuardrail")
+        );
+        expect(applies.length).toBeGreaterThan(0);
+        for (const s of applies) {
+            const resources = JSON.stringify(s.statement.Resource);
+            expect(resources).not.toBe('"*"');
+            expect(resources).toMatch(/CadStepAgentGuardrail.*GuardrailArn/);
+        }
+    });
+
     test("no s3:* or iam:* action is granted anywhere in the pipeline stack", () => {
         const stackStatements = policyStatements(synth).filter((s) =>
             /cadstepagent/i.test(s.stack)
@@ -389,6 +459,55 @@ describe("CAD STEP agent grants (either runtime)", () => {
             actionsOf(s.statement).some((a) => a.startsWith("secretsmanager:"))
         );
         expect(secrets.filter((s) => /cadstepagent/i.test(s.stack))).toEqual([]);
+    });
+});
+
+describe("CAD STEP agent with a plain model id and an existing guardrail", () => {
+    let synth: SynthResult;
+
+    beforeAll(() => {
+        synth = synthTemplate("commercial", {
+            mutate: onlyCadStepAgent("agentcore", (c) => {
+                c.app.pipelines.useGenAiCadStepAgent.bedrockModelId =
+                    "anthropic.claude-sonnet-4-5-20250929-v1:0";
+                c.app.pipelines.useGenAiCadStepAgent.bedrockGuardrail = {
+                    guardrailId: "abc123def456",
+                    guardrailVersion: "2",
+                };
+            }),
+            mutateKey: "cad-step-agent-agentcore-plain-model-own-guardrail",
+        });
+    });
+
+    test("a plain model id is granted in the deployment Region only", () => {
+        const bedrock = policyStatements(synth).filter((s) =>
+            actionsOf(s.statement).includes("bedrock:InvokeModel")
+        );
+        expect(bedrock.length).toBeGreaterThan(0);
+        for (const s of bedrock) {
+            const flat = SynthResult.flatten(s.statement.Resource);
+            expect(flat).toMatch(/:bedrock:us-east-1::foundation-model\/anthropic\.claude-sonnet/);
+            expect(flat).not.toMatch(/:bedrock:\*::/);
+            expect(flat).not.toMatch(/foundation-model\/\*/);
+        }
+    });
+
+    test("no guardrail is created; the configured one is applied and handed to the container", () => {
+        expect(synth.ofType("AWS::Bedrock::Guardrail")).toEqual([]);
+        expect(synth.ofType("AWS::Bedrock::GuardrailVersion")).toEqual([]);
+        const applies = policyStatements(synth).filter((s) =>
+            actionsOf(s.statement).includes("bedrock:ApplyGuardrail")
+        );
+        expect(applies.length).toBeGreaterThan(0);
+        for (const s of applies) {
+            expect(SynthResult.flatten(s.statement.Resource)).toMatch(
+                /:bedrock:us-east-1:123456789012:guardrail\/abc123def456$/
+            );
+        }
+        const env = (synth.ofType("AWS::BedrockAgentCore::Runtime")[0].properties as any)
+            .EnvironmentVariables;
+        expect(env.BEDROCK_GUARDRAIL_ID).toBe("abc123def456");
+        expect(env.BEDROCK_GUARDRAIL_VERSION).toBe("2");
     });
 });
 

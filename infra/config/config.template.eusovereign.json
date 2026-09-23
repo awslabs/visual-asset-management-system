@@ -119,6 +119,10 @@
                     "apiKeySecretArn": ""
                 },
                 "allowInternetResearch": true,
+                "bedrockGuardrail": {
+                    "guardrailId": "",
+                    "guardrailVersion": ""
+                },
                 "agentCore": {
                     "warmSessionSlots": 0,
                     "idleRuntimeSessionTimeoutSeconds": 900,

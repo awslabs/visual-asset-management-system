@@ -135,13 +135,20 @@ def strip_html(raw):
     return text.strip()
 
 
-def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn: Optional[Callable] = None):
+def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn: Optional[Callable] = None,
+                screen_fn: Optional[Callable] = None):
     """The Strands tool functions bound to ``state``.
 
     ``search_fn(query, max_results)`` and ``fetch_fn(url)`` are injectable so the tool layer tests
-    without network access; the defaults use ``ddgs`` and ``httpx``.
+    without network access; the defaults use ``ddgs`` and ``httpx``. ``screen_fn(text, what)`` is the
+    guardrail applied to every fetched page before the model sees it; it raises when the guardrail
+    intervenes. It is required whenever research is allowed: a fetched page is third-party text that
+    must not reach the model unscreened.
     """
     from strands import tool  # lazy: the container has Strands, the tests inject fakes
+
+    if state.research_allowed and screen_fn is None:
+        raise ValueError("research tools require a guardrail screen for fetched pages")
 
     @tool
     def inspect_input_step() -> str:
@@ -251,9 +258,15 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
                 text = _fetch(url)
             except Exception as exc:
                 return json.dumps({"ok": False, "error": f"fetch failed: {str(exc)[:300]}"})
+            text = text[:FETCH_MAX_TEXT_CHARS]
+            # Third-party text: the guardrail's prompt-attack filter sees it before the model does.
+            try:
+                screen_fn(text, "fetched page")
+            except Exception as exc:
+                return json.dumps({"ok": False, "error": f"page not returned: {str(exc)[:300]}"})
             if url not in state.sources:
                 state.sources.append(url)
-            return json.dumps({"ok": True, "url": url, "text": text[:FETCH_MAX_TEXT_CHARS]})
+            return json.dumps({"ok": True, "url": url, "text": text})
 
         tools += [web_search, fetch_url]
 

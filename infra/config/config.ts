@@ -905,6 +905,7 @@ export function getConfig(app: cdk.App): Config {
             bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
             openAi: { modelId: "", apiKeySecretArn: "" },
             allowInternetResearch: true,
+            bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
             agentCore: {
                 warmSessionSlots: 0,
                 idleRuntimeSessionTimeoutSeconds: 900,
@@ -923,6 +924,11 @@ export function getConfig(app: cdk.App): Config {
         if (cad.openAi.modelId == undefined) cad.openAi.modelId = "";
         if (cad.openAi.apiKeySecretArn == undefined) cad.openAi.apiKeySecretArn = "";
         if (cad.allowInternetResearch == undefined) cad.allowInternetResearch = true;
+        if (cad.bedrockGuardrail == undefined)
+            cad.bedrockGuardrail = { guardrailId: "", guardrailVersion: "" };
+        if (cad.bedrockGuardrail.guardrailId == undefined) cad.bedrockGuardrail.guardrailId = "";
+        if (cad.bedrockGuardrail.guardrailVersion == undefined)
+            cad.bedrockGuardrail.guardrailVersion = "";
         if (cad.agentCore == undefined)
             cad.agentCore = {
                 warmSessionSlots: 0,
@@ -1912,10 +1918,33 @@ export function getConfig(app: cdk.App): Config {
                     "idleRuntimeSessionTimeoutSeconds cannot exceed maxLifetimeSeconds."
             );
         }
-        if (!inRange(cad.maxRunSeconds, 300, 7200)) {
+        // The run task waits 6600 s on the inner token, inside the workflow's 7200 s outer bound, so
+        // the container's own budget has to end before the inner wait does.
+        if (!inRange(cad.maxRunSeconds, 300, 6000)) {
             throw new Error(
                 "Configuration Error: pipelines.useGenAiCadStepAgent.maxRunSeconds must be an integer " +
-                    "between 300 and 7200."
+                    "between 300 and 6000 (the run must report before the workflow task's 6600 s wait)."
+            );
+        }
+        const guardrailId = cad.bedrockGuardrail?.guardrailId ?? "";
+        const guardrailVersion = cad.bedrockGuardrail?.guardrailVersion ?? "";
+        if ((guardrailId.trim() === "") !== (guardrailVersion.trim() === "")) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId and " +
+                    "guardrailVersion must be set together (an existing guardrail) or both left empty " +
+                    "(the deployment creates a guardrail with a PROMPT_ATTACK input filter)."
+            );
+        }
+        if (guardrailId.trim() !== "" && !/^[a-z0-9]+$/.test(guardrailId.trim())) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId must " +
+                    "be a guardrail id (lower-case letters and digits), not an ARN or a name."
+            );
+        }
+        if (guardrailVersion.trim() !== "" && !/^(DRAFT|[0-9]+)$/.test(guardrailVersion.trim())) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion " +
+                    'must be a numbered guardrail version or "DRAFT".'
             );
         }
         if (cad.runtime === "agentcore" && cad.maxRunSeconds > cad.agentCore.maxLifetimeSeconds) {
@@ -3390,6 +3419,13 @@ export interface ConfigPublic {
                 };
                 // Deployment master switch for the agent's web search / page fetch tools.
                 allowInternetResearch: boolean;
+                // The Amazon Bedrock guardrail every model invocation and every fetched page runs
+                // through (a PROMPT_ATTACK input filter at least). Both empty: the deployment
+                // creates one; both set: an existing guardrail id and numbered version (or DRAFT).
+                bedrockGuardrail: {
+                    guardrailId: string;
+                    guardrailVersion: string;
+                };
                 agentCore: {
                     // Fixed runtime session ids reused across runs so a session stays warm; 0 uses a
                     // fresh session per run.

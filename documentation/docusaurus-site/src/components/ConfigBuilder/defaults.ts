@@ -253,6 +253,7 @@ const COMMERCIAL: ConfigShape = {
                 bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 openAi: { modelId: "", apiKeySecretArn: "" },
                 allowInternetResearch: true,
+                bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
                 agentCore: {
                     warmSessionSlots: 0,
                     idleRuntimeSessionTimeoutSeconds: 900,

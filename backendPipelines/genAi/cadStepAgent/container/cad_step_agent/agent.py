@@ -88,12 +88,20 @@ def resolve_model(provider, model_id_override="", env=None, secrets_client=None)
     return provider, model_id, api_key
 
 
-def build_model(provider, model_id, api_key=None, region=None):
-    """The Strands model object for the provider (lazy imports: the SDK lives in the container)."""
+def build_model(provider, model_id, api_key=None, region=None, guardrail=None):
+    """The Strands model object for the provider (lazy imports: the SDK lives in the container).
+
+    On Bedrock the deployment's guardrail rides on every invocation; the OpenAI provider has no
+    per-invocation guardrail, so its inputs are screened through ApplyGuardrail by the run instead.
+    """
     if provider == PROVIDER_BEDROCK:
         from strands.models import BedrockModel
+        if guardrail is None:
+            raise ModelConfigurationError("The Bedrock provider requires a guardrail")
         return BedrockModel(model_id=model_id, region_name=region or os.environ.get("AWS_REGION"),
-                            temperature=TEMPERATURE, max_tokens=MAX_TOKENS)
+                            temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
+                            guardrail_id=guardrail.guardrail_id, guardrail_version=guardrail.version,
+                            guardrail_trace="enabled")
     from strands.models.openai import OpenAIModel
     return OpenAIModel(client_args={"api_key": api_key}, model_id=model_id,
                        params={"max_tokens": MAX_TOKENS, "temperature": TEMPERATURE})
@@ -104,17 +112,32 @@ def build_agent(model, tools):
     return Agent(model=model, tools=tools, system_prompt=SYSTEM_PROMPT)
 
 
-def run_instruction(definition):
-    """The user-turn text handed to the agent for one run."""
+def run_framing(definition):
+    """The fixed part of the user turn: the run's mode, output name and budgets."""
     agent_cfg = definition.get("agent", {}) or {}
     mode = definition.get("mode", "modify")
-    lines = [
+    return "\n".join([
         f"Mode: {mode}.",
         f"Output file name: {definition.get('outputFiles', {}).get('fileName', 'output.step')}.",
         f"Attempt budget: {agent_cfg.get('maxAttempts', 4)} script attempts.",
         "Internet research: " + ("allowed" if agent_cfg.get("allowInternetResearch") else "not available in this run") + ".",
         "",
         "Instruction:",
-        str(agent_cfg.get("prompt", "")).strip(),
+    ])
+
+
+def run_instruction(definition, tag_prompt=False):
+    """The user turn handed to the agent for one run.
+
+    With ``tag_prompt`` the caller's instruction is a ``guardContent`` block, so the Bedrock guardrail
+    attached to the model inspects exactly the caller-supplied text; without it the turn is one string
+    (the OpenAI provider does not carry guard content).
+    """
+    prompt = str((definition.get("agent", {}) or {}).get("prompt", "")).strip()
+    framing = run_framing(definition)
+    if not tag_prompt:
+        return framing + "\n" + prompt
+    return [
+        {"text": framing},
+        {"guardContent": {"text": {"text": prompt, "qualifiers": ["guard_content"]}}},
     ]
-    return "\n".join(lines)
