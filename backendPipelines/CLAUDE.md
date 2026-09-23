@@ -679,6 +679,19 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     cold cache adds hours to a GPU image build. Copying an existing buildspec is how this regresses;
     `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the immutable-tag block of
     `infra/test/pipelines/containerBuildSources.test.ts` assert both halves.
+
+    A consumer that validates the image when it is CREATED needs the build to be synchronous from
+    CloudFormation's point of view. A Batch job definition accepts a tag that does not exist yet (the
+    job fails at start), which is why the Batch pipelines start the build from a fire-and-forget custom
+    resource; an Amazon Bedrock AgentCore Runtime rejects `CreateAgentRuntime` for a missing tag, so a
+    fresh deploy that creates it in parallel with the build always fails. The CAD STEP agent's
+    `cadStepAgentCodeBuild-construct.ts` is the pattern: a `cr.Provider` whose `onEventHandler` starts
+    the build (build id as physical id) and whose `isCompleteHandler` polls `codebuild:BatchGetBuilds`
+    on the project until the build is terminal, the handlers in
+    `genAi/cadStepAgent/lambda/imageBuildCustomResource.py` so the status mapping is unit-tested, and
+    `node.addDependency(<build custom resource>)` on every resource that names the tag
+    (`cadStepAgentRuntimes.test.ts` asserts the `DependsOn`).
+
 19. **A container that clones an upstream repository at build time clones a FIXED revision.** Declare
     the revision as an `ARG <NAME>_COMMIT=<40-hex>`, `git checkout --detach` it, and verify it landed
     with `test "$(git rev-parse HEAD)" = "${<NAME>_COMMIT}"` **in the same `RUN`** — a checkout in a

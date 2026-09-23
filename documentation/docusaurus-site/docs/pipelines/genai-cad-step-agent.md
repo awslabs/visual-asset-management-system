@@ -94,6 +94,7 @@ Enable the pipeline in `infra/config/config.json`:
                 "bedrockModelId": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 "openAi": { "modelId": "", "apiKeySecretArn": "" },
                 "allowInternetResearch": true,
+                "bedrockGuardrail": { "guardrailId": "", "guardrailVersion": "" },
                 "agentCore": {
                     "warmSessionSlots": 0,
                     "idleRuntimeSessionTimeoutSeconds": 900,
@@ -106,17 +107,24 @@ Enable the pipeline in `infra/config/config.json`:
 }
 ```
 
-Every option is described in the [Configuration Reference](../deployment/configuration-reference.md#genai-cad-step-agent-apppipelinesusegenaicadstepagent). Two points shape a deployment:
+Every option is described in the [Configuration Reference](../deployment/configuration-reference.md#genai-cad-step-agent-apppipelinesusegenaicadstepagent). Three points shape a deployment:
 
 -   **Model.** Set `bedrockModelId` to a model available in the deployment's Region (an Anthropic Claude model by default). To offer OpenAI models, store the API key in AWS Secrets Manager (as a plain string or as JSON with an `apiKey` key) and set `openAi.apiKeySecretArn` and `openAi.modelId`; a run then selects it with the `MODEL_PROVIDER` tag.
+-   **Guardrail.** Leave `bedrockGuardrail` empty and the deployment creates an Amazon Bedrock guardrail with a prompt-attack input filter (strength `LOW`) and applies it to every run; or name an existing guardrail's id and numbered version (or `DRAFT`) to apply your own, for example one that adds denied topics or word filters. The guardrail is applied whichever model provider a run uses.
 -   **Internet research.** `allowInternetResearch` is the deployment master switch. With it on, a run's `ALLOW_INTERNET_RESEARCH` tag decides; with it off, the search and fetch tools are never registered.
+
+### Warm sessions
+
+`agentCore.warmSessionSlots` trades start-up latency for concurrency. With `0` (the default) every run gets a fresh runtime session and its own container; runs are independent but each pays the container start. With `N` slots, runs are hashed onto `N` fixed session ids that the runtime keeps warm for `idleRuntimeSessionTimeoutSeconds`, so repeat runs start on a warm container — but one session hosts one run at a time: a run that lands on a slot whose session is still busy is refused by the container and retried by the workflow, and a session that reaches `maxLifetimeSeconds` mid-run ends that run. Size the slot count to the expected concurrency, or keep `0` where runs are rare or long.
 
 ## Security Model
 
--   **Generated scripts run in a sandbox.** Each script runs in a subprocess with an isolated interpreter (`python -I`), a scrubbed environment (no AWS credential variables, no task token, no model API key), a per-attempt working directory, a wall-clock timeout, and a bounded output tail. Where the runtime starts the container as root the script additionally runs as a separate `sandboxrunner` account; the agent itself always runs as the non-root `cadagent` account.
--   **Least privilege.** The container role may read and write objects under the registered asset-bucket prefixes and the auxiliary bucket, invoke the configured Amazon Bedrock model, report on AWS Step Functions task tokens, and — only when configured — read the single OpenAI API-key secret.
--   **Bounded runs.** `MAX_ATTEMPTS`, `maxRunSeconds`, the per-attempt script timeout and the Batch attempt duration bound cost and wall time; a run that exceeds its budget is failed and reported.
--   **Caller content stays with the caller.** The prompt is recorded in the run's report on the asset; the pipeline Lambdas log identifiers and counts, not the instruction text.
+-   **Generated scripts run in a bounded subprocess.** Each script runs in its own session with an isolated interpreter (`python -I`), an allow-listed environment (no AWS credential variables, no task token, no model API key), resource limits (address space, process count, file size), a per-attempt working directory, a wall-clock timeout that kills the whole process group, and a bounded output tail. The agent process makes itself non-dumpable at start, so a script cannot read the agent's environment, memory or open files through `/proc`. The script runs under the same `cadagent` account, in the same container and network namespace as the agent: the sandbox bounds time, output and the direct environment, and it is not a uid, network or credential boundary on its own. Treat the agent's task role as the permission set of any script the model writes.
+-   **`allowInternetResearch` gates tools, not egress.** With research off the search and fetch tools are not registered, but the container still has network access (public network mode on `agentcore`, NAT egress on `fargate`) for its own calls to Amazon Bedrock, Amazon S3 and AWS Step Functions. The page-fetch tool accepts only `http(s)` URLs without credentials, resolves every host and refuses private, loopback, link-local and metadata addresses (before the request and again on every redirect, which it follows one bounded hop at a time), and caps the response size and time.
+-   **Every model invocation runs under a guardrail.** The Amazon Bedrock provider applies the deployment's guardrail (`bedrockGuardrail.guardrailId` / `guardrailVersion`, or the one the deployment creates when both are empty) with a prompt-attack input filter, and tags the caller's instruction and the tool results as the input the filter inspects.
+-   **Least privilege.** The container role may read and write objects under the registered asset-bucket prefixes and the auxiliary bucket, invoke the configured Amazon Bedrock model (the inference profile and, for a cross-Region profile, the foundation model in every Region it routes to), apply the guardrail, report on AWS Step Functions task tokens, and — only when configured — read the single OpenAI API-key secret.
+-   **Bounded runs.** `MAX_ATTEMPTS`, `maxRunSeconds`, the per-attempt script timeout and the Batch attempt duration bound cost and wall time; a run that exceeds its budget is failed and reported. On the `agentcore` runtime the watchdog reports the failure but cannot stop the session from outside: aborting an in-flight AgentCore run from VAMS is not supported, the run ends when `maxRunSeconds` elapses.
+-   **Caller content stays with the caller.** The prompt is recorded in the run's report on the asset; the pipeline Lambdas log identifiers and counts, not the instruction text. The definition document reaches the container through its environment (not its command line) and carries no workflow token.
 
 ## Prerequisites
 

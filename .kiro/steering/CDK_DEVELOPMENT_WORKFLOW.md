@@ -1372,6 +1372,17 @@ every execution then failing `CannotPullContainerError`. `:latest` is pushed alo
 GPU image build. Coverage: `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the
 immutable-tag block of `infra/test/pipelines/containerBuildSources.test.ts`.
 
+A consumer that validates the image when it is CREATED needs the build to be synchronous from
+CloudFormation's point of view. An AWS Batch job definition accepts a tag that does not exist yet (the
+job fails at start), so the Batch pipelines start the build from a fire-and-forget custom resource; an
+Amazon Bedrock AgentCore Runtime rejects `CreateAgentRuntime` for a missing tag, so a fresh deploy that
+creates it in parallel with the build always fails. The CAD STEP agent's
+`cadStepAgentCodeBuild-construct.ts` is the pattern: a `cr.Provider` with an `onEventHandler` that
+starts the build (build id as physical id) and an `isCompleteHandler` that polls
+`codebuild:BatchGetBuilds` on the project until the build is terminal, the handlers in
+`backendPipelines/genAi/cadStepAgent/lambda/imageBuildCustomResource.py` so the status mapping is
+unit-tested, and `node.addDependency(<build custom resource>)` on every resource that names the tag.
+
 #### **Pinned Upstream Clones in a Container Build**
 
 A container that clones an upstream repository while the image builds clones a FIXED revision:
