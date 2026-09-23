@@ -314,11 +314,15 @@ export class IsaacLabTrainingConstruct extends Construct {
                 effect: iam.Effect.ALLOW,
                 actions: ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"],
                 resources: [
-                    `arn:${ServiceHelper.Partition()}:elasticfilesystem:${region}:${account}:file-system/${trainingEfs.fileSystemId}`,
+                    `arn:${ServiceHelper.Partition()}:elasticfilesystem:${region}:${account}:file-system/${
+                        trainingEfs.fileSystemId
+                    }`,
                 ],
                 conditions: {
                     StringEquals: {
-                        "elasticfilesystem:AccessPointArn": `arn:${ServiceHelper.Partition()}:elasticfilesystem:${region}:${account}:access-point/${trainingEfsAccessPoint.accessPointId}`,
+                        "elasticfilesystem:AccessPointArn": `arn:${ServiceHelper.Partition()}:elasticfilesystem:${region}:${account}:access-point/${
+                            trainingEfsAccessPoint.accessPointId
+                        }`,
                     },
                 },
             })

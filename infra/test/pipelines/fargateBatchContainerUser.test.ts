@@ -278,9 +278,7 @@ describe("EFS Access Point wiring (issue #327)", () => {
         });
 
         const template = Template.fromStack(stack);
-        const jobDefs = Object.values(
-            template.findResources("AWS::Batch::JobDefinition")
-        ) as any[];
+        const jobDefs = Object.values(template.findResources("AWS::Batch::JobDefinition")) as any[];
         // Exactly one EC2 (non-Fargate) GPU job definition is expected from this construct.
         const ec2JobDefs = jobDefs.filter(
             (jd) => !(jd.Properties?.PlatformCapabilities ?? []).includes("FARGATE")
