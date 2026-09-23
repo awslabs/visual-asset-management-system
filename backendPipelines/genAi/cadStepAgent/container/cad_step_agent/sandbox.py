@@ -172,6 +172,15 @@ def _kill_process_group(proc):
         proc.kill()
 
 
+def _decode(captured):
+    """The script's combined output as text; bytes the script wrote that are not UTF-8 are replaced."""
+    if not captured:
+        return ""
+    if isinstance(captured, bytes):
+        return captured.decode("utf-8", errors="replace")
+    return str(captured)
+
+
 def run_script(code, work_dir, input_step=None, output_name="output.step",
                timeout_seconds=DEFAULT_TIMEOUT_SECONDS, python_executable=None):
     """Run ``code`` as a script in ``work_dir`` and return a ScriptResult.
@@ -203,20 +212,18 @@ def run_script(code, work_dir, input_step=None, output_name="output.step",
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        errors="replace",
         start_new_session=True,
         preexec_fn=_rlimit_preexec(script_rlimits()),
     )
     try:
         stdout, _ = proc.communicate(timeout=timeout_seconds)
         returncode = proc.returncode
-        lines = (stdout or "").splitlines()
+        lines = _decode(stdout).splitlines()
     except subprocess.TimeoutExpired:
         timed_out = True
         _kill_process_group(proc)
         stdout, _ = proc.communicate()
-        lines = (stdout or "").splitlines() + [f"[sandbox] script exceeded {timeout_seconds}s and was terminated"]
+        lines = _decode(stdout).splitlines() + [f"[sandbox] script exceeded {timeout_seconds}s and was terminated"]
 
     return ScriptResult(
         returncode=returncode,
