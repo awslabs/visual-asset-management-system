@@ -176,6 +176,23 @@ class TestOpenPipeline:
         assert sfn_input["inputS3AssetFilePath"] == ""
         assert sfn_input["jobName"].startswith("CadStepAgent_")
 
+    def test_the_sub_execution_is_registered_with_the_state_machine_log_source(self):
+        mod = _load("openPipeline.py", {
+            "ORCHESTRATION_BUS_NAME": "bus",
+            "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/VAMSStateMachine-CadStepAgentX",
+            "STATE_MACHINE_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:111111111111:log-group:/aws/vendedlogs/VAMSStateMachine-CadStepAgentX"})
+        start = MagicMock(return_value={
+            "executionArn": "arn:aws:states:us-east-1:1:execution:cad:CadStepAgent_x",
+            "startDate": datetime.datetime(2026, 1, 1),
+        })
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(_open_event("s3://abkt/xasset1/part.stp"), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "CAD STEP agent processing"
+        assert detail["logs"][0]["sourceType"] == "stateMachine"
+        assert detail["logs"][0]["label"] == "CAD STEP agent state machine"
+
     @pytest.mark.parametrize("ext", [".stp", ".STEP"])
     def test_step_inputs_pass_the_gate(self, ext):
         mod = _load("openPipeline.py")

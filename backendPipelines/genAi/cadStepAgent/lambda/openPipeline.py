@@ -61,6 +61,7 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "CAD STEP agent processing",
         },
     }
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
@@ -68,6 +69,8 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
+            "sourceType": "stateMachine",
+            "label": "CAD STEP agent state machine",
         }]
     try:
         events_client.put_events(Entries=[{
