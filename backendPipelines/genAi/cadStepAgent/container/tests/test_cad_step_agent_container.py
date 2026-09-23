@@ -377,6 +377,17 @@ class TestTools:
         assert state.final_status_hint == "partial"
         assert state.final_checks == ["size: expected 40x40x10 - measured 40x40x10 - ok"]
 
+    def test_describe_features_lists_hole_centres_per_plane(self):
+        features = {"planar_faces": 6, "holes": [
+            {"diameter_mm": 4.5, "through": True, "count": 5,
+             "centres_mm": [{"plane": "xy", "from_bbox_min": [8.0, 8.0]}, {"plane": "xy", "from_bbox_min": [92.0, 52.0]},
+                            {"plane": "yz", "from_bbox_min": [30.0, 5.0]}],
+             "centres_omitted": 2},
+            {"diameter_mm": 8.0, "through": False, "count": 1}]}
+        text = cad_io.describe_features(features)
+        assert "5 x D4.50 (through; centres from bbox min corner xy: (8.0, 8.0), (92.0, 52.0); yz: (30.0, 5.0), +2 more not listed)" in text
+        assert "1 x D8.00 (not full depth: blind or counterbored)" in text and text.endswith("planar faces 6")
+
     def test_finish_with_a_mismatch_check_and_a_succeeded_status_is_flagged(self, tmp_path):
         state = _state(tmp_path, research=False)
         fns = _tool_map(tools.build_tools(state))
@@ -975,8 +986,55 @@ class TestFeatureSummary:
         assert summary.features["cylindrical_bosses"] == [{"diameter_mm": 120.0, "count": 1}]
         assert summary.features["fillet_like_faces"] == []
         text = summary.describe()
-        assert "6 x D6.60 (through)" in text and "1 x D4.00 (not full depth" in text
+        assert "6 x D6.60 (through" in text and "1 x D4.00 (not full depth" in text
         assert "holes" in summary.to_dict()["features"]
+
+    def test_hole_centres_are_measured_from_the_bounding_box_min_corner(self, tmp_path):
+        import cadquery as cq
+        path = str(tmp_path / "plate.step")
+        plate = (cq.Workplane("XY").box(100, 60, 10, centered=(True, True, False)).faces(">Z").workplane()
+                 .pushPoints([(-42, -22), (42, -22), (-42, 22), (42, 22)]).hole(4.5))
+        cq.exporters.export(plate, path)
+        summary = cad_io.inspect_step(path)
+        [group] = summary.features["holes"]
+        assert group["count"] == 4 and group["through"] is True and "centres_omitted" not in group
+        assert [c["plane"] for c in group["centres_mm"]] == ["xy"] * 4
+        assert [c["from_bbox_min"] for c in group["centres_mm"]] == [[8.0, 8.0], [8.0, 52.0], [92.0, 8.0], [92.0, 52.0]]
+        assert "centres from bbox min corner xy: (8.0, 8.0), (8.0, 52.0), (92.0, 8.0), (92.0, 52.0)" in summary.describe()
+
+    def test_the_thickness_recipe_keeps_the_hole_centres(self, tmp_path):
+        import cadquery as cq
+        source = str(tmp_path / "in.step")
+        cq.exporters.export(cq.Workplane("XY").box(100, 60, 10, centered=(True, True, False)).faces(">Z").workplane()
+                            .pushPoints([(-42, -22), (42, -22), (-42, 22), (42, 22)]).hole(4.5), source)
+        part = cq.importers.importStep(source)
+        thick = str(tmp_path / "thick.step")
+        cq.exporters.export(part.faces("<Z").wires().toPending().extrude(15, combine=False), thick)
+        summary = cad_io.inspect_step(thick)
+        assert summary.bounding_box_mm[5] - summary.bounding_box_mm[2] == pytest.approx(15.0)
+        [group] = summary.features["holes"]
+        assert group["through"] and [c["from_bbox_min"] for c in group["centres_mm"]] == \
+            [[8.0, 8.0], [8.0, 52.0], [92.0, 8.0], [92.0, 52.0]]
+
+    def test_hole_centres_follow_the_hole_axis_and_stay_bounded(self, tmp_path):
+        import cadquery as cq
+        side = str(tmp_path / "side.step")
+        cq.exporters.export(cq.Workplane("XY").box(40, 40, 20, centered=(True, True, False)).faces(">X")
+                            .workplane(centerOption="CenterOfBoundBox").hole(6), side)
+        [group] = cad_io.inspect_step(side).features["holes"]
+        assert group["centres_mm"] == [{"plane": "yz", "from_bbox_min": [20.0, 10.0]}]
+        tilted = str(tmp_path / "tilted.step")
+        cq.exporters.export(cq.Workplane("XY").box(40, 40, 20, centered=(True, True, False)).faces(">Z").workplane()
+                            .transformed(rotate=(20, 0, 0)).hole(6), tilted)
+        [group] = cad_io.inspect_step(tilted).features["holes"]
+        assert group["count"] == 1 and "centres_mm" not in group
+        grid = str(tmp_path / "grid.step")
+        cq.exporters.export(cq.Workplane("XY").box(120, 100, 5, centered=(True, True, False)).faces(">Z").workplane()
+                            .rarray(20, 20, 6, 5).hole(3), grid)
+        [group] = cad_io.inspect_step(grid).features["holes"]
+        assert group["count"] == 30 and len(group["centres_mm"]) == cad_io.HOLE_CENTRES_MAX
+        assert group["centres_omitted"] == 30 - cad_io.HOLE_CENTRES_MAX
+        assert "+6 more not listed" in cad_io.describe_features({"holes": [group]})
 
     def test_fillets_and_slot_ends(self, tmp_path):
         import cadquery as cq

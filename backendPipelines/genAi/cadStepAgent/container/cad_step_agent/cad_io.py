@@ -51,16 +51,35 @@ class StepSummary:
 FILLET_MAX_SWEEP_DEG = 200.0
 HOLE_MIN_SWEEP_DEG = 300.0
 _GROUP_TOL = 0.05  # mm, same radius / same axis when merging the faces of one cylinder
+_AXIS_ALIGNED_COS = 0.9994  # cos(2 deg): a hole axis this close to x, y or z gets in-plane coordinates
+# Hole centres are listed for at most this many holes; the count per diameter is always complete.
+HOLE_CENTRES_MAX = 24
+_PLANE_OF_AXIS = {0: "yz", 1: "xz", 2: "xy"}  # the two coordinates given for a hole along x, y or z
+
+
+def _describe_hole_group(hole):
+    depth = "through" if hole.get("through") else "not full depth: blind or counterbored"
+    text = f"{hole['count']} x D{hole['diameter_mm']:.2f} ({depth}"
+    centres = hole.get("centres_mm") or []
+    if centres:
+        by_plane = {}
+        for c in centres:
+            by_plane.setdefault(c["plane"], []).append(f"({c['from_bbox_min'][0]:.1f}, {c['from_bbox_min'][1]:.1f})")
+        text += "; centres from bbox min corner " + "; ".join(
+            f"{plane}: " + ", ".join(points) for plane, points in sorted(by_plane.items()))
+        if hole.get("centres_omitted"):
+            text += f", +{hole['centres_omitted']} more not listed"
+    return text + ")"
 
 
 def describe_features(features):
-    """One line: 'holes: 6 x D6.60 (through), 1 x D30.00 (through); fillet-like faces: 4 x R3.00; planar faces 10'."""
+    """One line: 'holes: 4 x D4.50 (through; centres from bbox min corner xy: (8.0, 8.0), (92.0, 8.0), ...);
+    fillet-like faces: 4 x R3.00; planar faces 10'."""
     if not features:
         return ""
     parts = []
     if features.get("holes"):
-        parts.append("holes: " + ", ".join(
-            f"{h['count']} x D{h['diameter_mm']:.2f} ({'through' if h.get('through') else 'not full depth: blind or counterbored'})" for h in features["holes"]))
+        parts.append("holes: " + ", ".join(_describe_hole_group(h) for h in features["holes"]))
     else:
         parts.append("holes: none")
     if features.get("cylindrical_bosses"):
@@ -78,8 +97,10 @@ def describe_features(features):
 
 def summarize_features(shape, bbox):
     """Feature counts of a CadQuery shape: holes (concave cylinders, grouped per axis, by diameter, with a
-    through/blind flag against the bounding box), cylindrical outer faces, fillet-like faces (convex partial
-    cylinders and tori) and planar faces. Best effort: any failure yields None rather than an error."""
+    through/blind flag against the bounding box and, for axis-aligned holes, the centre in the plane
+    perpendicular to the axis measured from the bounding box's min corner), cylindrical outer faces,
+    fillet-like faces (convex partial cylinders and tori) and planar faces. Best effort: any failure yields
+    None rather than an error."""
     try:
         import math
         from OCP.BRepAdaptor import BRepAdaptor_Surface
@@ -140,12 +161,21 @@ def summarize_features(shape, bbox):
             return max(values) - min(values)
 
         holes, bosses, fillets, partial_cuts = {}, {}, {}, {}
-        for radius, direction, _foot, pmin, pmax, sweep, concave in groups:
+        hole_centres = {}
+        for radius, direction, foot, pmin, pmax, sweep, concave in groups:
             diameter = round(2 * radius, 2)
             if concave and sweep >= HOLE_MIN_SWEEP_DEG:
                 through = (pmax - pmin) >= extent_along(direction) - 0.5
                 key = (diameter, through)
                 holes[key] = holes.get(key, 0) + 1
+                axis_index = max(range(3), key=lambda i: abs(direction.toTuple()[i]))
+                if abs(direction.toTuple()[axis_index]) >= _AXIS_ALIGNED_COS:
+                    centre = (foot + direction * (0.5 * (pmin + pmax))).toTuple()
+                    i, j = [a for a in range(3) if a != axis_index]
+                    hole_centres.setdefault(key, []).append({
+                        "plane": _PLANE_OF_AXIS[axis_index],
+                        "from_bbox_min": [round(centre[i] - bbox[i], 2), round(centre[j] - bbox[j], 2)],
+                    })
             elif concave:
                 r = round(radius, 2)
                 partial_cuts[r] = partial_cuts.get(r, 0) + 1
@@ -156,9 +186,22 @@ def summarize_features(shape, bbox):
                 fillets[r] = fillets.get(r, 0) + 1
         for r in torus_radii:
             fillets[r] = fillets.get(r, 0) + 1
+
+        hole_entries = []
+        listed = 0
+        for (d, t), n in sorted(holes.items()):
+            entry = {"diameter_mm": d, "through": t, "count": n}
+            centres = sorted(hole_centres.get((d, t), []), key=lambda c: c["from_bbox_min"])
+            room = max(0, HOLE_CENTRES_MAX - listed)
+            if centres:
+                entry["centres_mm"] = centres[:room]
+                listed += len(entry["centres_mm"])
+                if len(centres) > room:
+                    entry["centres_omitted"] = len(centres) - room
+            hole_entries.append(entry)
         return {
             "planar_faces": planar,
-            "holes": [{"diameter_mm": d, "through": t, "count": n} for (d, t), n in sorted(holes.items())],
+            "holes": hole_entries,
             "cylindrical_bosses": [{"diameter_mm": d, "count": n} for d, n in sorted(bosses.items())],
             "fillet_like_faces": [{"radius_mm": r, "count": n} for r, n in sorted(fillets.items())],
             "partial_round_cuts": [{"radius_mm": r, "count": n} for r, n in sorted(partial_cuts.items())],
