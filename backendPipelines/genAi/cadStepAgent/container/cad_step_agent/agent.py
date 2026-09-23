@@ -12,7 +12,7 @@ PROVIDERS = (PROVIDER_BEDROCK, PROVIDER_OPENAI)
 
 BEDROCK_MODEL_ID_ENV = "BEDROCK_MODEL_ID"
 OPENAI_MODEL_ID_ENV = "OPENAI_MODEL_ID"
-OPENAI_API_KEY_SECRET_ARN_ENV = "OPENAI_API_KEY_SECRET_ARN"
+OPENAI_API_KEY_SECRET_ARN_ENV = "OPENAI_API_KEY_SECRET_ARN"  # nosec B105 - environment variable name, not a secret
 # Keys a JSON-shaped secret may store the API key under; a plain-string secret is used as-is.
 OPENAI_SECRET_JSON_KEYS = ("apiKey", "OPENAI_API_KEY", "api_key", "key")
 

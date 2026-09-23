@@ -28,18 +28,17 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY ./cad_step_agent/ ./cad_step_agent/
 
-# Two accounts. The agent runs as cadagent, never root. A generated script runs in a subprocess with a
-# scrubbed environment (no credential variables, no task token, no API key), an isolated interpreter
-# (-I), a per-attempt working directory and a timeout (sandbox.py); where the runtime starts the
-# container as root the script is additionally switched to the sandboxrunner uid.
+# The agent runs as cadagent, never root. A generated script runs in a subprocess of that same account
+# with a scrubbed environment (no credential variables, no task token, no API key), an isolated
+# interpreter (-I), its own session, resource limits, a per-attempt working directory and a timeout
+# (sandbox.py); the agent process makes itself non-dumpable so the script cannot read its /proc entry.
 RUN useradd --create-home --uid 10001 --user-group cadagent \
-    && useradd --create-home --uid 10002 --user-group sandboxrunner \
-    && mkdir -p /work && chown cadagent:cadagent /work && chmod 1777 /work
-ENV CAD_AGENT_SANDBOX_USER=sandboxrunner
+    && mkdir -p /work && chown cadagent:cadagent /work && chmod 700 /work
 ENV TMPDIR=/work
 USER cadagent
 
 # AgentCore Runtime protocol: HTTP on 8080 (/invocations, /ping). The Batch job definition overrides
-# the command with `python3 -m cad_step_agent.batch_main <definition>`.
+# the command with `python3 -m cad_step_agent.batch_main` and hands the definition over in the
+# environment.
 EXPOSE 8080
 CMD ["python3", "-m", "cad_step_agent.agentcore_app"]

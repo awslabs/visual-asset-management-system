@@ -29,7 +29,7 @@ from . import cad_step_naming, report, tools
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = logging.getLogger("cad_step_agent")
-TASK_TOKEN_ENV = "TASK_TOKEN"
+TASK_TOKEN_ENV = "TASK_TOKEN"  # nosec B105 - environment variable name, not a secret
 DEFAULT_MAX_RUN_SECONDS = 3600
 FAILURE_ERROR_CODE = "CadStepAgentRunFailed"
 INPUT_FILE_NAME = "input.step"
@@ -191,15 +191,15 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         watchdog = Watchdog(max_run, lambda: report_failure(f"Run exceeded its {max_run}s budget"))
         watchdog.start()
 
-        # The output name is re-derived here from the same module the Lambda used, so a definition
-        # whose name was hand-edited in transit is still held to the naming rules.
+        # The output name is passed back through the same naming module the Lambda used, as an
+        # override: a name that came out of the rules comes back unchanged, and a definition whose
+        # name was hand-edited in transit (a foreign extension, a disallowed character) does not.
         out = definition["outputFiles"]
         input_name = (definition.get("inputFile") or {}).get("objectKey", "").rsplit("/", 1)[-1]
         expected = cad_step_naming.resolve_output_filename(
             definition["mode"], input_name, out.get("fileName", ""), "", "", agent_cfg.get("prompt", ""))
-        if out.get("fileName") and cad_step_naming.split_extension(out["fileName"])[1] != \
-                cad_step_naming.split_extension(expected)[1]:
-            raise RunFailed("output file extension does not match the mode's rules")
+        if out.get("fileName") != expected:
+            raise RunFailed("output file name does not follow the mode's naming rules")
 
         input_step = _download_input(s3, definition, work_root)
         provider, model_id, api_key = agent_module.resolve_model(

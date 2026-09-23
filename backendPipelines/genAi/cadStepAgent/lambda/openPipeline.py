@@ -36,7 +36,7 @@ REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 
 def abort_external_workflow(error, task_token):
-    if (task_token != None and task_token != ""):
+    if task_token:  # nosec B105 - the token is compared against the empty string, not a hardcoded secret
         logger.error(f"Aborting external task: {task_token}")
         sfn.send_task_failure(
             taskToken=task_token,

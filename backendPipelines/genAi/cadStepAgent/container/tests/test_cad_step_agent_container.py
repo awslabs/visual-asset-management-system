@@ -6,7 +6,10 @@ replaced at their boundaries."""
 
 import json
 import os
+import resource
+import subprocess  # nosec B404 - the test spawns the interpreter by absolute path with a fixed argv
 import sys
+import time
 import types
 from unittest.mock import MagicMock, patch
 
@@ -64,12 +67,12 @@ class TestSandbox:
 
     def test_run_script_writes_output_and_reports_success(self, tmp_path):
         code = "import os\nopen(os.environ['CAD_OUTPUT_STEP'], 'w').write('ISO-10303-21;')\nprint('done')\n"
-        result = sandbox.run_script(code, str(tmp_path / "a1"), timeout_seconds=30, uid=None)
+        result = sandbox.run_script(code, str(tmp_path / "a1"), timeout_seconds=30)
         assert result.succeeded and result.returncode == 0 and not result.timed_out
         assert result.output_exists and "done" in result.output_tail
 
     def test_run_script_without_output_is_not_a_success(self, tmp_path):
-        result = sandbox.run_script("print('no file')\n", str(tmp_path / "a2"), timeout_seconds=30, uid=None)
+        result = sandbox.run_script("print('no file')\n", str(tmp_path / "a2"), timeout_seconds=30)
         assert result.returncode == 0 and not result.output_exists and not result.succeeded
 
     def test_run_script_cannot_see_the_parent_credentials(self, tmp_path, monkeypatch):
@@ -77,13 +80,109 @@ class TestSandbox:
         monkeypatch.setenv("TASK_TOKEN", "leak-me-too")
         code = ("import os,json\nprint(json.dumps({k: v for k, v in os.environ.items() if 'leak' in v}))\n"
                 "open(os.environ['CAD_OUTPUT_STEP'],'w').write('x')\n")
-        result = sandbox.run_script(code, str(tmp_path / "a3"), timeout_seconds=30, uid=None)
+        result = sandbox.run_script(code, str(tmp_path / "a3"), timeout_seconds=30)
         assert json.loads(result.output_tail.splitlines()[0]) == {}
 
     def test_run_script_times_out(self, tmp_path):
-        result = sandbox.run_script("import time\ntime.sleep(30)\n", str(tmp_path / "a4"), timeout_seconds=1, uid=None)
+        result = sandbox.run_script("import time\ntime.sleep(30)\n", str(tmp_path / "a4"), timeout_seconds=1)
         assert result.timed_out and not result.succeeded
         assert "terminated" in result.output_tail
+
+    def test_a_timed_out_script_leaves_no_surviving_grandchild(self, tmp_path):
+        # The script forks a sleeper and then sleeps itself; the timeout must take the whole group.
+        code = ("import subprocess, sys, time\n"
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                "print(child.pid, flush=True)\n"
+                "time.sleep(60)\n")
+        result = sandbox.run_script(code, str(tmp_path / "a5"), timeout_seconds=1)
+        assert result.timed_out
+        grandchild = int(result.output_tail.splitlines()[0])
+        for _ in range(50):
+            if not _alive(grandchild):
+                break
+            time.sleep(0.05)
+        assert not _alive(grandchild), f"grandchild {grandchild} survived the timeout"
+
+    def test_the_script_runs_under_the_resource_limits(self, tmp_path):
+        code = ("import resource, json, os\n"
+                "print(json.dumps({'as': resource.getrlimit(resource.RLIMIT_AS)[0],"
+                " 'fsize': resource.getrlimit(resource.RLIMIT_FSIZE)[0],"
+                " 'nproc': resource.getrlimit(resource.RLIMIT_NPROC)[0]}))\n"
+                "open(os.environ['CAD_OUTPUT_STEP'],'w').write('x')\n")
+        result = sandbox.run_script(code, str(tmp_path / "a6"), timeout_seconds=30)
+        assert result.succeeded, result.output_tail
+        limits = json.loads(result.output_tail.splitlines()[0])
+        assert limits["as"] <= sandbox.SCRIPT_MAX_ADDRESS_SPACE_BYTES
+        assert limits["fsize"] <= sandbox.SCRIPT_MAX_FILE_BYTES
+        assert limits["nproc"] != resource.RLIM_INFINITY
+
+    def test_an_oversized_output_file_is_cut_off_by_the_file_size_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sandbox, "SCRIPT_MAX_FILE_BYTES", 4096)
+        code = ("import os\n"
+                "with open(os.environ['CAD_OUTPUT_STEP'], 'wb') as fh:\n"
+                "    fh.write(b'x' * 1_000_000)\n")
+        result = sandbox.run_script(code, str(tmp_path / "a7"), timeout_seconds=30)
+        assert not result.succeeded
+        assert os.path.getsize(result.output_path) <= 4096
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="/proc and prctl are Linux")
+    def test_a_script_cannot_read_the_hardened_agent_environment(self, tmp_path):
+        """The regression test for the /proc/<ppid>/environ leak.
+
+        Run in a subprocess so hardening the "agent" does not change this test process. The agent
+        stand-in carries the credential marker, records that a script COULD read it while dumpable (the
+        positive control that the marker is there and the channel exists), hardens itself, and records
+        that the same script then cannot.
+        """
+        probe = (
+            "import json, os, sys\n"
+            f"sys.path.insert(0, {json.dumps(_CONTAINER_DIR)})\n"
+            "import types\n"
+            "fake = types.ModuleType('strands'); fake.tool = lambda fn: fn\n"
+            "sys.modules['strands'] = fake\n"
+            "from cad_step_agent import sandbox\n"
+            "assert os.environ['AWS_CONTAINER_CREDENTIALS_RELATIVE_URI'] == '/v2/credentials/TEST-MARKER'\n"
+            "script = ('import os\\n'\n"
+            "          'try:\\n'\n"
+            "          '    data = open(f\"/proc/{os.getppid()}/environ\", \"rb\").read()\\n'\n"
+            "          '    print(\"READ\", b\"TEST-MARKER\" in data)\\n'\n"
+            "          'except PermissionError:\\n'\n"
+            "          '    print(\"DENIED\")\\n'\n"
+            "          'open(os.environ[\"CAD_OUTPUT_STEP\"], \"w\").write(\"x\")\\n')\n"
+            f"before = sandbox.run_script(script, {json.dumps(str(tmp_path / 'before'))}, timeout_seconds=30)\n"
+            "hardened = sandbox.harden_agent_process()\n"
+            f"after = sandbox.run_script(script, {json.dumps(str(tmp_path / 'after'))}, timeout_seconds=30)\n"
+            "print(json.dumps({'hardened': hardened, 'before': before.output_tail.splitlines()[0],"
+            " 'after': after.output_tail.splitlines()[0]}))\n"
+        )
+        env = dict(os.environ)
+        env["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"] = "/v2/credentials/TEST-MARKER"
+        completed = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True,
+                                   timeout=120, check=False)
+        assert completed.returncode == 0, completed.stderr
+        report = json.loads(completed.stdout.strip().splitlines()[-1])
+        assert report["hardened"] is True
+        # Positive control: while the agent stand-in was dumpable, the script read the marker.
+        assert report["before"] == "READ True", report
+        # The fix: once non-dumpable, the same read is refused.
+        assert report["after"] == "DENIED", report
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("State:"):
+                    return not line.split()[1].startswith("Z")
+    except OSError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -269,7 +368,6 @@ def _definition(mode="modify", **agent_overrides):
         "auxiliary": {"bucketName": "aux", "objectDir": "xasset1/pipeline/"},
         "assetId": "xasset1", "databaseId": "db1",
         "agent": agent_cfg,
-        "externalSfnTaskToken": "outer",
     }
 
 
@@ -372,6 +470,15 @@ class TestRunJob:
             run.run_job(definition, "inner-token", s3=_FakeS3(), sfn=sfn, agent_factory=_agent_that())
         sfn.send_task_failure.assert_called_once()
 
+    def test_a_hand_edited_output_name_is_refused_even_with_the_right_extension(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        definition = _definition()
+        definition["outputFiles"]["fileName"] = "../part.stp"
+        sfn = MagicMock()
+        with pytest.raises(run.RunFailed):
+            run.run_job(definition, "inner-token", s3=_FakeS3(), sfn=sfn, agent_factory=_agent_that())
+        sfn.send_task_failure.assert_called_once()
+
     def test_the_token_is_reported_exactly_once_when_the_watchdog_fires_first(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
         s3, sfn = _FakeS3(), MagicMock()
@@ -398,3 +505,31 @@ class TestRunJob:
         assert run.parse_definition([json.dumps(d)]) == d
         with pytest.raises(run.RunFailed):
             run.parse_definition({"mode": "modify"})
+
+
+# ---------------------------------------------------------------------------------------------------
+# batch_main
+# ---------------------------------------------------------------------------------------------------
+@pytest.mark.unit
+class TestBatchMain:
+    def test_the_definition_and_token_come_from_the_environment_after_hardening(self):
+        from cad_step_agent import batch_main
+        calls = []
+        with patch.object(batch_main.sandbox, "harden_agent_process", lambda: calls.append("harden") or True), \
+                patch.object(batch_main.run, "run_job", lambda d, t: calls.append(("run", d, t))):
+            rc = batch_main.main({"CAD_AGENT_DEFINITION": '{"mode": "modify"}', "TASK_TOKEN": "inner"})
+        assert rc == 0
+        assert calls == ["harden", ("run", '{"mode": "modify"}', "inner")]
+
+    def test_a_missing_definition_is_a_usage_error_without_a_run(self):
+        from cad_step_agent import batch_main
+        with patch.object(batch_main.sandbox, "harden_agent_process", lambda: True), \
+                patch.object(batch_main.run, "run_job", MagicMock()) as run_job:
+            assert batch_main.main({}) == 2
+        run_job.assert_not_called()
+
+    def test_a_failed_run_is_exit_code_one(self):
+        from cad_step_agent import batch_main
+        with patch.object(batch_main.sandbox, "harden_agent_process", lambda: True), \
+                patch.object(batch_main.run, "run_job", MagicMock(side_effect=run.RunFailed("no step"))):
+            assert batch_main.main({"CAD_AGENT_DEFINITION": "{}"}) == 1

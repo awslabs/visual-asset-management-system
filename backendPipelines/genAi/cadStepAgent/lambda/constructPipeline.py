@@ -193,6 +193,8 @@ def _build_execution_params(event):
         bucket, key = _split_s3_uri('s3 path', uri)
         return {"bucketName": bucket, "objectDir": key}
 
+    # The definition is what the container receives; the outer workflow token stays on the state
+    # machine payload, where pipelineEnd reads it, and never enters the container.
     definition = {
         "jobName": event.get("jobName"),
         "stageType": STAGE_TYPE,
@@ -217,7 +219,6 @@ def _build_execution_params(event):
             "maxRunSeconds": settings["maxRunSeconds"],
             "scriptTimeoutSeconds": settings["scriptTimeoutSeconds"],
         },
-        "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
     # The prompt is caller-authored content; the log line names the run and its shape, not the text.
     logger.info(

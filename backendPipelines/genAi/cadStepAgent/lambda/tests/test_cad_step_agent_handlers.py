@@ -252,6 +252,13 @@ class TestConstructPipeline:
         assert resp["externalSfnTaskToken"] == _TOKEN
         assert resp["orchestrationEventPrefix"] == "vams.test.execution.E1.pipeline.P1"
 
+    def test_the_outer_token_stays_out_of_the_container_bound_definition(self):
+        mod = _load("constructPipeline.py")
+        resp, _, exc = self._run(mod, _construct_event(), _config())
+        assert exc is None
+        assert _TOKEN not in resp["definition"][0]
+        assert "externalSfnTaskToken" not in json.loads(resp["definition"][0])
+
     def test_generate_definition_has_no_input_and_a_generated_name(self):
         mod = _load("constructPipeline.py")
         resp, _, exc = self._run(mod, _construct_event(with_input=False),
@@ -321,6 +328,46 @@ class TestConstructPipeline:
         assert json.loads(resp["definition"][0])["agent"]["maxAttempts"] == 10
         resp, _, _ = self._run(mod, _construct_event(), _config(maxAttempts="0"))
         assert json.loads(resp["definition"][0])["agent"]["maxAttempts"] == 1
+
+
+# ---------------------------------------------------------------------------------------------------
+# executeBatchJob
+# ---------------------------------------------------------------------------------------------------
+@pytest.mark.unit
+class TestExecuteBatchJob:
+    def _event(self):
+        return {"jobName": "CadStepAgent_x", "definition": [json.dumps({"mode": "modify", "agent": {}})],
+                "taskToken": _TOKEN, "orchestrationEventPrefix": "vams.test.execution.E1.pipeline.P1"}
+
+    def test_the_definition_travels_in_the_environment_not_the_command_line(self):
+        mod = _load("executeBatchJob.py", {"ORCHESTRATION_BUS_NAME": "bus",
+                                          "BATCH_JOB_LOG_GROUP_NAME": "/aws/vendedlogs/Pipelines/CadStepAgentX",
+                                          "BATCH_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:111111111111:log-group:/aws/vendedlogs/Pipelines/CadStepAgentX"})
+        submit = MagicMock(return_value={"jobId": "job-1"})
+        put_events = MagicMock()
+        with patch.object(mod.batch, "submit_job", submit), patch.object(mod.events_client, "put_events", put_events):
+            resp = mod.lambda_handler(self._event(), MagicMock())
+        assert resp == {"jobId": "job-1", "jobName": "CadStepAgent_x", "status": "SUBMITTED"}
+        overrides = submit.call_args.kwargs["containerOverrides"]
+        assert overrides["command"] == ["python3", "-m", "cad_step_agent.batch_main"]
+        env = {e["name"]: e["value"] for e in overrides["environment"]}
+        assert json.loads(env["CAD_AGENT_DEFINITION"]) == {"mode": "modify", "agent": {}}
+        assert env["TASK_TOKEN"] == _TOKEN
+        assert "mode" not in " ".join(overrides["command"])
+
+    def test_the_job_is_registered_with_its_container_log_source(self):
+        mod = _load("executeBatchJob.py", {"ORCHESTRATION_BUS_NAME": "bus",
+                                          "BATCH_JOB_LOG_GROUP_NAME": "/aws/vendedlogs/Pipelines/CadStepAgentX",
+                                          "BATCH_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:111111111111:log-group:/aws/vendedlogs/Pipelines/CadStepAgentX"})
+        put_events = MagicMock()
+        with patch.object(mod.batch, "submit_job", MagicMock(return_value={"jobId": "job-1"})), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(self._event(), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["jobId"] == "job-1"
+        assert detail["subExecution"]["stageName"] == "CadStepAgentBatchJob"
+        assert detail["logs"][0]["logStreamPrefix"] == "jobdef/default/"
+        assert detail["logs"][0]["sourceType"] == "batch"
 
 
 # ---------------------------------------------------------------------------------------------------

@@ -13,9 +13,15 @@ import asyncio
 import logging
 import os
 
-from bedrock_agentcore.runtime import BedrockAgentCoreApp
+from . import sandbox
 
-from . import run
+# Before any thread exists (the runtime SDK starts its server threads on import below): the agent's
+# /proc entry must be closed to the scripts it runs.
+_NON_DUMPABLE = sandbox.harden_agent_process()
+
+from bedrock_agentcore.runtime import BedrockAgentCoreApp  # noqa: E402
+
+from . import run  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("cad_step_agent.agentcore")
@@ -50,7 +56,7 @@ async def run_in_background(definition, task_token, job_name):
 
 @app.entrypoint
 async def invoke(payload, context=None):
-    logger.info("container.runtime_uid uid=%s euid=%s", os.getuid(), os.geteuid())
+    logger.info("container.runtime_uid uid=%s euid=%s non_dumpable=%s", os.getuid(), os.geteuid(), _NON_DUMPABLE)
     try:
         definition, task_token, job_name = validate_payload(payload)
     except ValueError as exc:

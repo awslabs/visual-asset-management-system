@@ -11,9 +11,7 @@ result of a run never depends on parsing the model's prose.
 
 import html
 import json
-import os
 import re
-import shutil
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
@@ -218,11 +216,3 @@ def _httpx_fetch(url):
             raw = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
     return strip_html(raw) if "html" in content_type.lower() or raw.lstrip().startswith("<") else raw
 
-
-def cleanup(state: RunState):
-    shutil.rmtree(state.work_root, ignore_errors=True)
-
-
-def ensure_dir(path):
-    os.makedirs(path, exist_ok=True)
-    return path

@@ -39,6 +39,9 @@ REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 RESOURCE_TYPE_BATCH_JOB = "batchJob"
 # The container image's CMD is the AgentCore Runtime server, so a Batch job names its own entrypoint.
 BATCH_ENTRYPOINT = ["python3", "-m", "cad_step_agent.batch_main"]
+# The definition document travels to the container as an environment variable, not as a command
+# argument: the command line is readable by every process in the container through /proc.
+DEFINITION_ENV = "CAD_AGENT_DEFINITION"
 # The state that invokes this lambda (its CDK construct id); the job and its container log are
 # attributed to it.
 BATCH_STATE_NAME = "CadStepAgentBatchJob"
@@ -94,6 +97,13 @@ def register_batch_job(orchestration_event_prefix, job_id):
         logger.warning(f"Batch job registration failed (non-critical): {e}")
 
 
+def definition_document(definition):
+    """The definition as the one JSON string the container parses, whichever shape the state handed over."""
+    if isinstance(definition, list):
+        definition = definition[0]
+    return definition if isinstance(definition, str) else json.dumps(definition)
+
+
 def lambda_handler(event, context):
     logger.info("Event", event=event)
 
@@ -106,13 +116,12 @@ def lambda_handler(event, context):
         "jobQueue": BATCH_JOB_QUEUE,
         "jobDefinition": BATCH_JOB_DEFINITION,
         "containerOverrides": {
-            # The image's own CMD is the AgentCore HTTP server; a Batch job runs the batch entrypoint
-            # with the definition document as its argument.
-            "command": BATCH_ENTRYPOINT + (
-                definition if isinstance(definition, list) else [json.dumps(definition)]
-            ),
+            # The image's own CMD is the AgentCore HTTP server; a Batch job runs the batch entrypoint,
+            # which reads the definition and the task token from its environment.
+            "command": BATCH_ENTRYPOINT,
             "environment": [
                 {"name": "TASK_TOKEN", "value": task_token},
+                {"name": DEFINITION_ENV, "value": definition_document(definition)},
                 {
                     "name": "AWS_REGION",
                     "value": os.environ.get("AWS_REGION", "us-east-1"),
