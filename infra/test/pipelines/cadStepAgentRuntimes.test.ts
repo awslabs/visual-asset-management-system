@@ -363,6 +363,16 @@ describe("CAD STEP agent on the Fargate runtime", () => {
         expect(jobDef.raw.DependsOn ?? []).toContain(imageBuildCustomResource(synth).logicalId);
         expectSynchronousImageBuild(synth);
     });
+
+    test("the container runs under an init process so a terminated job's SIGTERM reaches the agent", () => {
+        const jobDef = synth
+            .ofType("AWS::Batch::JobDefinition")
+            .find((j) => /CadStepAgent/.test(j.logicalId))!;
+        const linux = (jobDef.properties as any).ContainerProperties.LinuxParameters;
+        expect(linux.InitProcessEnabled).toBe(true);
+        // A Fargate job definition takes no device or tmpfs lists.
+        expect(Object.keys(linux)).toEqual(["InitProcessEnabled"]);
+    });
 });
 
 describe("CAD STEP agent grants (either runtime)", () => {

@@ -24,6 +24,7 @@ import signal
 import subprocess  # nosec B404 - the interpreter is invoked by absolute path with a fixed argv
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -53,6 +54,10 @@ SCRIPT_MAX_FILE_BYTES = 512 * 1024 ** 2
 
 # prctl(2) option that clears the process's dumpable flag.
 PR_SET_DUMPABLE = 4
+
+# The script processes running right now, so a stop request can end them from another thread.
+_active_lock = threading.Lock()
+_active_scripts: List[subprocess.Popen] = []
 
 
 @dataclass
@@ -172,6 +177,26 @@ def _kill_process_group(proc):
         proc.kill()
 
 
+def kill_active_scripts():
+    """SIGKILL the process group of every script running right now; returns how many there were."""
+    with _active_lock:
+        procs = list(_active_scripts)
+    for proc in procs:
+        _kill_process_group(proc)
+    return len(procs)
+
+
+def _track(proc):
+    with _active_lock:
+        _active_scripts.append(proc)
+
+
+def _untrack(proc):
+    with _active_lock:
+        if proc in _active_scripts:
+            _active_scripts.remove(proc)
+
+
 def _decode(captured):
     """The script's combined output as text; bytes the script wrote that are not UTF-8 are replaced."""
     if not captured:
@@ -215,6 +240,7 @@ def run_script(code, work_dir, input_step=None, output_name="output.step",
         start_new_session=True,
         preexec_fn=_rlimit_preexec(script_rlimits()),
     )
+    _track(proc)
     try:
         stdout, _ = proc.communicate(timeout=timeout_seconds)
         returncode = proc.returncode
@@ -224,6 +250,8 @@ def run_script(code, work_dir, input_step=None, output_name="output.step",
         _kill_process_group(proc)
         stdout, _ = proc.communicate()
         lines = _decode(stdout).splitlines() + [f"[sandbox] script exceeded {timeout_seconds}s and was terminated"]
+    finally:
+        _untrack(proc)
 
     return ScriptResult(
         returncode=returncode,

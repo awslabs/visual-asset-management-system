@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urljoin, urlsplit
 
-from . import cad_io, report, sandbox
+from . import cad_io, cancellation, report, sandbox
 
 SEARCH_MAX_RESULTS = 6
 # Research budget per run: once it is spent, web_search / fetch_url refuse and tell the model to record
@@ -153,7 +153,8 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
     without network access; the defaults use ``ddgs`` and ``httpx``. ``screen_fn(text, what)`` is the
     guardrail applied to every fetched page before the model sees it; it raises when the guardrail
     intervenes. It is required whenever research is allowed: a fetched page is third-party text that
-    must not reach the model unscreened.
+    must not reach the model unscreened. Every tool first checks for a stop request and raises
+    ``cancellation.RunCancelled`` when one is recorded, which is what ends the agent loop.
     """
     from strands import tool  # lazy: the container has Strands, the tests inject fakes
 
@@ -166,6 +167,7 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         and the feature summary (holes by diameter with through/blind and their centres measured from the
         bounding box's minimum corner, cylindrical outer faces, fillet-like faces, planar faces). Returns
         a note when the run has no input file."""
+        cancellation.raise_if_requested()
         if not state.input_step:
             return json.dumps({"hasInput": False, "note": "This run has no input STEP file; create the geometry from scratch."})
         summary = cad_io.inspect_step(state.input_step)
@@ -185,6 +187,7 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
             code: The complete Python script to run.
             intent: One sentence describing what this attempt changes or builds.
         """
+        cancellation.raise_if_requested()
         blocked = state.out_of_budget()
         if blocked:
             return json.dumps({"ok": False, "error": f"Refused: {blocked}. Call finish() with what was achieved."})
@@ -194,6 +197,8 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         result = sandbox.run_script(
             code, attempt_dir, input_step=state.input_step, output_name="output.step",
             timeout_seconds=timeout)
+        # A stop request kills the running script; its result is not an attempt to reason about.
+        cancellation.raise_if_requested()
         summary = cad_io.inspect_step(result.output_path) if result.output_exists else cad_io.StepSummary(
             valid=False, error="the script wrote no output file at CAD_OUTPUT_STEP")
         ok = result.succeeded and summary.valid
@@ -232,6 +237,7 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
                 size, every hole/slot/pocket (count, diameter, depth or through), fillets/chamfers, and
                 for a modify run the elements of the input that had to stay unchanged.
         """
+        cancellation.raise_if_requested()
         state.finished = True
         state.final_summary = str(summary or "")
         state.final_unresolved = [str(u) for u in (unresolved or []) if str(u).strip()]
@@ -258,6 +264,7 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
             Args:
                 query: The search query.
             """
+            cancellation.raise_if_requested()
             if state.search_calls >= SEARCH_BUDGET:
                 return json.dumps({"ok": False, "error": f"Refused: the research budget of {SEARCH_BUDGET} searches is spent. "
                                                          "Continue with the figures you have and list every unverified one in finish()."})
@@ -280,6 +287,7 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
             Args:
                 url: The http(s) URL to fetch.
             """
+            cancellation.raise_if_requested()
             try:
                 validate_fetch_url(url)
             except UnsafeUrl as exc:

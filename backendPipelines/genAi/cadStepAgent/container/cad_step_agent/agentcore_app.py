@@ -7,10 +7,12 @@ The runtime posts the invocation payload (``{"jobName", "definition", "taskToken
 ``/invocations``. The handler validates it, starts the job as a background task and returns an
 acknowledgement at once; the job reports the task token itself when it finishes, and the runtime keeps
 the session alive while the task runs (its ping reports busy). One run per session container: a
-payload that arrives while a run is active is answered ``accepted: false``.
+payload that arrives while a run is active is answered ``accepted: false``. A SIGTERM (the session
+ending) stops the active run through ``cancellation`` and then lets the server shut down.
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import threading
@@ -23,12 +25,21 @@ _NON_DUMPABLE = sandbox.harden_agent_process()
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp  # noqa: E402
 
-from . import run  # noqa: E402
+from . import cancellation, run  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("cad_step_agent.agentcore")
 
-app = BedrockAgentCoreApp()
+
+@contextlib.asynccontextmanager
+async def _lifespan(app):
+    # Installed once the server is up, so the stop request runs first and the server's own
+    # graceful-exit handler (installed before the loop started) runs after it.
+    cancellation.install_signal_handlers()
+    yield
+
+
+app = BedrockAgentCoreApp(lifespan=_lifespan)
 
 # One run per session container at a time. A warm session slot is one microVM, and two runs sharing
 # it would contend for CadQuery memory and share process-wide state; a second run arriving while one
@@ -74,6 +85,9 @@ async def run_in_background(definition, task_token, job_name):
     logger.info("background run start job=%s", job_name)
     try:
         await asyncio.to_thread(run.run_job, definition, task_token)
+    except run.RunCancelled:
+        # run_job has logged the cancellation; the token belongs to the workflow that stopped the run.
+        pass
     except Exception:
         # run_job has already reported the token and logged the cause.
         logger.error("background run failed job=%s", job_name)

@@ -7,6 +7,8 @@ import json
 import os
 import re
 
+from . import cancellation
+
 PROVIDER_BEDROCK = "bedrock"
 PROVIDER_OPENAI = "openai"
 PROVIDERS = (PROVIDER_BEDROCK, PROVIDER_OPENAI)
@@ -155,9 +157,26 @@ def build_model(provider, model_id, api_key=None, region=None, guardrail=None):
                        params={"max_tokens": MAX_TOKENS, "temperature": TEMPERATURE})
 
 
+class CancellationHook:
+    """Ends the agent loop at its next model call once a stop has been requested.
+
+    A tool that finds the stop request raises, which the framework hands back to the model as a tool
+    error; this hook is what keeps the model from being called again after that.
+    """
+
+    def register_hooks(self, registry, **kwargs):
+        from strands.hooks import BeforeModelCallEvent
+        registry.add_callback(BeforeModelCallEvent, self.before_model_call)
+
+    @staticmethod
+    def before_model_call(event):
+        if cancellation.requested():
+            event.cancel = f"run cancelled by {cancellation.reason()}"
+
+
 def build_agent(model, tools):
     from strands import Agent
-    return Agent(model=model, tools=tools, system_prompt=SYSTEM_PROMPT)
+    return Agent(model=model, tools=tools, system_prompt=SYSTEM_PROMPT, hooks=[CancellationHook()])
 
 
 # A capitalised multi-token run ("Jetson Nano Developer Kit", "Raspberry Pi 4B") or a word that announces a

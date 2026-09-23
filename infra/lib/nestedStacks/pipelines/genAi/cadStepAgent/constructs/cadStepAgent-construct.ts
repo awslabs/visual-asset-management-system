@@ -424,6 +424,9 @@ export class CadStepAgentConstruct extends Construct {
                     ephemeralStorageGiB: 40,
                     logGroup: containerLogGroup,
                     environment: containerEnvironment,
+                    // The SIGTERM of an abort must reach the agent interpreter, which then stops the run
+                    // and reports nothing (the workflow already recorded the abort).
+                    initProcessEnabled: true,
                     ecrImage: codeBuildConstruct
                         ? {
                               repository: codeBuildConstruct.repository,

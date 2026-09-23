@@ -76,6 +76,13 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      * caller that supplies the repository alone would silently fall back to a mutable alias.
      */
     ecrImage?: { repository: ecr.IRepository; tag: string };
+    /**
+     * Run the container under an init process that forwards signals to the command and reaps its
+     * children. Without it the command runs as PID 1, which drops the SIGTERM AWS Batch sends when the
+     * job is terminated, and the container keeps working until the SIGKILL that follows or until it
+     * finishes on its own. Default false.
+     */
+    initProcessEnabled?: boolean;
 }
 
 const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
@@ -161,6 +168,15 @@ export class BatchFargatePipelineConstruct extends Construct {
                 // would still run as uid 0.
             }),
         });
+
+        // Set on the L1 so the template carries InitProcessEnabled alone: the L2 LinuxParameters
+        // also renders device and tmpfs lists, which a Fargate job definition does not take.
+        if (props.initProcessEnabled) {
+            (this.batchJobDefinition.node.defaultChild as CfnJobDefinition).addPropertyOverride(
+                "ContainerProperties.LinuxParameters.InitProcessEnabled",
+                true
+            );
+        }
 
         this.batchJobQueue = new batch.JobQueue(this, "BatchJobQueue", {
             computeEnvironments: [

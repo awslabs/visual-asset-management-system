@@ -6,6 +6,7 @@ replaced at their boundaries."""
 
 import importlib.util
 import json
+import logging
 import os
 import resource
 import subprocess  # nosec B404 - the test spawns the interpreter by absolute path with a fixed argv
@@ -33,8 +34,16 @@ def _fake_strands(monkeypatch):
 
 
 from cad_step_agent import agent as agent_module  # noqa: E402
-from cad_step_agent import report, run, sandbox, tools  # noqa: E402
+from cad_step_agent import cancellation, report, run, sandbox, tools  # noqa: E402
 from cad_step_agent import cad_io  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_stop_request():
+    """Every test starts and ends without a recorded stop request."""
+    cancellation.reset()
+    yield
+    cancellation.reset()
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -104,6 +113,21 @@ class TestSandbox:
                 break
             time.sleep(0.05)
         assert not _alive(grandchild), f"grandchild {grandchild} survived the timeout"
+
+    def test_kill_active_scripts_ends_the_running_script_from_another_thread(self, tmp_path):
+        killed = {}
+
+        def stop_soon():
+            time.sleep(0.4)
+            killed["count"] = sandbox.kill_active_scripts()
+        threading.Thread(target=stop_soon, daemon=True).start()
+        started = time.time()
+        result = sandbox.run_script("import time\ntime.sleep(30)\n", str(tmp_path / "k1"), timeout_seconds=30)
+        assert time.time() - started < 10
+        assert killed["count"] == 1
+        assert result.returncode is not None and result.returncode != 0 and not result.succeeded
+        # The registry is empty again once the script has ended.
+        assert sandbox.kill_active_scripts() == 0
 
     def test_the_script_runs_under_the_resource_limits(self, tmp_path):
         code = ("import resource, json, os\n"
@@ -402,6 +426,31 @@ class TestTools:
         fns = _tool_map(tools.build_tools(state))
         out = json.loads(fns["run_cad_script"]("print(1)\n", "late"))
         assert out["ok"] is False and "time budget" in out["error"]
+
+    def test_every_tool_raises_once_a_stop_is_requested(self, tmp_path):
+        state = _state(tmp_path, research=True)
+        fns = _tool_map(tools.build_tools(state, search_fn=lambda q, n: [], fetch_fn=lambda u: "text",
+                                          screen_fn=_pass_screen))
+        cancellation.request("SIGTERM")
+        with pytest.raises(cancellation.RunCancelled):
+            fns["inspect_input_step"]()
+        with pytest.raises(cancellation.RunCancelled):
+            fns["run_cad_script"]("print(1)\n", "attempt")
+        with pytest.raises(cancellation.RunCancelled):
+            fns["finish"]("s", [], "succeeded", ["a: expected 1 - measured 1 - ok"])
+        with pytest.raises(cancellation.RunCancelled):
+            fns["web_search"]("jetson nano hole pattern")
+        with pytest.raises(cancellation.RunCancelled):
+            fns["fetch_url"]("https://example.com/")
+        assert state.attempts == [] and not state.finished and state.search_calls == 0 and state.fetch_calls == 0
+
+    def test_a_script_killed_by_a_stop_request_is_not_recorded_as_an_attempt(self, tmp_path):
+        state = _state(tmp_path, research=False)
+        fns = _tool_map(tools.build_tools(state))
+        threading.Timer(0.4, cancellation.request, args=("SIGTERM",)).start()
+        with pytest.raises(cancellation.RunCancelled):
+            fns["run_cad_script"]("import time\ntime.sleep(30)\n", "slow")
+        assert state.attempts == [] and state.best_output is None
 
     def test_finish_records_the_outcome(self, tmp_path):
         state = _state(tmp_path, research=False)
@@ -852,6 +901,78 @@ class TestRunJob:
         assert sfn.send_task_failure.call_count == 1
         sfn.send_task_success.assert_not_called()
 
+    def test_a_stop_request_ends_a_running_job_without_uploading_or_reporting(self, monkeypatch, caplog):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+
+        def slow_factory(model, bound_tools):
+            fns = {fn.__name__: fn for fn in bound_tools}
+
+            def agent(instruction):
+                fns["run_cad_script"]("import time\ntime.sleep(30)\n", "slow")
+                return "done"
+            return agent
+
+        threading.Timer(0.5, cancellation.request, args=("SIGTERM",)).start()
+        started = time.time()
+        with caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunCancelled):
+            run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn, agent_factory=slow_factory, guardrail=_FakeGuardrail())
+        assert time.time() - started < 10
+        assert s3.objects == {}
+        sfn.send_task_success.assert_not_called()
+        sfn.send_task_failure.assert_not_called()
+        cancelled = [r for r in caplog.records if r.getMessage() == "run cancelled by SIGTERM"]
+        assert len(cancelled) == 1 and cancelled[0].levelno == logging.INFO and cancelled[0].exc_info is None
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+    def test_a_stop_that_arrives_while_the_agent_is_mid_turn_is_honoured_before_the_upload(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+
+        def factory(model, bound_tools):
+            fns = {fn.__name__: fn for fn in bound_tools}
+
+            def agent(instruction):
+                fns["run_cad_script"]("import os\nopen(os.environ['CAD_OUTPUT_STEP'],'w').write('ISO')\n", "attempt")
+                # The stop arrives during the model's final turn: no tool sees it.
+                cancellation.request("SIGTERM")
+                return "done"
+            return agent
+
+        with patch.object(cad_io, "inspect_step", return_value=VALID), pytest.raises(run.RunCancelled):
+            run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn, agent_factory=factory, guardrail=_FakeGuardrail())
+        assert s3.objects == {}
+        sfn.send_task_success.assert_not_called()
+        sfn.send_task_failure.assert_not_called()
+
+    def test_a_result_the_workflow_no_longer_waits_for_is_an_upstream_abort_not_a_failure(self, monkeypatch, caplog):
+        from botocore.exceptions import ClientError
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        sfn.send_task_success.side_effect = ClientError(
+            {"Error": {"Code": "TaskTimedOut", "Message": "Provided task does not exist anymore"}}, "SendTaskSuccess")
+        with patch.object(cad_io, "inspect_step", return_value=VALID), \
+                caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunCancelled):
+            run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn,
+                        agent_factory=_agent_that(finish_args=("ok", [], "succeeded", ["a: expected 1 - measured 1 - ok"])),
+                        guardrail=_FakeGuardrail())
+        sfn.send_task_failure.assert_not_called()
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+        assert any(r.levelno == logging.INFO and "TaskTimedOut" in r.getMessage() for r in caplog.records)
+
+    def test_a_failure_report_on_a_token_that_is_gone_is_logged_as_information(self, monkeypatch, caplog):
+        from botocore.exceptions import ClientError
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        sfn = MagicMock()
+        sfn.send_task_failure.side_effect = ClientError(
+            {"Error": {"Code": "TaskDoesNotExist", "Message": "gone"}}, "SendTaskFailure")
+        with caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunFailed):
+            run.run_job(_definition(), "inner-token", s3=_FakeS3(), sfn=sfn,
+                        agent_factory=_agent_that(script_writes_output=False), guardrail=_FakeGuardrail())
+        gone = [r for r in caplog.records if "aborted upstream" in r.getMessage()]
+        assert len(gone) == 1 and gone[0].levelno == logging.INFO
+        assert [r for r in caplog.records if "send_task_failure failed" in r.getMessage()] == []
+
     def test_parse_definition_accepts_every_transport_shape(self):
         d = _definition()
         assert run.parse_definition(d) == d
@@ -917,6 +1038,9 @@ def agentcore_app(monkeypatch):
     fake_runtime = types.ModuleType("bedrock_agentcore.runtime")
 
     class BedrockAgentCoreApp:
+        def __init__(self, lifespan=None):
+            self.lifespan = lifespan
+
         def entrypoint(self, fn):
             return fn
 
@@ -971,6 +1095,36 @@ class TestAgentCoreApp:
         assert second["accepted"] is False and "busy" in second["error"]
         assert third == {"accepted": True, "jobName": "job-3"}
 
+    def test_a_stop_request_during_a_run_releases_the_slot_without_an_error_line(self, agentcore_app, caplog):
+        import asyncio
+
+        def cancelled_run(definition, task_token):
+            raise run.RunCancelled("SIGTERM")
+
+        async def scenario():
+            with patch.object(agentcore_app.run, "run_job", cancelled_run):
+                reply = await agentcore_app.invoke(self._payload("job-1"))
+                for _ in range(200):
+                    if agentcore_app.active_job() is None:
+                        break
+                    await asyncio.sleep(0.01)
+            return reply
+
+        with caplog.at_level(logging.INFO, logger="cad_step_agent.agentcore"):
+            reply = asyncio.run(scenario())
+        assert reply == {"accepted": True, "jobName": "job-1"}
+        assert agentcore_app.active_job() is None
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+    def test_the_server_lifespan_installs_the_stop_signal_handlers(self, agentcore_app):
+        import asyncio
+        installed = []
+        with patch.object(agentcore_app.cancellation, "install_signal_handlers", lambda: installed.append(True)):
+            async def scenario():
+                async with agentcore_app.app.lifespan(agentcore_app.app):
+                    return list(installed)
+            assert asyncio.run(scenario()) == [True]
+
     def test_a_malformed_payload_is_rejected_without_claiming_the_slot(self, agentcore_app):
         import asyncio
         reply = asyncio.run(agentcore_app.invoke({"definition": {"mode": "modify"}}))
@@ -987,14 +1141,16 @@ class TestBatchMain:
         from cad_step_agent import batch_main
         calls = []
         with patch.object(batch_main.sandbox, "harden_agent_process", lambda: calls.append("harden") or True), \
+                patch.object(batch_main.cancellation, "install_signal_handlers", lambda: calls.append("signals")), \
                 patch.object(batch_main.run, "run_job", lambda d, t: calls.append(("run", d, t))):
             rc = batch_main.main({"CAD_AGENT_DEFINITION": '{"mode": "modify"}', "TASK_TOKEN": "inner"})
         assert rc == 0
-        assert calls == ["harden", ("run", '{"mode": "modify"}', "inner")]
+        assert calls == ["harden", "signals", ("run", '{"mode": "modify"}', "inner")]
 
     def test_a_missing_definition_is_a_usage_error_without_a_run(self):
         from cad_step_agent import batch_main
         with patch.object(batch_main.sandbox, "harden_agent_process", lambda: True), \
+                patch.object(batch_main.cancellation, "install_signal_handlers", lambda: None), \
                 patch.object(batch_main.run, "run_job", MagicMock()) as run_job:
             assert batch_main.main({}) == 2
         run_job.assert_not_called()
@@ -1002,8 +1158,78 @@ class TestBatchMain:
     def test_a_failed_run_is_exit_code_one(self):
         from cad_step_agent import batch_main
         with patch.object(batch_main.sandbox, "harden_agent_process", lambda: True), \
+                patch.object(batch_main.cancellation, "install_signal_handlers", lambda: None), \
                 patch.object(batch_main.run, "run_job", MagicMock(side_effect=run.RunFailed("no step"))):
             assert batch_main.main({"CAD_AGENT_DEFINITION": "{}"}) == 1
+
+    def test_a_cancelled_run_is_the_interrupt_exit_code(self):
+        from cad_step_agent import batch_main
+        with patch.object(batch_main.sandbox, "harden_agent_process", lambda: True), \
+                patch.object(batch_main.cancellation, "install_signal_handlers", lambda: None), \
+                patch.object(batch_main.run, "run_job", MagicMock(side_effect=run.RunCancelled("SIGTERM"))):
+            assert batch_main.main({"CAD_AGENT_DEFINITION": "{}"}) == batch_main.EXIT_CANCELLED == 130
+
+
+# ---------------------------------------------------------------------------------------------------
+# cancellation
+# ---------------------------------------------------------------------------------------------------
+@pytest.mark.unit
+class TestCancellation:
+    def test_a_request_is_recorded_once_with_its_reason_and_kills_running_scripts(self):
+        assert not cancellation.requested()
+        with patch.object(sandbox, "kill_active_scripts", MagicMock(return_value=0)) as kill:
+            cancellation.request("SIGTERM")
+        kill.assert_called_once()
+        assert cancellation.requested() and cancellation.reason() == "SIGTERM"
+        with pytest.raises(cancellation.RunCancelled, match="SIGTERM"):
+            cancellation.raise_if_requested()
+        cancellation.reset()
+        assert not cancellation.requested()
+        cancellation.raise_if_requested()
+
+    def test_the_stop_signals_request_a_stop_and_chain_to_an_earlier_handler_but_not_to_the_default(self):
+        import signal
+        chained = []
+        originals = {sig: signal.getsignal(sig) for sig in cancellation.STOP_SIGNALS}
+        try:
+            signal.signal(signal.SIGTERM, lambda signum, frame: chained.append(signum))
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            previous = cancellation.install_signal_handlers()
+            assert set(previous) == set(cancellation.STOP_SIGNALS)
+            handler = signal.getsignal(signal.SIGTERM)
+            assert handler is signal.getsignal(signal.SIGINT)
+            with patch.object(sandbox, "kill_active_scripts", MagicMock(return_value=0)):
+                handler(signal.SIGTERM, None)
+                assert cancellation.requested() and cancellation.reason() == "SIGTERM"
+                assert chained == [signal.SIGTERM]
+                cancellation.reset()
+                handler(signal.SIGINT, None)
+            assert cancellation.reason() == "SIGINT"
+            assert chained == [signal.SIGTERM]
+        finally:
+            for sig, original in originals.items():
+                signal.signal(sig, original)
+
+    def test_the_agent_hook_cancels_the_next_model_call_only_after_a_stop_request(self):
+        event = types.SimpleNamespace(cancel=False)
+        agent_module.CancellationHook.before_model_call(event)
+        assert event.cancel is False
+        with patch.object(sandbox, "kill_active_scripts", MagicMock(return_value=0)):
+            cancellation.request("SIGTERM")
+        agent_module.CancellationHook.before_model_call(event)
+        assert event.cancel == "run cancelled by SIGTERM"
+
+    def test_the_agent_is_built_with_the_hook_registered_on_before_model_call(self, monkeypatch, _fake_strands):
+        hooks_module = types.ModuleType("strands.hooks")
+        hooks_module.BeforeModelCallEvent = type("BeforeModelCallEvent", (), {})
+        monkeypatch.setitem(sys.modules, "strands.hooks", hooks_module)
+        agent_module.build_agent("model", ["tools"])
+        kwargs = _fake_strands.Agent.call_args.kwargs
+        assert kwargs["system_prompt"] == agent_module.SYSTEM_PROMPT
+        (hook,) = kwargs["hooks"]
+        registry = MagicMock()
+        hook.register_hooks(registry)
+        registry.add_callback.assert_called_once_with(hooks_module.BeforeModelCallEvent, hook.before_model_call)
 
 
 # ---------------------------------------------------------------------------------------------------

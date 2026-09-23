@@ -6,7 +6,8 @@
 Both entrypoints (AWS Batch and Amazon Bedrock AgentCore Runtime) call ``run_job``. The outcome is
 derived from the tool state, not from the model's prose: a run that produced at least one validated STEP
 file succeeds (``succeeded`` or ``partial`` per the agent's own unresolved list); a run that produced
-none fails. Every failure route reports the task token.
+none fails. Every failure route reports the task token; a run stopped from outside (``cancellation``)
+uploads nothing and leaves the token to the workflow that stopped it.
 """
 
 import json
@@ -20,9 +21,10 @@ import uuid
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from . import agent as agent_module
-from . import cad_step_naming, guardrail as guardrail_module, report, tools
+from . import cad_step_naming, cancellation, guardrail as guardrail_module, report, tools
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md: the container talks to
 # Amazon S3 and Step Functions for the length of a run.
@@ -33,10 +35,20 @@ TASK_TOKEN_ENV = "TASK_TOKEN"  # nosec B105 - environment variable name, not a s
 DEFAULT_MAX_RUN_SECONDS = 3600
 FAILURE_ERROR_CODE = "CadStepAgentRunFailed"
 INPUT_FILE_NAME = "input.step"
+# Step Functions answers these when the task the token belongs to has already ended: the workflow was
+# aborted or timed out upstream, and the outcome it recorded stands.
+TOKEN_GONE_ERROR_CODES = ("TaskTimedOut", "TaskDoesNotExist")
+
+RunCancelled = cancellation.RunCancelled
 
 
 class RunFailed(RuntimeError):
     """The run produced no valid STEP file (or could not start)."""
+
+
+def _token_gone(exc):
+    """True when a callback failed because the task token's task no longer exists."""
+    return isinstance(exc, ClientError) and exc.response.get("Error", {}).get("Code") in TOKEN_GONE_ERROR_CODES
 
 
 def _clients():
@@ -182,7 +194,11 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
             sfn.send_task_failure(taskToken=task_token, error=FAILURE_ERROR_CODE,
                                   cause=report.failure_cause(message))
         except Exception as exc:  # the failure is already logged; a stale token must not mask it
-            logger.error("send_task_failure failed: %s", exc)
+            if _token_gone(exc):
+                logger.info("task token no longer accepted (%s): the run was aborted upstream",
+                            exc.response["Error"]["Code"])
+            else:
+                logger.error("send_task_failure failed: %s", exc)
 
     def report_success(payload):
         with token_lock:
@@ -190,7 +206,14 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
                 raise RunFailed("the run's time budget expired before its result was reported")
             token_state["reported"] = True
         if task_token:
-            sfn.send_task_success(taskToken=task_token, output=json.dumps(payload))
+            try:
+                sfn.send_task_success(taskToken=task_token, output=json.dumps(payload))
+            except ClientError as exc:
+                if not _token_gone(exc):
+                    raise
+                raise RunCancelled(
+                    f"the workflow ({exc.response['Error']['Code']}): its task ended before the result was reported"
+                ) from None
 
     work_root = tempfile.mkdtemp(prefix="cad-agent-")
     watchdog = None
@@ -244,10 +267,14 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         try:
             agent(agent_module.run_instruction(definition, tag_prompt=provider == agent_module.PROVIDER_BEDROCK))
         except Exception as exc:
+            if cancellation.requested():
+                raise RunCancelled(cancellation.reason()) from None
             logger.exception("agent loop raised")
             if not state.best_output:
                 raise RunFailed(f"Agent loop failed: {str(exc)[:200]}") from exc
             state.final_unresolved.append(f"The agent stopped early: {str(exc)[:200]}")
+        # A stop that arrived while the model was mid-turn is honoured here, before anything is uploaded.
+        cancellation.raise_if_requested()
 
         outcome = derive_outcome(state, definition, model_label, run_id, time.time() - started)
         key = upload_outputs(s3, definition, outcome, state.best_output)
@@ -257,6 +284,11 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         logger.info("agent run done id=%s status=%s attempts=%s unresolved=%s",
                     run_id, outcome.status, len(outcome.attempts), len(outcome.unresolved))
         return payload
+    except RunCancelled as exc:
+        # Nothing is uploaded and the token is left alone: the workflow that stopped the run has
+        # already recorded its outcome.
+        logger.info("run cancelled by %s", exc)
+        raise
     except Exception as exc:
         logger.exception("run failed")
         report_failure(str(exc))
