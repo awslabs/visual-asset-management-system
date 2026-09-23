@@ -15,16 +15,34 @@
  * assertion below is what stops it coming back.
  *
  * **EC2 GPU jobs (issue #327):** GPU pipeline containers now run as uid/gid 10000:10000, enforced
- * via the image's `USER` directive (not ContainerProperties.User, which stays absent). The EFS
- * access point POSIX user matches this uid/gid, so containers can read/write the shared Hugging
- * Face cache. The assertion below verifies the USER directive is present in each GPU image by
- * checking the emitted job definition does NOT name a user override — if ContainerProperties.User
- * appeared, it would replace the image's USER and break EFS write permission.
+ * via the image's `USER` directive (ContainerProperties.User stays absent, or it would replace the
+ * image's USER). Two things are guarded below, both as real assertions: the seven GPU Dockerfiles
+ * each declare `USER 10000:10000` after their last COPY (a static parse — deleting a USER line fails
+ * the test), and the Isaac Lab EC2 job definition carries its EFS access point in the synthesized
+ * template (AccessPointId + TransitEncryption), so a revert to a raw-root mount fails the test.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import { SynthResult, synthTemplate } from "../support/templateSynth";
+import * as cdk from "aws-cdk-lib";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ecr from "aws-cdk-lib/aws-ecr";
+import * as events from "aws-cdk-lib/aws-events";
+import * as kms from "aws-cdk-lib/aws-kms";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import { Template } from "aws-cdk-lib/assertions";
+import * as Config from "../../config/config";
+import * as Service from "../../lib/helper/service-helper";
+import * as s3AssetBuckets from "../../lib/helper/s3AssetBuckets";
+import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
+import { IsaacLabTrainingConstruct } from "../../lib/nestedStacks/pipelines/simulation/isaacLabTraining/constructs/isaacLabTraining-construct";
+import commercialTemplate from "../../config/config.template.commercial.json";
+import { newTestApp } from "../support/testApp";
+
+/** backendPipelines/ tree, for the static Dockerfile USER parses below. */
+const PIPELINES_DIR = path.join(__dirname, "..", "..", "..", "backendPipelines");
 
 /**
  * Enable the four pipelines that build Fargate Batch jobs.
@@ -119,64 +137,177 @@ describe("Fargate Batch container user", () => {
  *
  * The 7 GPU pipeline Dockerfiles (Cosmos 3/Predict-v1/Predict-v2.5/Reason/Transfer, GR00T, Isaac Lab)
  * each declare `USER 10000:10000`. These are EC2 Batch jobs, so the image's USER takes effect (unlike
- * Fargate, where ContainerProperties.User would override it). The test verifies that USER is present
- * in each Dockerfile -- a vacuous assertion without actually parsing the Dockerfile, so the real guard
- * is `containerBuildSources.test.ts` extending NVIDIA_DOCKERFILES to include all 7 and asserting USER
- * in each. This suite's job is to confirm the JOB DEFINITION does NOT name a user override, because
- * that would replace the image's USER and break EFS write permission.
+ * Fargate, where ContainerProperties.User would override it). None of these Dockerfiles is reachable
+ * from a synthesized template (CodeBuild receives them as an s3assets.Asset CloudFormation never
+ * inspects — same reason containerBuildSources.test.ts parses them directly), so this is a static
+ * parse of each file: the USER must be the numeric 10000:10000 pair, and it must sit after the last
+ * COPY so the copied application is not left root-owned. Deleting or weakening any USER line fails
+ * the test — the vacuity the earlier placeholder had is gone.
  */
-describe("GPU container USER (issue #327)", () => {
-    // The full synth for GPU pipelines requires cosmos/gr00t/isaacLab all enabled. That is overkill for
-    // this assertion: the absence-of-user check can run on ANY job definition, and the Dockerfile check
-    // in containerBuildSources is the real gate. So this suite skips a dedicated synth and instead
-    // documents the assertion: when a GPU pipeline IS enabled in another synth (e.g., a full-stack
-    // CoreVAMSStack test), its job definition must not name ContainerProperties.User.
+const GPU_DOCKERFILES: { label: string; file: string }[] = [
+    {
+        label: "cosmos 3",
+        file: path.resolve(PIPELINES_DIR, "genAi/nvidia/cosmos/3/container/Dockerfile"),
+    },
+    {
+        label: "cosmos predict v1",
+        file: path.resolve(PIPELINES_DIR, "genAi/nvidia/cosmos/predict/containerv1/Dockerfile"),
+    },
+    {
+        label: "cosmos predict v2.5",
+        file: path.resolve(PIPELINES_DIR, "genAi/nvidia/cosmos/predict/containerv2.5/Dockerfile"),
+    },
+    {
+        label: "cosmos reason",
+        file: path.resolve(PIPELINES_DIR, "genAi/nvidia/cosmos/reason/container/Dockerfile"),
+    },
+    {
+        label: "cosmos transfer",
+        file: path.resolve(PIPELINES_DIR, "genAi/nvidia/cosmos/transfer/container/Dockerfile"),
+    },
+    {
+        label: "gr00t",
+        file: path.resolve(PIPELINES_DIR, "genAi/nvidia/gr00t/container/Dockerfile"),
+    },
+    {
+        label: "isaac lab training",
+        file: path.resolve(PIPELINES_DIR, "simulation/isaacLabTraining/container/Dockerfile"),
+    },
+];
 
-    test("the NVIDIA_DOCKERFILES list in containerBuildSources.test.ts covers all 7 GPU images", () => {
-        // Guard on the list this test DELEGATES to. If a GPU image is added and containerBuildSources
-        // is not updated, this test fails rather than silently passing with incomplete coverage.
-        const containerSourcesFile = fs.readFileSync(
-            path.resolve(__dirname, "./containerBuildSources.test.ts"),
-            "utf-8"
-        );
-        const expected = [
-            '"cosmos 3"',
-            '"cosmos predict v1"',
-            '"cosmos predict v2.5"',
-            '"cosmos transfer"',
-            '"cosmos reason"',
-            '"gr00t"',
-            '"isaac lab training"',
-        ];
-        for (const label of expected) {
-            expect(containerSourcesFile).toContain(`label: ${label}`);
-        }
+describe.each(GPU_DOCKERFILES)("GPU image $label runs as non-root (issue #327)", ({ file }) => {
+    const lines = fs.readFileSync(file, "utf-8").split(/\r?\n/);
+    const userLines = lines
+        .map((l, i) => ({ i, m: /^USER\s+(\S+)/.exec(l.trim()) }))
+        .filter((x) => x.m !== null);
+
+    it("declares exactly one USER, set to 10000:10000", () => {
+        // Numeric uid:gid, not a name: a runtime runAsNonRoot check verifies it without reading the
+        // image's /etc/passwd, and the EFS ownership (userdata chown / access point) is on 10000:10000.
+        expect(userLines.length).toBe(1);
+        expect(userLines[0].m![1]).toBe("10000:10000");
     });
 
-    test("no GPU job definition names a container user override", () => {
-        // Placeholder: a full-stack synth enabling GPU pipelines would assert here that every EC2
-        // Batch job definition emitted by those pipelines has ContainerProperties.User === undefined.
-        // The assertion is structurally identical to the Fargate one above: any value is a regression.
-        expect(true).toBe(true);
+    it("switches to that USER after the last COPY", () => {
+        // A USER ahead of the last COPY leaves the copied application root-owned; several of these
+        // images regressed exactly that way (USER before the build steps) and could not even build.
+        const lastCopyAt = lines.reduce((acc, l, i) => (/^COPY\s/.test(l.trim()) ? i : acc), -1);
+        expect(userLines[0].i).toBeGreaterThan(lastCopyAt);
+    });
+});
+
+describe("GPU Fargate-shape guard is not applicable", () => {
+    // The GPU pipelines are EC2 Batch jobs; the "no ContainerProperties.User override" property is a
+    // Fargate concern already covered by the top suite. The Isaac Lab EC2 job definition's access-point
+    // wiring — the load-bearing C1 guard — is asserted in the synth block below.
+    test("[doc] GPU USER coverage is the Dockerfile parse above", () => {
+        expect(GPU_DOCKERFILES.length).toBe(7);
     });
 });
 
 /**
- * EFS Access Point wiring (issue #327)
+ * EFS Access Point wiring (issue #327) — the load-bearing C1 regression guard.
  *
- * The 4 Cosmos pipelines and GR00T use launch-template userdata to mount EFS and chown the mounted
- * cache dir to 10000:10000, so NO AccessPointId appears in their job definitions (the mount is a
- * host bind-mount via userdata, not an EcsVolume.efs with accessPointId). Isaac Lab DOES wire the
- * access point via EcsVolume.efs({ accessPointId, transitEncryption, authorizationConfig }), and
- * that must be present in the synthesized job definition or the mount reverts to raw-root and the
- * container gets EACCES on first write.
+ * The 4 Cosmos pipelines and GR00T mount the EFS root in launch-template userdata and `chown -R`
+ * the cache dir to 10000:10000, so NO AccessPointId appears in their job definitions. Isaac Lab
+ * DOES wire its access point through batch.EcsVolume.efs({ accessPointId, enableTransitEncryption,
+ * useJobRole }); that must reach the synthesized EC2 job definition, or the mount reverts to the raw
+ * EFS root (root:root 0755) and the non-root container gets EACCES on makedirs. This synthesizes the
+ * real IsaacLabTrainingConstruct (as isaacLabSchemaRegistrationTriggers.test.ts does — no web/dist,
+ * no full CoreVAMSStack) and asserts on the emitted template. It fails if the volume props are
+ * dropped or the container gains a root user override.
  */
 describe("EFS Access Point wiring (issue #327)", () => {
-    test("Isaac Lab job definition carries AccessPointId in its EFS volume config", () => {
-        // Placeholder: a full-stack synth enabling isaacLabTraining would assert here that the
-        // IsaacLabTraining job definition's ContainerProperties.Volumes[0] (the EFS volume) carries
-        // an EfsVolumeConfiguration.AccessPointId and TransitEncryption === "ENABLED". The absence
-        // of either is a regression that would let the mount fall back to the raw EFS root.
-        expect(true).toBe(true);
+    const ACCOUNT = "123456789012";
+    const REGION = "us-east-1";
+    let jobDef: any;
+
+    beforeAll(() => {
+        const config = JSON.parse(JSON.stringify(commercialTemplate)) as Config.Config;
+        config.env.account = ACCOUNT;
+        config.env.region = REGION;
+        config.env.partition = "aws";
+        config.env.coreStackName = "vams-test-us-east-1";
+        config.app.baseStackName = "vams-test";
+        config.app.useGlobalVpc.enabled = true;
+        config.app.useGlobalVpc.useForAllLambdas = false;
+        config.app.pipelines.useIsaacLabTraining.enabled = true;
+        config.app.pipelines.useIsaacLabTraining.acceptNvidiaEula = true;
+        config.app.pipelines.useIsaacLabTraining.autoRegisterWithVAMS = false;
+        (config as any).enableCdkNag = false;
+        config.resourceNamesSSMParamPrefix = "/vams-test-us-east-1/resourceNames";
+        Service.SetConfig(config);
+
+        const app = newTestApp();
+        const stack = new cdk.Stack(app, "IsaacLabEfsTestStack", {
+            env: { account: ACCOUNT, region: REGION },
+        });
+        const vpc = new ec2.Vpc(stack, "Vpc", { maxAzs: 2 });
+        const kmsKey = new kms.Key(stack, "Key");
+
+        s3AssetBuckets.getS3AssetBucketRecords().length = 0;
+        s3AssetBuckets.addS3AssetBucket(new s3.Bucket(stack, "AssetBucket"), "/", "db");
+
+        const storage = {
+            encryption: { kmsKey },
+            s3: {
+                assetAuxiliaryBucket: new s3.Bucket(stack, "AuxBucket"),
+                artefactsBucket: new s3.Bucket(stack, "ArtefactsBucket"),
+            },
+            eventBridge: { orchestrationBus: new events.EventBus(stack, "Bus") },
+        } as unknown as storageResources;
+
+        new IsaacLabTrainingConstruct(stack, "IsaacLabTrainingPipeline", {
+            config,
+            vpc,
+            pipelineSubnets: vpc.privateSubnets,
+            pipelineSubnetsIsolated: vpc.isolatedSubnets,
+            pipelineSecurityGroups: [new ec2.SecurityGroup(stack, "Sg", { vpc })],
+            storageResources: storage,
+            lambdaCommonBaseLayer: lambda.LayerVersion.fromLayerVersionArn(
+                stack,
+                "Layer",
+                `arn:aws:lambda:${REGION}:${ACCOUNT}:layer:vams-test-common:1`
+            ) as lambda.LayerVersion,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflowV2",
+            // ECR-sourced so synth does not run a local Docker build.
+            codeBuildImage: {
+                repository: ecr.Repository.fromRepositoryName(stack, "Repo", "isaaclab"),
+                tag: "0123456789abcdef0123456789abcdef01234567",
+            },
+        });
+
+        const template = Template.fromStack(stack);
+        const jobDefs = Object.values(
+            template.findResources("AWS::Batch::JobDefinition")
+        ) as any[];
+        // Exactly one EC2 (non-Fargate) GPU job definition is expected from this construct.
+        const ec2JobDefs = jobDefs.filter(
+            (jd) => !(jd.Properties?.PlatformCapabilities ?? []).includes("FARGATE")
+        );
+        expect(ec2JobDefs.length).toBe(1);
+        jobDef = ec2JobDefs[0];
+    });
+
+    test("[control] the EC2 job definition has an EFS volume", () => {
+        const volumes = jobDef.Properties?.ContainerProperties?.Volumes ?? [];
+        const efsVolumes = volumes.filter((v: any) => v.EfsVolumeConfiguration);
+        expect(efsVolumes.length).toBeGreaterThanOrEqual(1);
+    });
+
+    test("the EFS volume carries AccessPointId and TransitEncryption ENABLED", () => {
+        // The C1 guard: a revert to batch.EcsVolume.efs() without accessPointId (the raw-root mount)
+        // drops AuthorizationConfig.AccessPointId, and this fails. AWS Batch requires TransitEncryption
+        // whenever an access point is used, so it is asserted alongside.
+        const volumes = jobDef.Properties.ContainerProperties.Volumes as any[];
+        const efsVol = volumes.find((v) => v.EfsVolumeConfiguration);
+        const cfg = efsVol.EfsVolumeConfiguration;
+        expect(cfg.TransitEncryption).toBe("ENABLED");
+        expect(cfg.AuthorizationConfig?.AccessPointId).toBeDefined();
+    });
+
+    test("the EC2 job definition names no root container user", () => {
+        // The image's USER 10000:10000 must decide; a ContainerProperties.User would replace it.
+        expect(jobDef.Properties.ContainerProperties.User).toBeUndefined();
     });
 });
