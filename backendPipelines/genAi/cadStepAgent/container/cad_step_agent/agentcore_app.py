@@ -85,11 +85,14 @@ async def run_in_background(definition, task_token, job_name):
     logger.info("background run start job=%s", job_name)
     try:
         await asyncio.to_thread(run.run_job, definition, task_token)
-    except run.RunCancelled:
-        # run_job has logged the cancellation; the token belongs to the workflow that stopped the run.
-        pass
+    except (run.RunCancelled, run.RunFailed) as exc:
+        # Both are outcomes run_job has already settled: a cancellation leaves the token to the workflow
+        # that stopped the run, a failure has reported it, and each has logged its cause at the level it
+        # deserves (a guardrail block is a WARNING, not an application error). Only the class is recorded
+        # here; the message may carry the caller's instruction.
+        logger.info("background run ended job=%s outcome=%s", job_name, type(exc).__name__)
     except Exception:
-        # run_job has already reported the token and logged the cause.
+        # A fault run_job did not classify; it has logged the traceback and reported the token.
         logger.error("background run failed job=%s", job_name)
     else:
         logger.info("background run done job=%s", job_name)
