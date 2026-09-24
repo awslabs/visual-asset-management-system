@@ -17,9 +17,9 @@ import logging
 import os
 import sys
 
-from . import cancellation, run, sandbox
+from . import cancellation, logging_setup, run, sandbox
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging_setup.configure_logging()
 logger = logging.getLogger("cad_step_agent.batch")
 
 DEFINITION_ENV = "CAD_AGENT_DEFINITION"

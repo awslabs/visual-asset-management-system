@@ -34,7 +34,7 @@ def _fake_strands(monkeypatch):
 
 
 from cad_step_agent import agent as agent_module  # noqa: E402
-from cad_step_agent import cancellation, report, run, sandbox, tools  # noqa: E402
+from cad_step_agent import cancellation, logging_setup, report, run, sandbox, tools  # noqa: E402
 from cad_step_agent import cad_io  # noqa: E402
 
 
@@ -1241,6 +1241,12 @@ class TestAgentCoreApp:
         assert reply["accepted"] is False and "taskToken" in reply["error"]
         assert agentcore_app.active_job() is None
 
+    def test_the_entry_point_quiets_the_http_client_loggers(self, agentcore_app):
+        import importlib
+        _reset_quiet_loggers()
+        importlib.reload(agentcore_app)
+        assert {logging.getLogger(n).level for n in logging_setup.QUIET_LOGGERS} == {logging.WARNING}
+
 
 # ---------------------------------------------------------------------------------------------------
 # batch_main
@@ -1278,6 +1284,41 @@ class TestBatchMain:
                 patch.object(batch_main.cancellation, "install_signal_handlers", lambda: None), \
                 patch.object(batch_main.run, "run_job", MagicMock(side_effect=run.RunCancelled("SIGTERM"))):
             assert batch_main.main({"CAD_AGENT_DEFINITION": "{}"}) == batch_main.EXIT_CANCELLED == 130
+
+    def test_the_entry_point_quiets_the_http_client_loggers(self):
+        import importlib
+        from cad_step_agent import batch_main
+        _reset_quiet_loggers()
+        importlib.reload(batch_main)
+        assert {logging.getLogger(n).level for n in logging_setup.QUIET_LOGGERS} == {logging.WARNING}
+
+
+# ---------------------------------------------------------------------------------------------------
+# logging_setup
+# ---------------------------------------------------------------------------------------------------
+_SIGNED_URL = "https://downloads.example.com/guide.pdf?__token__=exp=1790208858~hmac=0123456789abcdef"
+
+
+def _reset_quiet_loggers():
+    for name in logging_setup.QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.NOTSET)
+
+
+@pytest.mark.unit
+class TestLoggingSetup:
+    def test_the_http_client_loggers_speak_only_from_warning_up(self, caplog):
+        _reset_quiet_loggers()
+        logging_setup.configure_logging()
+        assert set(logging_setup.QUIET_LOGGERS) == {"httpx", "httpcore"}
+        with caplog.at_level(logging.INFO):
+            for name in logging_setup.QUIET_LOGGERS:
+                logging.getLogger(name).info("HTTP Request: GET %s \"HTTP/1.1 200 OK\"", _SIGNED_URL)
+            logging.getLogger("httpx").warning("connection reset by peer")
+            logging.getLogger("cad_step_agent.tools").info("fetch_url host=downloads.example.com")
+        assert all("__token__" not in r.getMessage() for r in caplog.records)
+        assert [r.getMessage() for r in caplog.records if r.name == "httpx"] == ["connection reset by peer"]
+        # The agent's own loggers are untouched.
+        assert any(r.name == "cad_step_agent.tools" and r.levelno == logging.INFO for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------------------------------

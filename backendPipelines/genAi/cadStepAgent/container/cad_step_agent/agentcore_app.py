@@ -25,9 +25,9 @@ _NON_DUMPABLE = sandbox.harden_agent_process()
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp  # noqa: E402
 
-from . import cancellation, run  # noqa: E402
+from . import cancellation, logging_setup, run  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging_setup.configure_logging()
 logger = logging.getLogger("cad_step_agent.agentcore")
 
 
