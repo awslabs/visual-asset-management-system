@@ -1088,6 +1088,41 @@ class TestRunJob:
         assert sfn.send_task_failure.call_count == 1
         sfn.send_task_success.assert_not_called()
 
+    def test_the_watchdog_stops_the_agent_loop_with_the_budget_as_the_reason(self, monkeypatch, caplog):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        turns = []
+
+        def looping_factory(model, bound_tools):
+            # A stand-in for the model loop: each turn asks the before-model-call hook whether to go on,
+            # as Strands does, and would otherwise keep taking turns well past the budget.
+            def agent(instruction):
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    event = types.SimpleNamespace(cancel=False)
+                    agent_module.CancellationHook.before_model_call(event)
+                    if event.cancel:
+                        return event.cancel
+                    turns.append(time.time())
+                    time.sleep(0.05)
+                return "ran out the clock"
+            return agent
+
+        started = time.time()
+        with caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunCancelled, match="maxRunSeconds"):
+            run.run_job(_definition(maxRunSeconds=1), "inner-token", s3=s3, sfn=sfn, agent_factory=looping_factory,
+                        guardrail=_FakeGuardrail())
+        assert time.time() - started < 5
+        assert turns and cancellation.requested() and cancellation.reason() == "maxRunSeconds (1 s)"
+        # One failure report, from the watchdog; the cancelled run reports nothing further and uploads nothing.
+        assert sfn.send_task_failure.call_count == 1
+        assert "budget" in sfn.send_task_failure.call_args.kwargs["cause"]
+        sfn.send_task_success.assert_not_called()
+        assert s3.objects == {}
+        cancelled = [r for r in caplog.records if r.getMessage() == "run cancelled by maxRunSeconds (1 s)"]
+        assert len(cancelled) == 1 and cancelled[0].levelno == logging.INFO
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
     def test_a_stop_request_ends_a_running_job_without_uploading_or_reporting(self, monkeypatch, caplog):
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
         s3, sfn = _FakeS3(), MagicMock()

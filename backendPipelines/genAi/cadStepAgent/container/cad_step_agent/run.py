@@ -7,7 +7,8 @@ Both entrypoints (AWS Batch and Amazon Bedrock AgentCore Runtime) call ``run_job
 derived from the tool state, not from the model's prose: a run that produced at least one validated STEP
 file succeeds (``succeeded`` or ``partial`` per the agent's own unresolved list); a run that produced
 none fails. Every failure route reports the task token; a run stopped from outside (``cancellation``)
-uploads nothing and leaves the token to the workflow that stopped it.
+uploads nothing and leaves the token to the workflow that stopped it. At ``maxRunSeconds`` the watchdog
+fails the token and then stops the agent the same cooperative way.
 """
 
 import json
@@ -177,7 +178,8 @@ def _download_input(s3, definition, work_root):
 
 
 class Watchdog:
-    """Reports the token as failed when a run outlives its budget, whatever the agent is doing."""
+    """Runs ``on_expire`` when a run outlives its budget, whatever the agent is doing: ``run_job`` uses
+    it to fail the token and to stop the agent through ``cancellation``."""
 
     def __init__(self, seconds, on_expire):
         self._timer = threading.Timer(seconds, on_expire)
@@ -243,7 +245,16 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         definition = parse_definition(definition_raw)
         agent_cfg = definition["agent"]
         max_run = int(agent_cfg.get("maxRunSeconds") or DEFAULT_MAX_RUN_SECONDS)
-        watchdog = Watchdog(max_run, lambda: report_failure(f"Run exceeded its {max_run}s budget"))
+
+        def budget_expired():
+            # The token is failed first, so the workflow learns of the outcome at the deadline whatever
+            # the agent is doing; then the run is stopped through the same cooperative path a SIGTERM
+            # takes -- the running script is killed, the next tool call and the next model call end the
+            # loop -- so the compute ends with the report rather than a model turn later.
+            report_failure(f"Run exceeded its {max_run}s budget")
+            cancellation.request(f"maxRunSeconds ({max_run} s)")
+
+        watchdog = Watchdog(max_run, budget_expired)
         watchdog.start()
 
         # The output name is passed back through the same naming module the Lambda used, as an
