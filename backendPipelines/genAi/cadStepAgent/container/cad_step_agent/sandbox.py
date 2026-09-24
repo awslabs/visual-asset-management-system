@@ -7,7 +7,10 @@ A generated script never runs in the agent's own interpreter. It is written to a
 and run as a subprocess in its own session with an isolated interpreter (``-I``), an allow-listed
 environment that carries no credential variable, task token or API key, resource limits on address
 space, process count and file size, and a wall-clock timeout after which the whole process group is
-killed. Its output is kept as a fixed-size tail.
+killed, along with every same-uid process that descends from the script or shares its session but
+left the group (``os.setsid()`` / ``os.setpgid()`` in a child). Its output is kept as a fixed-size
+tail, and collecting it after the kill is bounded too: a child that escaped the walk and still holds
+the output pipe cannot keep the agent waiting.
 
 What the sandbox is not: the script runs under the SAME uid, in the same network namespace and in the
 same container as the agent, so it is not a uid, network or credential boundary on its own. The agent
@@ -36,6 +39,12 @@ ALLOWED_ENV = ("PATH", "LANG", "LC_ALL", "PYTHONHASHSEED")
 # Prefixes/names that are never forwarded even if a caller adds them to the allow list.
 SECRET_ENV_MARKERS = ("AWS_", "TASK_TOKEN", "OPENAI", "SECRET", "TOKEN", "_KEY", "PASSWORD", "CREDENTIAL")
 DEFAULT_TIMEOUT_SECONDS = 300
+# How long, after the script's process group has been killed, the sandbox waits for the output pipe to
+# close. EOF arrives only when every holder of the write end has exited; a child that left the group and
+# escaped the descendant walk (a double fork that has already been reparented, for instance) still holds
+# it, and past this grace the partial output is kept and the collection abandoned rather than blocking
+# the agent for as long as that process lives.
+SANDBOX_POST_KILL_GRACE_SECONDS = 3
 OUTPUT_TAIL_LINES = 80
 OUTPUT_TAIL_LINE_CHARS = 2000
 SCRIPT_FILE_NAME = "script.py"
@@ -179,12 +188,115 @@ def _kill_process_group(proc):
         proc.kill()
 
 
+def _proc_uid_and_parent(pid):
+    """``(uid, ppid)`` from ``/proc/<pid>/status``, or None where the process is gone or unreadable."""
+    uid = ppid = None
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("Uid:"):
+                    uid = int(line.split()[1])
+                elif line.startswith("PPid:"):
+                    ppid = int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    if uid is None or ppid is None:
+        return None
+    return uid, ppid
+
+
+def _proc_session(pid):
+    """The session id from ``/proc/<pid>/stat`` (field 6), or None."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as handle:
+            stat = handle.read()
+        # The command name (field 2) is parenthesised and may itself hold spaces or parentheses; the
+        # numeric fields follow the LAST closing parenthesis: state, ppid, pgrp, session, ...
+        fields = stat[stat.rindex(")") + 1:].split()
+        return int(fields[3])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def script_descendants(script_pid, uid=None):
+    """The pids of every process of ``uid`` that descends from the script (its ``PPid`` chain reaches
+    ``script_pid``) or belongs to the script's session, the script itself excluded.
+
+    The session catches a child that changed its process group but stayed in the session; the parent
+    chain catches one that called ``setsid()`` -- for as long as its ancestors up to the script are
+    alive, which is why the walk runs BEFORE the group is killed. Best-effort: a process that has gone
+    or cannot be read is skipped, and the set is empty where there is no ``/proc``.
+    """
+    uid = os.getuid() if uid is None else uid
+    try:
+        pids = [int(p) for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return set()
+    parents = {}
+    for pid in pids:
+        if pid == script_pid:
+            continue
+        found = _proc_uid_and_parent(pid)
+        if found is not None and found[0] == uid:
+            parents[pid] = found[1]
+    descendants = set()
+    for pid, ppid in parents.items():
+        if _proc_session(pid) == script_pid:
+            descendants.add(pid)
+            continue
+        seen = set()
+        while ppid > 1 and ppid not in seen:
+            if ppid == script_pid:
+                descendants.add(pid)
+                break
+            seen.add(ppid)
+            ppid = parents.get(ppid, 0)
+    return descendants
+
+
+def _kill_escapees(script_pid, pids):
+    """SIGKILL every pid in ``pids`` that still belongs to this uid; returns how many were signalled.
+
+    Never pid 1, the agent itself or the script (the group kill handles that one); a process that
+    has gone or that cannot be signalled is skipped, and nothing raises into the caller.
+    """
+    killed = 0
+    uid = os.getuid()
+    for pid in pids:
+        if pid <= 1 or pid in (os.getpid(), script_pid):
+            continue
+        found = _proc_uid_and_parent(pid)
+        if found is None or found[0] != uid:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            continue
+        killed += 1
+    return killed
+
+
+def _kill_script(proc):
+    """SIGKILL the script's process group and every process that left it; returns the escapee count.
+
+    The descendants are collected while the script is alive (a ``setsid()`` child is reachable only
+    through its parent chain), the group is killed, the collected escapees are killed, and one more
+    walk catches a process that joined the session between the walk and the kill.
+    """
+    escapees = script_descendants(proc.pid)
+    _kill_process_group(proc)
+    killed = _kill_escapees(proc.pid, escapees)
+    killed += _kill_escapees(proc.pid, script_descendants(proc.pid) - escapees)
+    return killed
+
+
 def kill_active_scripts():
-    """SIGKILL the process group of every script running right now; returns how many there were."""
+    """SIGKILL every script running right now, its process group and every process that left the
+    group; returns how many scripts there were."""
     with _active_lock:
         procs = list(_active_scripts)
     for proc in procs:
-        _kill_process_group(proc)
+        _kill_script(proc)
     return len(procs)
 
 
@@ -206,6 +318,33 @@ def _decode(captured):
     if isinstance(captured, bytes):
         return captured.decode("utf-8", errors="replace")
     return str(captured)
+
+
+def _collect_after_kill(proc, timeout_seconds):
+    """The output lines of a script that was killed on timeout, collected within the post-kill grace.
+
+    ``communicate`` returns when the output pipe reaches EOF, which happens only once every holder of
+    the write end has exited. The group kill and the escapee walk end the script's processes, so that
+    is normally immediate; a process the walk could not reach (already reparented, for instance) keeps
+    the pipe open, and after ``SANDBOX_POST_KILL_GRACE_SECONDS`` the partial output is kept, the read
+    end closed and the collection abandoned, so the escapee holds nothing of the agent's.
+    """
+    notice = f"[sandbox] script exceeded {timeout_seconds}s and was terminated"
+    try:
+        stdout, _ = proc.communicate(timeout=SANDBOX_POST_KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        partial = exc.stdout  # what communicate had read so far, across both attempts
+        try:
+            proc.stdout.close()
+        except OSError:
+            pass
+        proc.wait()  # the script itself is dead; only the pipe was open
+        return _decode(partial).splitlines() + [
+            notice,
+            f"[sandbox] output collection abandoned after {SANDBOX_POST_KILL_GRACE_SECONDS}s "
+            "(a child process left the process group and still holds the output pipe)",
+        ]
+    return _decode(stdout).splitlines() + [notice]
 
 
 def run_script(code, work_dir, input_step=None, output_name="output.step",
@@ -232,7 +371,8 @@ def run_script(code, work_dir, input_step=None, output_name="output.step",
     lines: List[str] = []
     returncode = None
     # A new session puts the script and every process it spawns in one process group, so a timeout
-    # kills the grandchildren too rather than leaving them running for the rest of the run.
+    # kills the grandchildren too rather than leaving them running for the rest of the run; a child
+    # that leaves the group is found through /proc and killed with it.
     proc = subprocess.Popen(  # nosec B603 - the interpreter is invoked by absolute path with a fixed argv
         argv,
         cwd=work_dir,
@@ -249,9 +389,8 @@ def run_script(code, work_dir, input_step=None, output_name="output.step",
         lines = _decode(stdout).splitlines()
     except subprocess.TimeoutExpired:
         timed_out = True
-        _kill_process_group(proc)
-        stdout, _ = proc.communicate()
-        lines = _decode(stdout).splitlines() + [f"[sandbox] script exceeded {timeout_seconds}s and was terminated"]
+        _kill_script(proc)
+        lines = _collect_after_kill(proc, timeout_seconds)
     finally:
         _untrack(proc)
 

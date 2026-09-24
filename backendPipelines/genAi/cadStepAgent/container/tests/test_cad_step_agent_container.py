@@ -116,16 +116,137 @@ class TestSandbox:
             time.sleep(0.05)
         assert not _alive(grandchild), f"grandchild {grandchild} survived the timeout"
 
+    def test_a_grandchild_that_left_the_process_group_is_killed_and_the_output_still_collected(self, tmp_path):
+        # The child calls setsid(), so the group kill misses it, and it holds the inherited stdout pipe,
+        # which would otherwise keep the post-kill communicate() waiting for as long as it lives.
+        code = ("import os, time\n"
+                "pid = os.fork()\n"
+                "if pid == 0:\n"
+                "    os.setsid()\n"
+                "    time.sleep(60)\n"
+                "    os._exit(0)\n"
+                "print(pid, flush=True)\n"
+                "time.sleep(60)\n")
+        started = time.time()
+        result = sandbox.run_script(code, str(tmp_path / "a8"), timeout_seconds=1)
+        elapsed = time.time() - started
+        assert result.timed_out and not result.succeeded
+        assert elapsed < 1 + sandbox.SANDBOX_POST_KILL_GRACE_SECONDS + 1, elapsed
+        escapee = int(result.output_tail.splitlines()[0])
+        for _ in range(40):
+            if not _alive(escapee):
+                break
+            time.sleep(0.05)
+        assert not _alive(escapee), f"escapee {escapee} survived the timeout"
+        # The escapee died, so the pipe closed and the collection completed rather than being abandoned.
+        assert "terminated" in result.output_tail and "abandoned" not in result.output_tail
+
+    def test_the_post_kill_collection_is_abandoned_when_an_escapee_is_out_of_reach(self, tmp_path):
+        # A double fork: the middle process leaves the session and exits at once, so by the time the
+        # timeout fires the daemon is reparented and in a session of its own -- neither the group kill
+        # nor the /proc walk can reach it. It holds stdout; the collection must give up on it in time.
+        code = ("import os, time\n"
+                "if os.fork() == 0:\n"
+                "    os.setsid()\n"
+                "    daemon = os.fork()\n"
+                "    if daemon == 0:\n"
+                "        time.sleep(60)\n"
+                "        os._exit(0)\n"
+                "    print(daemon, flush=True)\n"
+                "    os._exit(0)\n"
+                "time.sleep(60)\n")
+        started = time.time()
+        result = sandbox.run_script(code, str(tmp_path / "a9"), timeout_seconds=1)
+        elapsed = time.time() - started
+        daemon = int(result.output_tail.splitlines()[0])
+        try:
+            assert result.timed_out and not result.succeeded
+            assert elapsed < 1 + sandbox.SANDBOX_POST_KILL_GRACE_SECONDS + 1, elapsed
+            assert elapsed >= sandbox.SANDBOX_POST_KILL_GRACE_SECONDS, elapsed
+            assert "terminated" in result.output_tail
+            assert "output collection abandoned" in result.output_tail
+        finally:
+            try:
+                os.kill(daemon, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def test_kill_active_scripts_reaches_a_grandchild_that_left_the_process_group(self, tmp_path):
+        code = ("import os, time\n"
+                "pid = os.fork()\n"
+                "if pid == 0:\n"
+                "    os.setsid()\n"
+                "    time.sleep(60)\n"
+                "    os._exit(0)\n"
+                "print(pid, flush=True)\n"
+                "time.sleep(60)\n")
+        killed = {}
+
+        def stop_soon():
+            time.sleep(0.6)
+            killed["count"] = sandbox.kill_active_scripts()
+        stopper = threading.Thread(target=stop_soon, daemon=True)
+        stopper.start()
+        started = time.time()
+        result = sandbox.run_script(code, str(tmp_path / "k2"), timeout_seconds=30)
+        assert time.time() - started < 10
+        stopper.join(timeout=5)  # the escapee pass runs after the group kill that released run_script
+        assert killed["count"] == 1 and not result.succeeded
+        escapee = int(result.output_tail.splitlines()[0])
+        for _ in range(40):
+            if not _alive(escapee):
+                break
+            time.sleep(0.05)
+        assert not _alive(escapee), f"escapee {escapee} survived the stop request"
+
+    def test_script_descendants_follows_the_parent_chain_and_the_session_but_not_this_process(self, tmp_path):
+        # A live script whose child changed its process group (same session) and whose grandchild
+        # called setsid(); both are descendants, the test process and the script itself are not.
+        code = ("import os, time\n"
+                "if os.fork() == 0:\n"
+                "    os.setpgid(0, 0)\n"
+                "    if os.fork() == 0:\n"
+                "        os.setsid()\n"
+                "        time.sleep(60)\n"
+                "    time.sleep(60)\n"
+                "print('ready', flush=True)\n"
+                "time.sleep(60)\n")
+        script_path = tmp_path / "walk.py"
+        script_path.write_text(code)
+        proc = subprocess.Popen([sys.executable, "-I", str(script_path)], stdout=subprocess.PIPE,
+                                start_new_session=True)
+        try:
+            assert proc.stdout.readline().strip() == b"ready"
+            time.sleep(0.3)  # let both forks happen
+            found = sandbox.script_descendants(proc.pid)
+            assert len(found) == 2, found
+            assert proc.pid not in found and os.getpid() not in found and 1 not in found
+            sessions = {sandbox._proc_session(pid) for pid in found}
+            assert proc.pid in sessions and len(sessions) == 2  # one stayed in the session, one left
+            assert sandbox._kill_escapees(proc.pid, found | {1, os.getpid(), proc.pid}) == 2
+            for pid in found:
+                for _ in range(40):
+                    if not _alive(pid):
+                        break
+                    time.sleep(0.05)
+                assert not _alive(pid)
+        finally:
+            sandbox._kill_process_group(proc)
+            proc.stdout.close()
+            proc.wait()
+
     def test_kill_active_scripts_ends_the_running_script_from_another_thread(self, tmp_path):
         killed = {}
 
         def stop_soon():
             time.sleep(0.4)
             killed["count"] = sandbox.kill_active_scripts()
-        threading.Thread(target=stop_soon, daemon=True).start()
+        stopper = threading.Thread(target=stop_soon, daemon=True)
+        stopper.start()
         started = time.time()
         result = sandbox.run_script("import time\ntime.sleep(30)\n", str(tmp_path / "k1"), timeout_seconds=30)
         assert time.time() - started < 10
+        stopper.join(timeout=5)  # the escapee pass runs after the group kill that released run_script
         assert killed["count"] == 1
         assert result.returncode is not None and result.returncode != 0 and not result.succeeded
         # The registry is empty again once the script has ended.
