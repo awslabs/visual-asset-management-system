@@ -8,7 +8,9 @@ import importlib.util
 import json
 import logging
 import os
+import queue
 import resource
+import signal
 import subprocess  # nosec B404 - the test spawns the interpreter by absolute path with a fixed argv
 import sys
 import threading
@@ -1358,6 +1360,250 @@ class TestBatchMain:
         _reset_quiet_loggers()
         importlib.reload(batch_main)
         assert {logging.getLogger(n).level for n in logging_setup.QUIET_LOGGERS} == {logging.WARNING}
+
+
+# ---------------------------------------------------------------------------------------------------
+# init (the container's PID 1)
+# ---------------------------------------------------------------------------------------------------
+_D11_MARKER = "D11-PROBE"
+# What a generated script does to reach the process tree above it: from its parent, one PPid hop at a
+# time, up to PID 1 or to STOP (the pid the agent stand-in substitutes for its own parent, the init),
+# trying every ancestor's /proc/<pid>/environ on the way.
+_WALKING_READER = r'''
+import json, os
+def field(pid, name):
+    with open(f"/proc/{pid}/status") as fh:
+        for line in fh:
+            if line.startswith(name + ":"):
+                return line.split(None, 1)[1].strip()
+hops, pid = [], os.getppid()
+while True:
+    hop = {"pid": pid, "comm": field(pid, "Name")}
+    try:
+        data = open(f"/proc/{pid}/environ", "rb").read()
+        hop["environ"] = "READ"
+        hop["leak"] = b"D11-PROBE" in data
+    except PermissionError:
+        hop["environ"] = "DENIED"
+    hop["cmdline_leak"] = b"D11-PROBE" in open(f"/proc/{pid}/cmdline", "rb").read()
+    hops.append(hop)
+    if pid in (1, STOP):
+        break
+    pid = int(field(pid, "PPid"))
+print("HOPS " + json.dumps(hops), flush=True)
+'''
+# The agent through its real entry path (batch_main.main: harden, install the stop handlers, run the
+# job), with the job replaced by one sandboxed run of the walking reader.
+_PROBING_AGENT = (
+    "import json, os, sys, tempfile, types\n"
+    "fake = types.ModuleType('strands'); fake.tool = lambda fn: fn; sys.modules['strands'] = fake\n"
+    "from cad_step_agent import batch_main, run, sandbox\n"
+    f"reader = {json.dumps(_WALKING_READER)}.replace('STOP', str(os.getppid()))\n"
+    "def probe(definition, task_token):\n"
+    "    assert 'D11-PROBE' in os.environ['AWS_CONTAINER_CREDENTIALS_RELATIVE_URI'] and 'D11-PROBE' in task_token\n"
+    "    result = sandbox.run_script(reader, tempfile.mkdtemp(prefix='d11-'), timeout_seconds=30)\n"
+    "    print(result.output_tail, flush=True)\n"
+    "run.run_job = probe\n"
+    "sys.exit(batch_main.main(os.environ))\n"
+)
+# The agent through its real entry path, with a job that waits for the stop request the SIGTERM
+# handler records and ends the way a cancelled run does.
+_WAITING_AGENT = (
+    "import os, sys, time, types\n"
+    "fake = types.ModuleType('strands'); fake.tool = lambda fn: fn; sys.modules['strands'] = fake\n"
+    "from cad_step_agent import batch_main, cancellation, run\n"
+    "def wait_for_stop(definition, task_token):\n"
+    "    print('RUNNING', os.getpid(), flush=True)\n"
+    "    while not cancellation.requested():\n"
+    "        time.sleep(0.02)\n"
+    "    raise run.RunCancelled(cancellation.reason())\n"
+    "run.run_job = wait_for_stop\n"
+    "sys.exit(batch_main.main(os.environ))\n"
+)
+# Leaves an orphan behind: the grandchild forks a process that outlives it, hands its pid up a pipe
+# and exits, so the orphan is reparented to the nearest subreaper while this process is still running.
+_ORPHANING_CHILD = (
+    "import os, sys, time\n"
+    "r, w = os.pipe()\n"
+    "grandchild = os.fork()\n"
+    "if grandchild == 0:\n"
+    "    orphan = os.fork()\n"
+    "    if orphan == 0:\n"
+    "        time.sleep(0.5)\n"
+    "        os._exit(0)\n"
+    "    os.write(w, str(orphan).encode())\n"
+    "    os._exit(0)\n"
+    "os.waitpid(grandchild, 0)\n"
+    "orphan = int(os.read(r, 32))\n"
+    "with open(f'/proc/{orphan}/status') as fh:\n"
+    "    ppid = [line.split()[1] for line in fh if line.startswith('PPid:')][0]\n"
+    "print('ORPHAN', orphan, 'PPID', ppid, flush=True)\n"
+    "time.sleep(3)\n"
+)
+
+
+def _container_env(**extra):
+    env = dict(os.environ)
+    env["PYTHONPATH"] = _CONTAINER_DIR + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env.update(extra)
+    return env
+
+
+def _task_env():
+    """The Fargate task's environment as the container sees it: credential pointer, token, definition."""
+    return _container_env(AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=f"/v2/credentials/{_D11_MARKER}-LEAK",
+                          TASK_TOKEN=f"{_D11_MARKER}-TOKEN",
+                          CAD_AGENT_DEFINITION=json.dumps({"mode": "modify", "marker": f"{_D11_MARKER}-DEFINITION"}))
+
+
+def _program(tmp_path, name, code):
+    """``code`` as a file, so the command line shows a file name -- as the container's shows module
+    names -- and not the program text."""
+    path = tmp_path / f"{name}.py"
+    path.write_text(code, encoding="utf-8")
+    return str(path)
+
+
+class _Streamed:
+    """A process whose merged output is read on a thread: a test can wait for one line (without the
+    buffering that select()+readline() trips over) and still have the whole output at the end."""
+
+    def __init__(self, argv, env):
+        self.proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.lines = []
+        self._queue = queue.Queue()
+        self._thread = threading.Thread(target=self._pump, daemon=True)
+        self._thread.start()
+
+    def _pump(self):
+        for line in self.proc.stdout:
+            self.lines.append(line)
+            self._queue.put(line)
+        self._queue.put(None)
+
+    @property
+    def pid(self):
+        return self.proc.pid
+
+    def wait_for(self, prefix, timeout=30):
+        deadline = time.time() + timeout
+        while True:
+            try:
+                line = self._queue.get(timeout=max(0.01, deadline - time.time()))
+            except queue.Empty:
+                pytest.fail(f"no line starting with {prefix!r} within {timeout}s:\n{''.join(self.lines)}")
+            if line is None:
+                pytest.fail(f"output ended before a line starting with {prefix!r}:\n{''.join(self.lines)}")
+            if line.startswith(prefix):
+                return line.split()
+
+    def finish(self, timeout=30):
+        try:
+            self.proc.wait(timeout=timeout)
+        finally:
+            if self.proc.poll() is None:
+                self.proc.kill()
+                self.proc.wait()
+        self._thread.join(timeout=5)
+        return self.proc.returncode, "".join(self.lines)
+
+
+def _init(*command, env=None):
+    return _Streamed([sys.executable, "-m", "cad_step_agent.init", *command], env or _container_env())
+
+
+def _hops(output):
+    line = [ln for ln in output.splitlines() if ln.startswith("HOPS ")][-1]
+    return json.loads(line[len("HOPS "):])
+
+
+def _environ_denied(pid):
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as handle:
+            handle.read()
+    except PermissionError:
+        return True
+    return False
+
+
+@pytest.mark.unit
+class TestInit:
+    def test_no_ancestor_of_a_script_answers_an_environ_read(self, tmp_path):
+        """The regression test for the readable init: a script walks from its parent to PID 1 (here: to
+        the init, which is not PID 1 of a test's namespace) and reads each ancestor's environment."""
+        agent = _program(tmp_path, "probing_agent", _PROBING_AGENT)
+        # Positive control -- an ordinary dumpable process at the top of the tree, which is what a
+        # container service's injected init is: the agent refuses, the init answers with the pointer.
+        dumpable_init = _program(tmp_path, "dumpable_init",
+                                 "import subprocess, sys\n"
+                                 "sys.exit(subprocess.call([sys.executable, sys.argv[1]]))\n")
+        rc, output = _Streamed([sys.executable, dumpable_init, agent], _task_env()).finish(timeout=120)
+        assert rc == 0, output
+        hops = _hops(output)
+        assert [h["environ"] for h in hops] == ["DENIED", "READ"] and hops[1]["leak"] is True, hops
+
+        # The image's init: the same walk finds nothing readable.
+        rc, output = _init(sys.executable, agent, env=_task_env()).finish(timeout=120)
+        assert rc == 0, output
+        assert "non_dumpable=True" in output  # the agent's own hardening, on the real entry path
+        hops = _hops(output)
+        assert len(hops) == 2, hops  # the agent, then the init: nothing else sits between them
+        assert all(h["environ"] == "DENIED" for h in hops), hops
+        assert all(h["comm"].startswith("python") for h in hops), hops
+        # What /proc shows of every process regardless -- the command line -- carries no secret.
+        assert not any(h["cmdline_leak"] for h in hops), hops
+
+    def test_a_stop_signal_to_pid_1_reaches_the_agent_and_its_interrupt_exit_code_comes_back(self, tmp_path):
+        from cad_step_agent import batch_main
+        init = _init(sys.executable, _program(tmp_path, "waiting_agent", _WAITING_AGENT), env=_task_env())
+        try:
+            _, agent_pid = init.wait_for("RUNNING")
+            agent_pid = int(agent_pid)
+            # Both processes hold the task environment; neither answers a same-uid read of it.
+            assert _environ_denied(init.pid) and _environ_denied(agent_pid)
+            os.kill(init.pid, signal.SIGTERM)
+        finally:
+            rc, output = init.finish(timeout=20)
+        assert rc == batch_main.EXIT_CANCELLED == 130, output
+        assert not _alive(agent_pid)
+
+    @pytest.mark.parametrize("child, expected", [
+        pytest.param("import sys; sys.exit(7)", 7, id="exit-code"),
+        pytest.param("import os, signal; os.kill(os.getpid(), signal.SIGKILL)", 137, id="signal-death"),
+    ])
+    def test_the_child_outcome_is_the_container_exit_code(self, child, expected):
+        rc, output = _init(sys.executable, "-c", child).finish()
+        assert rc == expected, output
+
+    def test_a_command_that_cannot_start_is_exit_127(self):
+        rc, output = _init("/nonexistent/cad-agent").finish()
+        assert rc == 127 and "cannot start /nonexistent/cad-agent" in output
+
+    def test_orphaned_descendants_are_reparented_to_the_init_and_reaped_while_the_child_runs(self, tmp_path):
+        init = _init(sys.executable, _program(tmp_path, "orphaning_child", _ORPHANING_CHILD))
+        try:
+            _, orphan, _, ppid = init.wait_for("ORPHAN")
+            assert int(ppid) == init.pid  # the subreaper, not the namespace's PID 1
+            deadline = time.time() + 5
+            while time.time() < deadline and os.path.exists(f"/proc/{orphan}"):
+                assert init.proc.poll() is None
+                time.sleep(0.05)
+            assert not os.path.exists(f"/proc/{orphan}")  # reaped, not left a zombie
+        finally:
+            rc, output = init.finish()
+        assert rc == 0, output
+
+    def test_it_does_not_start_a_child_while_it_can_be_read(self):
+        from cad_step_agent import init
+        assert init.main(["true"], harden=lambda: False,
+                         subreaper=lambda: pytest.fail("no step past hardening")) == init.EXIT_NOT_HARDENED == 3
+        assert init.main([]) == init.EXIT_USAGE == 2
+
+    def test_exit_code_follows_the_shell_convention(self):
+        from cad_step_agent import init
+        assert init.exit_code(7 << 8) == 7
+        assert init.exit_code(signal.SIGKILL) == 137
+        assert init.exit_code(signal.SIGTERM) == 143
 
 
 # ---------------------------------------------------------------------------------------------------

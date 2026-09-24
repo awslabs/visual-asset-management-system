@@ -398,14 +398,13 @@ describe("CAD STEP agent on the Fargate runtime", () => {
         expectSynchronousImageBuild(synth);
     });
 
-    test("the container runs under an init process so a terminated job's SIGTERM reaches the agent", () => {
+    test("the job definition layers no ECS init process above the image's own non-dumpable PID 1", () => {
         const jobDef = synth
             .ofType("AWS::Batch::JobDefinition")
             .find((j) => /CadStepAgent/.test(j.logicalId))!;
-        const linux = (jobDef.properties as any).ContainerProperties.LinuxParameters;
-        expect(linux.InitProcessEnabled).toBe(true);
-        // A Fargate job definition takes no device or tmpfs lists.
-        expect(Object.keys(linux)).toEqual(["InitProcessEnabled"]);
+        // The init ECS injects would be an ordinary same-uid process holding the task environment,
+        // readable by a generated script through /proc/1/environ; the image's ENTRYPOINT is the init.
+        expect((jobDef.properties as any).ContainerProperties.LinuxParameters).toBeUndefined();
     });
 });
 

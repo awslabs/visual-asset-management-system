@@ -14,7 +14,9 @@ same container as the agent, so it is not a uid, network or credential boundary 
 process withholds its environment from same-uid readers by making itself non-dumpable
 (``harden_agent_process``): ``/proc/<agent pid>/{environ,maps,mem,fd}`` then answer EACCES to any
 process without CAP_SYS_PTRACE, which is what keeps the container credential pointer and the task
-token out of a script that reads its parent's ``/proc`` entry.
+token out of a script that reads its parent's ``/proc`` entry. The container's init (``init``, PID 1,
+the agent's parent) holds the same environment and hardens itself the same way before the agent
+exists, so the walk up the process tree finds no readable ancestor.
 """
 
 import ctypes

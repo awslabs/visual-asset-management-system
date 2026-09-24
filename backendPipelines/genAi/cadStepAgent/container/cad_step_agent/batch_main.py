@@ -8,9 +8,10 @@ task token in ``TASK_TOKEN`` (both set by the executeBatchJob Lambda as containe
 travels in the command line: ``/proc/<pid>/cmdline`` is readable by every process in the container,
 while the environment of a non-dumpable process is not.
 
-The job definition runs the container under an init process, so the SIGTERM that AWS Batch sends when
-the job is terminated reaches this interpreter; the handler stops the run (``cancellation``), which then
-uploads nothing, reports nothing on its token and exits with ``EXIT_CANCELLED``.
+The image's own init process (``init``, PID 1) forwards the SIGTERM that AWS Batch sends when the job is
+terminated to this interpreter; the handler stops the run (``cancellation``), which then uploads nothing,
+reports nothing on its token and exits with ``EXIT_CANCELLED``, which the init passes on as the
+container's exit code.
 """
 
 import logging

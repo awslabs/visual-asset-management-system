@@ -31,14 +31,21 @@ COPY ./cad_step_agent/ ./cad_step_agent/
 # The agent runs as cadagent, never root. A generated script runs in a subprocess of that same account
 # with a scrubbed environment (no credential variables, no task token, no API key), an isolated
 # interpreter (-I), its own session, resource limits, a per-attempt working directory and a timeout
-# (sandbox.py); the agent process makes itself non-dumpable so the script cannot read its /proc entry.
+# (sandbox.py). Every process above the script that holds the task environment -- the agent and the
+# init below -- makes itself non-dumpable, so the script cannot read their /proc entries.
 RUN useradd --create-home --uid 10001 --user-group cadagent \
     && mkdir -p /work && chown cadagent:cadagent /work && chmod 700 /work
 ENV TMPDIR=/work
 USER cadagent
 
+# PID 1 on both runtimes is the image's own init (init.py): non-dumpable before it starts the command,
+# it forwards the stop signals to the command and reaps orphaned processes. The job definition asks
+# ECS for no init process: the one ECS injects is an ordinary same-uid process holding the whole task
+# environment, readable by a generated script through /proc/1/environ.
+ENTRYPOINT ["python3", "-m", "cad_step_agent.init"]
+
 # AgentCore Runtime protocol: HTTP on 8080 (/invocations, /ping). The Batch job definition overrides
-# the command with `python3 -m cad_step_agent.batch_main` and hands the definition over in the
-# environment.
+# the command with `python3 -m cad_step_agent.batch_main` (the ENTRYPOINT stays) and hands the
+# definition over in the environment.
 EXPOSE 8080
 CMD ["python3", "-m", "cad_step_agent.agentcore_app"]
