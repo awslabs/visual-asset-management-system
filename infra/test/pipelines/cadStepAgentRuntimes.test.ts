@@ -239,19 +239,22 @@ describe("CAD STEP agent on the AgentCore runtime", () => {
         expect(busy[0].ErrorEquals).toEqual(["CadStepAgentBusy"]);
         expect(busy[0].IntervalSeconds).toBe(30);
         expect(busy[0].BackoffRate).toBe(2);
-        expect(busy[0].MaxAttempts).toBe(5);
+        expect(busy[0].MaxAttempts).toBe(4);
         // Every other error still goes straight to the catch that runs pipelineEnd.
         expect(run.Catch).toHaveLength(1);
         expect(run.Catch[0].ErrorEquals).toEqual(["States.ALL"]);
-        // The waits between retries (30 s doubling) plus the largest run budget getConfig accepts
-        // (6000 s) end inside the workflow task's outer bound.
+        // Step Functions restarts the state's TimeoutSeconds on every attempt, so the waits between
+        // retries (30 s doubling) plus one full wait on the token must end inside the workflow task's
+        // outer bound -- the case of a container that takes the last attempt and then never reports.
         let totalWait = 0;
         for (let i = 0; i < busy[0].MaxAttempts; i++) {
             totalWait += busy[0].IntervalSeconds * Math.pow(busy[0].BackoffRate, i);
         }
-        expect(totalWait).toBeGreaterThanOrEqual(15 * 60 - 60);
+        expect(totalWait).toBe(450);
         const bundle = JSON.parse(fs.readFileSync(path.join(SCHEMA_DIR, "pipeline.json"), "utf8"));
-        expect(totalWait + 6000).toBeLessThan(Number(bundle.executionConfig.taskTimeout));
+        expect(totalWait + run.TimeoutSeconds).toBeLessThan(
+            Number(bundle.executionConfig.taskTimeout)
+        );
     });
 
     test("the image is built for arm64 by CodeBuild", () => {

@@ -64,14 +64,16 @@ export const CAD_STEP_AGENT_PIPELINE_ID = "genai-cad-step-agent";
 export const RUN_TASK_TIMEOUT = cdk.Duration.seconds(6600);
 /**
  * Retry of the run state on the agentcore runtime's busy refusal (`CadStepAgentBusy`): a warm session
- * slot still running an earlier job. Five retries at 30 s doubling wait about 15.5 minutes in all;
- * with the largest `maxRunSeconds` getConfig accepts (6000 s) the state still ends inside the bundles'
- * 7200 s workflow task timeout.
+ * slot still running an earlier job. Step Functions restarts the state's TimeoutSeconds
+ * (RUN_TASK_TIMEOUT, 6600 s) on every attempt, so the bound that matters is the sum of the waits plus
+ * one full wait on the token, for a container that takes the last attempt and then never reports:
+ * four retries at 30 s doubling wait 30 + 60 + 120 + 240 = 450 s in all, and 450 + 6600 = 7050 s ends
+ * inside the bundles' 7200 s workflow task timeout. A fifth retry (930 + 6600 = 7530 s) would not.
  */
 export const BUSY_RETRY = {
     interval: cdk.Duration.seconds(30),
     backoffRate: 2,
-    maxAttempts: 5,
+    maxAttempts: 4,
 };
 export const CAD_STEP_AGENT_MODIFY_WORKFLOW_ID = "genai-cad-step-agent-modify";
 export const CAD_STEP_AGENT_GENERATE_WORKFLOW_ID = "genai-cad-step-agent-generate";

@@ -115,7 +115,7 @@ Every option is described in the [Configuration Reference](../deployment/configu
 
 ### Warm sessions
 
-`agentCore.warmSessionSlots` trades start-up latency for concurrency. With `0` (the default) every run gets a fresh runtime session and its own container; runs are independent but each pays the container start. With `N` slots, runs are hashed onto `N` fixed session ids that the runtime keeps warm for `idleRuntimeSessionTimeoutSeconds`, so repeat runs start on a warm container — but one session hosts one run at a time: a run that lands on a slot whose session is still busy is refused by the container and retried by the workflow onto the same slot (30 seconds apart, doubling, for up to about 15 minutes; a run that still finds the slot busy then fails), and a session that reaches `maxLifetimeSeconds` mid-run ends that run. Size the slot count to the expected concurrency, or keep `0` where runs are rare or long.
+`agentCore.warmSessionSlots` trades start-up latency for concurrency. With `0` (the default) every run gets a fresh runtime session and its own container; runs are independent but each pays the container start. With `N` slots, runs are hashed onto `N` fixed session ids that the runtime keeps warm for `idleRuntimeSessionTimeoutSeconds`, so repeat runs start on a warm container — but one session hosts one run at a time: a run that lands on a slot whose session is still busy is refused by the container and retried by the workflow onto the same slot (30 seconds apart, doubling, four times, about 7.5 minutes in all; a run that still finds the slot busy then fails), and a session that reaches `maxLifetimeSeconds` mid-run ends that run. Size the slot count to the expected concurrency, or keep `0` where runs are rare or long.
 
 ## Security Model
 
