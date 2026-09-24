@@ -1778,7 +1778,7 @@ class TestLoggingSetup:
     def test_the_http_client_loggers_speak_only_from_warning_up(self, caplog):
         _reset_quiet_loggers()
         logging_setup.configure_logging()
-        assert set(logging_setup.QUIET_LOGGERS) == {"httpx", "httpcore"}
+        assert set(logging_setup.QUIET_LOGGERS) == {"httpx", "httpcore", "primp", "ddgs"}
         with caplog.at_level(logging.INFO):
             for name in logging_setup.QUIET_LOGGERS:
                 logging.getLogger(name).info("HTTP Request: GET %s \"HTTP/1.1 200 OK\"", _SIGNED_URL)
@@ -1788,6 +1788,18 @@ class TestLoggingSetup:
         assert [r.getMessage() for r in caplog.records if r.name == "httpx"] == ["connection reset by peer"]
         # The agent's own loggers are untouched.
         assert any(r.name == "cad_step_agent.tools" and r.levelno == logging.INFO for r in caplog.records)
+
+    def test_the_search_client_logger_speaks_only_from_warning_up(self, caplog):
+        # primp (the HTTP client behind ddgs) logs every search-engine request URL at INFO, query string
+        # included; after configure_logging an INFO record is not emitted while a WARNING still is.
+        _reset_quiet_loggers()
+        logging_setup.configure_logging()
+        with caplog.at_level(logging.INFO):
+            logging.getLogger("primp").info("GET https://search.example/html/?q=m3+heat+set+insert+dimensions")
+            logging.getLogger("primp").warning("request failed: connection reset by peer")
+        primp = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == "primp"]
+        assert primp == [(logging.WARNING, "request failed: connection reset by peer")]
+        assert not any("q=m3" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------------------------------
