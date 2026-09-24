@@ -21,7 +21,7 @@ import uuid
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from . import agent as agent_module
 from . import cad_step_naming, cancellation, guardrail as guardrail_module, report, tools
@@ -49,6 +49,28 @@ class RunFailed(RuntimeError):
 def _token_gone(exc):
     """True when a callback failed because the task token's task no longer exists."""
     return isinstance(exc, ClientError) and exc.response.get("Error", {}).get("Code") in TOKEN_GONE_ERROR_CODES
+
+
+def require_live_token(sfn, task_token):
+    """Raise ``RunCancelled`` when the task ``task_token`` belongs to has already ended.
+
+    A heartbeat is the one call that tells whether a task is still waiting on its token without
+    naming the execution. It is sent before anything is uploaded: an abort reaches the Fargate
+    container as a SIGTERM, but nothing reaches an AgentCore session from outside, so a run that
+    finishes after its execution was aborted would otherwise leave objects nobody registers. A probe
+    that fails for any other reason is logged and does not stand in the way of a healthy run. No
+    probe without a token (a direct or local invocation)."""
+    if not task_token:
+        return
+    try:
+        sfn.send_task_heartbeat(taskToken=task_token)
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "ClientError")
+        if _token_gone(exc):
+            raise RunCancelled(f"the workflow ({code}): its task ended before the result was uploaded") from None
+        logger.warning("workflow task probe failed (%s); uploading the result anyway", code)
+    except BotoCoreError as exc:
+        logger.warning("workflow task probe failed (%s); uploading the result anyway", type(exc).__name__)
 
 
 def _clients():
@@ -274,6 +296,8 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         cancellation.raise_if_requested()
 
         outcome = derive_outcome(state, definition, model_label, run_id, time.time() - started)
+        # A result the workflow no longer waits for is not uploaded: nothing would register it.
+        require_live_token(sfn, task_token)
         key = upload_outputs(s3, definition, outcome, state.best_output)
         payload = report.success_payload(outcome)
         payload["outputKey"] = key

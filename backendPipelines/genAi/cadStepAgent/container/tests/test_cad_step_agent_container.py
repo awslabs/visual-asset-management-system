@@ -1024,6 +1024,73 @@ class TestRunJob:
         assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
         assert any(r.levelno == logging.INFO and "TaskTimedOut" in r.getMessage() for r in caplog.records)
 
+    @pytest.mark.parametrize("code", ["TaskTimedOut", "TaskDoesNotExist"])
+    def test_a_run_whose_task_has_ended_uploads_nothing(self, monkeypatch, caplog, code):
+        from botocore.exceptions import ClientError
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        sfn.send_task_heartbeat.side_effect = ClientError(
+            {"Error": {"Code": code, "Message": "Provided task does not exist anymore"}}, "SendTaskHeartbeat")
+        with patch.object(cad_io, "inspect_step", return_value=VALID), \
+                caplog.at_level(logging.INFO, logger="cad_step_agent"), pytest.raises(run.RunCancelled):
+            run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn,
+                        agent_factory=_agent_that(finish_args=("ok", [], "succeeded", ["a: expected 1 - measured 1 - ok"])),
+                        guardrail=_FakeGuardrail())
+        sfn.send_task_heartbeat.assert_called_once_with(taskToken="inner-token")
+        assert s3.objects == {}
+        sfn.send_task_success.assert_not_called()
+        sfn.send_task_failure.assert_not_called()
+        cancelled = [r for r in caplog.records if r.getMessage().startswith("run cancelled by")]
+        assert cancelled == [cancelled[0]] and cancelled[0].levelno == logging.INFO and cancelled[0].exc_info is None
+        assert cancelled[0].getMessage() == f"run cancelled by the workflow ({code}): its task ended before the result was uploaded"
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+    def test_a_live_task_is_probed_once_before_the_upload(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        order = []
+        sfn.send_task_heartbeat.side_effect = lambda **kwargs: order.append(("probe", len(s3.objects)))
+        with patch.object(cad_io, "inspect_step", return_value=VALID):
+            payload = run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn,
+                                  agent_factory=_agent_that(finish_args=("ok", [], "succeeded", ["a: expected 1 - measured 1 - ok"])),
+                                  guardrail=_FakeGuardrail())
+        sfn.send_task_heartbeat.assert_called_once_with(taskToken="inner-token")
+        assert order == [("probe", 0)]  # the probe came first, with nothing uploaded yet
+        assert ("abkt", "xasset1/sub/part.stp") in s3.objects and payload["status"] == "succeeded"
+        sfn.send_task_success.assert_called_once()
+
+    @pytest.mark.parametrize("failure", [
+        pytest.param(("ClientError", {"Error": {"Code": "AccessDeniedException", "Message": "no"}}), id="client-error"),
+        pytest.param(("EndpointConnectionError", {"endpoint_url": "https://states.example"}), id="connection-error"),
+    ])
+    def test_a_probe_that_fails_for_another_reason_is_a_warning_and_the_upload_proceeds(self, monkeypatch, caplog, failure):
+        from botocore import exceptions as botocore_exceptions
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        kind, detail = failure
+        sfn.send_task_heartbeat.side_effect = botocore_exceptions.ClientError(detail, "SendTaskHeartbeat") \
+            if kind == "ClientError" else botocore_exceptions.EndpointConnectionError(**detail)
+        with patch.object(cad_io, "inspect_step", return_value=VALID), caplog.at_level(logging.INFO, logger="cad_step_agent"):
+            payload = run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn,
+                                  agent_factory=_agent_that(finish_args=("ok", [], "succeeded", ["a: expected 1 - measured 1 - ok"])),
+                                  guardrail=_FakeGuardrail())
+        assert payload["status"] == "succeeded" and ("abkt", "xasset1/sub/part.stp") in s3.objects
+        sfn.send_task_success.assert_called_once()
+        probe = [r for r in caplog.records if "workflow task probe failed" in r.getMessage()]
+        assert len(probe) == 1 and probe[0].levelno == logging.WARNING and probe[0].exc_info is None
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+    def test_a_run_without_a_token_is_not_probed(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        with patch.object(cad_io, "inspect_step", return_value=VALID):
+            payload = run.run_job(_definition(), "", s3=s3, sfn=sfn,
+                                  agent_factory=_agent_that(finish_args=("ok", [], "succeeded", ["a: expected 1 - measured 1 - ok"])),
+                                  guardrail=_FakeGuardrail())
+        sfn.send_task_heartbeat.assert_not_called()
+        sfn.send_task_success.assert_not_called()
+        assert payload["status"] == "succeeded" and ("abkt", "xasset1/sub/part.stp") in s3.objects
+
     def test_a_failure_report_on_a_token_that_is_gone_is_logged_as_information(self, monkeypatch, caplog):
         from botocore.exceptions import ClientError
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
