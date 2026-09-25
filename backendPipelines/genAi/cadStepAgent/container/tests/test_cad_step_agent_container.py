@@ -1868,9 +1868,69 @@ class TestCancellation:
 # cad_io feature summary (needs the OCP wheel; these tests alone are skipped where CadQuery is absent,
 # the rest of the module still runs, as cad_io's lazy import intends)
 # ---------------------------------------------------------------------------------------------------
+def _write_step_roots(path, shapes):
+    """A STEP file with one root shape per entry, the way an AP242 exporter writes the solid beside its PMI
+    annotation compounds (CadQuery's own exporter writes a single root)."""
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+    writer = STEPControl_Writer()
+    for shape in shapes:
+        assert writer.Transfer(shape.wrapped, STEPControl_AsIs) == IFSelect_RetDone
+    assert writer.Write(path) == IFSelect_RetDone
+
+
+def _plate_with_two_holes(cq):
+    return (cq.Workplane("XY").box(100, 60, 10, centered=(True, True, False)).faces(">Z").workplane()
+            .pushPoints([(-42, -22), (42, 22)]).hole(4.5))
+
+
+def _annotation_roots(cq):
+    """What surrounds the solid in an AP242 file with PMI: an empty compound and a compound of free planes,
+    one of them 30 mm above the part along the hole axis, so a bounding box that included it would make
+    every through hole look blind."""
+    planes = cq.Compound.makeCompound([
+        cq.Face.makePlane(30, 20, cq.Vector(90, 0, 30), cq.Vector(0, 0, 1)),
+        cq.Face.makePlane(10, 10, cq.Vector(0, 0, 60), cq.Vector(0, 1, 0))])
+    return cq.Compound.makeCompound([]), planes
+
+
 @pytest.mark.unit
 @pytest.mark.skipif(importlib.util.find_spec("cadquery") is None, reason="cadquery/OCP wheel not installed")
 class TestFeatureSummary:
+    def test_a_multi_root_file_is_measured_on_its_solids(self, tmp_path):
+        import cadquery as cq
+        plate = _plate_with_two_holes(cq)
+        empty, planes = _annotation_roots(cq)
+        path = str(tmp_path / "multiroot.step")
+        _write_step_roots(path, [empty, plate.val(), planes])
+        # The file reproduces the failure: the first root alone has no bounding box.
+        with pytest.raises(Exception, match="Bnd_Box is void"):
+            cq.importers.importStep(path).val().BoundingBox()
+        summary = cad_io.inspect_step(path)
+        assert summary.valid and summary.error == ""
+        assert summary.solid_count == 1 and summary.non_solid_roots == 2
+        assert summary.face_count == 8 and summary.edge_count == 18  # the plate's, not the annotation planes'
+        assert summary.bounding_box_mm == pytest.approx([-50, -30, 0, 50, 30, 10])
+        assert summary.volume_mm3 == pytest.approx(plate.val().Volume())
+        [group] = summary.features["holes"]
+        assert group["count"] == 2 and group["through"] is True
+        assert summary.to_dict()["non_solid_roots"] == 2
+        assert summary.describe().endswith("; 2 non-solid root shape(s) ignored")
+        # A single-root file carries no such key and no such clause.
+        clean = str(tmp_path / "clean.step")
+        cq.exporters.export(plate, clean)
+        clean_summary = cad_io.inspect_step(clean)
+        assert "non_solid_roots" not in clean_summary.to_dict() and "non-solid" not in clean_summary.describe()
+        assert clean_summary.face_count == summary.face_count and clean_summary.bounding_box_mm == pytest.approx(summary.bounding_box_mm)
+
+    def test_a_file_whose_roots_hold_no_solid_is_still_invalid(self, tmp_path):
+        import cadquery as cq
+        empty, planes = _annotation_roots(cq)
+        path = str(tmp_path / "planes-only.step")
+        _write_step_roots(path, [empty, planes])
+        summary = cad_io.inspect_step(path)
+        assert not summary.valid and "contains no solids" in summary.error and summary.face_count == 2
+
     def test_holes_bosses_and_fillets_are_counted(self, tmp_path):
         import cadquery as cq
         path = str(tmp_path / "disc.step")

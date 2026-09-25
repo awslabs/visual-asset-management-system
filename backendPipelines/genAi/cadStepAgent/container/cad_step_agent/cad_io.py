@@ -24,6 +24,9 @@ class StepSummary:
     error: str = ""
     # Feature counts the agent can compare against the instruction (see ``summarize_features``).
     features: Optional[Dict] = None
+    # Top-level shapes of the file that hold no solid (the annotation planes and empty compounds of an
+    # AP242 export with PMI). Every figure above describes the solids only; these roots are not measured.
+    non_solid_roots: int = 0
 
     def to_dict(self):
         data = asdict(self)
@@ -33,6 +36,8 @@ class StepSummary:
             data["bounding_box_mm"] = [round(v, 3) for v in data["bounding_box_mm"]]
         if data["features"] is None:
             data.pop("features")
+        if not data["non_solid_roots"]:
+            data.pop("non_solid_roots")
         return data
 
     def describe(self):
@@ -44,7 +49,8 @@ class StepSummary:
             bbox = f" size {xmax - xmin:.2f} x {ymax - ymin:.2f} x {zmax - zmin:.2f} mm"
         volume = f" volume {self.volume_mm3:.1f} mm^3" if self.volume_mm3 is not None else ""
         features = f"; {describe_features(self.features)}" if self.features else ""
-        return f"{self.solid_count} solid(s), {self.face_count} faces, {self.edge_count} edges{bbox}{volume}{features}"
+        ignored = f"; {self.non_solid_roots} non-solid root shape(s) ignored" if self.non_solid_roots else ""
+        return f"{self.solid_count} solid(s), {self.face_count} faces, {self.edge_count} edges{bbox}{volume}{features}{ignored}"
 
 
 # A cylindrical face group narrower than this is a fillet/round; wider than HOLE_MIN it is a hole or a boss.
@@ -210,6 +216,16 @@ def summarize_features(shape, bbox):
         return None
 
 
+def _solids_body(cq, solids):
+    """The shape that stands for a file's design content: its one solid, or a compound of its solids."""
+    return solids[0] if len(solids) == 1 else cq.Compound.makeCompound(solids)
+
+
+def _non_solid_roots(shape):
+    """How many top-level shapes of an imported file hold no solid (PMI annotation planes, empty compounds)."""
+    return sum(1 for root in shape.vals() if not root.Solids())
+
+
 def inspect_step(path):
     """Load a STEP file and summarize its geometry; a failure to load is a summary with valid=False."""
     try:
@@ -219,22 +235,24 @@ def inspect_step(path):
     try:
         shape = cq.importers.importStep(str(path))
         solids = shape.solids().vals()
-        faces = shape.faces().vals()
-        edges = shape.edges().vals()
         if not solids:
-            return StepSummary(valid=False, face_count=len(faces), edge_count=len(edges),
+            return StepSummary(valid=False, face_count=len(shape.faces().vals()), edge_count=len(shape.edges().vals()),
                                error="the STEP file contains no solids")
-        bb = shape.val().BoundingBox() if len(solids) == 1 else shape.combine().val().BoundingBox()
-        volume = sum(s.Volume() for s in solids)
+        # A file may carry several root shapes (an AP242 export with PMI: the solid, annotation planes,
+        # empty compounds). ``shape.val()`` is only the FIRST root -- an empty one has no bounding box, and
+        # a non-empty annotation root would inflate it -- so every figure is measured on the solids.
+        body = _solids_body(cq, solids)
+        bb = body.BoundingBox()
         bbox = [bb.xmin, bb.ymin, bb.zmin, bb.xmax, bb.ymax, bb.zmax]
         return StepSummary(
             valid=True,
             solid_count=len(solids),
-            face_count=len(faces),
-            edge_count=len(edges),
+            face_count=len(body.Faces()),
+            edge_count=len(body.Edges()),
             bounding_box_mm=bbox,
-            volume_mm3=float(volume),
-            features=summarize_features(shape, bbox),
+            volume_mm3=float(sum(s.Volume() for s in solids)),
+            features=summarize_features(cq.Workplane("XY").newObject([body]), bbox),
+            non_solid_roots=_non_solid_roots(shape),
         )
     except Exception as exc:  # the file is caller data; any failure is a validation outcome
         return StepSummary(valid=False, error=str(exc)[:500])
