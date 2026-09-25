@@ -28,6 +28,10 @@ import {
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import { NagSuppressions } from "cdk-nag";
+import {
+    GPU_CONTAINER_UID,
+    GPU_CONTAINER_GID,
+} from "../../../genAi/nvidia/cosmos/constructs/gpuContainerUser";
 import * as path from "path";
 
 export interface IsaacLabTrainingConstructProps {
@@ -104,6 +108,28 @@ export class IsaacLabTrainingConstruct extends Construct {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
             throughputMode: efs.ThroughputMode.BURSTING,
+        });
+
+        // EFS Access Point for Isaac Lab checkpoints (issue #327)
+        // Enforces POSIX uid/gid 10000:10000 so non-root GPU containers can read/write checkpoints
+        // without permission errors. The path is "/checkpoints" (not "/"): EFS applies createAcl only
+        // when the access-point root directory does not already exist, and "/" always exists as
+        // root:root 0755, so with "/" the ACL is never applied and the squashed uid 10000 cannot
+        // makedirs under it. "/checkpoints" is created and owned by this uid/gid on first mount. The
+        // access point is mounted at containerPath /mnt/efs/checkpoints, so the container sees this
+        // owned directory directly at the path __main__.py writes ("/mnt/efs/checkpoints/<job>").
+        const trainingEfsAccessPoint = new efs.AccessPoint(this, "TrainingEfsAccessPoint", {
+            fileSystem: trainingEfs,
+            path: "/checkpoints",
+            posixUser: {
+                uid: String(GPU_CONTAINER_UID),
+                gid: String(GPU_CONTAINER_GID),
+            },
+            createAcl: {
+                ownerUid: String(GPU_CONTAINER_UID),
+                ownerGid: String(GPU_CONTAINER_GID),
+                permissions: "755",
+            },
         });
 
         // Allow NFS traffic from the security group to itself for EFS access
@@ -279,6 +305,29 @@ export class IsaacLabTrainingConstruct extends Construct {
             })
         );
 
+        // The EFS volume mounts with useJobRole (IAM auth), so jobRole needs mount/write on the
+        // training file system, scoped to the checkpoint access point (issue #327). TLS is required
+        // for IAM-authenticated mounts; the elasticfilesystem:AccessPointArn condition confines the
+        // grant to the checkpoint access point rather than the whole file system.
+        jobRole.addToPolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"],
+                resources: [
+                    `arn:${ServiceHelper.Partition()}:elasticfilesystem:${region}:${account}:file-system/${
+                        trainingEfs.fileSystemId
+                    }`,
+                ],
+                conditions: {
+                    StringEquals: {
+                        "elasticfilesystem:AccessPointArn": `arn:${ServiceHelper.Partition()}:elasticfilesystem:${region}:${account}:access-point/${
+                            trainingEfsAccessPoint.accessPointId
+                        }`,
+                    },
+                },
+            })
+        );
+
         // Batch job definition using CDK-managed container image
         const jobDefinition = new batch.EcsJobDefinition(this, "IsaacLabJobDef", {
             container: new batch.EcsEc2ContainerDefinition(this, "Container", {
@@ -295,7 +344,14 @@ export class IsaacLabTrainingConstruct extends Construct {
                     batch.EcsVolume.efs({
                         name: "training-efs",
                         fileSystem: trainingEfs,
-                        containerPath: "/mnt/efs",
+                        containerPath: "/mnt/efs/checkpoints",
+                        accessPointId: trainingEfsAccessPoint.accessPointId,
+                        // L2 prop names: the L1/CloudFormation names are transitEncryption /
+                        // authorizationConfig. enableTransitEncryption renders TransitEncryption:
+                        // ENABLED (mandatory when an access point is used); useJobRole renders
+                        // AuthorizationConfig.Iam: ENABLED so the mount authenticates with jobRole.
+                        enableTransitEncryption: true,
+                        useJobRole: true,
                     }),
                 ],
             }),
