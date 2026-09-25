@@ -218,6 +218,10 @@ class VamsClient:
         compact = []
         for hit in hits[:max_hits]:
             source = hit.get("_source", {}) if isinstance(hit, dict) else {}
+            # Vector-search hits carry their ranking extras beside _source, not inside it; folding
+            # them under one key keeps every consumer's `source` reading valid.
+            if isinstance(hit, dict) and "_vector" in hit:
+                source = {**source, "_vector": hit["_vector"]}
             compact.append(
                 {
                     "id": hit.get("_id"),

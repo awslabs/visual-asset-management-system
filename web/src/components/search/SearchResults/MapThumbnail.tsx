@@ -7,7 +7,7 @@ import React, { useRef, useEffect, useState } from "react";
 import Map, { Marker, NavigationControl, MapRef, Source, Layer } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "../../../common/utils/maplibreWorker";
-import { Box } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
 import { extractLocationData } from "../utils/locationUtils";
 import { offsetForKey, splitGeoJsonForColoring } from "../utils/polygonColor";
 import MapPreviewModal from "./MapPreviewModal";

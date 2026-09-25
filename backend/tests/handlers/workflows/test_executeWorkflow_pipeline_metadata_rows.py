@@ -260,7 +260,6 @@ def _launch(pipelines, body, workflow=None, tables_out=None):
          patch(f"{MOD}._input_exists_in_s3", return_value=(True, "v-resolved")), \
          patch(f"{MOD}.CasbinEnforcer", return_value=_allow_enforcer()), \
          patch(f"{MOD}.request_to_claims", return_value={"tokens": ["user1"]}), \
-         patch(f"{MOD}._running_execution_exists", return_value=False), \
          patch(f"{MOD}._fetch_metadata",
                return_value=[{"metadataKey": "assetKey", "metadataValue": "assetValue"}]), \
          patch(f"{MOD}._fetch_file_metadata",

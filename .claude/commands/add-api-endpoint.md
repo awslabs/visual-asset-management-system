@@ -41,6 +41,12 @@ Add the route to `backend/backend/common/apiRoutes.py` — the single source of 
 API_MY_RESOURCE = ApiRoute("/myResource/{resourceId}", (GET, PUT), "myDomain")
 
 MY_DOMAIN_ROUTES: Tuple[ApiRoute, ...] = (API_MY_RESOURCE, ...)
+
+# A worked example: the natural-language search route lives under the existing search prefix so it
+# inherits the `starts_with "/search"` permission templates, and is added to the existing group.
+API_SEARCH_NLP = ApiRoute("/search/nlp", (POST,), "search")
+
+SEARCH_ROUTES: Tuple[ApiRoute, ...] = (API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_NLP)
 ```
 
 A route missing from the group arrays is invisible to constraint authoring and the CLI. Route templates MUST match the routes attached in the CDK api builder stacks.

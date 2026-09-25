@@ -1,6 +1,6 @@
 # Reindex Utility
 
-The reindex utility re-indexes Amazon OpenSearch and any attached downstream indexers (such as the Garnet Framework addon) for assets and files. It reads all asset and file records from Amazon DynamoDB and re-publishes them to the configured indexing pipeline.
+The reindex utility re-indexes Amazon OpenSearch and any attached downstream indexers (such as the Garnet Framework addon) for assets and files. It reads all asset and file records from Amazon DynamoDB and re-publishes them to the configured indexing pipeline. The vector index used by natural-language search is rebuilt by a separate function, the vector reindexer, described in [Vector Index Reindex](#vector-index-reindex).
 
 **Script location:** `infra/deploymentDataMigration/tools/reindex_utility.py`
 
@@ -288,6 +288,38 @@ python reindex_utility.py \
 | Lambda 15-minute timeout                           | Dataset too large to reindex within the Lambda limit (watch for this above ~100,000 records) | Monitor the reindexer Lambda's CloudWatch Logs for a timeout. If the run cannot finish within 15 minutes, re-run with `--mode direct`, which runs locally with no execution-time limit.                                               |
 | `ModuleNotFoundError` / import error (direct mode) | Backend source not found or direct-mode libraries missing                                    | Verify `--backend-path` points at the `backend/backend` directory and install the direct-mode libraries (`pip install boto3 botocore urllib3 opensearch-py`).                                                                         |
 | Failed items in results                            | Individual record indexing errors                                                            | Check Amazon CloudWatch Logs for the reindexer Lambda function (lambda mode) or the local console output (direct mode) for detailed error messages per record. Common causes include malformed records or OpenSearch capacity limits. |
+
+## Vector Index Reindex
+
+When `app.vectorSearch.enabled` is set, the `vectorReindexer` AWS Lambda function rebuilds the vector embeddings table. It is invoked directly with a JSON payload; nothing triggers it on deploy. Its name is published to AWS Systems Manager Parameter Store at `/<name>-<baseStackName>/resourceNames/lambdaFunctions/vectorReindexer`.
+
+```json
+{
+    "operation": "both",
+    "dryRun": false,
+    "limit": 500,
+    "databaseId": "my-database",
+    "startAfter": "prefix/asset-id/last-key-processed"
+}
+```
+
+| Field        | Required | Description                                                                                                                                                                         |
+| :----------- | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operation`  | yes      | `clear` deletes every vector item; `enqueue` sends one launch message per latest live file version to the system-workflow launch queue; `both` clears to completion, then enqueues. |
+| `dryRun`     | no       | Count what would be deleted or enqueued without writing or sending.                                                                                                                 |
+| `limit`      | no       | Maximum number of files to enqueue.                                                                                                                                                 |
+| `databaseId` | no       | Restrict the run to one database: `clear` deletes only that database's vectors, `enqueue` enumerates only its files.                                                                |
+| `startAfter` | no       | Resume the enumeration after an S3 key; the response of an interrupted run reports the marker.                                                                                      |
+
+Any other top-level key is rejected with a 400 response. The function walks the table and the buckets within one 15-minute invocation and, when fewer than 90 seconds remain, re-invokes itself asynchronously with a continuation token; the response of each invocation reports `deleted`, `enqueued`, `chunks`, `continued`, and `tableEmpty` (after a clear that was not restricted to one database). Run `operation: "clear"` without `databaseId` and wait for a response with `tableEmpty: true` before changing the embedding model.
+
+```bash
+aws lambda invoke --function-name <vector-reindexer-function-name> \
+    --cli-binary-format raw-in-base64-out \
+    --payload '{"operation": "enqueue", "dryRun": true}' response.json
+```
+
+Each launch message becomes one execution of the system GenAI metadata workflow, started as `SYSTEM_USER` at the concurrency set by `app.vectorSearch.indexingConcurrency`. The executions carry the stored trigger type `System-Reindex` and an `executionGroupId` of the form `vec-<runId>-<chunk>` (one group per 1,000 files), so they can be listed and aborted as groups with the existing execution commands: `vamscli execution list --group-id vec-<runId>-<chunk>` lists a group and `vamscli execution abort <execution-id> --group-id vec-<runId>-<chunk> --yes` aborts every active execution in it (see [execution commands](../../cli/commands/executions.md)). Reindex executions are ordinary execution records: nothing removes them on its own, so retaining or clearing them is an operator task. Once no member of a group is running, `vamscli execution permanent-delete <execution-id> --yes` removes each execution's records. A file version that is already running the workflow is declined by the workflow's per-input-file-version lock and skipped; a throttled launch is redelivered and dead-letters after three attempts. Files whose asset is archived, folder markers, preview files, and files outside the system workflow's input filters are not enqueued. A reindex re-runs the system workflow, so video-window and content-chunk vectors are re-created under the template's current `VIDEO_SEGMENT_SECONDS` and `CONTENT_CHUNKING` values; the new run's whole-file vector removes the segment vectors an earlier run left on the same file version, and `clear` removes everything else.
 
 ## Related Resources
 

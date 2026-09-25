@@ -19,6 +19,11 @@ interface TriggerListProps {
     /** Triggers that could not be written, shown as "Not saved" rows with a Retry action. */
     pending?: PendingTrigger[];
     onRetry?: (item: PendingTrigger) => void;
+    /**
+     * True for a system workflow: its triggers can be edited (to switch them on and off) but not
+     * added or deleted, so those actions are withheld.
+     */
+    locked?: boolean;
 }
 
 /**
@@ -33,6 +38,7 @@ const TriggerList: React.FC<TriggerListProps> = ({
     onDelete,
     pending = [],
     onRetry,
+    locked = false,
 }) => {
     return (
         <div className="orch-outline border border-border-default rounded p-6 bg-surface-container">
@@ -41,17 +47,18 @@ const TriggerList: React.FC<TriggerListProps> = ({
                 <div className="flex gap-2">
                     {/* One add button per configurable type, so a type added to TRIGGER_TYPES
                         appears here without touching this component. */}
-                    {TRIGGER_TYPES.map((t) => (
-                        <button
-                            key={t.type}
-                            type="button"
-                            onClick={() => onAdd(t.type)}
-                            title={t.description}
-                            className={triggerBtnPrimary}
-                        >
-                            Add {t.label.toLowerCase()} trigger
-                        </button>
-                    ))}
+                    {!locked &&
+                        TRIGGER_TYPES.map((t) => (
+                            <button
+                                key={t.type}
+                                type="button"
+                                onClick={() => onAdd(t.type)}
+                                title={t.description}
+                                className={triggerBtnPrimary}
+                            >
+                                Add {t.label.toLowerCase()} trigger
+                            </button>
+                        ))}
                 </div>
             </div>
 
@@ -123,14 +130,16 @@ const TriggerList: React.FC<TriggerListProps> = ({
                                                 >
                                                     Edit
                                                 </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onDelete(trigger)}
-                                                    aria-label={`Delete trigger ${trigger.triggerType}`}
-                                                    className={triggerBtnDanger}
-                                                >
-                                                    Delete
-                                                </button>
+                                                {!locked && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onDelete(trigger)}
+                                                        aria-label={`Delete trigger ${trigger.triggerType}`}
+                                                        className={triggerBtnDanger}
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>

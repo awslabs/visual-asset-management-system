@@ -4408,8 +4408,8 @@ paths:
                                     description: "Optional group id for bulk grouping / abort-by-group. Must be a valid identifier: it becomes a query key on the executions list and the abort-by-group route."
                                 triggerType:
                                     type: string
-                                    enum: [manual, fileUpload]
-                                    description: "Trigger type (default manual; set by trigger dispatch otherwise)."
+                                    enum: [manual, fileUpload, systemReindex]
+                                    description: "Trigger type in its request form (default manual). fileUpload is set by the upload trigger dispatcher and systemReindex by the vector-search reindex launcher; the execution row stores the canonical forms Manual, File-Upload and System-Reindex, which the list endpoints filter on."
             responses:
                 "200":
                     description: Workflow execution started.
@@ -4425,7 +4425,8 @@ paths:
                         Validation, template-resolution, or cross-entity validation error, including
                         metadataSourceAssets spanning more assets than the workflow's assetScope span
                         keys allow, a workflow that is archived or disabled, a conflicting execution
-                        already running under the workflow's concurrencyRestriction, and a recorded
+                        already running under the workflow's concurrencyRestriction (a lock held on one of
+                        the selected assets, files, or file versions, by restriction), and a recorded
                         set of inputs too large to store (fewer or shorter template tag values and
                         metadata-source entities). A template-resolution failure returns
                         a message object carrying templateResolutionErrors, and a cross-entity failure
@@ -4591,6 +4592,7 @@ paths:
                     type: string
               - in: query
                 name: triggerType
+                description: "Filter by the stored trigger type: Manual, File-Upload, or System-Reindex."
                 required: false
                 schema:
                     type: string
@@ -4787,7 +4789,7 @@ paths:
                                         items:
                                             type: string
                 "400":
-                    description: Invalid parameters.
+                    description: 'Invalid parameters, or a field other than enabled on a system pipeline (message: System pipelines are read-only; only "enabled" may be changed.).'
                     content:
                         application/json:
                             schema:
@@ -4829,7 +4831,7 @@ paths:
                 "200":
                     description: Pipeline archived (archived set to true).
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the pipeline is a system pipeline (message: System pipelines cannot be archived or restored through the API; the deployment owns them.)."
                     content:
                         application/json:
                             schema:
@@ -5040,7 +5042,7 @@ paths:
                                     message:
                                         $ref: '#/components/schemas/workflowV2'
                 "400":
-                    description: Invalid parameters.
+                    description: 'Invalid parameters, or a field other than enabled on a system workflow (message: System workflows are read-only; only "enabled" may be changed.).'
                     content:
                         application/json:
                             schema:
@@ -5078,11 +5080,12 @@ paths:
                     $ref: '#/components/schemas/id_regex'
         delete:
             summary: "Archive a workflow (soft-delete)."
+            description: "Sets archived to true and enabled to false, and deletes the workflow's trigger rows. A restore does not re-create the triggers; set them again afterwards."
             responses:
                 "200":
-                    description: Workflow archived (archived set to true).
+                    description: Workflow archived (archived set to true; trigger rows deleted).
                 "400":
-                    description: Invalid path parameters.
+                    description: "Invalid path parameters, or the workflow is a system workflow (message: System workflows cannot be archived or restored through the API; the deployment owns them.)."
                     content:
                         application/json:
                             schema:
@@ -5249,7 +5252,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/workflowTrigger'
                 "400":
-                    description: "Invalid parameters; a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list) — a triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional; a pipeline of the parent workflow that sets requireTemplate in its own pipeline systemConfig (a pipeline field, not one of the workflow systemConfig keys) for which no template is set by the trigger's defaultTemplateIds, the workflow reference's defaultTemplateId, or the pipeline's own default template (reported in the same triggerTemplateErrors list, naming the pipeline; any one of the three sources satisfies the requirement, and a pipeline that requires no template needs none of them, so this rejection is limited to the combination a triggered execution could never run); an additional trigger of a type on a workflow whose concurrencyRestriction is perAsset; or an additional trigger of a type naming the same defaultTemplateIds as an existing one. The require-template check is best-effort: a step whose pipeline record or default template cannot be read is skipped rather than rejected, so the trigger saves with the missing template undetected - and nothing user-visible records the consequence. Template resolution runs BEFORE the execution record is written, so each triggered launch is rejected with a 400 carrying templateResolutionErrors and no execution is created: the workflow's execution list stays empty and the only trace is in CloudWatch (a trigger-dispatcher warning naming the workflow and the status it received, plus the rejected launch's own templateResolutionErrors entry naming the pipeline, which also reaches the audit errors log group)."
+                    description: "Invalid parameters; a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list) — a triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional; a pipeline of the parent workflow that sets requireTemplate in its own pipeline systemConfig (a pipeline field, not one of the workflow systemConfig keys) for which no template is set by the trigger's defaultTemplateIds, the workflow reference's defaultTemplateId, or the pipeline's own default template (reported in the same triggerTemplateErrors list, naming the pipeline; any one of the three sources satisfies the requirement, and a pipeline that requires no template needs none of them, so this rejection is limited to the combination a triggered execution could never run); an additional trigger of a type on a workflow whose concurrencyRestriction is perAsset; or an additional trigger of a type naming the same defaultTemplateIds as an existing one. The require-template check is best-effort: a step whose pipeline record or default template cannot be read is skipped rather than rejected, so the trigger saves with the missing template undetected - and nothing user-visible records the consequence. Template resolution runs BEFORE the execution record is written, so each triggered launch is rejected with a 400 carrying templateResolutionErrors and no execution is created: the workflow's execution list stays empty and the only trace is in CloudWatch (a trigger-dispatcher warning naming the workflow and the status it received, plus the rejected launch's own templateResolutionErrors entry naming the pipeline, which also reaches the audit errors log group). On a system workflow (isSystem true) the trigger is part of the shipped bundle: enabled may be switched, but a key with no stored trigger is refused (message: Triggers of system workflows cannot be added or deleted.), and a supplied inputFileFilters or defaultTemplateIds that differs from the stored trigger is refused with a message naming the field."
                     content:
                         application/json:
                             schema:
@@ -5299,7 +5302,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 "200":
                     description: Trigger deleted.
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the workflow is a system workflow (message: Triggers of system workflows cannot be added or deleted.)."
                     content:
                         application/json:
                             schema:
@@ -6539,7 +6542,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/pipelineTemplate'
                 "400":
-                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
+                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list), or the pipeline is a system pipeline (message: Templates of system pipelines cannot be added or deleted.)."
                     content:
                         application/json:
                             schema:
@@ -6650,7 +6653,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/pipelineTemplate'
                 "400":
-                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
+                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list), or a locked field of a system pipeline's template differs from the stored value (only configBody, tagSchema and webFormJson may change; the message names the field)."
                     content:
                         application/json:
                             schema:
@@ -6710,7 +6713,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         items:
                                             type: string
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the pipeline is a system pipeline (message: Templates of system pipelines cannot be added or deleted.)."
                     content:
                         application/json:
                             schema:
@@ -7906,6 +7909,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     type: string
               - in: query
                 name: triggerType
+                description: "Filter by the stored trigger type: Manual, File-Upload, or System-Reindex."
                 required: false
                 schema:
                     type: string
@@ -8526,6 +8530,49 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
                 "404":
                     description: Search service not available.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /search/nlp:
+        post:
+            summary: "Natural-language search over vector embeddings."
+            description: "Embed a natural-language query with the deployment's embedding model and match it against the latest, non-archived vector items of every database the caller may read. The route exists only when app.vectorSearch.enabled is set. The answer is one page: size is the whole window and there is no pagination or cursor. Segment items (video windows, text chunks) collapse to one hit per file; the hit's _vector carries segmentHits and the best matching segment. hits.total.relation is gte when a result window filled or the accessible database list was cut (nlp.truncated is true), else eq. OpenSearch-only constraints (filters, metadataQuery, metadataSearchMode, geoSearch, tags) are applied and hits enriched from the file index only when an OpenSearch mode is enabled; otherwise they are ignored with an opensearch:fields_ignored warning. File-type words in the query (for example 'video', 'point cloud', 'pdf') order hits of those file classes first; the detected classes are reported in nlp.classIntent."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/nlpSearchRequest"
+            responses:
+                "200":
+                    description: Search executed successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/nlpSearchResponse"
+                "400":
+                    description: Invalid search parameters, or the query could not be embedded.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to access search.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: "Vector index is being built; retry later."
                     content:
                         application/json:
                             schema:
@@ -9748,6 +9795,7 @@ components:
                     description: "Empty while the execution is still running."
                 triggerType:
                     type: string
+                    description: "Stored trigger type: Manual (execute endpoint), File-Upload (upload trigger), or System-Reindex (vector-search reindex launcher)."
                 triggeredByUserId:
                     type: string
                 executionGroupId:
@@ -10508,6 +10556,11 @@ components:
                     type: boolean
                     description: "Whether the pipeline is archived (soft-deleted). Archived pipelines are hidden by default."
                     default: false
+                isSystem:
+                    type: boolean
+                    readOnly: true
+                    default: false
+                    description: "True for a pipeline the deployment registered from a vamsSchema bundle that declares it. Set only by the importer — the create and update request bodies ignore the key. A system pipeline is read-only through the API except for enabled (PUT) and the configBody, tagSchema and webFormJson of its templates; a redeploy re-asserts the shipped values."
                 dateCreated:
                     type: string
                     description: "ISO-8601 creation timestamp."
@@ -10909,11 +10962,12 @@ components:
                     $ref: "#/components/schemas/pipelineInputFileFilters"
                 concurrencyRestriction:
                     type: string
-                    description: "How concurrent executions of the workflow are limited."
+                    description: "How concurrent executions of the workflow are limited. perAsset, perInputFile and perInputFileVersion each lock the selected assets, files, or file versions before the state machine starts, so a launch on a scope another execution holds is rejected with 400 until that execution reaches a terminal status; none applies no limit."
                     enum:
                         - none
                         - perAsset
                         - perInputFile
+                        - perInputFileVersion
                 outputTarget:
                     $ref: "#/components/schemas/workflowOutputTarget"
                 allowWorkflowTriggerChaining:
@@ -10957,6 +11011,11 @@ components:
                     type: boolean
                     description: "Whether the workflow is archived (soft-deleted). Archived workflows are hidden by default."
                     default: false
+                isSystem:
+                    type: boolean
+                    readOnly: true
+                    default: false
+                    description: "True for a workflow the deployment registered from a vamsSchema bundle that declares it. Set only by the importer — the create and update request bodies ignore the key. A system workflow is read-only through the API except for enabled (PUT) and the enabled switch of its stored triggers; a redeploy re-asserts the shipped values."
                 workflow_arn:
                     type: string
                     description: "ARN of the workflow's Step Functions state machine."
@@ -14205,6 +14264,205 @@ components:
             required:
                 - str_rectype
         
+        nlpSearchRequest:
+            type: object
+            required: [query]
+            properties:
+                query:
+                    type: string
+                    minLength: 1
+                    maxLength: 1000
+                    description: "Natural-language query; embedded with the deployment's embedding model."
+                entityTypes:
+                    type: array
+                    items:
+                        type: string
+                        enum: [file, asset]
+                    minItems: 1
+                    maxItems: 1
+                    default: [file]
+                    description: "Exactly one record kind. asset collapses the file hits to one hit per asset."
+                databaseIds:
+                    type: array
+                    items:
+                        type: string
+                    maxItems: 100
+                    default: []
+                    description: "Databases to search; intersected with the caller's accessible databases. Empty searches every accessible database."
+                includeArchived:
+                    type: boolean
+                    default: false
+                includeSegments:
+                    type: boolean
+                    default: true
+                    description: "Also match video windows and text chunks; a file found through a segment reports it in _vector.bestSegment."
+                fileClasses:
+                    type: array
+                    items:
+                        type: string
+                    default: []
+                    description: "fileClass ids to keep (lower-cased, de-duplicated). One value is pushed into the index filter; several are applied after the merge."
+                fileExtensions:
+                    type: array
+                    items:
+                        type: string
+                    default: []
+                    description: "Extensions to keep, without the leading dot (lower-cased, de-duplicated)."
+                size:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 25
+                    description: "Hits returned. There is no pagination; the result window is min(100, 2 * size) candidates per SearchVectors call."
+                filters:
+                    type: array
+                    items:
+                        type: object
+                    description: "OpenSearch-only: query_string filter clauses as on /search."
+                metadataQuery:
+                    type: string
+                    maxLength: 1000
+                    description: "OpenSearch-only: metadata search text as on /search."
+                metadataSearchMode:
+                    type: string
+                    enum: [key, value, both]
+                    description: "OpenSearch-only."
+                geoSearch:
+                    type: object
+                    description: "OpenSearch-only: geospatial filter as on /search."
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "OpenSearch-only: keep hits carrying any of these tags."
+                enrich:
+                    type: boolean
+                    default: true
+                    description: "When an OpenSearch mode is enabled, merge the file index document into _source."
+        nlpSegmentRef:
+            type: object
+            nullable: true
+            properties:
+                segmentKey:
+                    type: string
+                segmentKind:
+                    type: string
+                    description: "videoTime or textChunk"
+                segmentLabel:
+                    type: string
+                segmentStartMs:
+                    type: integer
+                    nullable: true
+                segmentEndMs:
+                    type: integer
+                    nullable: true
+        nlpSearchHit:
+            type: object
+            properties:
+                _index:
+                    type: string
+                    enum: [vams-vectors]
+                _id:
+                    type: string
+                    description: "databaseId#assetId#filePath#versionId for a file hit; databaseId#assetId for an asset hit."
+                _score:
+                    type: number
+                    description: "1 - cosine distance, clipped to [0, 1]."
+                _index_type:
+                    type: string
+                    enum: [file, asset]
+                _source:
+                    $ref: "#/components/schemas/searchHitSource"
+                _vector:
+                    type: object
+                    properties:
+                        distance:
+                            type: number
+                        embeddingModelId:
+                            type: string
+                        sourceModalities:
+                            type: array
+                            items:
+                                type: string
+                        indexedAt:
+                            type: string
+                        fileClass:
+                            type: string
+                        segmentHits:
+                            type: integer
+                            description: "How many of the file's segment items were candidates."
+                        bestSegment:
+                            $ref: "#/components/schemas/nlpSegmentRef"
+        nlpSearchResponse:
+            type: object
+            properties:
+                took:
+                    type: integer
+                timed_out:
+                    type: boolean
+                _shards:
+                    type: object
+                hits:
+                    type: object
+                    properties:
+                        total:
+                            type: object
+                            properties:
+                                value:
+                                    type: integer
+                                    description: "Authorized hits before the size cut."
+                                relation:
+                                    type: string
+                                    enum: [eq, gte]
+                        max_score:
+                            type: number
+                            nullable: true
+                        hits:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/nlpSearchHit"
+                aggregations:
+                    type: object
+                aggregationTotal:
+                    type: integer
+                nlp:
+                    type: object
+                    properties:
+                        query:
+                            type: string
+                        embeddingModelId:
+                            type: string
+                        databasesSearched:
+                            type: integer
+                        candidatesEvaluated:
+                            type: integer
+                            description: "Distinct vector items after the merge, before the collapse."
+                        itemsCollapsed:
+                            type: integer
+                            description: "Items folded into another hit of the same file."
+                        classIntent:
+                            type: array
+                            items:
+                                type: string
+                        truncated:
+                            type: boolean
+                warnings:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            code:
+                                type: string
+                                enum:
+                                    - "truncated:window"
+                                    - "truncated:targets"
+                                    - "databases:none_accessible"
+                                    - "opensearch:fields_ignored"
+                                    - "opensearch:enrichment_failed"
+                                    - "segments:window_full"
+                            message:
+                                type: string
+
         searchHitExplanation:
             type: object
             properties:

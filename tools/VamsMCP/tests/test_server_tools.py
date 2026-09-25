@@ -77,6 +77,82 @@ def test_search_files_entity_type(mock_client):
     assert request["entityTypes"] == ["file"]
 
 
+# --- Natural-language search: every narrowing parameter reaches the API ------
+
+_NLP_RAW = {"hits": {"total": {"value": 3, "relation": "gte"}, "hits": []},
+            "nlp": {"truncated": True, "classIntent": ["document"]},
+            "warnings": [{"code": "truncated:window"}]}
+
+
+def test_search_nlp_forwards_every_parameter_and_reattaches_the_bounds(mock_client):
+    mock_client.api.search_nlp.return_value = _NLP_RAW
+    mock_client.trim_search_results.return_value = {"total": 3, "returned": 0, "results": []}
+    geo = {"point": {"lat": 47.6, "lon": -122.3, "radiusMeters": 500}}
+
+    out = server.search_nlp(query="rusty pipe", database_ids=["db1", "GLOBAL"], entity_type="asset",
+                            size=7, include_archived=True, file_classes=["document"],
+                            file_extensions=[".PDF", "docx"], metadata_query="product:Training",
+                            geo_search=geo, tags=["training", "safety"], include_segments=False)
+
+    request = mock_client.api.search_nlp.call_args.args[0]
+    assert request == {"query": "rusty pipe", "entityTypes": ["asset"], "size": 7,
+                       "includeArchived": True, "databaseIds": ["db1"], "fileClasses": ["document"],
+                       "fileExtensions": ["pdf", "docx"],
+                       "metadataQuery": "product:Training", "metadataSearchMode": "both",
+                       "geoSearch": geo, "tags": ["training", "safety"],
+                       "includeSegments": False}
+    mock_client.trim_search_results.assert_called_once_with(_NLP_RAW, max_hits=7)
+    assert out["relation"] == "gte"
+    assert out["nlp"] == {"truncated": True, "classIntent": ["document"]}
+    assert out["warnings"] == [{"code": "truncated:window"}]
+    mock_client.api.search_query.assert_not_called()
+
+
+def test_search_nlp_defaults_omit_the_optional_keys(mock_client):
+    mock_client.api.search_nlp.return_value = {"hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    out = server.search_nlp(query="anything")
+    request = mock_client.api.search_nlp.call_args.args[0]
+    assert request == {"query": "anything", "entityTypes": ["file"], "size": 25, "includeArchived": False}
+    assert out["relation"] == "eq" and out["nlp"] == {} and out["warnings"] == []
+
+
+@pytest.mark.parametrize("size, sent", [(0, 1), (-5, 1), (500, 100), (25, 25)])
+def test_search_nlp_clamps_size_to_the_api_bounds(mock_client, size, sent):
+    mock_client.api.search_nlp.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    server.search_nlp(query="q", size=size)
+    assert mock_client.api.search_nlp.call_args.args[0]["size"] == sent
+    mock_client.trim_search_results.assert_called_once_with(
+        mock_client.api.search_nlp.return_value, max_hits=sent)
+
+
+def test_search_nlp_rejects_an_unknown_entity_type_before_calling_the_api(mock_client):
+    out = server.search_nlp(query="q", entity_type="folder")
+    assert out["error_type"] == "ValueError" and "entity_type" in out["error"]
+    mock_client.api.search_nlp.assert_not_called()
+
+
+def test_search_nlp_rejects_an_unknown_file_class_and_names_the_valid_ids(mock_client):
+    # The route does not validate fileClasses, so an unknown id would be a silent empty result.
+    out = server.search_nlp(query="q", file_classes=["document", "3d-model"])
+    assert out["error_type"] == "ValueError"
+    assert "3d-model" in out["error"] and "document" not in out["error"].split("got")[1]
+    for file_class in ("image", "mesh", "pointcloud", "other"):
+        assert file_class in out["error"]
+    mock_client.api.search_nlp.assert_not_called()
+
+
+def test_search_nlp_normalises_file_classes_and_extensions_as_the_route_does(mock_client):
+    mock_client.api.search_nlp.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    server.search_nlp(query="q", file_classes=[" Video", "video", "MESH"],
+                      file_extensions=[".GLB", "glb", " .fbx "])
+    request = mock_client.api.search_nlp.call_args.args[0]
+    assert request["fileClasses"] == ["video", "mesh"]
+    assert request["fileExtensions"] == ["glb", "fbx"]
+
+
 # --- Database-scoped search must not over-match sibling databases ------------
 #
 # S6-TOOLS-003. The filter was `str_databaseid:"{database_id}"` on the ANALYZED field, so the standard
@@ -914,6 +990,12 @@ def test_config_tool_docstrings_list_every_metadata_input_key(tool):
     docstring = _docstring_of(tool)
     for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata"):
         assert key in docstring, f"{tool} docstring omits metadataInputs.{key}"
+
+
+@pytest.mark.parametrize("value", ["perAsset", "perInputFile", "perInputFileVersion"])
+def test_create_workflow_docstring_names_every_concurrency_restriction(value):
+    # The value set is closed on the backend; a value absent here is one no agent ever sets.
+    assert value in _docstring_of("create_workflow")
 
 
 def test_rerun_execution_docstring_mentions_warnings():

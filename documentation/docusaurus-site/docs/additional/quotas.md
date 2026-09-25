@@ -57,7 +57,7 @@ All VAMS DynamoDB tables use on-demand (pay-per-request) billing mode, which aut
 | Billing mode                | On-demand (PAY_PER_REQUEST)               |
 | Maximum item size           | 400 KB (DynamoDB service limit)           |
 | Metadata records per entity | 500                                       |
-| Table count                 | 46 tables (plus 5 retained for migration) |
+| Table count                 | 48 tables (plus 7 retained for migration) |
 
 :::info
 On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.

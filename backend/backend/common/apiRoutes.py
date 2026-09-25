@@ -535,8 +535,9 @@ USER_ROUTES: Tuple[ApiRoute, ...] = (
 # ---------------------------------------------------------------------------
 API_SEARCH = ApiRoute("/search", (GET, POST), "search")
 API_SEARCH_SIMPLE = ApiRoute("/search/simple", (POST,), "search")
+API_SEARCH_NLP = ApiRoute("/search/nlp", (POST,), "search")
 
-SEARCH_ROUTES: Tuple[ApiRoute, ...] = (API_SEARCH, API_SEARCH_SIMPLE)
+SEARCH_ROUTES: Tuple[ApiRoute, ...] = (API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_NLP)
 
 # ---------------------------------------------------------------------------
 # Add-ons

@@ -8,7 +8,7 @@ title: Search Commands
 Search assets and files using the dual-index Amazon OpenSearch Service system. VAMS maintains separate indexes for assets and files, allowing optimized queries and precise results per entity type.
 
 :::note[Prerequisite]
-Search requires Amazon OpenSearch Service to be enabled in your VAMS deployment. If the `NOOPENSEARCH` feature switch is enabled, search commands are unavailable and exit with a "Search Disabled" error. Use `vamscli assets list` as an alternative.
+The keyword commands (`search assets`, `search files`, `search simple`, `search mapping`) require Amazon OpenSearch Service to be enabled in your VAMS deployment. If the `NOOPENSEARCH` feature switch is enabled they exit with a "Search Disabled" error; use `vamscli assets list` as an alternative. `search nlp` is the exception: it requires the `VECTORSEARCH` feature switch instead and works with or without OpenSearch.
 :::
 
 ---
@@ -245,11 +245,49 @@ vamscli search mapping --json-output
 
 ---
 
+## search nlp
+
+Search files by meaning. The query is embedded with the deployment's Amazon Bedrock embedding model and ranked against the vector index of every indexed file version; `_score` is `1 - distance`. Works with or without Amazon OpenSearch Service; requires the `VECTORSEARCH` feature switch.
+
+```bash
+vamscli search nlp -q TEXT [OPTIONS]
+```
+
+| Option               | Type    | Required | Description                                                                                                                 |
+| -------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `-q`, `--query`      | TEXT    | Yes      | Natural-language description of what to find (1–1000 characters)                                                            |
+| `--entity-type`      | CHOICE  | No       | `file` (default, one hit per file) or `asset` (file hits grouped by asset, best score kept)                                 |
+| `-d`, `--database`   | TEXT    | No       | Restrict to a database ID; repeatable, at most 100. Intersected with the databases you can access                           |
+| `--include-archived` | Flag    | No       | Include archived files                                                                                                      |
+| `--size`             | INTEGER | No       | Number of hits to return (1–100, default 25)                                                                                |
+| `--file-class`       | TEXT    | No       | Hard filter on the indexed file class (`video`, `document`, `3d-model`, …); repeatable                                      |
+| `--file-ext`         | TEXT    | No       | Hard filter on the file extension; repeatable                                                                               |
+| `--no-segments`      | Flag    | No       | Match whole-file vectors only; skip video time windows and text chunks                                                      |
+| `--filters`          | TEXT    | No       | OpenSearch filters (JSON array or query string, as for `search assets`); ignored with a warning when OpenSearch is disabled |
+| `--metadata-query`   | TEXT    | No       | Metadata `key:value` constraint; OpenSearch-only, like `--filters`                                                          |
+| `--output-format`    | CHOICE  | No       | `table` (default), `json`, or `csv`                                                                                         |
+| `--json-output`      | Flag    | No       | Output the raw API response as JSON                                                                                         |
+
+`--filter` is accepted as an alias of `--filters`.
+
+When no `--file-class` is given, type words in the query (`video`, `pdf`, `point cloud`, …) soft-boost matching classes rather than filtering; the classes detected are echoed in `nlp.classIntent` of the JSON response.
+
+The `table` output shows `score`, `database`, `asset`, `file` and `class` for every hit, and adds a `segment` column with the best-matching window or chunk label whenever a hit was found through a segment. The total reads `N+` when it is a lower bound — the vector index answers fixed-size windows and one filled — and each `warnings[]` entry of the response is printed as a `Warning:` line (`truncated:window`, `truncated:targets`, `databases:none_accessible`, `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full`). Narrow with `-d`, `--file-class` or `--file-ext` rather than raising `--size`.
+
+```bash
+vamscli search nlp -q "rusty pipe near the north tank"
+vamscli search nlp -q "forklift safety training video" -d plant-a -d plant-b --size 10
+vamscli search nlp -q "hydraulic schematic" --file-class document --no-segments
+vamscli search nlp -q "turbine blade" --entity-type asset --json-output
+```
+
+---
+
 ## Output formats
 
 All search commands support three output formats via `--output-format` (default `table`):
 
--   **table** — Aligned columns derived from the `_source` fields of each hit, prefixed with the total result count. The mapping command renders `Index | Field | Type` rows.
+-   **table** — Aligned columns derived from the `_source` fields of each hit, prefixed with the total result count. The mapping command renders `Index | Field | Type` rows. The `nlp` command instead projects `score | database | asset | file | class [| segment]` (see above).
 -   **json** — The raw API response. Equivalent to passing `--json-output`.
 -   **csv** — Comma-separated rows written directly to standard output, with list values joined by semicolons. Suitable for redirecting to a file.
 

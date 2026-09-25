@@ -182,6 +182,8 @@ function cdkPairs(synth: SynthResult): Set<string> {
 /** Enable every optional feature that contributes an API route. */
 function withRouteContributingFeatures(c: any) {
     c.app.useGlobalVpc.enabled = true;
+    // Vector search registers POST /search/nlp and ships disabled in the templates.
+    c.app.vectorSearch.enabled = true;
     // The Physna add-on registers GET /addon/physna/viewer and ships disabled.
     const physna = c.app.addons?.usePhysnaSync;
     if (physna) {

@@ -148,7 +148,11 @@ started with inputs that differ from what was named.
     are four distinct entities with their own command groups; see
     [Processing: pipelines, templates, workflows, executions](#processing-pipelines-templates-workflows-executions).
 -   **Search** — full-text and metadata search across assets and files, including
-    geospatial queries.
+    geospatial queries; `vamscli search nlp -q "<description>"` ranks files by
+    natural-language similarity when the deployment's `VECTORSEARCH` feature is
+    on (whole files by default; `--no-segments` skips video windows and content
+    chunks). Newly uploaded files become searchable this way only after the
+    SYSTEM GenAI metadata pipeline has run on them.
 
 Most operations key off a **database ID** and an **asset ID** — capture these
 whenever you list or search.

@@ -119,7 +119,7 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
         "useConversionCoordinateTransform",
         "usePreviewPcPotreeViewer",
         "usePreview3dThumbnail",
-        "useGenAiMetadata3dLabeling",
+        "useSystemGenAiMetadata.useFargateRenderer",
     ];
 
     // The three blocks, keyed by an anchor unique to each.
@@ -209,6 +209,14 @@ describe("core stack nested-stack dependencies", () => {
             "pipelineBuilderNestedStack.addStackDependency(apiBuilder2NestedStack)"
         );
     });
+
+    // The system-workflow launcher built in SearchBuilder invokes the execute-workflow Lambda built in
+    // ApiBuilder2 by name; ApiBuilder2 consumes nothing from Search, so the arrow is acyclic.
+    test("searchBuilderNestedStack depends on apiBuilder2NestedStack", () => {
+        expect(activeSource).toContain(
+            "searchBuilderNestedStack.addStackDependency(apiBuilder2NestedStack)"
+        );
+    });
 });
 
 describe("setupSecurityAndLoggingEnvironmentAndPermissions", () => {
@@ -285,5 +293,35 @@ describe("setupSecurityAndLoggingEnvironmentAndPermissions", () => {
         expect(refs).not.toContain(
             JSON.stringify(stack.resolve(resources.dynamo.authEntitiesStorageTable.tableArn))
         );
+    });
+});
+
+describe("Bedrock Runtime endpoint condition", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "..", "../lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts"),
+        "utf8"
+    );
+    const bedrockAt = source.indexOf('"BedrockEndpoint"');
+    const conditionBlock = source.slice(source.lastIndexOf("if (", bedrockAt), bedrockAt);
+    // The two predicate constants directly above the `if`.
+    const predicateBlock = source.slice(
+        source.lastIndexOf("const bedrockFromAllLambdas", bedrockAt),
+        bedrockAt
+    );
+
+    test("is gated on the system pipeline or vector search with every Lambda in the VPC, or on the search placement", () => {
+        expect(bedrockAt).toBeGreaterThan(-1);
+        expect(conditionBlock).toContain("bedrockFromAllLambdas || bedrockFromSearch");
+        expect(predicateBlock).toContain("useForAllLambdas");
+        expect(predicateBlock).toContain("useSystemGenAiMetadata.enabled");
+        expect(predicateBlock).toContain("vectorSearch.enabled");
+        expect(predicateBlock).toContain("searchLambdasInVpc(props.config)");
+        // In the isolated subnets, where the pipeline and search Lambdas sit.
+        expect(source.slice(bedrockAt, bedrockAt + 400)).toContain("this.isolatedSubnets");
+    });
+
+    test("no Rekognition endpoint is created", () => {
+        expect(source).not.toContain("RekognitionEndpoint");
+        expect(source).not.toContain("REKOGNITION");
     });
 });

@@ -91,6 +91,11 @@ DELIBERATE_DEPARTURES = {
     ("handlers/workflows/workflowTriggerService.py", "lookup_retry_config"),
     # The executeWorkflowV2 Invoke is not idempotent: a retry would launch a duplicate execution.
     ("handlers/workflows/sfn/workflowTriggerDispatch.py", "invoke_config"),
+    # The same executeWorkflowV2 Invoke, issued per reindex launch message.
+    ("handlers/osVectorSearch/systemWorkflowLauncher.py", "invoke_config"),
+    # The reindexer's asynchronous self-invoke re-queues from a cursor; a retried duplicate would enqueue
+    # the same files twice.
+    ("handlers/osVectorSearch/vectorReindexer.py", "invoke_config"),
 }
 
 

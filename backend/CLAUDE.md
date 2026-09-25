@@ -39,6 +39,12 @@ backend/
 │   │   ├── dynamodb.py                             # query_all_items, query_has_match,
 │   │   │                                           #   to_update_expr, get_asset_object_from_id
 │   │   ├── resourceNames.py                        # SSM resource-name resolver + ResourceKeys
+│   │   ├── databaseAccess.py                       # DatabaseAccessManager (accessible-database scan + Casbin)
+│   │   ├── indexing/documentIds.py                 # OpenSearch doc ids + vector fileVersionKey / segment keys
+│   │   ├── indexing/fileEnumeration.py             # enumerate_latest_live_files (reindexers)
+│   │   ├── vectorsearch/embeddings.py              # Bedrock embedding adapters; vendored byte-identical into the system pipeline
+│   │   ├── vectorsearch/vectorStore.py             # VectorStore protocol + DynamoDbVectorStore (SearchVectors, MAX_TOP_K)
+│   │   ├── vectorsearch/fileClassIntent.py         # FILE_CLASSES phrases + query file-type intent (soft boost)
 │   │   ├── s3.py                                   # S3 file validation + paged list helpers
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns (mirror web/src/common/constants/fileFormats.ts)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
@@ -47,6 +53,8 @@ backend/
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
+│   │       ├── executionLocks.py                   #   concurrency lock rows for perAsset / perInputFile / perInputFileVersion (conditional put/delete, TTL, row-derived release)
+│   │       ├── systemRecords.py                    #   isSystem import marker + read-only guard messages
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
@@ -69,10 +77,19 @@ backend/
 │   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,
 │   │   │                                           #   registerPipelineExecution, workflowTriggerDispatch,
 │   │   │                                           #   deadlineCloudJobCallback
+│   │   ├── indexing/                               # CORE indexing: sqsBucketSync (S3 bucket sync), snsQueuing
+│   │   │                                           #   (SNS→SQS shims), crReindexer (row-rewriting reindexer that
+│   │   │                                           #   feeds every indexer family). Imports no search family.
+│   │   ├── osSemanticSearch/                       # OpenSearch family: search (GET/POST /search), osFileIndexer +
+│   │   │                                           #   osAssetIndexer (stream consumers writing the OpenSearch indexes)
+│   │   ├── osVectorSearch/                         # Vector family: vectorIndexer (single writer of the vector table),
+│   │   │                                           #   vectorReindexer (clear/enqueue/both; also a CDK custom resource),
+│   │   │                                           #   systemWorkflowLauncher (paced SQS → executeWorkflow),
+│   │   │                                           #   vectorSearchService (POST /search/nlp)
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
-│   │   └── assetLinks, comments, config, databases, indexing, metadata,
-│   │       metadataschema, roles, search, sendEmail, subscription, tags,
+│   │   └── assetLinks, comments, config, databases, metadata,
+│   │       metadataschema, roles, sendEmail, subscription, tags,
 │   │       tagTypes, userRoles                     # Domain handlers (folder per domain)
 │   └── models/                                     # Pydantic v1 models, one file per domain
 │       ├── assetsV3.py                             # GOLD STANDARD model file
@@ -813,11 +830,29 @@ asset_table = dynamodb.Table(asset_table_name)
 
 **Legacy env-var overrides** (for pipeline handlers and testing): `ASSET_STORAGE_TABLE_NAME`, `DATABASE_STORAGE_TABLE_NAME`, `S3_ASSET_AUXILIARY_BUCKET`, `AUDIT_LOG_*`, etc. Non-pipeline handlers resolve these via SSM unless the legacy env var is explicitly set.
 
+**Vector-search handler variables** (`handlers/osVectorSearch/`, all indexed with `os.environ[...]` at module level, so each is set only by the builder named — copying the read into a handler built elsewhere raises `KeyError` at import): `VECTOR_INDEX_NAME`, `EMBEDDING_MODEL_ID` (`app.vectorSearch.embeddingModelId`) and `EMBEDDING_DIMENSIONS` (`app.vectorSearch.embeddingDimensions`, read with `int()`) come from `vectorIndexEnvironment()` in `infra/lib/lambdaBuilder/osVectorSearchFunctions.ts` on `vectorIndexer`, `vectorReindexer` and `vectorSearchService`; `VECTOR_INDEXER_QUEUE_URL` (`vectorIndexer`) is the indexer's own SQS queue. `GENAI_METADATA_WORKFLOW_ID` and `GENAI_METADATA_WORKFLOW_DATABASE_ID` name the SYSTEM GenAI metadata workflow the reindexer re-launches (the shared literals of `infra/common/systemPipelines.ts`, `SYSTEM_GENAI_METADATA_WORKFLOW_ID` / `SYSTEM_WORKFLOW_DATABASE_ID`) and are set on `vectorReindexer` and `systemWorkflowLauncher` by `vectorIndexing-construct.ts`; `WORKFLOW_LAUNCH_QUEUE_URL` (`vectorReindexer`) is the launch queue the reindexer enqueues one message per file version onto, and `EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME` (`systemWorkflowLauncher`) is the function that queue's consumer cross-calls. The search Lambda also carries `OPENSEARCH_DISABLED` (`"true"` when no OpenSearch engine is deployed — `/search/nlp` then skips its OpenSearch enrichment step and reports OpenSearch-only filter fields under an `opensearch:fields_ignored` warning) alongside the `OPENSEARCH_*` variables the keyword search Lambda uses.
+
 ---
 
 ## File Security
 
 Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists live in `common/constants.py`; extend them there, never bypass.
+
+---
+
+## Feature-Gated Families Do Not Import Each Other
+
+A capability that a deployment can switch off wholesale is a **family**: its handlers, its `common/` package, and its models, all absent from a deployment with the flag off. Two exist today — the OpenSearch semantic search family (`handlers/osSemanticSearch`: the keyword `/search` route plus the `osFileIndexer` / `osAssetIndexer` stream consumers, on the OpenSearch mode flags) and the vector family (`handlers/osVectorSearch`, `common/vectorsearch`, `models/vectorsearch`, on `app.vectorSearch.enabled`). Between them sits `handlers/indexing`, the **core** that runs in every deployment: `sqsBucketSync`, the `snsQueuing` shims, and `crReindexer`, which re-writes rows so every indexer family's stream consumers re-process them. Either family can be deployed without the other, so a module-level import across a boundary fails the surviving code at cold start — a `500` on every request that synth cannot see and a test suite importing everything never reaches.
+
+The rules a family follows, each of which the vector family models:
+
+-   **It owns its packages and imports only `common/`.** Shared behaviour both families need is extracted into a neutral `common/` module rather than imported from either family: `common/indexing/documentIds.py` and `fileEnumeration.py` ("what is an asset file", defined once for the core reindexer and the vector reindexer), `common/databaseAccess.py`.
+-   **Core never imports it, and it never imports core.** Core touches a family through the registry seams every table and route already uses — a `ResourceKeys` constant, an `ApiRoute`, a feature switch — and through events: `sqsBucketSync` publishes to the storage stack's SNS fan-out topics that both families' queues subscribe to, and the pipeline publishes `vector.embedding.ready` on the orchestration bus for the vector indexer to consume, so no side imports another.
+-   **A cross-group read at runtime is function-scoped and gated.** Two are admitted: `vectorSearchService._opensearch_step` imports `handlers.osSemanticSearch.search` inside the function, after `OPENSEARCH_DISABLED` is ruled out, to enrich hits when both families are on; and `crReindexer.ReindexUtility.clear_opensearch_indexes` imports `opensearchpy` inside the method, so the core reindexer's row-rewriting path never loads the client where OpenSearch is off. Both are named, with a site count, in `tests/common/test_indexer_families_import_boundary.py`, which walks the tree and fails on a module-level import in any direction, an unlisted function-scoped one, or an exemption whose site no longer exists. The CDK half of the same boundary — no cross-gated function, no cross-wired queue — is `infra/test/platform/t1VectorIndexingWiring.test.ts`.
+
+**Each family also has its own reindexer, because the two re-index by different mechanisms.** The core `crReindexer` re-writes DynamoDB metadata rows so the stream consumers re-process them — enough for the OpenSearch indexers, whose documents are derived from those rows. A vector row is the output of a Bedrock analysis run, so `vectorReindexer` instead enqueues one system-workflow launch per latest live file version. Both are invoked the same two ways: directly, and as a CDK custom resource on deploy (`app.openSearch.reindexOnCdkDeploy` / `app.vectorSearch.reindexOnCdkDeploy`).
+
+A third family follows the same shape: its own `handlers/<family>` and `common/<family>` packages, its own queue subscribed to the storage stack's SNS fan-out topics (as the Garnet and Physna add-ons and the vector indexer do), its own tables registered through `ResourceKeys`, its own reindexer if its rows are not derivable by re-writing metadata, and an entry in that guard's family table.
 
 ---
 
@@ -864,7 +899,7 @@ New-handler / model / test skeletons: `backend/HANDLER_TEMPLATES.md`. Gold Stand
 
 ## Key Dependencies
 
-Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.45 / `botocore` 1.43.45 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
+Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.89 / `botocore` 1.43.89 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix; botocore **≥1.43.89** is the floor for the DynamoDB `SearchVectors` operation, pinned by `tests/common/test_vector_api_floor.py`), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
 
 Dev only: `moto` 5.1.0 (AWS mocks), `pytest` 9.0.3, `mypy` 1.0.0, `flake8` 6.0.0.
 

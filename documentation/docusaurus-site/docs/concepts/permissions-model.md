@@ -456,10 +456,11 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 
 ### Search route
 
-| Route            | Methods   | Tier 2 Object Type | Tier 2 Fields                                                                                  |
-| ---------------- | --------- | ------------------ | ---------------------------------------------------------------------------------------------- |
-| `/search`        | GET, POST | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (both GET and POST are non-mutating) |
-| `/search/simple` | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (POST is non-mutating)               |
+| Route            | Methods   | Tier 2 Object Type | Tier 2 Fields                                                                                                                         |
+| ---------------- | --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `/search`        | GET, POST | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (both GET and POST are non-mutating)                                        |
+| `/search/simple` | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (POST is non-mutating)                                                      |
+| `/search/nlp`    | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (POST is non-mutating; the route exists only when vector search is enabled) |
 
 ### Subscription routes
 

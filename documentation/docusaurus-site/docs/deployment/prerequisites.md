@@ -132,6 +132,17 @@ export AWS_USE_FIPS_ENDPOINT=true
 
 The same variable turns on `app.useFips` at synthesis. Setting `app.useFips` to `true` in the VAMS configuration file as well keeps the deployment reproducible when the variable is absent. See the [Configuration Reference](configuration-reference.md) for what the flag changes.
 
+### Amazon Bedrock model access
+
+The SYSTEM GenAI metadata pipeline (`app.pipelines.useSystemGenAiMetadata`) and natural-language search (`app.vectorSearch`) call Amazon Bedrock models with the deployment's own Lambda roles. Deployment grants those roles `bedrock:InvokeModel` on the configured models; whether a model is available to the account is account state that the stack does not manage.
+
+-   **Commercial AWS Regions** — Amazon Bedrock enables a third-party model on its first invocation when a principal in the account holds `aws-marketplace:Subscribe`, `aws-marketplace:ViewSubscriptions`, and `aws-marketplace:Unsubscribe`. The VAMS Lambda roles hold none of these, so enable the analysis model before the first upload: invoke it once from a principal with those permissions, or enable it on the Amazon Bedrock console's **Model access** page. Amazon-provider models, including the default embeddings model Amazon Titan Text Embeddings V2, need no Marketplace step.
+-   **Anthropic models** (the default analysis model in the commercial and GovCloud templates) additionally require a one-time use-case form, submitted once per account or once at the organization's management account. Until it is submitted, invocations fail with `FTUFormNotFilled` and the pipeline records each execution as failed with `BedrockAccessDenied`; configuration validation warns about this at synthesis.
+-   **AWS GovCloud (US)** — enable the model in **both** the linked commercial account and the GovCloud account (console **Model access** page in `us-gov-west-1`); Amazon models are enabled in the GovCloud account only. Use a `us-gov.` inference profile id for the analysis model.
+-   **AWS European Sovereign Cloud** — `app.vectorSearch.enabled` must be `false` (DynamoDB vector search is not available there); the pipeline can run with a model available in that partition.
+
+An account-wide service control policy that denies `bedrock:InvokeModel` makes every analysis fail with `AccessDeniedException`; the pipeline still writes the extracted file attributes. Prompt content sent to the analysis model is untrusted (file text, user-entered metadata); the deployment creates an Amazon Bedrock guardrail with a prompt-attack filter and PII filters by default (`app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create`), and an operator-owned guardrail can replace it through `guardrailIdentifier` and `guardrailVersion` — see the [pipeline page](../pipelines/system-genai-metadata.md#amazon-bedrock-guardrail). The role that deploys the stack needs `bedrock:CreateGuardrail`, `bedrock:CreateGuardrailVersion`, `bedrock:UpdateGuardrail`, `bedrock:DeleteGuardrail`, and `bedrock:GetGuardrail` for the created guardrail; the default AWS CDK bootstrap role has them.
+
 ## Network requirements
 
 The build machine requires outbound internet access to download dependencies from the following sources:

@@ -31,7 +31,9 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 ### Search
 
 -   **Full-text search** -- Search across asset names, descriptions, metadata fields, and file attributes
+-   **Natural-language search** -- Describe what a file shows or contains and rank files by semantic similarity of their generated metadata, extracted text, and renders; works with or without Amazon OpenSearch (`VECTORSEARCH`)
 -   **Asset and file search** -- Separate search scopes for assets and files with column-specific filters
+-   **Search providers as tabs** -- The Assets and Files page hosts an asset list tab and, when a search engine is enabled, a search tab with a keyword / natural-language toggle
 -   **Preview thumbnails in results** -- Visual asset identification directly in search result listings
 -   **Result paging** -- Full result counts with proper pagination
 
@@ -75,7 +77,7 @@ VAMS exposes a REST API through Amazon API Gateway, secured by a custom Lambda a
 | Tag Types        | CRUD                                   | Custom tag type definitions                                      |
 | Pipelines        | CRUD                                   | Pipeline registration and configuration                          |
 | Workflows        | CRUD + execute                         | Workflow design and execution                                    |
-| Search           | Query                                  | Full-text and attribute-based search                             |
+| Search           | Query                                  | Full-text, attribute-based, and natural-language (vector) search |
 | Comments         | CRUD                                   | Asset-level comments                                             |
 | Subscriptions    | CRUD                                   | Change notification subscriptions                                |
 | Auth             | Routes, constraints, roles, user-roles | Permission and authorization management                          |
@@ -149,8 +151,9 @@ For the full list of command groups and every command in each, see the [Command 
 
 -   **Dual-index architecture** -- Separate Amazon OpenSearch indexes for assets (`vams-assets-v3`) and files (`vams-files-v3`)
 -   **Event-driven indexing** -- Amazon SNS and Amazon SQS-based automatic index synchronization on asset and file changes
+-   **Vector indexing** -- A single vector indexer writes per-file-version Amazon Bedrock embeddings published by the SYSTEM GenAI metadata pipeline into a DynamoDB vector index, tracking latest-version, archive, and delete lifecycle
 -   **Preview file indexing** -- `str_previewfilekey` and `str_assetlocationkey` fields in search indexes for optimized UI rendering
--   **Re-index on deploy** -- Optional `reindexOnCdkDeploy` flag for full index rebuild during deployment
+-   **Re-index on deploy** -- Optional `app.openSearch.reindexOnCdkDeploy` and `app.vectorSearch.reindexOnCdkDeploy` flags rebuild the OpenSearch indexes or the vector table during a deployment, each independently; both reindexers can also be invoked directly on demand
 
 ---
 
@@ -173,34 +176,33 @@ The Deadline Cloud execution type requires `app.pipelines.deadlineCloudExecution
 
 ### Built-In Pipelines
 
-VAMS includes twenty-four built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
+VAMS includes twenty-three built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag. Pipelines whose category begins with `SYSTEM - ` are [system pipelines](../pipelines/system-pipelines.md), owned by the deployment and read-only through the API.
 
-| Pipeline                                | Config Flag                                       | Description                                                                                                              | Default  |
-| --------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- |
-| 3D Basic Conversion                     | `useConversion3dBasic`                            | Format conversion between 3D mesh formats using Trimesh                                                                  | Enabled  |
-| CAD/Mesh Metadata Extraction            | `useConversionCadMeshMetadataExtraction`          | File-level geometric metadata extraction using Trimesh and CADQuery                                                      | Disabled |
-| Coordinate Transform                    | `useConversionCoordinateTransform`                | Point cloud coordinate reference system reprojection using PDAL and pyproj                                               | Disabled |
-| Point Cloud Potree Viewer               | `usePreviewPcPotreeViewer`                        | Potree octree generation for browser streaming                                                                           | Disabled |
-| 3D Preview Thumbnail                    | `usePreview3dThumbnail`                           | Animated GIF or static image preview generation                                                                          | Disabled |
-| 3D Gaussian Splat Toolbox               | `useSplatToolbox`                                 | 3D Gaussian splat generation from images and video                                                                       | Disabled |
-| GenAI 3D Metadata Labeling              | `useGenAiMetadata3dLabeling`                      | AI-powered asset metadata labeling via Amazon Bedrock                                                                    | Disabled |
-| NVIDIA Cosmos Text-to-World 2B v2       | `useNvidiaCosmos.modelsPredict.text2world2B_v2`   | Video generation from text prompts using Cosmos-Predict2.5 2B                                                            | Disabled |
-| NVIDIA Cosmos Text-to-World 14B v2      | `useNvidiaCosmos.modelsPredict.text2world14B_v2`  | High-quality video generation from text prompts using Cosmos-Predict2.5 14B                                              | Disabled |
-| NVIDIA Cosmos Video-to-World 2B v2      | `useNvidiaCosmos.modelsPredict.video2world2B_v2`  | Video generation from video and text input using Cosmos-Predict2.5 2B                                                    | Disabled |
-| NVIDIA Cosmos Video-to-World 14B v2     | `useNvidiaCosmos.modelsPredict.video2world14B_v2` | High-quality video generation from video and text input using Cosmos-Predict2.5 14B                                      | Disabled |
-| NVIDIA Cosmos Reason 2B                 | `useNvidiaCosmos.modelsReason.reason2B`           | Vision Language Model for video analysis and captioning using Cosmos-Reason2 2B                                          | Disabled |
-| NVIDIA Cosmos Reason 8B                 | `useNvidiaCosmos.modelsReason.reason8B`           | Vision Language Model for video analysis and reasoning using Cosmos-Reason2 8B                                           | Disabled |
-| NVIDIA Cosmos Transfer 2B               | `useNvidiaCosmos.modelsTransfer.transfer2B`       | Style and content transfer with control signal conditioning using Cosmos-Transfer2.5 2B                                  | Disabled |
-| NVIDIA Cosmos 3 Nano (16B)              | `useNvidiaCosmos3.modelsOmni.nano16B`             | Omnimodal world-model generation using Cosmos3-Nano 16B                                                                  | Disabled |
-| NVIDIA Cosmos 3 Super (64B)             | `useNvidiaCosmos3.modelsOmni.super64B`            | Omnimodal world-model generation using Cosmos3-Super 64B                                                                 | Disabled |
-| NVIDIA Cosmos 3 Super Text2Image (64B)  | `useNvidiaCosmos3.modelsOmni.superText2Image64B`  | Image generation from text prompts using Cosmos3-Super 64B                                                               | Disabled |
-| NVIDIA Cosmos 3 Super Image2Video (64B) | `useNvidiaCosmos3.modelsOmni.superImage2Video64B` | Video generation from an image and text prompt using Cosmos3-Super 64B                                                   | Disabled |
-| NVIDIA Gr00t N1.5 3B Fine-Tuning        | `useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B`      | Fine-tuning of the GR00T-N1.5-3B embodied AI model on LeRobot robot manipulation datasets, with LoRA or full fine-tuning | Disabled |
-| Isaac Lab RL Training                   | `useIsaacLabTraining`                             | Reinforcement learning policy training using NVIDIA Isaac Lab                                                            | Disabled |
-| Isaac Lab RL Evaluation                 | `useIsaacLabTraining`                             | Evaluation of trained reinforcement learning policies using NVIDIA Isaac Lab                                             | Disabled |
-| RapidPipeline 3D Processor              | `useRapidPipeline.useEcs`                         | Licensed 3D model optimization and conversion on Amazon ECS                                                              | Disabled |
-| RapidPipeline (EKS)                     | `useRapidPipeline.useEks`                         | Licensed 3D model optimization and conversion on Amazon EKS                                                              | Disabled |
-| VNTANA ModelOps 3D Optimization         | `useModelOps`                                     | Licensed 3D model optimization and conversion using the VNTANA engine                                                    | Disabled |
+| Pipeline                                | Config Flag                                       | Description                                                                                                                                              | Default  |
+| --------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 3D Basic Conversion                     | `useConversion3dBasic`                            | Format conversion between 3D mesh formats using Trimesh                                                                                                  | Enabled  |
+| SYSTEM - GenAI Metadata Generation      | `useSystemGenAiMetadata`                          | Amazon Bedrock analysis of every viewer-supported file: `sys_*` and `ext_*` attributes, descriptive `genai_*` metadata, and embeddings for vector search | Enabled  |
+| Coordinate Transform                    | `useConversionCoordinateTransform`                | Point cloud coordinate reference system reprojection using PDAL and pyproj                                                                               | Disabled |
+| Point Cloud Potree Viewer               | `usePreviewPcPotreeViewer`                        | Potree octree generation for browser streaming                                                                                                           | Disabled |
+| 3D Preview Thumbnail (SYSTEM - Preview) | `usePreview3dThumbnail`                           | Animated GIF or static image preview generation                                                                                                          | Disabled |
+| 3D Gaussian Splat Toolbox               | `useSplatToolbox`                                 | 3D Gaussian splat generation from images and video                                                                                                       | Disabled |
+| NVIDIA Cosmos Text-to-World 2B v2       | `useNvidiaCosmos.modelsPredict.text2world2B_v2`   | Video generation from text prompts using Cosmos-Predict2.5 2B                                                                                            | Disabled |
+| NVIDIA Cosmos Text-to-World 14B v2      | `useNvidiaCosmos.modelsPredict.text2world14B_v2`  | High-quality video generation from text prompts using Cosmos-Predict2.5 14B                                                                              | Disabled |
+| NVIDIA Cosmos Video-to-World 2B v2      | `useNvidiaCosmos.modelsPredict.video2world2B_v2`  | Video generation from video and text input using Cosmos-Predict2.5 2B                                                                                    | Disabled |
+| NVIDIA Cosmos Video-to-World 14B v2     | `useNvidiaCosmos.modelsPredict.video2world14B_v2` | High-quality video generation from video and text input using Cosmos-Predict2.5 14B                                                                      | Disabled |
+| NVIDIA Cosmos Reason 2B                 | `useNvidiaCosmos.modelsReason.reason2B`           | Vision Language Model for video analysis and captioning using Cosmos-Reason2 2B                                                                          | Disabled |
+| NVIDIA Cosmos Reason 8B                 | `useNvidiaCosmos.modelsReason.reason8B`           | Vision Language Model for video analysis and reasoning using Cosmos-Reason2 8B                                                                           | Disabled |
+| NVIDIA Cosmos Transfer 2B               | `useNvidiaCosmos.modelsTransfer.transfer2B`       | Style and content transfer with control signal conditioning using Cosmos-Transfer2.5 2B                                                                  | Disabled |
+| NVIDIA Cosmos 3 Nano (16B)              | `useNvidiaCosmos3.modelsOmni.nano16B`             | Omnimodal world-model generation using Cosmos3-Nano 16B                                                                                                  | Disabled |
+| NVIDIA Cosmos 3 Super (64B)             | `useNvidiaCosmos3.modelsOmni.super64B`            | Omnimodal world-model generation using Cosmos3-Super 64B                                                                                                 | Disabled |
+| NVIDIA Cosmos 3 Super Text2Image (64B)  | `useNvidiaCosmos3.modelsOmni.superText2Image64B`  | Image generation from text prompts using Cosmos3-Super 64B                                                                                               | Disabled |
+| NVIDIA Cosmos 3 Super Image2Video (64B) | `useNvidiaCosmos3.modelsOmni.superImage2Video64B` | Video generation from an image and text prompt using Cosmos3-Super 64B                                                                                   | Disabled |
+| NVIDIA Gr00t N1.5 3B Fine-Tuning        | `useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B`      | Fine-tuning of the GR00T-N1.5-3B embodied AI model on LeRobot robot manipulation datasets, with LoRA or full fine-tuning                                 | Disabled |
+| Isaac Lab RL Training                   | `useIsaacLabTraining`                             | Reinforcement learning policy training using NVIDIA Isaac Lab                                                                                            | Disabled |
+| Isaac Lab RL Evaluation                 | `useIsaacLabTraining`                             | Evaluation of trained reinforcement learning policies using NVIDIA Isaac Lab                                                                             | Disabled |
+| RapidPipeline 3D Processor              | `useRapidPipeline.useEcs`                         | Licensed 3D model optimization and conversion on Amazon ECS                                                                                              | Disabled |
+| RapidPipeline (EKS)                     | `useRapidPipeline.useEks`                         | Licensed 3D model optimization and conversion on Amazon EKS                                                                                              | Disabled |
+| VNTANA ModelOps 3D Optimization         | `useModelOps`                                     | Licensed 3D model optimization and conversion using the VNTANA engine                                                                                    | Disabled |
 
 :::note[Model variant flags]
 A model variant flag takes effect only when its family flag is also enabled: `useNvidiaCosmos.enabled` for the Cosmos Predict, Reason, and Transfer variants, `useNvidiaCosmos3.enabled` for the Cosmos 3 variants, and `useNvidiaGr00t.enabled` for the Gr00t variant.
@@ -211,6 +213,8 @@ A model variant flag takes effect only when its family flag is also enabled: `us
 -   **Auto-registration** -- Pipelines can auto-register with VAMS on deployment via CDK custom resources
 -   **Auto-trigger on upload** -- Configurable automatic pipeline execution when new files are uploaded
 -   **Workflow chaining** -- Chain multiple pipelines into multi-step workflows orchestrated by AWS Step Functions
+-   **System pipelines** -- Shipped pipelines and workflows carry `isSystem`; they are read-only through the API except for their `enabled` switches and template content, and a deployment re-asserts them
+-   **Workflow execution locks** -- The `perAsset`, `perInputFile`, and `perInputFileVersion` concurrency restrictions lock the selected assets, files, or file versions for a run's duration, so a conflicting second execution is rejected while the first is running
 -   **Custom pipeline support** -- Register custom pipelines using the Lambda, SQS, EventBridge, or DeadlineCloud execution types
 
 :::note[VPC Requirement]
@@ -258,20 +262,21 @@ Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` t
 
 VAMS uses a feature flag system to conditionally enable capabilities at deployment time. Feature flags are persisted to Amazon DynamoDB and read by the web interface at runtime.
 
-| Feature Flag                    | Description                                                                                                                                                          |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                       |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats)                                                  |
-| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
-| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
-| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |
-| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                              |
-| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                                                                                                                              |
-| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                                                                                                                        |
-| `AUTHPROVIDER_COGNITO_OIDC`     | Indicates Amazon Cognito with OIDC federation                                                                                                                        |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                                                                                                                             |
-| `PHYSNA_ADDON`                  | Enables Physna add-on frontend features (viewer plugin, future Physna-powered UI surfaces). Emitted automatically when `app.addons.usePhysnaSync.enabled` is `true`. |
-| `DEADLINECLOUD_PIPELINES`       | Enables the AWS Deadline Cloud pipeline execution type in the web interface. Emitted automatically when `app.pipelines.deadlineCloudExecutionTypeEnabled` is `true`. |
+| Feature Flag                    | Description                                                                                                                                                                                                     |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                                                                  |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats)                                                                                             |
+| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                                                                       |
+| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                                                            |
+| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                                                                    |
+| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                                                                         |
+| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                                                                                                                                                                         |
+| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                                                                                                                                                                   |
+| `AUTHPROVIDER_COGNITO_OIDC`     | Indicates Amazon Cognito with OIDC federation                                                                                                                                                                   |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                                                                                                                                                                        |
+| `PHYSNA_ADDON`                  | Enables Physna add-on frontend features (viewer plugin, future Physna-powered UI surfaces). Emitted automatically when `app.addons.usePhysnaSync.enabled` is `true`.                                            |
+| `DEADLINECLOUD_PIPELINES`       | Enables the AWS Deadline Cloud pipeline execution type in the web interface. Emitted automatically when `app.pipelines.deadlineCloudExecutionTypeEnabled` is `true`.                                            |
+| `VECTORSEARCH`                  | Enables natural-language (vector) search: the web toggle, the CLI `search nlp` command, and the MCP `search_nlp` tool call `POST /search/nlp`. Emitted automatically when `app.vectorSearch.enabled` is `true`. |
 
 ### Additional Configuration
 

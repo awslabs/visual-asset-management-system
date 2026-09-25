@@ -111,13 +111,29 @@ PIPELINE_INPUT_PREFIX = "/input/"
 #   threads it as ``outputResultsPrefixRelative`` (next pipeline's manifest) and
 #   ``resultsPathKey`` (process-output step), and processWorkflowExecutionOutput
 #   reads it for both the normal and the results-only (``outputLocationType:
-#   "none"``) terminal paths. No shipped pipeline writes here yet, so the
-#   channel is read-ready but has no producer.
+#   "none"``) terminal paths. Pipelines receive it as ``outputS3AssetResultsPath``
+#   from ``manifestHelper.resolve_inputs``.
 # ---------------------------------------------------------------------------
 PIPELINE_OUTPUT_FILES_PREFIX = "/files/"
 PIPELINE_OUTPUT_PREVIEWS_PREFIX = "/previews/"
 PIPELINE_OUTPUT_METADATA_PREFIX = "/metadata/"
 PIPELINE_OUTPUT_RESULTS_PREFIX = "/results/"
+
+# ---------------------------------------------------------------------------
+# Reserved results object.
+#
+# EXECUTION_STATUS_RESULTS_FILENAME: object name directly under the results
+#   prefix through which a pipeline reports a terminal outcome it records rather
+#   than raises -- a failure met AFTER its outputs were written, so those outputs
+#   still reach the asset. Body:
+#   ``{"status": "FAILED", "error": "<code>", "cause": "<text>"}``.
+#   The process-output step reads it after write-back on both terminal paths
+#   and, when ``status`` is FAILED, records the execution and its end-state
+#   pipeline row FAILED with ``executionError = "<error>: <cause>"``. Any other
+#   status, or no object, leaves the outcome to the write-back result. The
+#   object is additionally recorded as an ordinary results row.
+# ---------------------------------------------------------------------------
+EXECUTION_STATUS_RESULTS_FILENAME = "execution.status.json"
 
 # ---------------------------------------------------------------------------
 # File-level preview files.

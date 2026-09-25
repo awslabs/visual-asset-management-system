@@ -8,8 +8,14 @@ import {
     searchAssets,
     searchAssetsSimple,
     fetchSearchMappings,
+    searchNlp,
 } from "../../../services/APIService";
-import { SearchQuery, SearchResponse, MetadataFilter } from "../types";
+import { SearchQuery, SearchResponse, NlpSearchResponse } from "../types";
+import {
+    buildKeywordSearchRequest,
+    buildNlpSearchRequest,
+    NlpRequestOptions,
+} from "./searchRequestBuilders";
 
 /**
  * Custom hook for search API operations
@@ -23,276 +29,15 @@ export const useSearchAPI = () => {
             metadataOperator?: string
         ): Promise<SearchResponse> => {
             try {
-                // Build filters array for the new API format
-                const filters: object[] = [];
-
-                // Determine if archived items should be included
-                const includeArchived = !!searchQuery.filters.bool_archived;
-
-                // Add regular filters using query_string format
-                Object.keys(searchQuery.filters).forEach((key) => {
-                    const filter = searchQuery.filters[key];
-
-                    // Skip non-filter fields, _rectype (handled by entityTypes), bool_archived (handled by includeArchived), and custom filter objects
-                    if (
-                        key === "includeMetadataInKeywordSearch" ||
-                        key === "showResultExplanation" ||
-                        key === "_rectype" ||
-                        key === "bool_archived" ||
-                        key === "date_lastmodified_filter" ||
-                        key === "num_filesize_filter" ||
-                        key === "geo_filter"
-                    )
-                        return;
-
-                    // Handle boolean filters (relationship filters, etc.)
-                    if (key.startsWith("bool_") && filter && typeof filter.value === "boolean") {
-                        filters.push({
-                            query_string: {
-                                query: `(${key}:${filter.value})`,
-                            },
-                        });
-                    }
-                    // Handle multi-value filters (values array)
-                    else if (
-                        filter &&
-                        filter.values &&
-                        Array.isArray(filter.values) &&
-                        filter.values.length > 0
-                    ) {
-                        // Build OR query for multiple values: field:("value1" OR "value2" OR "value3")
-                        const orQuery = filter.values.map((val: string) => `"${val}"`).join(" OR ");
-                        filters.push({
-                            query_string: {
-                                query: `(${key}:(${orQuery}))`,
-                            },
-                        });
-                    }
-                    // Handle single value filters
-                    else if (filter && filter.value !== "all" && filter.value !== "") {
-                        filters.push({
-                            query_string: {
-                                query: `(${key}:("${filter.value}"))`,
-                            },
-                        });
-                    }
-                });
-
-                // Handle date_lastmodified_filter
-                if (searchQuery.filters.date_lastmodified_filter) {
-                    const dateFilter = searchQuery.filters.date_lastmodified_filter;
-                    let queryString = "";
-
-                    if (dateFilter.operator === "between" && Array.isArray(dateFilter.value)) {
-                        const [startDate, endDate] = dateFilter.value;
-                        if (startDate && endDate) {
-                            queryString = `date_lastmodified:[${startDate} TO ${endDate}]`;
-                        }
-                    } else if (typeof dateFilter.value === "string" && dateFilter.value) {
-                        switch (dateFilter.operator) {
-                            case ">":
-                                queryString = `date_lastmodified:>=${dateFilter.value}`;
-                                break;
-                            case "<":
-                                queryString = `date_lastmodified:<=${dateFilter.value}`;
-                                break;
-                            case "=":
-                                queryString = `date_lastmodified:${dateFilter.value}`;
-                                break;
-                        }
-                    }
-
-                    if (queryString) {
-                        filters.push({
-                            query_string: {
-                                query: queryString,
-                            },
-                        });
-                    }
-                }
-
-                // Handle num_filesize_filter
-                if (searchQuery.filters.num_filesize_filter) {
-                    const sizeFilter = searchQuery.filters.num_filesize_filter;
-                    let queryString = "";
-
-                    if (sizeFilter.operator === "between" && Array.isArray(sizeFilter.value)) {
-                        const [minSize, maxSize] = sizeFilter.value;
-                        if (minSize !== undefined && maxSize !== undefined) {
-                            queryString = `num_filesize:[${minSize} TO ${maxSize}]`;
-                        }
-                    } else if (typeof sizeFilter.value === "number") {
-                        switch (sizeFilter.operator) {
-                            case ">":
-                                queryString = `num_filesize:>=${sizeFilter.value}`;
-                                break;
-                            case "<":
-                                queryString = `num_filesize:<=${sizeFilter.value}`;
-                                break;
-                            case "=":
-                                queryString = `num_filesize:${sizeFilter.value}`;
-                                break;
-                        }
-                    }
-
-                    if (queryString) {
-                        filters.push({
-                            query_string: {
-                                query: queryString,
-                            },
-                        });
-                    }
-                }
-
-                // Add database filter if specified, targeting the `.keyword` subfield for an EXACT
-                // match. str_databaseid is analyzed, so a phrase on the analyzed field matches the
-                // adjacent tokens [smoke, db] — which "smoke-db-2" ([smoke, db, 2]) also contains, and
-                // a database-locked search then returned assets from another database. It stays a
-                // query_string because the backend's SearchFilterModel requires that key.
-                if (databaseId) {
-                    filters.push({
-                        query_string: {
-                            query: `str_databaseid.keyword:"${databaseId}"`,
-                        },
-                    });
-                }
-
-                // Build metadata query for dedicated metadata search
-                // Construct proper MD_<type>_<fieldname> format based on search mode
-                // Filter out rows with empty field names
-                let metadataQuery = "";
-                if (searchQuery.metadataFilters.length > 0) {
-                    // For "value" mode, just send the value (no field name)
-                    // For "key" mode, just send the field name (no value)
-                    // For "both" mode, send field:value pairs
-
-                    if (metadataSearchMode === "value") {
-                        // Value-only mode: just send the values, no field names
-                        const metadataValues = searchQuery.metadataFilters
-                            .filter((filter) => filter.value && filter.value.trim() !== "")
-                            .map((filter) => filter.value.trim());
-                        const operator = metadataOperator || "AND";
-                        metadataQuery = metadataValues.join(` ${operator} `);
-                    } else if (metadataSearchMode === "key") {
-                        // Key-only mode: just send the field names, no values
-                        const metadataKeys = searchQuery.metadataFilters
-                            .filter((filter) => filter.key && filter.key.trim() !== "")
-                            .map((filter) => {
-                                // Always use "str" type for all metadata searches
-                                const fieldType = "str";
-                                let fieldName = filter.key;
-
-                                // Remove MD_ prefix if user added it
-                                if (fieldName.startsWith("MD_")) {
-                                    fieldName = fieldName.substring(3);
-                                }
-
-                                // Remove type prefix if user added it
-                                const typePrefixes = [
-                                    "str_",
-                                    "num_",
-                                    "bool_",
-                                    "date_",
-                                    "list_",
-                                    "gp_",
-                                    "gs_",
-                                ];
-                                for (const prefix of typePrefixes) {
-                                    if (fieldName.startsWith(prefix)) {
-                                        fieldName = fieldName.substring(prefix.length);
-                                        break;
-                                    }
-                                }
-
-                                // Remove wildcards from field names
-                                fieldName = fieldName.replace(/[*?]/g, "");
-
-                                return `MD_${fieldType}_${fieldName}`;
-                            });
-                        const operator = metadataOperator || "AND";
-                        metadataQuery = metadataKeys.join(` ${operator} `);
-                    } else {
-                        // Both mode: send field:value pairs
-                        const metadataTerms = searchQuery.metadataFilters
-                            .filter((filter) => filter.key && filter.key.trim() !== "") // Ignore empty field names
-                            .map((filter) => {
-                                // Always use "str" type for all metadata searches
-                                const fieldType = "str";
-                                let fieldName = filter.key;
-
-                                // Remove MD_ prefix if user added it
-                                if (fieldName.startsWith("MD_")) {
-                                    fieldName = fieldName.substring(3);
-                                }
-
-                                // Remove type prefix if user added it (e.g., str_product -> product)
-                                const typePrefixes = [
-                                    "str_",
-                                    "num_",
-                                    "bool_",
-                                    "date_",
-                                    "list_",
-                                    "gp_",
-                                    "gs_",
-                                ];
-                                for (const prefix of typePrefixes) {
-                                    if (fieldName.startsWith(prefix)) {
-                                        fieldName = fieldName.substring(prefix.length);
-                                        break;
-                                    }
-                                }
-
-                                // Remove wildcards from field names
-                                fieldName = fieldName.replace(/[*?]/g, "");
-
-                                // Construct final field name
-                                const fullFieldName = `MD_${fieldType}_${fieldName}`;
-                                return `${fullFieldName}:${filter.value}`;
-                            });
-                        const operator = metadataOperator || "AND";
-                        metadataQuery = metadataTerms.join(` ${operator} `);
-                    }
-                }
-
-                // Determine entity types based on filters
-                const entityTypes: string[] = [];
-                const rectypeFilter = searchQuery.filters._rectype;
-                if (rectypeFilter) {
-                    if (rectypeFilter.value === "asset") {
-                        entityTypes.push("asset");
-                    } else if (rectypeFilter.value === "file") {
-                        entityTypes.push("file");
-                    }
-                } else {
-                    // Default to both if no filter specified
-                    entityTypes.push("asset", "file");
-                }
-
-                // Build the request body using the new SearchRequestModel format
-                const body = {
-                    query: searchQuery.query || undefined,
-                    filters: filters.length > 0 ? filters : undefined,
-                    sort:
-                        searchQuery.sort && searchQuery.sort.length > 0
-                            ? searchQuery.sort
-                            : undefined,
-                    from: searchQuery.pagination.from,
-                    size: searchQuery.pagination.size,
-                    entityTypes: entityTypes.length > 0 ? entityTypes : undefined,
-                    metadataQuery: metadataQuery || undefined,
-                    metadataSearchMode: metadataSearchMode || "both",
-                    includeMetadataInSearch:
-                        searchQuery.filters.includeMetadataInKeywordSearch !== false,
-                    aggregations: true,
-                    includeHighlights: true,
-                    explainResults: searchQuery.filters.showResultExplanation || false,
-                    includeArchived: includeArchived, // Include archived items if bool_archived filter is set
-                    geoSearch: searchQuery.filters.geo_filter || undefined,
-                };
+                const body = buildKeywordSearchRequest(
+                    searchQuery,
+                    databaseId,
+                    metadataSearchMode,
+                    metadataOperator
+                );
 
                 console.log("Search API request body:", body);
 
-                // Execute the search
                 const [success, result] = (await searchAssets(body)) as [boolean, any];
                 if (!success) {
                     throw new Error(result || "Search failed");
@@ -303,6 +48,27 @@ export const useSearchAPI = () => {
                 console.error("Search API error:", error);
                 throw error;
             }
+        },
+        []
+    );
+
+    /**
+     * Natural-language search over file embeddings (`POST /search/nlp`). Returns the same envelope
+     * as `executeSearch` plus the `nlp` summary; paging over its hits is the caller's.
+     */
+    const executeNlpSearch = useCallback(
+        async (
+            searchQuery: SearchQuery,
+            options: NlpRequestOptions
+        ): Promise<NlpSearchResponse> => {
+            const body = buildNlpSearchRequest(searchQuery, options);
+            const [success, result] = await searchNlp(body);
+            if (!success) {
+                throw new Error(
+                    typeof result === "string" ? result : "Natural-language search failed"
+                );
+            }
+            return result as NlpSearchResponse;
         },
         []
     );
@@ -379,6 +145,7 @@ export const useSearchAPI = () => {
 
     return {
         executeSearch,
+        executeNlpSearch,
         executeSimpleSearch,
         getSearchMappings,
         buildSortQuery,

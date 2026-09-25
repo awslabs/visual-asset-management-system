@@ -92,7 +92,7 @@ positional, use an empty third segment to set a job name without a default templ
 # With a default template
 vamscli workflow create -d my-db -n "Convert then label" \
     --pipeline global:conversion-3d-basic:to-glb:convert-to-glb \
-    --pipeline global:metadata-3d-labeling::label-converted
+    --pipeline my-db:my-labeler::label-converted-files
 ```
 
 A `jobName` becomes a folder in the step's output path, so it is worth setting when the pipeline id

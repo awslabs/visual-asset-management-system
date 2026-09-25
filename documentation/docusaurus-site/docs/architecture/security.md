@@ -421,6 +421,16 @@ The following bucket policy statement is applied to every Amazon S3 bucket in VA
 }
 ```
 
+### Data Sent to Amazon Bedrock
+
+Two features send content to Amazon Bedrock in the deployment's own AWS account and Region: the SYSTEM GenAI metadata pipeline sends rendered views or video keyframes, extracted text excerpts, file attributes, and — when the template tag `SEED_WITH_EXISTING_METADATA` is `true` — the existing metadata of the file, its asset, and its database to the configured analysis model, and — when vector search is enabled — the composed embedding text, which always carries that existing metadata, to the embeddings model; natural-language search sends each query string to the embeddings model. Requests use the deployment's Lambda roles over TLS, and Amazon Bedrock does not use customer content to train models or share it with model providers. Renders and keyframes are transient objects under the auxiliary bucket's execution prefix; embedding documents are deleted by the vector indexer once written to the vector table. Review the model provider's terms recorded in [Notices](../additional/notices.md) before enabling either feature.
+
+#### Amazon Bedrock guardrail
+
+File text, user-entered metadata, and asset descriptions are untrusted prompt content, so the deployment creates an Amazon Bedrock guardrail for the SYSTEM GenAI metadata pipeline by default (`app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled`) and sends every analysis prompt with it. Following the organizational Bedrock guardrail guidance, the guardrail carries a prompt-attack content filter on the prompt (`create.promptAttackInputStrength`, `LOW` by default and never `NONE`) and, because metadata generation does not need personal data, sensitive-information filters that anonymize (or, with `create.piiFilter: block`, block) email addresses, phone numbers, person names, postal addresses, US Social Security numbers, payment card numbers, AWS access and secret keys, and passwords in both the prompt and the model response. The pipeline tags the untrusted blocks of each Converse call as guard content so the filters evaluate them, and — because the embeddings model accepts no guardrail on its own invocation — the embedding step screens the composed text and every content chunk through the guardrail's `ApplyGuardrail` operation first and embeds and stores the text the guardrail returns, so a masked entity is a type token in the vector table's `sourceText` as well. The two analysis functions and the embedding function are the only principals granted `bedrock:ApplyGuardrail`, on that guardrail's ARN only. A blocked prompt or response is recorded as `BedrockGuardrailIntervened` on the execution without the matched text, and so is a blocked embedding text; a masked one completes normally, with the entities replaced by their type tokens and the masked types recorded on the execution's analysis summary and embedding summary, and every successful call logs the filters that acted by side, policy, type, and action.
+
+The guardrail is encrypted with the deployment's KMS key when `app.useKmsCmkEncryption.enabled` is `true` (the AWS-managed Amazon Bedrock key otherwise). Amazon Bedrock authorizes that key through the principals that create and use the guardrail rather than through a service principal: the role that deploys the stack needs `kms:Decrypt`, `kms:GenerateDataKey`, `kms:DescribeKey`, and `kms:CreateGrant` on the key — the key policy delegates to the account, and the default AWS CDK bootstrap role carries them — and the analysis functions hold `kms:Decrypt` through the standard VAMS key grant. No Amazon Bedrock service principal is added to the key policy. The AWS GovCloud (US) and AWS European Sovereign Cloud templates ship with `create.enabled` `false` because Amazon Bedrock Guardrails availability in those partitions is unverified. An operator-owned guardrail can replace the created one through `guardrailIdentifier` and `guardrailVersion`; see the [pipeline page](../pipelines/system-genai-metadata.md#amazon-bedrock-guardrail).
+
 ## Content Security Policy (CSP)
 
 VAMS generates a dynamic Content Security Policy for the web application based on the deployment configuration. The CSP is constructed at AWS CDK synthesis time and applied to the web distribution.
@@ -687,17 +697,18 @@ Custom bucket policies can be applied to all VAMS Amazon S3 buckets via `infra/c
 
 `govCloud.enabled = true` is the restricted-partition switch: the AWS GovCloud (US), AWS European Sovereign Cloud, and ISO partitions all set it. When it is `true`:
 
-| Constraint                                | Enforcement                                                                           |
-| ----------------------------------------- | ------------------------------------------------------------------------------------- |
-| VPC required                              | `useGlobalVpc.enabled` must be `true`                                                 |
-| No Amazon CloudFront                      | `useCloudFront.enabled` must be `false`                                               |
-| No Amazon Location Service                | `useLocationService.enabled` must be `false`                                          |
-| No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                         |
-| No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable) |
-| No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                    |
-| FIPS endpoints                            | Automatically selected by service helper                                              |
+| Constraint                                | Enforcement                                                                                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| VPC required                              | `useGlobalVpc.enabled` must be `true`                                                                                          |
+| No Amazon CloudFront                      | `useCloudFront.enabled` must be `false`                                                                                        |
+| No Amazon Location Service                | `useLocationService.enabled` must be `false`                                                                                   |
+| No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                                                                  |
+| No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable)                                          |
+| No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                                                             |
+| FIPS endpoints                            | Automatically selected by service helper                                                                                       |
+| Vector search off by default              | `vectorSearch.enabled` is backfilled to `false`; enabling it is supported after the models are enabled in both linked accounts |
 
-The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain.
+The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain, and no DynamoDB vector search, so `vectorSearch.enabled` must be `false` there.
 
 When `govCloud.il6Compliant = true`:
 

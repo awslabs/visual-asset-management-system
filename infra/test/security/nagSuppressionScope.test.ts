@@ -122,7 +122,7 @@ describe("no suppression is a catch-all over Resource wildcards", () => {
         // matches nothing. Measured: three suppressions written that way silently applied to nothing
         // and the synth kept failing on findings they were meant to cover.
         for (const file of FILES.concat([
-            "../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/lambdaBuilder/metadata3dLabelingFunctions.ts",
+            "../lib/nestedStacks/pipelines/system/genAiMetadata/lambdaBuilder/systemGenAiMetadataFunctions.ts",
         ])) {
             for (const regex of suppressionRegexes(read(file))) {
                 // Every `*` intended literally is preceded by a backslash in the resolved string.
@@ -151,7 +151,7 @@ describe("no suppression is a catch-all over Resource wildcards", () => {
 describe("the per-asset SNS topic grant is pinned to this deployment", () => {
     const SITES = [
         "../lib/lambdaBuilder/assetFunctions.ts",
-        "../lib/lambdaBuilder/searchIndexBucketSyncFunctions.ts",
+        "../lib/lambdaBuilder/indexingFunctions.ts",
         "../lib/lambdaBuilder/sendEmailFunctions.ts",
         "../lib/lambdaBuilder/subscriptionFunctions.ts",
     ];
