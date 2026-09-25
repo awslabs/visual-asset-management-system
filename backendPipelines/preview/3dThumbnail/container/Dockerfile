@@ -62,6 +62,9 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy pipeline code
 COPY ./preview_pipeline /app/preview_pipeline
+# Normalize read bits: COPY preserves the build host's umask, so a hardened checkout (umask 077/027)
+# leaves these root-owned 600/640 and unreadable to the non-root USER below.
+RUN chmod -R a+rX /app/preview_pipeline
 
 # Create the runtime user and every path it has to write.
 #
