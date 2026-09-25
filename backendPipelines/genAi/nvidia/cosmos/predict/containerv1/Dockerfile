@@ -61,6 +61,10 @@ RUN echo "Installing dependencies. This will take a while..." && \
 RUN mkdir -p /opt/ml/code
 COPY __main__.py model_manager.py inference.py entrypoint.sh /opt/ml/code/
 RUN chmod +x /opt/ml/code/entrypoint.sh
+# Normalize read/traverse bits: COPY preserves the build host's umask, so on a hardened host
+# (umask 077/027) these files land root-owned 600/640 and the non-root USER below cannot read them
+# (PermissionError at import). a+rX = world-read files + traverse dirs, no plain-file exec bit.
+RUN chmod -R a+rX /opt/ml/code
 
 # Hand the runtime user ownership of Miniconda (installed at its final path above), the code dir,
 # and the cloned framework. The entrypoint activates the env via `source ~/miniconda3/bin/activate`,

@@ -80,6 +80,10 @@ COPY --chown=vams:vams __main__.py model_manager.py inference.py manifest_io.py 
 # from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
 # and the kernel returns ENOENT ("no such file or directory") on exec.
 RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+# Normalize read/traverse bits: --chown makes vams the owner, but COPY still preserves the build
+# host's umask, so on a hardened host (umask 077/027) the files are 600/640 and only owner-read —
+# fragile for the non-root USER. a+rX = world-read files + traverse dirs, no plain-file exec bit.
+RUN chmod -R a+rX /opt/ml/code
 
 # Add the venv bin to PATH so python/torchrun are available without activation
 ENV PATH="/opt/cosmos-predict2.5/.venv/bin:$PATH"

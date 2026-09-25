@@ -68,10 +68,16 @@ COPY __main__.py inference.py evaluation.py model_manager.py manifest_io.py entr
 # from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
 # and the kernel returns ENOENT ("no such file or directory") on exec.
 RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+# Normalize read/traverse bits: COPY preserves the build host's umask, so on a hardened host
+# (umask 077/027) these files land root-owned 600/640 and the non-root USER below cannot read them
+# (PermissionError at import). a+rX = world-read files + traverse dirs, no plain-file exec bit.
+RUN chmod -R a+rX /opt/ml/code
 
 # Copy finetune training script to expected location
 RUN mkdir -p /workspace/scripts
 COPY finetune_gr00t.py /workspace/scripts/finetune_gr00t.py
+# Normalize read bits for the non-root USER (umask-proof; see /opt/ml/code note above).
+RUN chmod -R a+rX /workspace/scripts
 
 WORKDIR /opt/ml/code
 

@@ -28,6 +28,12 @@ RUN mkdir -p /app /tmp/assets
 WORKDIR /app
 COPY . /app/
 
+# Normalize read/traverse bits: COPY preserves the build host's umask, so on a hardened host
+# (umask 077/027) these files land root-owned 600/640 and the non-root USER below cannot read them
+# (PermissionError at import). a+rX = world-read files + traverse dirs, no plain-file exec bit.
+# Runs before the chmod +x below so entrypoint.sh's exec bit is applied last.
+RUN chmod -R a+rX /app
+
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled
 # from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
 # and the kernel returns ENOENT ("no such file or directory") on exec.
