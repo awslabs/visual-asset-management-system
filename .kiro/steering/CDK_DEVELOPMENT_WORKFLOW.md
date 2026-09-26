@@ -1364,13 +1364,28 @@ A pipeline whose image is built by AWS CodeBuild pushes and consumes ONE content
 construct supplies `IMAGE_TAG` to the project's `environmentVariables` from `sourceAsset.assetHash`,
 and the pull site names that same value; a shared compute construct takes it as one prop together with
 the repository (`ecrImage` on `batch-fargate-pipeline.ts`, `codeBuildImage` on
-`batch-gpu-pipeline.ts`) so the tag cannot be omitted while the repository is supplied. The buildspec
+`batch-gpu-pipeline.ts`) so the tag cannot be omitted while the repository is supplied. A construct
+that builds one source tree for more than one architecture (the CAD STEP agent: arm64 for the AgentCore
+Runtime, amd64 for Fargate) passes the build platform as `contentImageTag`'s second argument, so the tag
+carries the architecture (`<hash>-arm64`, `<hash>-amd64`) and a runtime switch cannot replace the digest
+behind a tag the previous consumer still names. The buildspec
 must not default `IMAGE_TAG` — it fails the build when the project supplied none, because a default
 pushes a tag the AWS Batch job definition does not name and the deploy still reports success, with
 every execution then failing `CannotPullContainerError`. `:latest` is pushed alongside solely as the
 `--cache-from` alias, since a content-addressed tag never pre-exists and a cold cache adds hours to a
 GPU image build. Coverage: `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the
 immutable-tag block of `infra/test/pipelines/containerBuildSources.test.ts`.
+
+A consumer that validates the image when it is CREATED needs the build to be synchronous from
+CloudFormation's point of view. An AWS Batch job definition accepts a tag that does not exist yet (the
+job fails at start), so the Batch pipelines start the build from a fire-and-forget custom resource; an
+Amazon Bedrock AgentCore Runtime rejects `CreateAgentRuntime` for a missing tag, so a fresh deploy that
+creates it in parallel with the build always fails. The CAD STEP agent's
+`cadStepAgentCodeBuild-construct.ts` is the pattern: a `cr.Provider` with an `onEventHandler` that
+starts the build (build id as physical id) and an `isCompleteHandler` that polls
+`codebuild:BatchGetBuilds` on the project until the build is terminal, the handlers in
+`backendPipelines/genAi/cadStepAgent/lambda/imageBuildCustomResource.py` so the status mapping is
+unit-tested, and `node.addDependency(<build custom resource>)` on every resource that names the tag.
 
 #### **Pinned Upstream Clones in a Container Build**
 
@@ -1490,7 +1505,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
-    Six pipelines run in isolated subnets (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Six pipelines run in isolated subnets (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; five run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training, and the GenAI CAD STEP agent on its `fargate` runtime — its `agentcore` runtime runs no compute in the VPC and is gated out of all three) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
 
 9. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
 

@@ -569,6 +569,12 @@ const VPC_REQUIRING_FEATURES: {
         fieldPaths: ["app.pipelines.useConversionCoordinateTransform.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
     },
+    {
+        id: "vpc-required-pipelines-use-genai-cad-step-agent",
+        label: "pipelines.useGenAiCadStepAgent",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
 ];
 
 /** Partitions whose capability downgrades are gated on app.govCloud.enabled (config.ts: `restrictedPartitionRequiringFlag`). */
@@ -707,6 +713,7 @@ export const RULES: Rule[] = [
         [
             "useConversionCadMeshMetadataExtraction",
             "useConversionCoordinateTransform",
+            "useGenAiCadStepAgent",
             "usePreviewPcPotreeViewer",
             "usePreview3dThumbnail",
             "useGenAiMetadata3dLabeling",
@@ -2310,6 +2317,203 @@ export const RULES: Rule[] = [
         },
         message:
             'bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
+    },
+
+    // ----- GenAI CAD STEP agent (config.ts: "GenAI CAD STEP agent pipeline. The AgentCore runtime
+    // exists only in the commercial partition") -----
+    {
+        id: "cad-step-agent-runtime-value",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.runtime"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !["agentcore", "fargate"].includes(
+                String(g(c, "app.pipelines.useGenAiCadStepAgent.runtime"))
+            ),
+        message: 'pipelines.useGenAiCadStepAgent.runtime must be "agentcore" or "fargate".',
+    },
+    {
+        id: "cad-step-agent-agentcore-commercial-only",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.runtime", "env.region"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore" &&
+            !isCommercialPartition(c),
+        message:
+            'pipelines.useGenAiCadStepAgent.runtime "agentcore" is offered only in the commercial (aws) partition. Set runtime to "fargate".',
+    },
+    {
+        id: "cad-step-agent-agentcore-requires-codebuild",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.runtime",
+            "app.pipelines.useGenAiCadStepAgent.useCodeBuild",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore" &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.useCodeBuild") !== true,
+        message:
+            'pipelines.useGenAiCadStepAgent.runtime "agentcore" requires useCodeBuild to be true (the AgentCore Runtime pulls an arm64 image the CodeBuild project produces).',
+    },
+    {
+        id: "cad-step-agent-bedrock-model-id-required",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockModelId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockModelId")),
+        message:
+            "useGenAiCadStepAgent requires a bedrockModelId available in this partition and Region.",
+    },
+    {
+        id: "cad-step-agent-bedrock-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockModelId", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
+            const id = String(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockModelId") ?? "");
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'useGenAiCadStepAgent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition.',
+    },
+    {
+        id: "cad-step-agent-openai-secret-arn",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn",
+            "app.pipelines.useGenAiCadStepAgent.openAi.modelId",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
+            const secret = String(
+                g(c, "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn") ?? ""
+            );
+            const model = String(g(c, "app.pipelines.useGenAiCadStepAgent.openAi.modelId") ?? "");
+            if (isBlank(secret) && isBlank(model)) return false;
+            return !/^arn:(aws|aws-us-gov|aws-cn|aws-eusc|aws-iso(-[a-z])?):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$/.test(
+                secret
+            );
+        },
+        message:
+            "useGenAiCadStepAgent.openAi.apiKeySecretArn must be an AWS Secrets Manager secret ARN when the OpenAI provider is configured.",
+    },
+    {
+        id: "cad-step-agent-openai-model-id-required",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.openAi.modelId",
+            "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn")) &&
+            isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.openAi.modelId")),
+        message:
+            "useGenAiCadStepAgent.openAi.modelId must be set when openAi.apiKeySecretArn is set.",
+    },
+    ...(
+        [
+            ["agentCore.warmSessionSlots", 0, 20],
+            ["agentCore.idleRuntimeSessionTimeoutSeconds", 60, 28800],
+            ["agentCore.maxLifetimeSeconds", 60, 28800],
+            ["maxRunSeconds", 300, 6000],
+        ] as const
+    ).map(
+        ([field, min, max]): Rule => ({
+            id: `cad-step-agent-range-${field.replace(/\./g, "-")}`,
+            severity: "error",
+            fieldPaths: [`app.pipelines.useGenAiCadStepAgent.${field}`],
+            appliesWhen: (c) => {
+                if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
+                const v = Number(g(c, `app.pipelines.useGenAiCadStepAgent.${field}`));
+                return !Number.isInteger(v) || v < min || v > max;
+            },
+            message: `pipelines.useGenAiCadStepAgent.${field} must be an integer between ${min} and ${max}.`,
+        })
+    ),
+    {
+        id: "cad-step-agent-guardrail-pair",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId",
+            "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId")) !==
+                isBlank(
+                    g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion")
+                ),
+        message:
+            "useGenAiCadStepAgent.bedrockGuardrail.guardrailId and guardrailVersion must be set together (an existing guardrail) or both left empty (the deployment creates one).",
+    },
+    {
+        id: "cad-step-agent-guardrail-id-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !isBlank(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId")) &&
+            !/^[a-z0-9]+$/.test(
+                String(
+                    g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId")
+                ).trim()
+            ),
+        message:
+            "useGenAiCadStepAgent.bedrockGuardrail.guardrailId must be a guardrail id (lower-case letters and digits), not an ARN or a name.",
+    },
+    {
+        id: "cad-step-agent-guardrail-version-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            !isBlank(
+                g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion")
+            ) &&
+            !/^(DRAFT|[0-9]+)$/.test(
+                String(
+                    g(c, "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion")
+                ).trim()
+            ),
+        message:
+            'useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion must be a numbered guardrail version or "DRAFT".',
+    },
+    {
+        id: "cad-step-agent-idle-exceeds-lifetime",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds",
+            "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            Number(
+                g(
+                    c,
+                    "app.pipelines.useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds"
+                )
+            ) > Number(g(c, "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds")),
+        message:
+            "useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds cannot exceed maxLifetimeSeconds.",
+    },
+    {
+        id: "cad-step-agent-run-exceeds-lifetime",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiCadStepAgent.maxRunSeconds",
+            "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            g(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore" &&
+            Number(g(c, "app.pipelines.useGenAiCadStepAgent.maxRunSeconds")) >
+                Number(g(c, "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds")),
+        message:
+            "useGenAiCadStepAgent.maxRunSeconds cannot exceed agentCore.maxLifetimeSeconds when the runtime is agentcore.",
     },
 
     // ----- Physna outbound endpoints (config.ts: "must use https, or the credentials VAMS sends to it travel in cleartext") -----

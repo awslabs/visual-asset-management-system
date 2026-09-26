@@ -244,6 +244,23 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
             },
+            useGenAiCadStepAgent: {
+                enabled: false,
+                runtime: "agentcore",
+                useCodeBuild: true,
+                autoRegisterWithVAMS: true,
+                autoRegisterAutoTriggerOnFileUpload: false,
+                bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                openAi: { modelId: "", apiKeySecretArn: "" },
+                allowInternetResearch: true,
+                bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
+                agentCore: {
+                    warmSessionSlots: 0,
+                    idleRuntimeSessionTimeoutSeconds: 900,
+                    maxLifetimeSeconds: 28800,
+                },
+                maxRunSeconds: 3600,
+            },
             usePreviewPcPotreeViewer: {
                 enabled: false,
                 autoRegisterWithVAMS: true,
@@ -404,6 +421,10 @@ function buildGovCloud(): ConfigShape {
     // partition when they enable the pipeline (it ships disabled).
     cfg.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
     cfg.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload = true;
+    // AgentCore Runtime is commercial-only, so the restricted presets ship the Fargate runtime with
+    // the model id left for the operator, as for the labeling pipeline above.
+    cfg.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
+    cfg.app.pipelines.useGenAiCadStepAgent.bedrockModelId = "";
     return cfg;
 }
 
@@ -425,6 +446,8 @@ function buildEuSovereign(): ConfigShape {
     cfg.app.pipelines.useRapidPipeline.useEcs.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useModelOps.ecrContainerImageURI = euEcr;
+    // CodeBuild is not offered in the EU Sovereign Cloud (config.ts codeBuildSupportedPartitions).
+    cfg.app.pipelines.useGenAiCadStepAgent.useCodeBuild = false;
     return cfg;
 }
 

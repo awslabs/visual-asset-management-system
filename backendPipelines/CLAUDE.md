@@ -688,7 +688,7 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     - **Pipeline-only endpoint condition** (~line 651) — the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Required for every pipeline, either placement.** Without it Batch jobs cannot pull container images.
     - **ECS endpoint condition** (~line 736) — the `needsEcsPrivate` variable. **Private-subnet pipelines only.** This is the ECS _control-plane_ endpoint that the ECS agent on an EC2-launch-type container instance needs; **Fargate tasks do not use it** (they need ECR, Amazon S3 and CloudWatch Logs, supplied by the block above). Each endpoint adds one ENI per AZ, ~$15/month.
 
-    Six pipelines run in isolated subnets today (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Six pipelines run in isolated subnets today (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; five run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training, and the GenAI CAD STEP agent on its `fargate` runtime — its `agentcore` runtime runs no compute in the VPC and is in none of the three) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
 
 11. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
 12. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).
@@ -701,13 +701,30 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     supplies `IMAGE_TAG` to the project's `environmentVariables` from `sourceAsset.assetHash`, and the
     pull site names that same value — a shared compute construct takes it as one prop together with the
     repository (`ecrImage` on `batch-fargate-pipeline.ts`, `codeBuildImage` on `batch-gpu-pipeline.ts`)
-    so the tag cannot be omitted while the repository is supplied. The buildspec must NOT default
+    so the tag cannot be omitted while the repository is supplied. A construct that builds one source
+    tree for more than one architecture (the CAD STEP agent: arm64 for the AgentCore Runtime, amd64 for
+    Fargate) passes the build platform as `contentImageTag`'s second argument, so the tag carries the
+    architecture (`<hash>-arm64`, `<hash>-amd64`) and a runtime switch cannot replace the digest behind
+    a tag the previous consumer still names. The buildspec must NOT default
     `IMAGE_TAG`; it fails the build when the project supplied none, because a default pushes a tag the
     Batch job definition does not name and the deploy still reports success. `:latest` is pushed
     alongside solely as the `--cache-from` alias, since a content-addressed tag never pre-exists and a
     cold cache adds hours to a GPU image build. Copying an existing buildspec is how this regresses;
     `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the immutable-tag block of
     `infra/test/pipelines/containerBuildSources.test.ts` assert both halves.
+
+    A consumer that validates the image when it is CREATED needs the build to be synchronous from
+    CloudFormation's point of view. A Batch job definition accepts a tag that does not exist yet (the
+    job fails at start), which is why the Batch pipelines start the build from a fire-and-forget custom
+    resource; an Amazon Bedrock AgentCore Runtime rejects `CreateAgentRuntime` for a missing tag, so a
+    fresh deploy that creates it in parallel with the build always fails. The CAD STEP agent's
+    `cadStepAgentCodeBuild-construct.ts` is the pattern: a `cr.Provider` whose `onEventHandler` starts
+    the build (build id as physical id) and whose `isCompleteHandler` polls `codebuild:BatchGetBuilds`
+    on the project until the build is terminal, the handlers in
+    `genAi/cadStepAgent/lambda/imageBuildCustomResource.py` so the status mapping is unit-tested, and
+    `node.addDependency(<build custom resource>)` on every resource that names the tag
+    (`cadStepAgentRuntimes.test.ts` asserts the `DependsOn`).
+
 19. **A container that clones an upstream repository at build time clones a FIXED revision.** Declare
     the revision as an `ARG <NAME>_COMMIT=<40-hex>`, `git checkout --detach` it, and verify it landed
     with `test "$(git rev-parse HEAD)" = "${<NAME>_COMMIT}"` **in the same `RUN`** — a checkout in a
