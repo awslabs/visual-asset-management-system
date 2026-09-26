@@ -189,8 +189,11 @@ def sanitize_output(path, summary):
 
 
 # A volume difference below this fraction of the input's volume (and below this many mm^3) is re-export
-# noise, not a change; a bounding-box coordinate that moved less than BBOX_CHANGE_MM has not moved.
-UNCHANGED_VOLUME_FRACTION = 1e-5
+# noise, not a change: the noise measured on re-exported parts is at most 1e-6 of the volume, and a
+# feature small enough to fall under this band on a large part -- a 1 mm hole in a cubic metre -- is one
+# the model cannot verify by volume anyway. A bounding-box coordinate that moved less than BBOX_CHANGE_MM
+# has not moved.
+UNCHANGED_VOLUME_FRACTION = 1e-6
 UNCHANGED_VOLUME_MM3 = 1e-3
 BBOX_CHANGE_MM = 0.01
 
@@ -201,9 +204,10 @@ def _hole_count(summary):
 
 def delta_vs_input(before, after):
     """What a MODIFY attempt changed against the input: volume, hole count, solid count and whether the
-    bounding box moved -- with a note when the numbers say a requested cut did not land, so the model cannot
-    mistake a feature placed outside the material or on the wrong plane for a detector miss. None unless
-    both summaries are valid geometry."""
+    bounding box moved -- with the volume band under which a difference is re-export noise
+    (``unchanged_below_mm3``) and a note when the numbers say a requested cut did not land, so the model
+    cannot mistake a feature placed outside the material or on the wrong plane for a detector miss. None
+    unless both summaries are valid geometry."""
     if not (before and before.valid and after and after.valid):
         return None
     dv = (after.volume_mm3 or 0.0) - (before.volume_mm3 or 0.0)
@@ -211,13 +215,16 @@ def delta_vs_input(before, after):
     solids = after.solid_count - before.solid_count
     bbox_changed = any(abs(a - b) > BBOX_CHANGE_MM
                        for a, b in zip(after.bounding_box_mm or [], before.bounding_box_mm or []))
+    band = max(UNCHANGED_VOLUME_MM3, UNCHANGED_VOLUME_FRACTION * abs(before.volume_mm3 or 0.0))
     delta = {"volume_change_mm3": round(dv, 3) + 0.0, "holes_count_change": holes, "solid_count_change": solids,
-             "bbox_changed": bbox_changed}
-    unchanged = abs(dv) <= max(UNCHANGED_VOLUME_MM3, UNCHANGED_VOLUME_FRACTION * abs(before.volume_mm3 or 0.0))
+             "bbox_changed": bbox_changed, "unchanged_below_mm3": round(band, 6)}
+    unchanged = abs(dv) <= band
     if unchanged and holes == 0 and solids == 0 and not bbox_changed:
-        delta["note"] = ("nothing measurable changed against the input: if a cut or hole was requested, it was placed "
-                         "outside the material or on the wrong plane and removed no volume - change the plane (see the "
-                         "input's orientation.thickness_axis) or the coordinates, not the API call")
+        delta["note"] = (f"|dV| = {abs(delta['volume_change_mm3'])} mm^3 is within this part's re-export noise band "
+                         f"(<= {delta['unchanged_below_mm3']} mm^3) and no hole, solid or bounding-box change is "
+                         "detected, so nothing measurable changed against the input: if a cut or hole was requested, it "
+                         "was placed outside the material or on the wrong plane - change the plane (see the input's "
+                         "orientation.thickness_axis) or the coordinates, not the API call")
     elif dv < 0 and not unchanged and holes <= 0:
         delta["note"] = ("volume dropped but no new hole is detected: right for a pocket, slot, chamfer or an enlarged "
                          "hole; if a hole was requested, the cut is a sliver on an edge face (wrong workplane) or overlaps "
@@ -274,8 +281,10 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         script's output; use it to correct the next attempt. Geometry outside the solids (annotation planes
         or curves carried over from an imported file) is dropped from the output file and reported under
         dropped_non_solid_geometry. On a modify run the result also carries deltaVsInput: the volume, hole
-        count, solid count and bounding-box change against the input, with a note when nothing measurable
-        changed or when volume went without a new hole.
+        count, solid count and bounding-box change against the input, the volume band under which a
+        difference is re-export noise (unchanged_below_mm3: one millionth of the input's volume, at least
+        0.001 mm^3), and a note when the change stays within that band with nothing else changed or when
+        volume went without a new hole.
 
         Args:
             code: The complete Python script to run.

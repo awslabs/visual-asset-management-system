@@ -65,7 +65,7 @@ flowchart LR
     M --> N[pipelineEnd Lambda]
 ```
 
-The `constructPipeline` Lambda validates the run's settings and resolves the output file name before any compute starts. The agent container then downloads the input file (if any), builds the agent with the tools the run allows, and runs it under a wall-clock watchdog. The outcome is derived from the tools' recorded state — the attempts made, the best validated output, the agent's `finish` call — rather than from the model's prose.
+The `constructPipeline` Lambda validates the run's settings and resolves the output file name before any compute starts. The agent container then downloads the input file (if any), builds the agent with the tools the run allows, and runs it under a wall-clock watchdog. On a modify run every script result also states what the attempt changed against the input — volume, hole and solid counts, bounding box — and treats a volume difference within the part's re-export noise band (one millionth of the input's volume, at least 0.001 mm³, stated in the result as `unchanged_below_mm3`) as no change. The outcome is derived from the tools' recorded state — the attempts made, the best validated output, the agent's `finish` call — rather than from the model's prose.
 
 ### Runtimes
 

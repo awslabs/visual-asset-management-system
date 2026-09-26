@@ -672,11 +672,39 @@ class TestTools:
             nicked = json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "nick"))["deltaVsInput"]
         assert unchanged["volume_change_mm3"] == 0.004 and unchanged["holes_count_change"] == 0
         assert unchanged["solid_count_change"] == 0 and unchanged["bbox_changed"] is False
+        assert unchanged["unchanged_below_mm3"] == 0.06
         assert "nothing measurable changed" in unchanged["note"] and "not the API call" in unchanged["note"]
+        assert "|dV| = 0.004 mm^3 is within this part's re-export noise band (<= 0.06 mm^3)" in unchanged["note"]
         assert drilled["holes_count_change"] == 1 and drilled["volume_change_mm3"] == pytest.approx(-159.1)
-        assert "note" not in drilled
+        assert "note" not in drilled and drilled["unchanged_below_mm3"] == 0.06
         assert nicked["holes_count_change"] == 0 and nicked["volume_change_mm3"] == -60.0
         assert "no new hole" in nicked["note"] and "thickness_axis" in nicked["note"]
+
+    def test_the_unchanged_band_is_one_millionth_of_the_input_and_the_note_never_calls_a_visible_figure_zero(self):
+        cubic_metre = self._summary(1e9, bbox=(0, 0, 0, 1000, 1000, 1000))
+        # A D1 x 1 mm hole the detector did not count: 0.785 mm^3 IS within the band on a cubic metre, and the
+        # note says so with both figures instead of claiming the cut removed no volume.
+        missed = tools.delta_vs_input(cubic_metre, self._summary(1e9 - 0.785, bbox=(0, 0, 0, 1000, 1000, 1000)))
+        assert missed["volume_change_mm3"] == -0.785 and missed["unchanged_below_mm3"] == 1000.0
+        assert missed["note"].startswith("|dV| = 0.785 mm^3 is within this part's re-export noise band (<= 1000.0 mm^3)")
+        assert "removed no volume" not in missed["note"] and "not the API call" in missed["note"]
+        counted = tools.delta_vs_input(cubic_metre, self._summary(1e9 - 0.785, holes=1, bbox=(0, 0, 0, 1000, 1000, 1000)))
+        assert "note" not in counted and counted["unchanged_below_mm3"] == 1000.0
+        # A 20 x 20 x 1.35 mm pocket on an 800 x 450 x 150 mm block (-540 mm^3, 1e-5 of the volume) is ten
+        # times the band: the delta reads as a cut without a new hole, never as nothing changed.
+        block = self._summary(5.4e7, bbox=(0, 0, 0, 800, 450, 150))
+        pocket = tools.delta_vs_input(block, self._summary(5.4e7 - 540.0, bbox=(0, 0, 0, 800, 450, 150)))
+        assert pocket["volume_change_mm3"] == -540.0 and pocket["unchanged_below_mm3"] == 54.0
+        assert "nothing measurable changed" not in pocket["note"] and "noise band" not in pocket["note"]
+        assert pocket["note"].startswith("volume dropped but no new hole is detected: right for a pocket")
+        # The floor of 0.001 mm^3 holds for a part smaller than 1000 mm^3; a D2 x 3 mm hole in the 136 445 mm^3
+        # sheet is 69 times its band.
+        assert tools.delta_vs_input(self._summary(400.0), self._summary(400.0))["unchanged_below_mm3"] == 0.001
+        sheet = self._summary(136445.105, holes=26)
+        hole = tools.delta_vs_input(sheet, self._summary(136445.105 - 9.42, holes=26))
+        assert hole["unchanged_below_mm3"] == pytest.approx(0.136445) and "no new hole" in hole["note"]
+        for volume, delta in ((1e9, missed), (1e9, counted), (5.4e7, pocket), (136445.105, hole)):
+            assert delta["unchanged_below_mm3"] == pytest.approx(max(1e-3, 1e-6 * volume))
 
     def test_the_input_is_inspected_once_per_run_even_when_the_model_skips_the_inspect_call(self, tmp_path):
         state = self._modify_state(tmp_path)

@@ -83,8 +83,9 @@ CadQuery recipes for MODIFY runs (start from part = cq.importers.importStep(os.e
   "d from the +X edge" is cx = (xmax - xmin) - d and "d from the -X edge" is cx = d - never mirror them. Near
   a rounded corner of radius R a point closer than about 0.3 R to both edges lies outside the material:
   move it inward and say so, or report it.
-- Read deltaVsInput in the tool result. When it says nothing changed, or volume went without a new hole where
-  a hole was requested, the axis or the coordinates are wrong: the next attempt changes THEM, not the API call.
+- Read deltaVsInput in the tool result. When it says nothing changed (a volume difference within
+  unchanged_below_mm3 is re-export noise, not a cut), or volume went without a new hole where a hole was
+  requested, the axis or the coordinates are wrong: the next attempt changes THEM, not the API call.
 - Multi-body input: the summary's "solids" list gives each body's volume and bounding box - report them when the
   instruction asks per body; part.solids().vals() gives the bodies to work on, cq.Compound.makeCompound([...])
   keeps several of them in the result.
