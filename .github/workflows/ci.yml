@@ -38,6 +38,9 @@ jobs:
               with:
                   node-version: "22"
 
+            - name: Pin npm version
+              run: npm install -g npm@11.19.1
+
             - name: Clone automated security helper
               # Major-version tag of a GitHub-maintained action, the repo's current pinning
               # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
