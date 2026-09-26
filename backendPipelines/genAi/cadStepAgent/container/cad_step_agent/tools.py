@@ -12,6 +12,7 @@ result of a run never depends on parsing the model's prose.
 import html
 import ipaddress
 import json
+import logging
 import re
 import socket
 import time
@@ -20,6 +21,8 @@ from typing import Callable, Dict, List, Optional
 from urllib.parse import urljoin, urlsplit
 
 from . import cad_io, cancellation, report, sandbox
+
+logger = logging.getLogger("cad_step_agent.tools")
 
 SEARCH_MAX_RESULTS = 6
 # Research budget per run: once it is spent, web_search / fetch_url refuse and tell the model to record
@@ -154,6 +157,28 @@ def strip_html(raw):
     return text.strip()
 
 
+def sanitize_output(path, summary):
+    """The summary of a script's output STEP once the geometry that belongs to no solid is dropped from it.
+
+    A script that re-exports an imported part whole carries the source's PMI annotation planes and curve
+    sets along. The output is the design, so the file is rewritten as its solids and the summary records
+    what went, whatever the script did. A rewrite that fails leaves the file and the summary -- which
+    already describes the solids only, and still names the stray geometry -- as they are.
+    """
+    if not (summary.valid and summary.non_solid_geometry):
+        return summary
+    try:
+        dropped = cad_io.drop_non_solid_geometry(path)
+        if dropped:
+            summary = cad_io.inspect_step(path)
+    except Exception as exc:
+        logger.warning("the output's geometry outside the solids (%s) could not be dropped: %s",
+                       cad_io.describe_non_solid_geometry(summary.non_solid_geometry), str(exc)[:200])
+        return summary
+    summary.dropped_non_solid_geometry = dropped
+    return summary
+
+
 def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn: Optional[Callable] = None,
                 screen_fn: Optional[Callable] = None):
     """The Strands tool functions bound to ``state``.
@@ -174,8 +199,9 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
     def inspect_input_step() -> str:
         """Summarize the geometry of the input STEP file: solid/face/edge counts, bounding box in mm, volume
         and the feature summary (holes by diameter with through/blind and their centres measured from the
-        bounding box's minimum corner, cylindrical outer faces, fillet-like faces, planar faces). Returns
-        a note when the run has no input file."""
+        bounding box's minimum corner, cylindrical outer faces, fillet-like faces, planar faces). Every
+        figure describes the solids; annotation geometry outside them (PMI planes, curves) is only counted,
+        under non_solid_geometry. Returns a note when the run has no input file."""
         cancellation.raise_if_requested()
         if not state.input_step:
             return json.dumps({"hasInput": False, "note": "This run has no input STEP file; create the geometry from scratch."})
@@ -190,7 +216,9 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         exists, and MUST write its result to the path in CAD_OUTPUT_STEP (cq.exporters.export(shape,
         os.environ["CAD_OUTPUT_STEP"])). Only the Python standard library and cadquery are available;
         there is no network access. Returns a JSON result with the validation summary and the tail of the
-        script's output; use it to correct the next attempt.
+        script's output; use it to correct the next attempt. Geometry outside the solids (annotation planes
+        or curves carried over from an imported file) is dropped from the output file and reported under
+        dropped_non_solid_geometry.
 
         Args:
             code: The complete Python script to run.
@@ -210,6 +238,7 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         cancellation.raise_if_requested()
         summary = cad_io.inspect_step(result.output_path) if result.output_exists else cad_io.StepSummary(
             valid=False, error="the script wrote no output file at CAD_OUTPUT_STEP")
+        summary = sanitize_output(result.output_path, summary)
         ok = result.succeeded and summary.valid
         state.attempts.append(report.AttemptRecord(
             number=number, succeeded=ok,

@@ -69,7 +69,9 @@ CadQuery recipes for MODIFY runs (start from part = cq.importers.importStep(os.e
 - Add holes or a pocket to the input: part.faces(">Z").workplane(centerOption="CenterOfBoundBox")
   .pushPoints(pts).hole(D); pushPoints coordinates are then measured from the face's centre, so convert the
   summary's from-min-corner centres with x = cx - L/2, y = cy - W/2.
-- Re-export unchanged: result = part.
+- Re-export unchanged: result = cq.Compound.makeCompound(part.solids().vals()) - the solids only. PMI annotation
+  planes and empty root shapes of the source file are not part of the design; the tool drops any that reach the
+  output and reports how many.
 GENERATE recipes (each is one script; wp = cq.Workplane("XY"); use them in a modify run only when the edit
 is impossible on the imported solid):
 - Plate with holes at explicit positions (positions measured from the plate centre):

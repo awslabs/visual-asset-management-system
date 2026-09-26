@@ -24,9 +24,14 @@ class StepSummary:
     error: str = ""
     # Feature counts the agent can compare against the instruction (see ``summarize_features``).
     features: Optional[Dict] = None
-    # Top-level shapes of the file that hold no solid (the annotation planes and empty compounds of an
-    # AP242 export with PMI). Every figure above describes the solids only; these roots are not measured.
-    non_solid_roots: int = 0
+    # Geometry in the file that belongs to none of its solids -- the annotation planes and curve sets of an
+    # AP242 export with PMI -- as {"faces": F, "edges": E} (an edge bounding one of those faces is not
+    # counted again); None when the file holds nothing but its solids. Every figure above describes the
+    # solids only.
+    non_solid_geometry: Optional[Dict] = None
+    # Such geometry that was in a script's output and has been removed from the file (see
+    # ``drop_non_solid_geometry``): the file now holds the solids the summary describes, and nothing else.
+    dropped_non_solid_geometry: Optional[Dict] = None
 
     def to_dict(self):
         data = asdict(self)
@@ -34,10 +39,9 @@ class StepSummary:
             data["volume_mm3"] = round(data["volume_mm3"], 3)
         if data["bounding_box_mm"] is not None:
             data["bounding_box_mm"] = [round(v, 3) for v in data["bounding_box_mm"]]
-        if data["features"] is None:
-            data.pop("features")
-        if not data["non_solid_roots"]:
-            data.pop("non_solid_roots")
+        for key in ("features", "non_solid_geometry", "dropped_non_solid_geometry"):
+            if data[key] is None:
+                data.pop(key)
         return data
 
     def describe(self):
@@ -49,8 +53,18 @@ class StepSummary:
             bbox = f" size {xmax - xmin:.2f} x {ymax - ymin:.2f} x {zmax - zmin:.2f} mm"
         volume = f" volume {self.volume_mm3:.1f} mm^3" if self.volume_mm3 is not None else ""
         features = f"; {describe_features(self.features)}" if self.features else ""
-        ignored = f"; {self.non_solid_roots} non-solid root shape(s) ignored" if self.non_solid_roots else ""
-        return f"{self.solid_count} solid(s), {self.face_count} faces, {self.edge_count} edges{bbox}{volume}{features}{ignored}"
+        ignored = (f"; {describe_non_solid_geometry(self.non_solid_geometry)} outside the solids ignored"
+                   if self.non_solid_geometry else "")
+        dropped = (f"; {describe_non_solid_geometry(self.dropped_non_solid_geometry)} outside the solids dropped "
+                   "from the output file" if self.dropped_non_solid_geometry else "")
+        return (f"{self.solid_count} solid(s), {self.face_count} faces, {self.edge_count} edges{bbox}{volume}"
+                f"{features}{ignored}{dropped}")
+
+
+def describe_non_solid_geometry(geometry):
+    """'5 face(s) and 290 edge(s)' for {"faces": 5, "edges": 290}."""
+    parts = [f"{geometry[key]} {key[:-1]}(s)" for key in ("faces", "edges") if geometry.get(key)]
+    return " and ".join(parts) or "geometry"
 
 
 # A cylindrical face group narrower than this is a fillet/round; wider than HOLE_MIN it is a hole or a boss.
@@ -221,9 +235,22 @@ def _solids_body(cq, solids):
     return solids[0] if len(solids) == 1 else cq.Compound.makeCompound(solids)
 
 
-def _non_solid_roots(shape):
-    """How many top-level shapes of an imported file hold no solid (PMI annotation planes, empty compounds)."""
-    return sum(1 for root in shape.vals() if not root.Solids())
+def _non_solid_geometry(shape, body):
+    """The faces and edges of an imported file that belong to none of its solids, as {"faces": F, "edges": E}
+    (an edge that bounds one of those faces is not counted again), or None when there are none. A STEP
+    reader presents an AP242 file with PMI as the solid beside annotation roots (planes, curve sets); a
+    script that re-exports the imported part whole writes them into one compound beside the solid -- the
+    count is the same either way. Best effort: a failure to count is None."""
+    try:
+        body_faces, body_edges = set(body.Faces()), set(body.Edges())
+        faces = [f for f in shape.faces().vals() if f not in body_faces]
+        face_edges = {e for f in faces for e in f.Edges()}
+        edges = [e for e in shape.edges().vals() if e not in body_edges and e not in face_edges]
+    except Exception:
+        return None
+    if not faces and not edges:
+        return None
+    return {"faces": len(faces), "edges": len(edges)}
 
 
 def inspect_step(path):
@@ -239,8 +266,8 @@ def inspect_step(path):
             return StepSummary(valid=False, face_count=len(shape.faces().vals()), edge_count=len(shape.edges().vals()),
                                error="the STEP file contains no solids")
         # A file may carry several root shapes (an AP242 export with PMI: the solid, annotation planes,
-        # empty compounds). ``shape.val()`` is only the FIRST root -- an empty one has no bounding box, and
-        # a non-empty annotation root would inflate it -- so every figure is measured on the solids.
+        # curve sets, empty compounds). ``shape.val()`` is only the FIRST root -- an empty one has no
+        # bounding box, and an annotation root would inflate it -- so every figure is measured on the solids.
         body = _solids_body(cq, solids)
         bb = body.BoundingBox()
         bbox = [bb.xmin, bb.ymin, bb.zmin, bb.xmax, bb.ymax, bb.zmax]
@@ -252,7 +279,26 @@ def inspect_step(path):
             bounding_box_mm=bbox,
             volume_mm3=float(sum(s.Volume() for s in solids)),
             features=summarize_features(cq.Workplane("XY").newObject([body]), bbox),
-            non_solid_roots=_non_solid_roots(shape),
+            non_solid_geometry=_non_solid_geometry(shape, body),
         )
     except Exception as exc:  # the file is caller data; any failure is a validation outcome
         return StepSummary(valid=False, error=str(exc)[:500])
+
+
+def drop_non_solid_geometry(path):
+    """Rewrite the STEP file at ``path`` as its solids alone when it carries geometry that belongs to no
+    solid (the PMI annotation planes and curve sets a script re-exports along with an imported part).
+    Returns what was dropped, as ``StepSummary.non_solid_geometry`` counts it, or None when the file was
+    left untouched. Raises on a file that cannot be read or written -- the caller validates the file first."""
+    import cadquery as cq  # noqa: WPS433 - lazy import by design
+
+    shape = cq.importers.importStep(str(path))
+    solids = shape.solids().vals()
+    if not solids:
+        return None
+    body = _solids_body(cq, solids)
+    dropped = _non_solid_geometry(shape, body)
+    if not dropped:
+        return None
+    cq.exporters.export(body, str(path))
+    return dropped

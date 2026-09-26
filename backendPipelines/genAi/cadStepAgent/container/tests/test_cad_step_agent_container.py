@@ -436,6 +436,8 @@ class TestModelResolution:
         assert modify_at < generate_at < prompt.index("wp.box(L, W, T")
         assert 'faces("<Z").wires().toPending().extrude(t, combine=False)' in prompt
         assert "measured from the bounding box's minimum corner" in prompt
+        # An unchanged re-export writes the solids, never the source's annotation roots.
+        assert "result = cq.Compound.makeCompound(part.solids().vals())" in prompt and "result = part." not in prompt
 
     @pytest.mark.parametrize("prompt, named", [
         ("Create a flat 4 mm carrier plate for the NVIDIA Jetson Nano Developer Kit carrier board.", True),
@@ -549,6 +551,51 @@ class TestTools:
         out = json.loads(fns["run_cad_script"]("print('nothing')\n", "noop"))
         assert out["ok"] is False and "no output file" in out["geometry"]["error"]
         assert state.best_output is None and len(state.attempts) == 1
+
+    _WRITES_OUTPUT = "import os\nopen(os.environ['CAD_OUTPUT_STEP'],'w').write('ISO')\n"
+
+    def test_run_cad_script_drops_the_geometry_outside_the_solids_from_the_output_and_says_so(self, tmp_path):
+        state = _state(tmp_path, research=False)
+        fns = _tool_map(tools.build_tools(state))
+        stray = {"faces": 5, "edges": 290}
+        polluted = cad_io.StepSummary(valid=True, solid_count=1, face_count=8, edge_count=18,
+                                      bounding_box_mm=[0, 0, 0, 100, 60, 10], volume_mm3=59682.0, non_solid_geometry=stray)
+        clean = cad_io.StepSummary(valid=True, solid_count=1, face_count=8, edge_count=18,
+                                   bounding_box_mm=[0, 0, 0, 100, 60, 10], volume_mm3=59682.0)
+        dropped_at = []
+
+        def drop(path):
+            dropped_at.append(path)
+            return dict(stray)
+        with patch.object(cad_io, "inspect_step", side_effect=[polluted, clean]), \
+                patch.object(cad_io, "drop_non_solid_geometry", side_effect=drop):
+            out = json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "re-export the part"))
+        assert out["ok"] is True
+        assert out["geometry"]["dropped_non_solid_geometry"] == stray and "non_solid_geometry" not in out["geometry"]
+        assert dropped_at == [state.best_output]
+        assert state.best_geometry["dropped_non_solid_geometry"] == stray
+        assert state.attempts[0].summary.endswith("; 5 face(s) and 290 edge(s) outside the solids dropped from the output file")
+
+    def test_a_clean_output_is_not_rewritten_and_a_failed_rewrite_keeps_the_summary(self, tmp_path, caplog):
+        state = _state(tmp_path, research=False)
+        fns = _tool_map(tools.build_tools(state))
+        clean = cad_io.StepSummary(valid=True, solid_count=1, face_count=6, edge_count=12,
+                                   bounding_box_mm=[0, 0, 0, 10, 10, 10], volume_mm3=1000.0)
+        with patch.object(cad_io, "inspect_step", return_value=clean), \
+                patch.object(cad_io, "drop_non_solid_geometry") as drop:
+            out = json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "clean"))
+        drop.assert_not_called()
+        assert out["ok"] and "dropped_non_solid_geometry" not in out["geometry"]
+        polluted = cad_io.StepSummary(valid=True, solid_count=1, face_count=6, edge_count=12,
+                                      bounding_box_mm=[0, 0, 0, 10, 10, 10], volume_mm3=1000.0,
+                                      non_solid_geometry={"faces": 3, "edges": 0})
+        with patch.object(cad_io, "inspect_step", return_value=polluted), \
+                patch.object(cad_io, "drop_non_solid_geometry", side_effect=OSError("read-only")), \
+                caplog.at_level(logging.WARNING, logger="cad_step_agent.tools"):
+            out = json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "polluted"))
+        assert out["ok"] and out["geometry"]["non_solid_geometry"] == {"faces": 3, "edges": 0}
+        assert "dropped_non_solid_geometry" not in out["geometry"]
+        assert any("3 face(s)" in r.getMessage() and "could not be dropped" in r.getMessage() for r in caplog.records)
 
     def test_attempt_budget_is_enforced(self, tmp_path):
         state = _state(tmp_path, research=False, attempts=1)
@@ -1885,13 +1932,17 @@ def _plate_with_two_holes(cq):
 
 
 def _annotation_roots(cq):
-    """What surrounds the solid in an AP242 file with PMI: an empty compound and a compound of free planes,
-    one of them 30 mm above the part along the hole axis, so a bounding box that included it would make
-    every through hole look blind."""
+    """What surrounds the solid in an AP242 file with PMI: an empty compound, a compound of free planes
+    (one of them 30 mm above the part along the hole axis, so a bounding box that included it would make
+    every through hole look blind) and a compound of annotation curves."""
     planes = cq.Compound.makeCompound([
         cq.Face.makePlane(30, 20, cq.Vector(90, 0, 30), cq.Vector(0, 0, 1)),
         cq.Face.makePlane(10, 10, cq.Vector(0, 0, 60), cq.Vector(0, 1, 0))])
-    return cq.Compound.makeCompound([]), planes
+    curves = cq.Compound.makeCompound([
+        cq.Edge.makeLine(cq.Vector(0, 0, 40), cq.Vector(20, 0, 40)),
+        cq.Edge.makeLine(cq.Vector(20, 0, 40), cq.Vector(20, 10, 40)),
+        cq.Edge.makeLine(cq.Vector(-70, 0, 5), cq.Vector(-60, 0, 5))])
+    return cq.Compound.makeCompound([]), planes, curves
 
 
 @pytest.mark.unit
@@ -1900,36 +1951,87 @@ class TestFeatureSummary:
     def test_a_multi_root_file_is_measured_on_its_solids(self, tmp_path):
         import cadquery as cq
         plate = _plate_with_two_holes(cq)
-        empty, planes = _annotation_roots(cq)
+        empty, planes, curves = _annotation_roots(cq)
         path = str(tmp_path / "multiroot.step")
-        _write_step_roots(path, [empty, plate.val(), planes])
+        _write_step_roots(path, [empty, plate.val(), planes, curves])
         # The file reproduces the failure: the first root alone has no bounding box.
         with pytest.raises(Exception, match="Bnd_Box is void"):
             cq.importers.importStep(path).val().BoundingBox()
         summary = cad_io.inspect_step(path)
         assert summary.valid and summary.error == ""
-        assert summary.solid_count == 1 and summary.non_solid_roots == 2
-        assert summary.face_count == 8 and summary.edge_count == 18  # the plate's, not the annotation planes'
+        assert summary.solid_count == 1 and summary.non_solid_geometry == {"faces": 2, "edges": 3}
+        assert summary.face_count == 8 and summary.edge_count == 18  # the plate's, not the annotations'
         assert summary.bounding_box_mm == pytest.approx([-50, -30, 0, 50, 30, 10])
         assert summary.volume_mm3 == pytest.approx(plate.val().Volume())
         [group] = summary.features["holes"]
         assert group["count"] == 2 and group["through"] is True
-        assert summary.to_dict()["non_solid_roots"] == 2
-        assert summary.describe().endswith("; 2 non-solid root shape(s) ignored")
+        assert summary.to_dict()["non_solid_geometry"] == {"faces": 2, "edges": 3}
+        assert summary.describe().endswith("; 2 face(s) and 3 edge(s) outside the solids ignored")
         # A single-root file carries no such key and no such clause.
         clean = str(tmp_path / "clean.step")
         cq.exporters.export(plate, clean)
         clean_summary = cad_io.inspect_step(clean)
-        assert "non_solid_roots" not in clean_summary.to_dict() and "non-solid" not in clean_summary.describe()
+        assert "non_solid_geometry" not in clean_summary.to_dict() and "outside the solids" not in clean_summary.describe()
         assert clean_summary.face_count == summary.face_count and clean_summary.bounding_box_mm == pytest.approx(summary.bounding_box_mm)
 
     def test_a_file_whose_roots_hold_no_solid_is_still_invalid(self, tmp_path):
         import cadquery as cq
-        empty, planes = _annotation_roots(cq)
+        empty, planes, _ = _annotation_roots(cq)
         path = str(tmp_path / "planes-only.step")
         _write_step_roots(path, [empty, planes])
         summary = cad_io.inspect_step(path)
         assert not summary.valid and "contains no solids" in summary.error and summary.face_count == 2
+
+    def test_the_geometry_outside_the_solids_of_an_output_is_dropped_from_the_file(self, tmp_path):
+        import cadquery as cq
+        plate = _plate_with_two_holes(cq)
+        one_plane = cq.Compound.makeCompound([cq.Face.makePlane(30, 20, cq.Vector(90, 0, 30), cq.Vector(0, 0, 1))])
+        path = str(tmp_path / "polluted.step")
+        _write_step_roots(path, [plate.val(), one_plane])
+        assert len(cq.importers.importStep(path).faces().vals()) == 9  # 8 of the plate + the free plane
+        assert cad_io.inspect_step(path).non_solid_geometry == {"faces": 1, "edges": 0}
+        assert cad_io.drop_non_solid_geometry(path) == {"faces": 1, "edges": 0}
+        rewritten = cq.importers.importStep(path)
+        assert len(rewritten.vals()) == 1 and len(rewritten.faces().vals()) == 8
+        summary = cad_io.inspect_step(path)
+        assert summary.valid and summary.face_count == 8 and summary.non_solid_geometry is None
+        assert summary.bounding_box_mm == pytest.approx([-50, -30, 0, 50, 30, 10])
+        # Several bodies survive as several solids; an empty compound is nothing.
+        two = str(tmp_path / "two-bodies.step")
+        empty, planes, curves = _annotation_roots(cq)
+        _write_step_roots(two, [empty, plate.val(), cq.Workplane("XY").box(10, 10, 10).translate((200, 0, 0)).val(), planes, curves])
+        assert cad_io.drop_non_solid_geometry(two) == {"faces": 2, "edges": 3}
+        after = cad_io.inspect_step(two)
+        assert after.solid_count == 2 and after.non_solid_geometry is None and len(cq.importers.importStep(two).vals()) == 1
+
+    def test_an_imported_part_re_exported_whole_carries_its_annotations_in_one_compound(self, tmp_path):
+        # What a script does with ``result = part`` on a multi-root input: CadQuery writes the imported
+        # roots as ONE compound, so the annotation planes and curves travel inside the single root of the
+        # output. The count is the same on both files.
+        import cadquery as cq
+        source = str(tmp_path / "source.step")
+        empty, planes, curves = _annotation_roots(cq)
+        _write_step_roots(source, [empty, _plate_with_two_holes(cq).val(), planes, curves, cq.Compound.makeCompound([])])
+        assert cad_io.inspect_step(source).non_solid_geometry == {"faces": 2, "edges": 3}
+        out = str(tmp_path / "output.step")
+        cq.exporters.export(cq.importers.importStep(source), out)
+        whole = cq.importers.importStep(out)
+        assert len(whole.vals()) == 1 and len(whole.faces().vals()) == 10
+        summary = cad_io.inspect_step(out)
+        assert summary.non_solid_geometry == {"faces": 2, "edges": 3} and summary.face_count == 8
+        assert summary.bounding_box_mm == pytest.approx([-50, -30, 0, 50, 30, 10])
+        assert cad_io.drop_non_solid_geometry(out) == {"faces": 2, "edges": 3}
+        rewritten = cq.importers.importStep(out)
+        assert len(rewritten.vals()) == 1 and len(rewritten.faces().vals()) == 8 and len(rewritten.edges().vals()) == 18
+        assert cad_io.inspect_step(out).non_solid_geometry is None
+
+    def test_an_all_solid_file_is_not_rewritten(self, tmp_path):
+        import cadquery as cq
+        path = str(tmp_path / "clean.step")
+        cq.exporters.export(_plate_with_two_holes(cq), path)
+        before = open(path, "rb").read()
+        assert cad_io.drop_non_solid_geometry(path) is None
+        assert open(path, "rb").read() == before
 
     def test_holes_bosses_and_fillets_are_counted(self, tmp_path):
         import cadquery as cq
