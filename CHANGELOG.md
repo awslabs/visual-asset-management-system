@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
--   Hotfix release: GPU pipeline Batch containers run as a non-root user, non-root CPU pipeline containers start correctly when built under a restrictive umask, and npm dependency intake enforces a minimum release age.
+-   Hotfix release: non-root CPU pipeline containers start correctly when built under a restrictive umask, and npm dependency intake enforces a minimum release age.
 
 ### ⚠ BREAKING CHANGES
 
@@ -14,8 +14,6 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
--   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
-    -   Note: The same images normalize read bits after each source `COPY` so a build under a restrictive umask remains readable to the non-root user, and the Reason entrypoint tolerates an already-present Python header symlink instead of aborting.
 -   **Pipelines** The non-root preview (3D thumbnail) and coordinate-transform CPU containers normalize read bits after each source `COPY`, so images built under a restrictive umask (STIG 077 / CI 027) start without a `PermissionError` at import (#353).
 
 ### Chores
