@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vams-mcp"
-version = "2.6.2"
+version = "2.6.3"
 description = "Model Context Protocol (MCP) server for the Visual Asset Management System (VAMS)"
 readme = "README.md"
 license = "Apache-2.0"
