@@ -14,7 +14,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 
 ### **Version Info**
 
-VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 22.x (Lambda). React 18.3 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
+VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 22.x (Lambda). npm 11.10.0+ (required for min-release-age support). React 18.3 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
 
 **Rolling the VAMS version** — the version string is duplicated across seven files; update all of them together in the same change:
 
