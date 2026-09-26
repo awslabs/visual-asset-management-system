@@ -118,6 +118,16 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": false
             },
+            "useGenAiVideoSopBom": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "bedrockModelId": "global.anthropic.claude-sonnet-5",
+                "limits": {
+                    "maxVideoFiles": 4,
+                    "maxTotalDurationMinutes": 240
+                }
+            },
             "useSplatToolbox": {
                 "enabled": false,
                 "useCodeBuild": false,

@@ -118,15 +118,15 @@ Tags and tag types are database-namespaced: the partition key is the `databaseId
 
 ## Amazon S3 Buckets
 
-| Bucket                         | Versioned | CORS | Access Logging                  | Removal on teardown     | Custom name (redeploy collision)     | Purpose                                                                                                                    |
-| ------------------------------ | --------- | ---- | ------------------------------- | ----------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| **Asset Bucket(s)**            | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Primary asset file storage. One auto-created bucket plus optional external buckets.                                        |
-| **Asset Auxiliary Bucket**     | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Auto-generated previews, visualizer files, pipeline temporary storage, staged asset export payloads under `assetExports/`. |
-| **Artefacts Bucket**           | Yes       | No   | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Template notebooks, deployment artefacts, and pipeline registration bundles under `vamsSchema/`.                           |
-| **Access Logs Bucket**         | Yes       | No   | No (self-referencing prevented) | Retained                | No (auto-named)                      | Server access logs for all other buckets. 90-day lifecycle expiration.                                                     |
-| **Web App Bucket**             | Yes       | No   | Yes (to Web App Access Logs)    | Deleted (emptied first) | ALB only (named for the domain host) | Built frontend static assets (CloudFront/ALB origin).                                                                      |
-| **Web App Access Logs Bucket** | Yes       | No   | No (self-referencing prevented) | Deleted (emptied first) | ALB only (named for the domain host) | Access logs for the web app bucket and ALB. 30-day lifecycle expiration.                                                   |
-| **Model Cache Bucket(s)**      | No        | No   | No                              | Retained                | No (auto-named)                      | Cached model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines.                                                     |
+| Bucket                         | Versioned | CORS | Access Logging                  | Removal on teardown     | Custom name (redeploy collision)     | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------ | --------- | ---- | ------------------------------- | ----------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Asset Bucket(s)**            | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Primary asset file storage. One auto-created bucket plus optional external buckets.                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Asset Auxiliary Bucket**     | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Auto-generated previews, visualizer files, pipeline temporary storage, staged asset export payloads under `assetExports/`. When the Video SOP/BOM Extraction pipeline is enabled, a lifecycle rule expires objects under `pipelines/genai-video-sop-bom/` (that pipeline's temporary storage) 30 days after creation, so temporary objects left by a crashed or aborted run are removed; other pipelines' working prefixes, previews, and viewer data are not expired. |
+| **Artefacts Bucket**           | Yes       | No   | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Template notebooks, deployment artefacts, and pipeline registration bundles under `vamsSchema/`.                                                                                                                                                                                                                                                                                                                                                                       |
+| **Access Logs Bucket**         | Yes       | No   | No (self-referencing prevented) | Retained                | No (auto-named)                      | Server access logs for all other buckets. 90-day lifecycle expiration.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Web App Bucket**             | Yes       | No   | Yes (to Web App Access Logs)    | Deleted (emptied first) | ALB only (named for the domain host) | Built frontend static assets (CloudFront/ALB origin).                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Web App Access Logs Bucket** | Yes       | No   | No (self-referencing prevented) | Deleted (emptied first) | ALB only (named for the domain host) | Access logs for the web app bucket and ALB. 30-day lifecycle expiration.                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Model Cache Bucket(s)**      | No        | No   | No                              | Retained                | No (auto-named)                      | Cached model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines.                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 :::note[Asset Bucket Configuration]
 VAMS supports multiple asset buckets. The `createNewBucket` configuration option creates a VAMS-managed bucket. The `externalAssetBuckets` configuration option registers pre-existing buckets by ARN. Each external bucket requires a `defaultSyncDatabaseId` and optional `baseAssetsPrefix`.
@@ -324,7 +324,7 @@ The AWS WAF groups are the one set outside the `/aws/vendedlogs/` namespace: AWS
 
 ### Pipeline Log Groups (per enabled pipeline)
 
-Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-Metadata3dLabelingPipeline`. Container-based pipelines additionally create groups under `/aws/vendedlogs/Pipelines/` for their container output. The AWS Fargate job groups carry the deployment's KMS key when `useKmsCmkEncryption` is enabled, and the workflow execution-service role is granted read access to every group under that prefix.
+Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-Metadata3dLabelingPipeline`, `VAMSStateMachine-VideoSopBom`. Container-based pipelines additionally create groups under `/aws/vendedlogs/Pipelines/` for their container output. The AWS Fargate job groups carry the deployment's KMS key when `useKmsCmkEncryption` is enabled, and the workflow execution-service role is granted read access to every group under that prefix.
 
 | Log Group                                                           | Container                                 | Created When                       | Removal Policy | Custom Name |
 | ------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------- | -------------- | ----------- |
@@ -333,6 +333,7 @@ Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VA
 | `/aws/vendedlogs/Pipelines/Preview3dThumbnail<hash>`                | 3D thumbnail renderer (AWS Fargate)       | `usePreview3dThumbnail`            | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL<hash>`                | PDAL point cloud conversion (AWS Fargate) | `usePreviewPcPotreeViewer`         | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/PcPotreeViewerPotree<hash>`              | Potree octree conversion (AWS Fargate)    | `usePreviewPcPotreeViewer`         | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/VideoSopBom<hash>`                       | Video SOP/BOM Extraction (AWS Fargate)    | `useGenAiVideoSopBom`              | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/<containerName>`                         | RapidPipeline, ModelOps containers        | `useRapidPipeline`, `useModelOps`  | DESTROY        | Yes         |
 
 :::note[Log Retention]
@@ -494,6 +495,8 @@ Deployed conditionally for each enabled pipeline:
 | **Job Definition**      | Container definitions with pipeline-specific configuration |
 | **Security Groups**     | Pipeline-specific security groups within VPC               |
 
+Every AWS Fargate job definition carries an explicit name: each construct chooses its own prefix (`CoordinateTransformJob_<config.name>_<baseStackName>`, `Preview3dThumbnailJob<config.name>_<baseStackName>`, `PcPotreeViewerJob_PDAL<config.name>_<baseStackName>` and `PcPotreeViewerJob_Potree<config.name>_<baseStackName>`, the constant `Metadata3dLabelingJob_BlenderRenderer`, and `VideoSopBomJob_<config.name>_<baseStackName>` for Video SOP/BOM Extraction) and the shared construct appends a 10-character hash. AWS Batch keeps a job definition as a versioned family under that name, so a revision left behind by a failed teardown does not block a redeploy; the stack deregisters its own revisions on deletion. The Video SOP/BOM Extraction job definition sets its own size (4 vCPU, 16 GiB, 100 GiB ephemeral storage) and sends container logs to its KMS-encrypted `/aws/vendedlogs/Pipelines/VideoSopBom<hash>` group instead of the AWS Batch default `aws/batch/job` group.
+
 ## Amazon Elastic Container Registry
 
 Deployed for each pipeline configured with `useCodeBuild: true`. AWS CodeBuild builds the pipeline's
@@ -510,17 +513,19 @@ their image locally at synthesis time and use the CDK asset repository instead.
 All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
 images are removed when the stack is destroyed cleanly.
 
-Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. The
-**Coordinate Transform** repository is the exception: it carries an explicit name,
-`{config.name}-{app.baseStackName}-coordtransform`, and is redeploy-collision relevant. Delete any
-orphaned repository of that name left by a failed teardown before redeploying with the same configuration
+Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Two
+repositories are the exception and carry explicit names: **Coordinate Transform**
+(`{config.name}-{app.baseStackName}-coordtransform`) and **Video SOP/BOM Extraction**
+(`{config.name}-{app.baseStackName}-videosopbom`). Both are redeploy-collision relevant: delete any
+orphaned repository of either name left by a failed teardown before redeploying with the same configuration
 name and account.
 
-:::note[Why one repository is explicitly named]
+:::note[Why two repositories are explicitly named]
 Amazon ECS and AWS Batch cap a container image reference at 255 characters across the whole
 `{account}.dkr.ecr.{region}.amazonaws.com/{repository}:{tag}` string. An auto-generated repository
-name is derived from the nested-stack path, and the Coordinate Transform pipeline's path is deep enough
-that the resulting reference exceeds the cap — AWS Batch then rejects every job at submission. Because the
+name is derived from the nested-stack path, and the Coordinate Transform and Video SOP/BOM Extraction
+pipelines' paths are deep enough that the resulting reference exceeds the cap — AWS Batch then rejects every
+job at submission. Because the
 job never starts, no container log or exit code is produced; the reason appears only in the job's
 `statusReason`. An explicit short name keeps the reference well inside the limit without shortening the
 content-addressed tag.

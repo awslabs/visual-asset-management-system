@@ -88,6 +88,69 @@ describe("Deadline Cloud VPC interface endpoint gating", () => {
     });
 });
 
+describe("Bedrock Runtime and Transcribe VPC interface endpoint gating", () => {
+    // The video SOP/BOM Batch container calls Amazon Bedrock Runtime and Amazon Transcribe from the
+    // isolated subnets, which have no NAT, so both endpoints key on that pipeline's flag alone. The
+    // metadata-labeling pipeline's Bedrock caller is a Lambda that is in the VPC only under
+    // useForAllLambdas, so its half of the Bedrock gate keeps that condition, and Amazon Rekognition
+    // (Lambda-only caller) keeps it entirely.
+    const servicesFor = (mutate: (c: Config.Config) => void): string[] => {
+        const config = createMockConfig();
+        mutate(config);
+        return synthVpcEndpointServices(config);
+    };
+    // Service names are JSON-stringified, so the closing quote pins the exact suffix: `.transcribe"`
+    // does not match `transcribestreaming`, `.bedrock-runtime"` does not match `bedrock-runtime-fips`.
+    const count = (services: string[], suffix: string): number =>
+        services.filter((s) => s.includes(`.${suffix}"`)).length;
+
+    test("both are created for the video SOP/BOM pipeline with lambdas outside the VPC", () => {
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+            c.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
+            c.app.useGlobalVpc.useForAllLambdas = false;
+        });
+        expect(count(services, "transcribe")).toBe(1);
+        expect(count(services, "bedrock-runtime")).toBe(1);
+        expect(count(services, "rekognition")).toBe(0);
+    });
+
+    test("[control] the labeling pipeline with in-VPC lambdas keeps Bedrock and Rekognition", () => {
+        // The positive control for the labeling path: the widened gate must still create what the
+        // Lambda-gated gate created, and the Transcribe endpoint must not ride along.
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+            c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+        });
+        expect(count(services, "bedrock-runtime")).toBe(1);
+        expect(count(services, "rekognition")).toBe(1);
+        expect(count(services, "transcribe")).toBe(0);
+    });
+
+    test("the widened gate does not create Bedrock for the labeling pipeline alone", () => {
+        // Pins that the OR did not loosen the Lambda half: with lambdas outside the VPC the labeling
+        // Lambda reaches Bedrock over the public endpoint and an interface endpoint has no consumer.
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+            c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = false;
+        });
+        expect(count(services, "bedrock-runtime")).toBe(0);
+        expect(count(services, "transcribe")).toBe(0);
+    });
+
+    test("neither is created when both pipelines are disabled", () => {
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+            c.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+        });
+        expect(count(services, "bedrock-runtime")).toBe(0);
+        expect(count(services, "transcribe")).toBe(0);
+    });
+});
+
 describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
     // Every Batch/ECS/Fargate pipeline flag must appear in all three condition blocks:
     // subnet creation, the Batch/ECR endpoint block, and the ECS endpoint block.
@@ -120,6 +183,7 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
         "usePreviewPcPotreeViewer",
         "usePreview3dThumbnail",
         "useGenAiMetadata3dLabeling",
+        "useGenAiVideoSopBom",
     ];
 
     // The three blocks, keyed by an anchor unique to each.

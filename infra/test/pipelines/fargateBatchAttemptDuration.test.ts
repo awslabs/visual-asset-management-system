@@ -31,7 +31,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { SynthResult, synthTemplate } from "../support/templateSynth";
 
-/** Enable the four pipelines that build Fargate Batch jobs. */
+/** Enable the five pipelines that build Fargate Batch jobs. */
 function fargatePipelines(c: any) {
     c.app.useGlobalVpc.enabled = true;
     c.app.useGlobalVpc.addVpcEndpoints = true;
@@ -40,6 +40,7 @@ function fargatePipelines(c: any) {
         "useGenAiMetadata3dLabeling",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
+        "useGenAiVideoSopBom",
     ]) {
         if (c.app.pipelines[flag]) {
             c.app.pipelines[flag].enabled = true;
@@ -69,10 +70,10 @@ describe("Fargate Batch job attempt duration", () => {
     });
 
     test("[control] Fargate job definitions ARE emitted in this synth", () => {
-        // All four pipelines ship disabled, so every assertion below is otherwise vacuous. Five job
-        // definitions are expected: one each for coordinate transform, metadata labeling and the 3D
-        // thumbnail, plus PDAL and Potree from the point-cloud viewer.
-        expect(fargateJobDefinitions(synth).length).toBeGreaterThanOrEqual(5);
+        // All five pipelines ship disabled, so every assertion below is otherwise vacuous. Six job
+        // definitions are expected: one each for coordinate transform, metadata labeling, the 3D
+        // thumbnail and the video SOP/BOM job, plus PDAL and Potree from the point-cloud viewer.
+        expect(fargateJobDefinitions(synth).length).toBeGreaterThanOrEqual(6);
     });
 
     test("every Fargate job definition declares an attempt duration", () => {

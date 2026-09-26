@@ -103,6 +103,53 @@ export const COGNITO_USERNAME_MAX_LENGTH = 128;
 // long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
 export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
+// Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
+// being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
+// the audio and key frames extracted from them, so the byte caps are fixed alongside the volume size
+// and getConfig() rejects a pair the volume cannot hold. The per-run count and duration caps are
+// deployment configuration (app.pipelines.useGenAiVideoSopBom.limits). The key-frame ceiling bounds
+// the MAX_KEY_FRAMES template tag, and the bundle timeout is the taskTimeout the pipeline's
+// vamsSchema declares (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json).
+export const VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB = 4096;
+export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
+export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
+export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
+export const VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS = 30600;
+
+/**
+ * Ephemeral storage, in GiB, that a total input size requires: the inputs, a 1.5x working factor for
+ * the audio and frames extracted from them, and 2 GiB for the image and scratch space.
+ */
+export function videoSopBomWorkingSetGib(totalInputSizeMb: number): number {
+    return Math.ceil((totalInputSizeMb * 1.5) / 1024) + 2;
+}
+
+/**
+ * Refuses a byte-cap pair the Fargate job's ephemeral volume cannot hold. The caps are constants sized
+ * together with the volume, so a failing pair is a code error; getConfig() calls this on every load,
+ * so a constant edit cannot ship without the matching volume.
+ */
+export function assertVideoSopBomCapsFitVolume(
+    fileMb: number,
+    totalMb: number,
+    volumeGib: number
+): void {
+    if (fileMb > totalMb) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB (${fileMb}) exceeds ` +
+                `VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb}) in infra/config/config.ts.`
+        );
+    }
+    const requiredGib = videoSopBomWorkingSetGib(totalMb);
+    if (requiredGib > volumeGib) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb} MB) needs ` +
+                `${requiredGib} GiB of ephemeral storage but VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB is ` +
+                `${volumeGib}. Raise the volume or lower the cap in infra/config/config.ts.`
+        );
+    }
+}
+
 // GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
 // on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
 // smaller g6e.12xlarge carries four, so the mapping is explicit. An instance type absent from this
@@ -236,6 +283,35 @@ function validateOutboundHttpsEndpoint(endpoint: string, configPath: string) {
             `Configuration Error: ${configPath} resolves to a loopback, link-local, or private ` +
                 `address (${url.hostname}). This endpoint is called by a Lambda that can read the ` +
                 `VAMS asset buckets, so it must name an external service. Got: ${endpoint}`
+        );
+    }
+}
+
+/**
+ * Requires an enabled GenAI pipeline's Amazon Bedrock model id to be set and to exist in the
+ * deployment's partition.
+ *
+ * The id carries a cross-Region inference-profile prefix, and the prefixes are partition-specific:
+ * `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is passed through to the
+ * Lambda unvalidated, and the IAM grant is derived by stripping the prefix — so a commercial profile
+ * id in a restricted partition produces both a model that does not exist and a grant that does not
+ * match it. `flagPath` is the `pipelines.<flag>` path the message names.
+ */
+export function validateBedrockModelId(flagPath: string, modelId: string, partition: string): void {
+    if (modelId.trim() === "") {
+        throw new Error(
+            `Configuration Error: ${flagPath} is enabled but bedrockModelId is empty. Set a model id ` +
+                "available in this partition and Region (the restricted-partition templates ship it " +
+                "empty because the commercial cross-Region inference profiles do not exist there)."
+        );
+    }
+    const commercialOnlyPrefix = ["global.", "us."].find((prefix) => modelId.startsWith(prefix));
+    if (commercialOnlyPrefix && partition !== "aws") {
+        throw new Error(
+            `Configuration Error: ${flagPath}.bedrockModelId is "${modelId}", whose ` +
+                `"${commercialOnlyPrefix}" cross-Region inference-profile prefix exists only in the ` +
+                `commercial partition. This deployment targets ${partition}. Use a model id or ` +
+                `inference profile offered there (GovCloud uses the "us-gov." prefix).`
         );
     }
 }
@@ -895,6 +971,45 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // The Video SOP/BOM caps travel to the pipeline's Lambdas as environment variables, so every leaf
+    // is filled here: an absent one would reach the Lambda as the string "undefined".
+    if (config.app.pipelines.useGenAiVideoSopBom == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom = {
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: false,
+            bedrockModelId: "",
+            limits: { maxVideoFiles: 4, maxTotalDurationMinutes: 240 },
+        };
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.enabled = false;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.useCodeBuild == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.useCodeBuild = false;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.bedrockModelId == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits = {
+            maxVideoFiles: 4,
+            maxTotalDurationMinutes: 240,
+        };
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles = 4;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes = 240;
+    }
+
     // Pipeline constructs gate the VamsSchemaRegistration custom resource on
     // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
     // would deploy the pipeline stack with no VAMS registration. A partially-specified block
@@ -920,6 +1035,7 @@ export function getConfig(app: cdk.App): Config {
     defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
     defaultAutoRegisterFlags(config.app.pipelines.useGenAiMetadata3dLabeling, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiVideoSopBom);
     defaultAutoRegisterFlags(config.app.pipelines.useSplatToolbox);
     defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEcs);
     defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEks);
@@ -1297,6 +1413,7 @@ export function getConfig(app: cdk.App): Config {
             "useNvidiaCosmos",
             "useNvidiaCosmos3",
             "useNvidiaGr00t",
+            "useGenAiVideoSopBom",
         ];
         const enabledOutsideSupport = codeBuildPipelinePaths.filter(
             (name) => pipelines[name]?.useCodeBuild === true
@@ -1404,6 +1521,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled)
+        vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -1748,31 +1867,82 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    // The Bedrock model id carries a cross-Region inference-profile prefix, and the prefixes are
-    // partition-specific: `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is
-    // passed through to the Lambda unvalidated, and the IAM grant is derived by stripping the prefix —
-    // so a commercial profile id in a restricted partition produces both a model that does not exist
-    // and a grant that does not match it.
+    // Both GenAI pipelines pass their Bedrock model id through to a Lambda unvalidated, so the id is
+    // checked here against the partition it is deployed into (see validateBedrockModelId).
     if (config.app.pipelines.useGenAiMetadata3dLabeling?.enabled) {
-        const bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId ?? "";
-        if (bedrockModelId.trim() === "") {
+        validateBedrockModelId(
+            "pipelines.useGenAiMetadata3dLabeling",
+            config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId ?? "",
+            config.env.partition
+        );
+    }
+
+    // The Video SOP/BOM byte caps are constants sized together with the Fargate job's ephemeral volume,
+    // so the pair is checked on every load, enabled or not: a constant edit cannot ship without the
+    // matching volume.
+    assertVideoSopBomCapsFitVolume(
+        VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB,
+        VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB,
+        VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB
+    );
+
+    // The Video SOP/BOM Extraction pipeline calls Amazon Transcribe and Amazon Bedrock from a Fargate
+    // container in isolated subnets, reachable only through VPC interface endpoints. Outside the
+    // commercial and GovCloud partitions the Transcribe endpoint's availability is unverified and the
+    // service-helper has no row for the service, and a missing endpoint does not fail: the container's
+    // connect hangs until the run's timeout. The check is authoritative regardless of
+    // app.govCloud.enabled, and it runs before the model-id check so an operator enabling the pipeline
+    // on a restricted template (which ships the model id empty) is told the pipeline is unavailable
+    // rather than sent to fill in a model id.
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled) {
+        const videoSopBomPartitions = ["aws", "aws-us-gov"];
+        if (!videoSopBomPartitions.includes(config.env.partition)) {
             throw new Error(
-                "Configuration Error: pipelines.useGenAiMetadata3dLabeling is enabled but " +
-                    "bedrockModelId is empty. Set a model id available in this partition and Region " +
-                    "(the restricted-partition templates ship it empty because the commercial " +
-                    "cross-Region inference profiles do not exist there)."
+                "Configuration Error: pipelines.useGenAiVideoSopBom is enabled while deploying to the " +
+                    `'${config.env.partition}' partition. The Video SOP/BOM Extraction pipeline is ` +
+                    "not validated outside the commercial and GovCloud partitions: Amazon Transcribe " +
+                    "endpoint availability is unverified and the service-helper has no row for this " +
+                    "partition; a missing endpoint hangs a run until its timeout. Set " +
+                    "app.pipelines.useGenAiVideoSopBom.enabled to false."
             );
         }
-        const commercialOnlyPrefix = ["global.", "us."].find((prefix) =>
-            bedrockModelId.startsWith(prefix)
+
+        validateBedrockModelId(
+            "pipelines.useGenAiVideoSopBom",
+            config.app.pipelines.useGenAiVideoSopBom.bedrockModelId ?? "",
+            config.env.partition
         );
-        if (commercialOnlyPrefix && config.env.partition !== "aws") {
+
+        // The two operator-set caps travel to the pipeline's Lambdas as environment variables and are
+        // enforced there, so a value outside the range the pipeline can honour is refused here rather
+        // than at the first run. The file-count ceiling is the pipeline's own; the duration ceiling is
+        // Amazon Transcribe's 28,800 seconds of audio per job.
+        const { maxVideoFiles, maxTotalDurationMinutes } =
+            config.app.pipelines.useGenAiVideoSopBom.limits;
+        if (
+            typeof maxVideoFiles !== "number" ||
+            !Number.isInteger(maxVideoFiles) ||
+            maxVideoFiles < 1 ||
+            maxVideoFiles > 4
+        ) {
             throw new Error(
-                `Configuration Error: pipelines.useGenAiMetadata3dLabeling.bedrockModelId is ` +
-                    `"${bedrockModelId}", whose "${commercialOnlyPrefix}" cross-Region inference-profile ` +
-                    `prefix exists only in the commercial partition. This deployment targets ` +
-                    `${config.env.partition}. Use a model id or inference profile offered there ` +
-                    `(GovCloud uses the "us-gov." prefix).`
+                "Configuration Error: pipelines.useGenAiVideoSopBom.limits.maxVideoFiles must be an " +
+                    `integer from 1 to 4 (videos per run). Received: ${JSON.stringify(
+                        maxVideoFiles
+                    )}`
+            );
+        }
+        if (
+            typeof maxTotalDurationMinutes !== "number" ||
+            !Number.isInteger(maxTotalDurationMinutes) ||
+            maxTotalDurationMinutes < 1 ||
+            maxTotalDurationMinutes > 480
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes " +
+                    "must be an integer from 1 to 480 (minutes of video per run; Amazon Transcribe " +
+                    "accepts at most 28,800 seconds of audio per job). Received: " +
+                    JSON.stringify(maxTotalDurationMinutes)
             );
         }
     }
@@ -3239,6 +3409,16 @@ export interface ConfigPublic {
                 bedrockModelId: string;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
+            };
+            useGenAiVideoSopBom: {
+                enabled: boolean;
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                bedrockModelId: string;
+                limits: {
+                    maxVideoFiles: number;
+                    maxTotalDurationMinutes: number;
+                };
             };
             useRapidPipeline: {
                 useEcs: {
