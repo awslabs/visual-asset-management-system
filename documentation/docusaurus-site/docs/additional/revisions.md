@@ -43,6 +43,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Non-root CPU pipeline containers** — The preview (3D thumbnail) and coordinate-transform containers normalize read bits (`chmod -R a+rX`) after each source `COPY`, so an image built on a hardened host (umask 077/027) no longer leaves the copied Python source root-owned and unreadable to the non-root user, which had caused a `PermissionError` at import.
 -   **Potree point cloud viewer pipeline** — The container job role can send the workflow task-token heartbeat (`states:SendTaskHeartbeat`, scoped to the deployment account and region), so a long PDAL/Potree conversion keeps its parent task alive instead of logging an `AccessDeniedException` on every heartbeat.
 
 **Other changes:**
