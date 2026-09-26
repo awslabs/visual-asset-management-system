@@ -7,6 +7,7 @@ CadQuery is imported lazily so the pure parts of the container (naming, reportin
 import and test without the OCP wheel; ``inspect_step`` is the only entry point that needs it.
 """
 
+import os
 from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional
 
@@ -356,8 +357,11 @@ def drop_non_solid_geometry(path):
     """Rewrite the STEP file at ``path`` as its solids alone when it carries geometry that belongs to no
     solid (the PMI annotation planes and curve sets a script re-exports along with an imported part).
     Returns what was dropped, as ``StepSummary.non_solid_geometry`` counts it, or None when the file was
-    left untouched. Raises on a file that cannot be read or written -- the caller validates the file first."""
+    left untouched. The solids are written to a sibling ``<path>.tmp`` that replaces ``path`` only once the
+    STEP writer reports the file complete, so a write that fails or stops short leaves the original as it
+    was. Raises on a file that cannot be read or written -- the caller validates the file first."""
     import cadquery as cq  # noqa: WPS433 - lazy import by design
+    from OCP.IFSelect import IFSelect_RetDone  # noqa: WPS433 - lazy import by design
 
     shape = cq.importers.importStep(str(path))
     solids = shape.solids().vals()
@@ -367,5 +371,15 @@ def drop_non_solid_geometry(path):
     dropped = _non_solid_geometry(shape, body)
     if not dropped:
         return None
-    cq.exporters.export(body, str(path))
+    tmp = f"{path}.tmp"
+    try:
+        # Shape.exportStep returns the writer's status; the extension-driven cq.exporters.export discards
+        # it (and refuses ``.stp``).
+        status = body.exportStep(tmp)
+        if status != IFSelect_RetDone:
+            raise RuntimeError(f"STEP write failed ({getattr(status, 'name', status)})")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
     return dropped

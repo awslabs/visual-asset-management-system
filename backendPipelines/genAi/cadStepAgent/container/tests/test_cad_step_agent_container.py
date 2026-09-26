@@ -621,6 +621,23 @@ class TestTools:
         assert "dropped_non_solid_geometry" not in out["geometry"]
         assert any("3 face(s)" in r.getMessage() and "could not be dropped" in r.getMessage() for r in caplog.records)
 
+    def test_a_rewrite_that_leaves_stray_geometry_in_the_file_is_not_recorded_as_a_drop(self, tmp_path, caplog):
+        state = _state(tmp_path, research=False)
+        fns = _tool_map(tools.build_tools(state))
+        polluted = cad_io.StepSummary(valid=True, solid_count=1, face_count=6, edge_count=12,
+                                      bounding_box_mm=[0, 0, 0, 10, 10, 10], volume_mm3=1000.0,
+                                      non_solid_geometry={"faces": 1, "edges": 0})
+        with patch.object(cad_io, "inspect_step", return_value=polluted), \
+                patch.object(cad_io, "drop_non_solid_geometry", return_value={"faces": 1, "edges": 0}), \
+                caplog.at_level(logging.WARNING, logger="cad_step_agent.tools"):
+            out = json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "polluted"))
+        assert out["ok"] and out["geometry"]["non_solid_geometry"] == {"faces": 1, "edges": 0}
+        assert "dropped_non_solid_geometry" not in out["geometry"]
+        assert state.attempts[0].summary.endswith("; 1 face(s) outside the solids ignored")
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == ["the output's geometry outside the solids (1 face(s)) could not be dropped: the rewritten "
+                            "file still carries 1 face(s)"]
+
     def _modify_state(self, tmp_path):
         state = _state(tmp_path, research=False)
         state.input_step = str(tmp_path / "input.step")
@@ -2208,6 +2225,56 @@ class TestFeatureSummary:
         before = open(path, "rb").read()
         assert cad_io.drop_non_solid_geometry(path) is None
         assert open(path, "rb").read() == before
+
+    def _polluted_file(self, cq, path):
+        one_plane = cq.Compound.makeCompound([cq.Face.makePlane(30, 20, cq.Vector(90, 0, 30), cq.Vector(0, 0, 1))])
+        _write_step_roots(path, [_plate_with_two_holes(cq).val(), one_plane])
+        return open(path, "rb").read()
+
+    def test_a_polluted_output_with_the_stp_extension_is_rewritten_too(self, tmp_path):
+        import cadquery as cq
+        path = str(tmp_path / "polluted.stp")
+        self._polluted_file(cq, path)
+        assert cad_io.drop_non_solid_geometry(path) == {"faces": 1, "edges": 0}
+        assert cad_io.inspect_step(path).non_solid_geometry is None
+        assert sorted(os.listdir(tmp_path)) == ["polluted.stp"]
+
+    def test_a_write_the_step_writer_does_not_complete_leaves_the_file_and_the_summary_alone(self, tmp_path, caplog):
+        import cadquery as cq
+        from OCP.IFSelect import IFSelect_RetStop
+        path = str(tmp_path / "polluted.step")
+        before = self._polluted_file(cq, path)
+        summary = cad_io.inspect_step(path)
+        with patch.object(cq.Shape, "exportStep", return_value=IFSelect_RetStop) as export, \
+                caplog.at_level(logging.WARNING, logger="cad_step_agent.tools"):
+            sanitized = tools.sanitize_output(path, summary)
+        assert export.call_args.args == (path + ".tmp",)
+        assert sanitized is summary and summary.non_solid_geometry == {"faces": 1, "edges": 0}
+        assert summary.dropped_non_solid_geometry is None
+        assert open(path, "rb").read() == before and sorted(os.listdir(tmp_path)) == ["polluted.step"]
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == ["the output's geometry outside the solids (1 face(s)) could not be dropped: STEP write failed "
+                            "(IFSelect_RetStop)"]
+
+    def test_a_write_that_stops_short_never_replaces_the_valid_original(self, tmp_path, caplog):
+        import cadquery as cq
+        from OCP.IFSelect import IFSelect_RetFail
+        path = str(tmp_path / "polluted.step")
+        before = self._polluted_file(cq, path)
+        summary = cad_io.inspect_step(path)
+
+        def truncated(self, file_name, *args, **kwargs):
+            with open(file_name, "wb") as fh:
+                fh.write(before[:200])
+            return IFSelect_RetFail
+        with patch.object(cq.Shape, "exportStep", truncated), \
+                caplog.at_level(logging.WARNING, logger="cad_step_agent.tools"):
+            sanitized = tools.sanitize_output(path, summary)
+        assert sanitized is summary and summary.dropped_non_solid_geometry is None
+        assert open(path, "rb").read() == before and sorted(os.listdir(tmp_path)) == ["polluted.step"]
+        assert cad_io.inspect_step(path).non_solid_geometry == {"faces": 1, "edges": 0}
+        assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [
+            "the output's geometry outside the solids (1 face(s)) could not be dropped: STEP write failed (IFSelect_RetFail)"]
 
     def test_the_orientation_names_the_thickness_axis_of_a_sheet_like_part(self, tmp_path):
         import cadquery as cq

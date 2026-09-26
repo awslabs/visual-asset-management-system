@@ -166,19 +166,25 @@ def sanitize_output(path, summary):
     A script that re-exports an imported part whole carries the source's PMI annotation planes and curve
     sets along. The output is the design, so the file is rewritten as its solids and the summary records
     what went, whatever the script did. A rewrite that fails leaves the file and the summary -- which
-    already describes the solids only, and still names the stray geometry -- as they are.
+    already describes the solids only, and still names the stray geometry -- as they are; the drop is
+    recorded only once the rewritten file re-inspects free of it.
     """
     if not (summary.valid and summary.non_solid_geometry):
         return summary
+    stray = cad_io.describe_non_solid_geometry(summary.non_solid_geometry)
     try:
         dropped = cad_io.drop_non_solid_geometry(path)
-        if dropped:
-            summary = cad_io.inspect_step(path)
     except Exception as exc:
-        logger.warning("the output's geometry outside the solids (%s) could not be dropped: %s",
-                       cad_io.describe_non_solid_geometry(summary.non_solid_geometry), str(exc)[:200])
+        logger.warning("the output's geometry outside the solids (%s) could not be dropped: %s", stray, str(exc)[:200])
         return summary
-    summary.dropped_non_solid_geometry = dropped
+    if not dropped:
+        return summary
+    summary = cad_io.inspect_step(path)
+    if summary.valid and summary.non_solid_geometry:
+        logger.warning("the output's geometry outside the solids (%s) could not be dropped: the rewritten file "
+                       "still carries %s", stray, cad_io.describe_non_solid_geometry(summary.non_solid_geometry))
+    elif summary.valid:
+        summary.dropped_non_solid_geometry = dropped
     return summary
 
 
