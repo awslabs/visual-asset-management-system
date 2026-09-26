@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.6.3] (2026-09-26)
+
+### Major Change Summary:
+
+-   Hotfix release: GPU pipeline Batch containers run as a non-root user, non-root CPU pipeline containers start correctly when built under a restrictive umask, and npm dependency intake enforces a minimum release age.
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+### Bug Fixes
+
+-   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
+    -   Note: The same images normalize read bits after each source `COPY` so a build under a restrictive umask remains readable to the non-root user, and the Reason entrypoint tolerates an already-present Python header symlink instead of aborting.
+-   **Pipelines** The non-root preview (3D thumbnail) and coordinate-transform CPU containers normalize read bits after each source `COPY`, so images built under a restrictive umask (STIG 077 / CI 027) start without a `PermissionError` at import (#353).
+
+### Chores
+
+-   **CI**: Set `min-release-age = 7` (days) in all `.npmrc` files and require npm >= 11.10.0 via `engines.npm` constraints in `package.json`. Node 22 ships with npm 10.9.x, which does not support `min-release-age` (introduced in npm 11.10.0); CI workflows and build sites (GitHub Actions, GitLab CI pages job, Amplify) now pin npm 11.19.1 after Node setup to enforce the 7-day minimum release age for all npm dependencies (#329).
+
+### Known Outstanding Issues
+
+-   **Web** The nested viewer installs under `web/customInstalls/*` are not governed by the top-level `.npmrc` `min-release-age` setting; npm does not propagate it to child installs (#334).
+-   **Web** `npm audit` reports six low-severity findings under `vite-plugin-node-polyfills` → `node-stdlib-browser` → `crypto-browserify` → `elliptic` (GHSA-848j-6mx2-7j84). No patched `elliptic` release exists, every package in the chain is at its latest version, and the only change npm offers is a semver-major downgrade of the plugin. The affected `crypto` polyfill is not enabled in the web build (`vite.config.ts` polyfills only `buffer`, `process`, and `stream`), so the code is not bundled into the application.
+
+### Troubleshooting
+
 ## [2.6.2] (2026-09-23)
 
 ### Major Change Summary:
