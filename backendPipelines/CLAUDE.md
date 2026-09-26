@@ -593,6 +593,31 @@ holding:
 The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** — a
 forbid-forever guardrail also has zero occurrences, and that absence is the guard working.
 
+## A Non-Root Container Normalizes Read Bits on the Source It COPYs
+
+A pipeline container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line
+immediately after every `COPY` of source it will read:
+
+```dockerfile
+COPY ./preview_pipeline /app/preview_pipeline
+RUN chmod -R a+rX /app/preview_pipeline
+...
+USER appuser
+```
+
+`docker COPY` preserves the build host's umask and copies the files root-owned. A hardened build host —
+umask `077` (the STIG default on RHEL and Amazon Linux) or `027` (locked-down CI) — therefore produces
+root-owned `600`/`640` files the non-root user cannot read, and Python raises
+`PermissionError: [Errno 13]` at import. It is NOT `ModuleNotFoundError`: the directory is recreated
+`0755`, so the package is traversable and found, but its files are unreadable. This is invisible at build
+time — the image builds green and fails only at container runtime, and only for images built on such a
+host. The Batch job definition sets no user override, so the image's `USER` is what runs.
+
+`a+rX` grants world-read on files and traverse on directories without adding an execute bit to plain
+files. `COPY --chown=<user>` is NOT sufficient — it makes the file readable by that one owner while the
+mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfile` and
+`conversion/coordinateTransform/container/Dockerfile`.
+
 ## Adding a New Processing Pipeline
 
 1. Create directory under `backendPipelines/{useCase}/`.
@@ -625,7 +650,11 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     instance for the NVIDIA pipelines — is provisioned. Keep the token capture ahead of
     `resolve_pipeline_inputs` in every `vamsExecute` handler so the raise reaches `SendTaskFailure`.
 
-3. Add container if needed in `container/` subdirectory.
+3. Add container if needed in `container/` subdirectory. **A container that drops to a non-root `USER`
+   runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads** —
+   `COPY` preserves the build host's umask, and a hardened host's root-owned `600`/`640` files raise
+   `PermissionError` at import under the non-root user, invisible to the build. See
+   [A Non-Root Container Normalizes Read Bits on the Source It COPYs](#a-non-root-container-normalizes-read-bits-on-the-source-it-copys).
 4. **Register the pipeline's sub-process and log sources** from `openPipeline.py` (or from
    `executeBatchJob.py` when that lambda submits the job itself): the state-machine log entry with
    `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the

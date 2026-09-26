@@ -1385,6 +1385,30 @@ version. Coverage: the NVIDIA block of `infra/test/pipelines/containerBuildSourc
 names the Dockerfiles explicitly because a `**/Dockerfile` glob passes locally and fails in CI on
 the gitignored splat Dockerfile.
 
+#### **Read Bits on COPY'd Source in a Non-Root Container**
+
+A pipeline container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line
+immediately after every `COPY` of source it will read:
+
+```dockerfile
+COPY ./preview_pipeline /app/preview_pipeline
+RUN chmod -R a+rX /app/preview_pipeline
+...
+USER appuser
+```
+
+`docker COPY` preserves the build host's umask and copies the files root-owned. A hardened build
+host — umask `077` (the STIG default on RHEL and Amazon Linux) or `027` (locked-down CI) — therefore
+produces root-owned `600`/`640` files the non-root user cannot read, and Python raises
+`PermissionError: [Errno 13]` at import. It is NOT `ModuleNotFoundError`: the directory is recreated
+`0755`, so the package is traversable and found, but its files are unreadable. This is invisible at
+build time — the image builds green and fails only at container runtime, and only for images built on
+such a host. The Batch job definition sets no user override, so the image's `USER` is what runs.
+`a+rX` grants world-read on files and traverse on directories without adding an execute bit to plain
+files. `COPY --chown=<user>` is NOT sufficient — it makes the file readable by that one owner while
+the mode stays restrictive. Worked examples: `backendPipelines/preview/3dThumbnail/container/Dockerfile`
+and `backendPipelines/conversion/coordinateTransform/container/Dockerfile`.
+
 #### **Container Lambda Handler Pattern**
 
 ```python
@@ -1477,6 +1501,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     Declare the constant **above the first client**, not merely after the imports: a few modules interleave imports with executable code (`multi/rapidPipelineEKS/lambda/consolidated_handler.py` builds a client and then keeps importing), and a constant placed after the last import lands below the client that uses it — `NameError` at module import, which in a Lambda is a cold-start 500 on every request. A deliberate departure (a non-idempotent call a retry would duplicate) needs a comment saying why, because the ratchet cannot tell it from an oversight. Coverage: `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`.
 
 11. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
+
+12. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above.
 
 #### **Pipeline Configuration Rules**
 
