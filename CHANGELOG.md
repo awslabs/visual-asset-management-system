@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file. See [standa
 ### Bug Fixes
 
 -   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
+-   **Pipelines** The non-root preview (3D thumbnail) and coordinate-transform CPU containers normalize read bits after each source `COPY`, so images built under a restrictive umask (STIG 077 / CI 027) start without a `PermissionError` at import (#353).
 -   **Pipelines** The Potree point cloud viewer container job role holds `states:SendTaskHeartbeat` alongside `SendTaskSuccess`/`SendTaskFailure` (scoped to the deployment account and region), so the PDAL/Potree container's workflow task-token heartbeat is delivered instead of logging an `AccessDeniedException` on every job.
 
 ### Chores
@@ -24,6 +25,26 @@ All notable changes to this project will be documented in this file. See [standa
 ### Known Outstanding Issues
 
 ### Troubleshooting
+
+## [2.6.2] (2026-09-23)
+
+### Major Change Summary:
+
+-   Hotfix release: build-from-source repair for the web and infrastructure npm lockfiles, and a documentation-site dependency security update.
+
+### Bug Fixes
+
+-   **Web / CDK** `web/package-lock.json` and `infra/package-lock.json` now record the full set of optional platform-specific native bindings (`esbuild`, `rolldown`, `lightningcss`, `@napi-rs/canvas`, `@parcel/watcher`, `@unrs/resolver-binding` and their transitives), so `npm ci` installs both packages instead of failing with `EUSAGE` because the lockfile was out of sync with `package.json`.
+    -   Note: No dependency version changes; only the missing lockfile entries were added.
+-   **Deployment** The build workflow checks the four package lockfiles (repository root, `web/`, `infra/`, `documentation/docusaurus-site/`) against their `package.json` with `npm ci --dry-run` under npm 11 before installing, so lockfile drift — including missing optional native bindings for other platforms — fails the build rather than being silently rewritten by `npm install`.
+
+### Chores
+
+-   **Documentation** Documentation site: `image-size` updated to 2.0.4 (resolves the ICNS / JXL / HEIF parser denial-of-service advisories GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq).
+
+### Known Outstanding Issues
+
+-   **Web** `npm audit` reports six low-severity findings under `vite-plugin-node-polyfills` → `node-stdlib-browser` → `crypto-browserify` → `elliptic` (GHSA-848j-6mx2-7j84). No patched `elliptic` release exists, every package in the chain is at its latest version, and the only change npm offers is a semver-major downgrade of the plugin. The affected `crypto` polyfill is not enabled in the web build (`vite.config.ts` polyfills only `buffer`, `process`, and `stream`), so the code is not bundled into the application.
 
 ## [2.6.1] (2026-09-13)
 
