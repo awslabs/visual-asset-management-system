@@ -688,6 +688,9 @@ class TestTools:
         fns = _tool_map(tools.build_tools(modify))
         assert "deltaVsInput" not in json.loads(fns["run_cad_script"]("print('no output')\n", "noop"))
         assert tools.delta_vs_input(self._summary(1.0), cad_io.StepSummary(valid=False, error="x")) is None
+        # A re-export that lost nothing reads 0.0, not -0.0.
+        delta = tools.delta_vs_input(self._summary(136445.105), self._summary(136445.1049999))
+        assert json.dumps(delta["volume_change_mm3"]) == "0.0" and "nothing measurable changed" in delta["note"]
 
     def test_attempt_budget_is_enforced(self, tmp_path):
         state = _state(tmp_path, research=False, attempts=1)

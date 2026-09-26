@@ -205,7 +205,7 @@ def delta_vs_input(before, after):
     solids = after.solid_count - before.solid_count
     bbox_changed = any(abs(a - b) > BBOX_CHANGE_MM
                        for a, b in zip(after.bounding_box_mm or [], before.bounding_box_mm or []))
-    delta = {"volume_change_mm3": round(dv, 3), "holes_count_change": holes, "solid_count_change": solids,
+    delta = {"volume_change_mm3": round(dv, 3) + 0.0, "holes_count_change": holes, "solid_count_change": solids,
              "bbox_changed": bbox_changed}
     unchanged = abs(dv) <= max(UNCHANGED_VOLUME_MM3, UNCHANGED_VOLUME_FRACTION * abs(before.volume_mm3 or 0.0))
     if unchanged and holes == 0 and solids == 0 and not bbox_changed:
