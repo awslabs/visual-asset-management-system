@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
 -   **Pipelines** The non-root preview (3D thumbnail) and coordinate-transform CPU containers normalize read bits after each source `COPY`, so images built under a restrictive umask (STIG 077 / CI 027) start without a `PermissionError` at import (#353).
 -   **Pipelines** The Potree point cloud viewer container job role holds `states:SendTaskHeartbeat` alongside `SendTaskSuccess`/`SendTaskFailure` (scoped to the deployment account and region), so the PDAL/Potree container's workflow task-token heartbeat is delivered instead of logging an `AccessDeniedException` on every job.
 

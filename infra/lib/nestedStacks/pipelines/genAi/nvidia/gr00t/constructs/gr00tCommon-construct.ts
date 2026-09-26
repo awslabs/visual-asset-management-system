@@ -83,6 +83,11 @@ export class Gr00tCommonConstruct extends Construct {
             removalPolicy: RemovalPolicy.DESTROY,
         });
 
+        // Non-root GPU containers (issue #327) reach this cache through the launch-template userdata,
+        // which mounts the EFS root at /mnt/efs/gr00t-models and `chown -R 10000:10000` it after the
+        // mount, so the shared model cache is owned by the container uid/gid. No EFS access point is
+        // used for the GR00T cache: the mount is a plain root mount, not AP-fronted.
+
         /**
          * CDK Nag Suppressions
          */
