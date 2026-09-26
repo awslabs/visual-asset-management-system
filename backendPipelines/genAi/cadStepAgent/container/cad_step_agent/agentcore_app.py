@@ -88,8 +88,9 @@ async def run_in_background(definition, task_token, job_name):
     except (run.RunCancelled, run.RunFailed) as exc:
         # Both are outcomes run_job has already settled: a cancellation leaves the token to the workflow
         # that stopped the run, a failure has reported it, and each has logged its cause at the level it
-        # deserves (a guardrail block is a WARNING, not an application error). Only the class is recorded
-        # here; the message may carry the caller's instruction.
+        # deserves (a guardrail block is a WARNING, not an application error). This line records the class
+        # only; the reason is in run_job's own line -- "run cancelled by ..." at INFO, "run failed: ..." at
+        # WARNING -- and, for a failure, on the token.
         logger.info("background run ended job=%s outcome=%s", job_name, type(exc).__name__)
     except Exception:
         # A fault run_job did not classify; it has logged the traceback and reported the token.
