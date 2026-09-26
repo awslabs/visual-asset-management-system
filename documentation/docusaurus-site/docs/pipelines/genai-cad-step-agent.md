@@ -45,7 +45,7 @@ Every run that produced a valid STEP file writes three things to the asset:
 -   **A Markdown report** beside it, named `<file>.cad-agent-report.md`: the instruction, each attempt's outcome, the final geometry summary (solid count, bounding box, volume, features — all measured on the file's solids; the PMI annotation planes and curves an AP242 export carries are counted, not measured, and are dropped from the output file), the web sources consulted, and every requested element the agent could not complete.
 -   **File metadata** on the STEP file: `cadAgentStatus` (`succeeded` or `partial`), `cadAgentSummary`, `cadAgentUnresolved` (JSON list), `cadAgentSources` (JSON list), `cadAgentModel`, `cadAgentAttempts`, `cadAgentGeometry`, and `cadAgentRunId`. These are queryable like any other file metadata.
 
-A run is `partial` when the agent produced a valid STEP file but recorded elements it could not complete — for example a reference design it could not find online. A run that produces no valid STEP file within its attempt or time budget fails, and the execution record carries the reason. The execution's success payload carries the outcome summary only, never the scripts' output.
+A run is `partial` when the agent produced a valid STEP file but recorded elements it could not complete — for example a reference design it could not find online. A run that produces no valid STEP file within its attempt or time budget fails and writes no report; the execution record carries the reason and the attempt count. The execution's success payload carries the outcome summary only, never the scripts' output.
 
 ## Architecture
 

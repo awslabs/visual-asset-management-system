@@ -326,6 +326,13 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         # of the run, so the reason travels on the token without a traceback.
         report_failure(str(exc))
         raise RunFailed(str(exc)) from None
+    except RunFailed as exc:
+        # An outcome the run reached on purpose -- no valid STEP after the attempt budget, a definition
+        # that names the wrong file, a result the workflow no longer waits for -- not a fault: one line
+        # with the reason, no traceback. The reason travels on the token as well.
+        logger.warning("run failed: %s", exc)
+        report_failure(str(exc))
+        raise
     except Exception as exc:
         logger.exception("run failed")
         report_failure(str(exc))

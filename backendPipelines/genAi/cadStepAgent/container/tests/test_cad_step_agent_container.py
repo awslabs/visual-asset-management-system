@@ -1181,6 +1181,30 @@ class TestRunJob:
         assert kwargs["taskToken"] == "inner-token" and kwargs["error"] == run.FAILURE_ERROR_CODE
         assert len(kwargs["cause"]) <= 256
 
+    def test_an_exhausted_attempt_budget_is_one_warning_without_a_traceback(self, monkeypatch, caplog):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        with caplog.at_level(logging.INFO), pytest.raises(run.RunFailed, match="No valid STEP"):
+            run.run_job(_definition(maxAttempts=1), "inner-token", s3=s3, sfn=sfn,
+                        agent_factory=_agent_that(script_writes_output=False), guardrail=_FakeGuardrail())
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1 and "No valid STEP file was produced after 1 attempt(s)" in warnings[0].getMessage()
+        assert warnings[0].exc_info is None
+        assert not s3.objects  # no report for a run without a STEP file
+        assert "No valid STEP" in sfn.send_task_failure.call_args.kwargs["cause"]
+
+    def test_an_unclassified_fault_keeps_its_traceback(self, monkeypatch, caplog):
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        sfn = MagicMock()
+        s3 = _FakeS3()
+        s3.download_file = MagicMock(side_effect=OSError("disk full"))
+        with caplog.at_level(logging.INFO), pytest.raises(OSError):
+            run.run_job(_definition(), "inner-token", s3=s3, sfn=sfn, agent_factory=MagicMock(), guardrail=_FakeGuardrail())
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1 and errors[0].getMessage() == "run failed" and errors[0].exc_info is not None
+        assert "disk full" in sfn.send_task_failure.call_args.kwargs["cause"]
+
     def test_agent_crash_after_a_valid_output_is_a_partial_success(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
         s3, sfn = _FakeS3(), MagicMock()
@@ -1596,6 +1620,26 @@ class TestAgentCoreApp:
         errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert len(errors) == 1 and errors[0].getMessage() == "background run failed job=job-1"
 
+    def test_an_exhausted_attempt_budget_ends_the_background_run_with_one_warning(self, agentcore_app, monkeypatch, caplog):
+        import asyncio
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        sfn = MagicMock()
+        real_run_job = run.run_job
+
+        def no_step_run(definition, task_token):
+            return real_run_job(_definition(maxAttempts=1), task_token, s3=_FakeS3(), sfn=sfn,
+                                agent_factory=_agent_that(script_writes_output=False), guardrail=_FakeGuardrail())
+
+        with caplog.at_level(logging.INFO):
+            reply = asyncio.run(self._run_to_completion(agentcore_app, no_step_run))
+        assert reply == {"accepted": True, "jobName": "job-1"} and agentcore_app.active_job() is None
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1 and "No valid STEP" in warnings[0].getMessage() and warnings[0].exc_info is None
+        ended = [r for r in caplog.records if "background run ended" in r.getMessage()]
+        assert len(ended) == 1 and ended[0].levelno == logging.INFO and "RunFailed" in ended[0].getMessage()
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok"
+
     def test_the_server_lifespan_installs_the_stop_signal_handlers(self, agentcore_app):
         import asyncio
         installed = []
@@ -1647,6 +1691,26 @@ class TestBatchMain:
                 patch.object(batch_main.cancellation, "install_signal_handlers", lambda: None), \
                 patch.object(batch_main.run, "run_job", MagicMock(side_effect=run.RunFailed("no step"))):
             assert batch_main.main({"CAD_AGENT_DEFINITION": "{}"}) == 1
+
+    def test_an_exhausted_attempt_budget_is_exit_code_one_with_one_warning(self, monkeypatch, caplog):
+        from cad_step_agent import batch_main
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        sfn = MagicMock()
+        real_run_job = run.run_job
+
+        def no_step_run(definition, task_token):
+            return real_run_job(definition, task_token, s3=_FakeS3(), sfn=sfn,
+                                agent_factory=_agent_that(script_writes_output=False), guardrail=_FakeGuardrail())
+
+        with patch.object(batch_main.sandbox, "harden_agent_process", lambda: True), \
+                patch.object(batch_main.cancellation, "install_signal_handlers", lambda: None), \
+                patch.object(batch_main.run, "run_job", no_step_run), caplog.at_level(logging.INFO):
+            rc = batch_main.main({"CAD_AGENT_DEFINITION": json.dumps(_definition(maxAttempts=1)), "TASK_TOKEN": "inner"})
+        assert rc == 1
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1 and "No valid STEP" in warnings[0].getMessage() and warnings[0].exc_info is None
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "inner"
 
     def test_a_cancelled_run_is_the_interrupt_exit_code(self):
         from cad_step_agent import batch_main
