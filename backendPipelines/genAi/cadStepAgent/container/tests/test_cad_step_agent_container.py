@@ -482,7 +482,18 @@ class TestModelResolution:
         fns = _tool_map(tools.build_tools(_state(tmp_path, research=False)))
         doc = " ".join(fns["finish"].__doc__.split())
         assert "every figure whose only source is a forum, Q&A site, user post or blog" in doc
-        assert "no figure rests on an assumption or an unconfirmed source" in doc
+        assert "no specified or implied figure rests on an assumption or an unconfirmed source" in doc
+        # A value the instruction left open is an assumption in the summary, not an unresolved item.
+        assert 'End it with an "Assumptions:" line naming every value the instruction left unspecified' in doc
+        assert "does not by itself make the run partial" in doc
+
+    def test_the_prompt_separates_chosen_values_from_unverified_specified_ones(self):
+        rule = " ".join(agent_module.SYSTEM_PROMPT.split("7. Call finish")[1].split("CadQuery recipes")[0].split())
+        assert 'a value the instruction left UNSPECIFIED and you chose' in rule
+        assert 'under an "Assumptions:" line, not in unresolved, and does not by itself make the status "partial"' in rule
+        assert "a value the instruction specifies or IMPLIES" in rule and 'stays in unresolved and makes it "partial"' in rule
+        # A named product's figures stay an assumption that makes the run partial (the no-research reminder).
+        assert 'list every assumed figure in unresolved, and finish with status "partial"' in agent_module._NO_RESEARCH_REMINDER
 
 
 # ---------------------------------------------------------------------------------------------------

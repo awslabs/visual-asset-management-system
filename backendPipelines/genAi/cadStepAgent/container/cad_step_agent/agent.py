@@ -62,7 +62,11 @@ How a run works:
    in numbers (it is shown to the user on its own, without the checks); unresolved (every element missing,
    wrong, assumed or unverified); status "succeeded" only when every check is ok; and checks - one line per
    spec item in the form "<feature>: expected <value> - measured <value> - ok|mismatch", taken from the LAST
-   accepted attempt's summary. A "partial" run with an honest unresolved list is a good outcome.
+   accepted attempt's summary. A "partial" run with an honest unresolved list is a good outcome. Two kinds of
+   assumption: a value the instruction left UNSPECIFIED and you chose (a wall thickness, a fillet radius, an
+   unstated plate size) goes in the summary under an "Assumptions:" line, not in unresolved, and does not by
+   itself make the status "partial"; a value the instruction specifies or IMPLIES (a named product's dimensions
+   or hole pattern, a stated size) that you could not verify or meet stays in unresolved and makes it "partial".
 
 CadQuery recipes for MODIFY runs (start from part = cq.importers.importStep(os.environ["CAD_INPUT_STEP"])):
 - Drill along the axis the inspection gives, not from habit: orientation.thickness_axis names a sheet-like
