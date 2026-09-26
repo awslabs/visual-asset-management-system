@@ -83,6 +83,11 @@ export class CosmosCommonConstruct extends Construct {
             removalPolicy: RemovalPolicy.DESTROY,
         });
 
+        // Non-root GPU containers (issue #327) reach this cache through the launch-template userdata,
+        // which mounts the EFS root at /mnt/efs/cosmos-models and `chown -R 10000:10000` it after the
+        // mount, so the shared Hugging Face cache is owned by the container uid/gid. No EFS access
+        // point is used for the Cosmos cache: the mount is a plain root mount, not AP-fronted.
+
         /**
          * CDK Nag Suppressions
          */
