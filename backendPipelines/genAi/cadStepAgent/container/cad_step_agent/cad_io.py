@@ -35,6 +35,10 @@ class StepSummary:
     # The largest planar faces with their outward normals and, for a sheet-like part, the axis its thickness
     # runs along (see ``summarize_orientation``): what a script drills through. Advisory; None when unknown.
     orientation: Optional[Dict] = None
+    # One entry per solid, {"volume_mm3", "bounding_box_mm"}, so a per-body request is answered from the
+    # summary; the first SOLIDS_LISTED_MAX bodies by volume are listed. Kept out of to_dict() for a single
+    # solid, whose figures are the summary's own.
+    solids: Optional[List[Dict]] = None
 
     def to_dict(self):
         data = asdict(self)
@@ -45,6 +49,8 @@ class StepSummary:
         for key in ("features", "non_solid_geometry", "dropped_non_solid_geometry", "orientation"):
             if data[key] is None:
                 data.pop(key)
+        if not data["solids"] or len(data["solids"]) < 2:
+            data.pop("solids")
         return data
 
     def describe(self):
@@ -55,6 +61,11 @@ class StepSummary:
             xmin, ymin, zmin, xmax, ymax, zmax = self.bounding_box_mm
             bbox = f" size {xmax - xmin:.2f} x {ymax - ymin:.2f} x {zmax - zmin:.2f} mm"
         volume = f" volume {self.volume_mm3:.1f} mm^3" if self.volume_mm3 is not None else ""
+        bodies = ""
+        if self.solids and len(self.solids) > 1:
+            bodies = "; bodies by volume " + ", ".join(f"{b['volume_mm3']:.1f} mm^3" for b in self.solids)
+            if self.solid_count > len(self.solids):
+                bodies += f", +{self.solid_count - len(self.solids)} more not listed"
         features = f"; {describe_features(self.features)}" if self.features else ""
         axis = (self.orientation or {}).get("thickness_axis")
         thickness = f"; sheet-like part, thickness along {axis.upper()}" if axis else ""
@@ -62,7 +73,7 @@ class StepSummary:
                    if self.non_solid_geometry else "")
         dropped = (f"; {describe_non_solid_geometry(self.dropped_non_solid_geometry)} outside the solids dropped "
                    "from the output file" if self.dropped_non_solid_geometry else "")
-        return (f"{self.solid_count} solid(s), {self.face_count} faces, {self.edge_count} edges{bbox}{volume}"
+        return (f"{self.solid_count} solid(s), {self.face_count} faces, {self.edge_count} edges{bbox}{volume}{bodies}"
                 f"{features}{thickness}{ignored}{dropped}")
 
 
@@ -244,6 +255,19 @@ def _solids_body(cq, solids):
 # extent is then the one a hole through the sheet runs along.
 SHEET_THICKNESS_RATIO = 0.25
 ORIENTATION_FACES_MAX = 3
+# Per-body figures are listed for at most this many solids (largest first); the solid count is always complete.
+SOLIDS_LISTED_MAX = 20
+
+
+def summarize_solids(solids):
+    """One {"volume_mm3", "bounding_box_mm"} entry per solid, largest first, at most SOLIDS_LISTED_MAX."""
+    entries = []
+    for solid in solids:
+        bb = solid.BoundingBox()
+        entries.append({"volume_mm3": round(solid.Volume(), 3),
+                        "bounding_box_mm": [round(v, 3) for v in (bb.xmin, bb.ymin, bb.zmin, bb.xmax, bb.ymax, bb.zmax)]})
+    entries.sort(key=lambda e: -e["volume_mm3"])
+    return entries[:SOLIDS_LISTED_MAX]
 
 
 def summarize_orientation(body, bbox):
@@ -322,6 +346,7 @@ def inspect_step(path):
             features=summarize_features(cq.Workplane("XY").newObject([body]), bbox),
             non_solid_geometry=_non_solid_geometry(shape, body),
             orientation=summarize_orientation(body, bbox),
+            solids=summarize_solids(solids),
         )
     except Exception as exc:  # the file is caller data; any failure is a validation outcome
         return StepSummary(valid=False, error=str(exc)[:500])

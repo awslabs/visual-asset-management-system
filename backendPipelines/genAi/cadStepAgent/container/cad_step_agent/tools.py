@@ -246,11 +246,11 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
     def inspect_input_step() -> str:
         """Summarize the geometry of the input STEP file: solid/face/edge counts, bounding box in mm, volume,
         the feature summary (holes by diameter with through/blind and their centres measured from the
-        bounding box's minimum corner, cylindrical outer faces, fillet-like faces, planar faces) and the
+        bounding box's minimum corner, cylindrical outer faces, fillet-like faces, planar faces), the
         orientation (largest planar faces with their normals; the thickness axis of a sheet-like part, which
-        is the axis a hole through it runs along). Every figure describes the solids; annotation geometry
-        outside them (PMI planes, curves) is only counted, under non_solid_geometry. Returns a note when the
-        run has no input file."""
+        is the axis a hole through it runs along) and, for a multi-body file, each body's volume and bounding
+        box under solids. Every figure describes the solids; annotation geometry outside them (PMI planes,
+        curves) is only counted, under non_solid_geometry. Returns a note when the run has no input file."""
         cancellation.raise_if_requested()
         if not state.input_step:
             return json.dumps({"hasInput": False, "note": "This run has no input STEP file; create the geometry from scratch."})

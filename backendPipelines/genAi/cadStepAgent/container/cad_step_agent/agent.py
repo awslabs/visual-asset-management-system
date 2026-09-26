@@ -81,6 +81,9 @@ CadQuery recipes for MODIFY runs (start from part = cq.importers.importStep(os.e
   move it inward and say so, or report it.
 - Read deltaVsInput in the tool result. When it says nothing changed, or volume went without a new hole where
   a hole was requested, the axis or the coordinates are wrong: the next attempt changes THEM, not the API call.
+- Multi-body input: the summary's "solids" list gives each body's volume and bounding box - report them when the
+  instruction asks per body; part.solids().vals() gives the bodies to work on, cq.Compound.makeCompound([...])
+  keeps several of them in the result.
 - Re-export unchanged: result = cq.Compound.makeCompound(part.solids().vals()) - the solids only. PMI annotation
   planes and curves of the source file are not part of the design; the tool drops any that reach the output
   and reports what went.

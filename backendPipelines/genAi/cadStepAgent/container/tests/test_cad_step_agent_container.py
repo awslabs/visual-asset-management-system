@@ -447,6 +447,7 @@ class TestModelResolution:
         assert '"d from the +X edge" is cx = (xmax - xmin) - d' in modify and "never mirror them" in modify
         assert "rounded corner of radius R" in modify
         assert "deltaVsInput" in modify and "the next attempt changes THEM, not the API call" in modify
+        assert 'the summary\'s "solids" list gives each body\'s volume and bounding box' in modify
         # The Z-up habit is not stated as universal anywhere in the modify recipes.
         assert 'faces(">Z").workplane(centerOption="CenterOfBoundBox")' not in modify
         assert "thickness_axis" in prompt.split("2. Write the SPEC")[0]  # the inspection step names the orientation
@@ -740,6 +741,23 @@ class TestTools:
         text = cad_io.describe_features(features)
         assert "5 x D4.50 (through; centres from bbox min corner xy: (8.0, 8.0), (92.0, 52.0); yz: (30.0, 5.0), +2 more not listed)" in text
         assert "1 x D8.00 (not full depth: blind or counterbored)" in text and text.endswith("planar faces 6")
+
+    def test_the_per_body_list_is_bounded_and_kept_out_of_a_single_solid_summary(self):
+        class _Solid:
+            def __init__(self, v):
+                self.v = v
+
+            def Volume(self):
+                return self.v
+
+            def BoundingBox(self):
+                return types.SimpleNamespace(xmin=0, ymin=0, zmin=0, xmax=self.v, ymax=1, zmax=1)
+        listed = cad_io.summarize_solids([_Solid(v) for v in range(1, 30)])
+        assert len(listed) == cad_io.SOLIDS_LISTED_MAX and listed[0] == {"volume_mm3": 29, "bounding_box_mm": [0, 0, 0, 29, 1, 1]}
+        summary = cad_io.StepSummary(valid=True, solid_count=29, solids=listed)
+        assert len(summary.to_dict()["solids"]) == 20 and "+9 more not listed" in summary.describe()
+        single = cad_io.StepSummary(valid=True, solid_count=1, solids=listed[:1])
+        assert "solids" not in single.to_dict() and "bodies" not in single.describe()
 
     def test_finish_with_a_mismatch_check_and_a_succeeded_status_is_flagged(self, tmp_path):
         state = _state(tmp_path, research=False)
@@ -2133,6 +2151,26 @@ class TestFeatureSummary:
         assert "sheet-like" not in cube_summary.describe()
         # Advisory: a shape it cannot read yields None, never an error.
         assert cad_io.summarize_orientation(None, [0, 0, 0, 1, 1, 1]) is None
+
+    def test_a_multi_body_file_lists_each_body(self, tmp_path):
+        import cadquery as cq
+        three = str(tmp_path / "three.step")
+        bodies = [cq.Workplane("XY").box(82.8, 28.8, 90.5, centered=False).val(),
+                  cq.Workplane("XY").box(82.8, 28.8, 1.5, centered=False).translate((0, 0, -1.5)).val(),
+                  cq.Workplane("XY").box(20, 20, 20, centered=False).translate((0, 0, 90.5)).val()]
+        cq.exporters.export(cq.Compound.makeCompound(bodies), three)
+        summary = cad_io.inspect_step(three)
+        assert summary.solid_count == 3
+        assert [b["volume_mm3"] for b in summary.solids] == pytest.approx([82.8 * 28.8 * 90.5, 8000.0, 82.8 * 28.8 * 1.5])
+        assert summary.solids[1]["bounding_box_mm"] == pytest.approx([0, 0, 90.5, 20, 20, 110.5])
+        assert summary.bounding_box_mm == pytest.approx([0, 0, -1.5, 82.8, 28.8, 110.5])
+        assert summary.volume_mm3 == pytest.approx(sum(b["volume_mm3"] for b in summary.solids))
+        assert len(summary.to_dict()["solids"]) == 3
+        assert "; bodies by volume 215809.9 mm^3, 8000.0 mm^3, 3577.0 mm^3" in summary.describe()
+        one = str(tmp_path / "one.step")
+        cq.exporters.export(_plate_with_two_holes(cq), one)
+        single = cad_io.inspect_step(one)
+        assert len(single.solids) == 1 and "solids" not in single.to_dict() and "bodies" not in single.describe()
 
     def test_holes_bosses_and_fillets_are_counted(self, tmp_path):
         import cadquery as cq
