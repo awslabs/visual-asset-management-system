@@ -439,6 +439,18 @@ class TestModelResolution:
         # An unchanged re-export writes the solids, never the source's annotation roots.
         assert "result = cq.Compound.makeCompound(part.solids().vals())" in prompt and "result = part." not in prompt
 
+    def test_the_modify_recipes_drill_along_the_inspected_axis_and_read_the_delta(self):
+        prompt = agent_module.SYSTEM_PROMPT
+        modify = prompt[prompt.index("recipes for MODIFY runs"):prompt.index("GENERATE recipes")]
+        assert "orientation.thickness_axis" in modify and "not from habit" in modify
+        assert "GLOBAL coordinates" in modify and "cq.Solid.makeCylinder(D/2, ymax - ymin + 2" in modify
+        assert '"d from the +X edge" is cx = (xmax - xmin) - d' in modify and "never mirror them" in modify
+        assert "rounded corner of radius R" in modify
+        assert "deltaVsInput" in modify and "the next attempt changes THEM, not the API call" in modify
+        # The Z-up habit is not stated as universal anywhere in the modify recipes.
+        assert 'faces(">Z").workplane(centerOption="CenterOfBoundBox")' not in modify
+        assert "thickness_axis" in prompt.split("2. Write the SPEC")[0]  # the inspection step names the orientation
+
     @pytest.mark.parametrize("prompt, named", [
         ("Create a flat 4 mm carrier plate for the NVIDIA Jetson Nano Developer Kit carrier board.", True),
         ("Make a bracket for the Raspberry Pi 4B.", True),
@@ -596,6 +608,74 @@ class TestTools:
         assert out["ok"] and out["geometry"]["non_solid_geometry"] == {"faces": 3, "edges": 0}
         assert "dropped_non_solid_geometry" not in out["geometry"]
         assert any("3 face(s)" in r.getMessage() and "could not be dropped" in r.getMessage() for r in caplog.records)
+
+    def _modify_state(self, tmp_path):
+        state = _state(tmp_path, research=False)
+        state.input_step = str(tmp_path / "input.step")
+        with open(state.input_step, "w") as fh:
+            fh.write("ISO-10303-21;")
+        return state
+
+    @staticmethod
+    def _summary(volume, holes=0, solids=1, bbox=(0, 0, 0, 100, 60, 10)):
+        features = {"planar_faces": 6, "holes": [{"diameter_mm": 4.5, "through": True, "count": holes}] if holes else []}
+        return cad_io.StepSummary(valid=True, solid_count=solids, face_count=6, edge_count=12,
+                                  bounding_box_mm=list(bbox), volume_mm3=volume, features=features)
+
+    def test_a_modify_attempt_reports_its_delta_against_the_input(self, tmp_path):
+        state = self._modify_state(tmp_path)
+        fns = _tool_map(tools.build_tools(state))
+        before = self._summary(60000.0, holes=2)
+        same = self._summary(60000.0 + 0.004, holes=2)  # re-export noise, not a change
+        hole = self._summary(59840.9, holes=3)
+        sliver = self._summary(59940.0, holes=2)
+        inspections = {state.input_step: before}
+
+        def inspect(path):
+            return inspections.get(path) or inspections["output"]
+        with patch.object(cad_io, "inspect_step", side_effect=inspect):
+            fns["inspect_input_step"]()
+            inspections["output"] = same
+            unchanged = json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "re-export"))["deltaVsInput"]
+            inspections["output"] = hole
+            drilled = json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "drill"))["deltaVsInput"]
+            inspections["output"] = sliver
+            nicked = json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "nick"))["deltaVsInput"]
+        assert unchanged["volume_change_mm3"] == 0.004 and unchanged["holes_count_change"] == 0
+        assert unchanged["solid_count_change"] == 0 and unchanged["bbox_changed"] is False
+        assert "nothing measurable changed" in unchanged["note"] and "not the API call" in unchanged["note"]
+        assert drilled["holes_count_change"] == 1 and drilled["volume_change_mm3"] == pytest.approx(-159.1)
+        assert "note" not in drilled
+        assert nicked["holes_count_change"] == 0 and nicked["volume_change_mm3"] == -60.0
+        assert "no new hole" in nicked["note"] and "thickness_axis" in nicked["note"]
+
+    def test_the_input_is_inspected_once_per_run_even_when_the_model_skips_the_inspect_call(self, tmp_path):
+        state = self._modify_state(tmp_path)
+        fns = _tool_map(tools.build_tools(state))
+        before = self._summary(60000.0)
+        after = self._summary(60000.0, bbox=(0, 0, 0, 100, 60, 15))
+        inspected = []
+
+        def inspect(path):
+            inspected.append(path)
+            return before if path == state.input_step else after
+        with patch.object(cad_io, "inspect_step", side_effect=inspect):
+            out = json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "thicken"))
+            fns["inspect_input_step"]()
+            fns["inspect_input_step"]()
+            fns["run_cad_script"](self._WRITES_OUTPUT, "thicken again")
+        assert out["deltaVsInput"]["bbox_changed"] is True and "note" not in out["deltaVsInput"]
+        assert inspected.count(state.input_step) == 1 and state.input_summary is before
+
+    def test_a_generate_attempt_and_a_failed_attempt_carry_no_delta(self, tmp_path):
+        generate = _state(tmp_path, research=False)
+        fns = _tool_map(tools.build_tools(generate))
+        with patch.object(cad_io, "inspect_step", return_value=self._summary(1000.0)):
+            assert "deltaVsInput" not in json.loads(fns["run_cad_script"](self._WRITES_OUTPUT, "build"))
+        modify = self._modify_state(tmp_path)
+        fns = _tool_map(tools.build_tools(modify))
+        assert "deltaVsInput" not in json.loads(fns["run_cad_script"]("print('no output')\n", "noop"))
+        assert tools.delta_vs_input(self._summary(1.0), cad_io.StepSummary(valid=False, error="x")) is None
 
     def test_attempt_budget_is_enforced(self, tmp_path):
         state = _state(tmp_path, research=False, attempts=1)
@@ -2032,6 +2112,27 @@ class TestFeatureSummary:
         before = open(path, "rb").read()
         assert cad_io.drop_non_solid_geometry(path) is None
         assert open(path, "rb").read() == before
+
+    def test_the_orientation_names_the_thickness_axis_of_a_sheet_like_part(self, tmp_path):
+        import cadquery as cq
+        sheet = str(tmp_path / "sheet.step")
+        cq.exporters.export(cq.Workplane("XY").box(190, 3, 280), sheet)
+        summary = cad_io.inspect_step(sheet)
+        orientation = summary.orientation
+        assert orientation["thickness_axis"] == "y"
+        assert [p["area_mm2"] for p in orientation["largest_planar_faces"]] == [53200.0, 53200.0, 840.0]
+        assert {tuple(p["normal"]) for p in orientation["largest_planar_faces"][:2]} == {(0.0, 1.0, 0.0), (0.0, -1.0, 0.0)}
+        assert "3.00 mm thick along Y" in orientation["hint"] and "(0, 1, 0)" in orientation["hint"]
+        assert "; sheet-like part, thickness along Y" in summary.describe()
+        assert summary.to_dict()["orientation"]["thickness_axis"] == "y"
+        cube = str(tmp_path / "cube.step")
+        cq.exporters.export(cq.Workplane("XY").box(100, 100, 100), cube)
+        cube_summary = cad_io.inspect_step(cube)
+        assert cube_summary.orientation["thickness_axis"] is None and "hint" not in cube_summary.orientation
+        assert len(cube_summary.orientation["largest_planar_faces"]) == cad_io.ORIENTATION_FACES_MAX
+        assert "sheet-like" not in cube_summary.describe()
+        # Advisory: a shape it cannot read yields None, never an error.
+        assert cad_io.summarize_orientation(None, [0, 0, 0, 1, 1, 1]) is None
 
     def test_holes_bosses_and_fillets_are_counted(self, tmp_path):
         import cadquery as cq

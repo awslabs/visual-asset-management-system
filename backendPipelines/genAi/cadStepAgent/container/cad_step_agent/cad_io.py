@@ -32,6 +32,9 @@ class StepSummary:
     # Such geometry that was in a script's output and has been removed from the file (see
     # ``drop_non_solid_geometry``): the file now holds the solids the summary describes, and nothing else.
     dropped_non_solid_geometry: Optional[Dict] = None
+    # The largest planar faces with their outward normals and, for a sheet-like part, the axis its thickness
+    # runs along (see ``summarize_orientation``): what a script drills through. Advisory; None when unknown.
+    orientation: Optional[Dict] = None
 
     def to_dict(self):
         data = asdict(self)
@@ -39,7 +42,7 @@ class StepSummary:
             data["volume_mm3"] = round(data["volume_mm3"], 3)
         if data["bounding_box_mm"] is not None:
             data["bounding_box_mm"] = [round(v, 3) for v in data["bounding_box_mm"]]
-        for key in ("features", "non_solid_geometry", "dropped_non_solid_geometry"):
+        for key in ("features", "non_solid_geometry", "dropped_non_solid_geometry", "orientation"):
             if data[key] is None:
                 data.pop(key)
         return data
@@ -53,12 +56,14 @@ class StepSummary:
             bbox = f" size {xmax - xmin:.2f} x {ymax - ymin:.2f} x {zmax - zmin:.2f} mm"
         volume = f" volume {self.volume_mm3:.1f} mm^3" if self.volume_mm3 is not None else ""
         features = f"; {describe_features(self.features)}" if self.features else ""
+        axis = (self.orientation or {}).get("thickness_axis")
+        thickness = f"; sheet-like part, thickness along {axis.upper()}" if axis else ""
         ignored = (f"; {describe_non_solid_geometry(self.non_solid_geometry)} outside the solids ignored"
                    if self.non_solid_geometry else "")
         dropped = (f"; {describe_non_solid_geometry(self.dropped_non_solid_geometry)} outside the solids dropped "
                    "from the output file" if self.dropped_non_solid_geometry else "")
         return (f"{self.solid_count} solid(s), {self.face_count} faces, {self.edge_count} edges{bbox}{volume}"
-                f"{features}{ignored}{dropped}")
+                f"{features}{thickness}{ignored}{dropped}")
 
 
 def describe_non_solid_geometry(geometry):
@@ -235,6 +240,42 @@ def _solids_body(cq, solids):
     return solids[0] if len(solids) == 1 else cq.Compound.makeCompound(solids)
 
 
+# A part is sheet-like when its smallest extent is at most this fraction of the next one; the axis of that
+# extent is then the one a hole through the sheet runs along.
+SHEET_THICKNESS_RATIO = 0.25
+ORIENTATION_FACES_MAX = 3
+
+
+def summarize_orientation(body, bbox):
+    """The largest planar faces of a shape (area, outward unit normal) and, for a sheet-like part, the axis
+    its thickness runs along -- what a script has to drill through, so a Y-thick sheet gets faces(">Y")
+    rather than the Z-up habit. Advisory: any failure yields None."""
+    try:
+        planes = []
+        for face in body.Faces():
+            if face.geomType() != "PLANE":
+                continue
+            n = face.normalAt()
+            planes.append({"area_mm2": round(face.Area(), 2),
+                           "normal": [round(n.x, 3) + 0.0, round(n.y, 3) + 0.0, round(n.z, 3) + 0.0]})
+        planes.sort(key=lambda p: -p["area_mm2"])
+        extents = [bbox[3] - bbox[0], bbox[4] - bbox[1], bbox[5] - bbox[2]]
+        thin = min(range(3), key=lambda i: extents[i])
+        others = sorted(extents[i] for i in range(3) if i != thin)
+        axis = "xyz"[thin] if extents[thin] <= SHEET_THICKNESS_RATIO * others[0] else None
+        orientation = {"largest_planar_faces": planes[:ORIENTATION_FACES_MAX], "thickness_axis": axis}
+        if axis:
+            in_plane = [a for a in "XYZ" if a != axis.upper()]
+            direction = [1 if a == axis.upper() else 0 for a in "XYZ"]
+            orientation["hint"] = (
+                f"sheet-like part, {extents[thin]:.2f} mm thick along {axis.upper()}: a hole through the sheet runs "
+                f"along {axis.upper()} (direction {tuple(direction)}), and its position is given in {in_plane[0]} and "
+                f"{in_plane[1]}")
+        return orientation
+    except Exception:
+        return None
+
+
 def _non_solid_geometry(shape, body):
     """The faces and edges of an imported file that belong to none of its solids, as {"faces": F, "edges": E}
     (an edge that bounds one of those faces is not counted again), or None when there are none. A STEP
@@ -280,6 +321,7 @@ def inspect_step(path):
             volume_mm3=float(sum(s.Volume() for s in solids)),
             features=summarize_features(cq.Workplane("XY").newObject([body]), bbox),
             non_solid_geometry=_non_solid_geometry(shape, body),
+            orientation=summarize_orientation(body, bbox),
         )
     except Exception as exc:  # the file is caller data; any failure is a validation outcome
         return StepSummary(valid=False, error=str(exc)[:500])

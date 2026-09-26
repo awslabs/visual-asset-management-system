@@ -131,6 +131,9 @@ class RunState:
     final_checks: List[str] = field(default_factory=list)
     search_calls: int = 0
     fetch_calls: int = 0
+    # The input STEP's summary, taken once per run (by inspect_input_step, or with the first script result
+    # when the model skipped that call): what every MODIFY attempt is compared against.
+    input_summary: Optional[cad_io.StepSummary] = None
 
     @property
     def attempts_left(self):
@@ -179,6 +182,50 @@ def sanitize_output(path, summary):
     return summary
 
 
+# A volume difference below this fraction of the input's volume (and below this many mm^3) is re-export
+# noise, not a change; a bounding-box coordinate that moved less than BBOX_CHANGE_MM has not moved.
+UNCHANGED_VOLUME_FRACTION = 1e-5
+UNCHANGED_VOLUME_MM3 = 1e-3
+BBOX_CHANGE_MM = 0.01
+
+
+def _hole_count(summary):
+    return sum(int(h.get("count", 0)) for h in (summary.features or {}).get("holes", []))
+
+
+def delta_vs_input(before, after):
+    """What a MODIFY attempt changed against the input: volume, hole count, solid count and whether the
+    bounding box moved -- with a note when the numbers say a requested cut did not land, so the model cannot
+    mistake a feature placed outside the material or on the wrong plane for a detector miss. None unless
+    both summaries are valid geometry."""
+    if not (before and before.valid and after and after.valid):
+        return None
+    dv = (after.volume_mm3 or 0.0) - (before.volume_mm3 or 0.0)
+    holes = _hole_count(after) - _hole_count(before)
+    solids = after.solid_count - before.solid_count
+    bbox_changed = any(abs(a - b) > BBOX_CHANGE_MM
+                       for a, b in zip(after.bounding_box_mm or [], before.bounding_box_mm or []))
+    delta = {"volume_change_mm3": round(dv, 3), "holes_count_change": holes, "solid_count_change": solids,
+             "bbox_changed": bbox_changed}
+    unchanged = abs(dv) <= max(UNCHANGED_VOLUME_MM3, UNCHANGED_VOLUME_FRACTION * abs(before.volume_mm3 or 0.0))
+    if unchanged and holes == 0 and solids == 0 and not bbox_changed:
+        delta["note"] = ("nothing measurable changed against the input: if a cut or hole was requested, it was placed "
+                         "outside the material or on the wrong plane and removed no volume - change the plane (see the "
+                         "input's orientation.thickness_axis) or the coordinates, not the API call")
+    elif dv < 0 and not unchanged and holes <= 0:
+        delta["note"] = ("volume dropped but no new hole is detected: right for a pocket, slot, chamfer or an enlarged "
+                         "hole; if a hole was requested, the cut is a sliver on an edge face (wrong workplane) or overlaps "
+                         "an existing feature - verify the drilling axis against the input's orientation.thickness_axis")
+    return delta
+
+
+def _input_summary(state):
+    """The run's input summary, inspected once (None for a run without an input file)."""
+    if state.input_step and state.input_summary is None:
+        state.input_summary = cad_io.inspect_step(state.input_step)
+    return state.input_summary
+
+
 def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn: Optional[Callable] = None,
                 screen_fn: Optional[Callable] = None):
     """The Strands tool functions bound to ``state``.
@@ -197,15 +244,17 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
 
     @tool
     def inspect_input_step() -> str:
-        """Summarize the geometry of the input STEP file: solid/face/edge counts, bounding box in mm, volume
-        and the feature summary (holes by diameter with through/blind and their centres measured from the
-        bounding box's minimum corner, cylindrical outer faces, fillet-like faces, planar faces). Every
-        figure describes the solids; annotation geometry outside them (PMI planes, curves) is only counted,
-        under non_solid_geometry. Returns a note when the run has no input file."""
+        """Summarize the geometry of the input STEP file: solid/face/edge counts, bounding box in mm, volume,
+        the feature summary (holes by diameter with through/blind and their centres measured from the
+        bounding box's minimum corner, cylindrical outer faces, fillet-like faces, planar faces) and the
+        orientation (largest planar faces with their normals; the thickness axis of a sheet-like part, which
+        is the axis a hole through it runs along). Every figure describes the solids; annotation geometry
+        outside them (PMI planes, curves) is only counted, under non_solid_geometry. Returns a note when the
+        run has no input file."""
         cancellation.raise_if_requested()
         if not state.input_step:
             return json.dumps({"hasInput": False, "note": "This run has no input STEP file; create the geometry from scratch."})
-        summary = cad_io.inspect_step(state.input_step)
+        summary = _input_summary(state)
         return json.dumps({"hasInput": True, "path": state.input_step, **summary.to_dict()})
 
     @tool
@@ -218,7 +267,9 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         there is no network access. Returns a JSON result with the validation summary and the tail of the
         script's output; use it to correct the next attempt. Geometry outside the solids (annotation planes
         or curves carried over from an imported file) is dropped from the output file and reported under
-        dropped_non_solid_geometry.
+        dropped_non_solid_geometry. On a modify run the result also carries deltaVsInput: the volume, hole
+        count, solid count and bounding-box change against the input, with a note when nothing measurable
+        changed or when volume went without a new hole.
 
         Args:
             code: The complete Python script to run.
@@ -240,6 +291,7 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
             valid=False, error="the script wrote no output file at CAD_OUTPUT_STEP")
         summary = sanitize_output(result.output_path, summary)
         ok = result.succeeded and summary.valid
+        delta = delta_vs_input(_input_summary(state), summary) if ok and state.input_step else None
         state.attempts.append(report.AttemptRecord(
             number=number, succeeded=ok,
             summary=f"{intent} -> {summary.describe()}" + (" (timed out)" if result.timed_out else ""),
@@ -247,7 +299,7 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         if ok:
             state.best_output = result.output_path
             state.best_geometry = summary.to_dict()
-        return json.dumps({
+        reply = {
             "ok": ok,
             "attempt": number,
             "attemptsLeft": state.attempts_left,
@@ -255,7 +307,10 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
             "timedOut": result.timed_out,
             "geometry": summary.to_dict(),
             "outputTail": result.output_tail[-4000:],
-        })
+        }
+        if delta is not None:
+            reply["deltaVsInput"] = delta
+        return json.dumps(reply)
 
     @tool
     def finish(summary: str, unresolved: List[str], status: str, checks: List[str]) -> str:
