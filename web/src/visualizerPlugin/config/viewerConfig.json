@@ -70,16 +70,7 @@
             "name": "Video Player",
             "description": "Play video files with standard controls",
             "componentPath": "./viewers/VideoViewerPlugin/VideoViewerComponent",
-            "supportedExtensions": [
-                ".mp4",
-                ".webm",
-                ".mov",
-                ".avi",
-                ".mkv",
-                ".flv",
-                ".wmv",
-                ".m4v"
-            ],
+            "supportedExtensions": [".mp4", ".webm", ".mov", ".mkv", ".m4v"],
             "supportsMultiFile": false,
             "canFullscreen": false,
             "priority": 1,

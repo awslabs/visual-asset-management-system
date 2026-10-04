@@ -19,45 +19,68 @@ VAMS deploys as a root stack (`CoreVAMSStack`) with 10+ nested stacks. Understan
 
 ### Dependency Chain
 
+Each solid arrow is an explicit `addStackDependency()` call in `core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none. The dotted arrow is a cross-stack reference that AWS CloudFormation orders implicitly: StaticWeb reads the REST API endpoint. See [Nested Stack Dependency Chain](../architecture/details.md#nested-stack-dependency-chain) for how the ordering is derived.
+
 ```mermaid
 graph TD
     Core["CoreVAMSStack (root)"]
     VPC["VPCBuilder (conditional)"]
     Layers["LambdaLayers"]
     Storage["StorageResourcesBuilder"]
+    Names["ResourceNamesBuilder"]
     Auth["AuthBuilder"]
-    ApiGw["ApiGatewayV2Amplify"]
     Api["ApiBuilder"]
-    Web["StaticWebBuilder"]
+    Api2["ApiBuilder2"]
     Search["SearchBuilder"]
     Pipeline["PipelineBuilder"]
-    Feature["CustomFeatureEnabledConfig"]
+    Addon["AddonBuilder"]
+    Rest["RestApi"]
+    Web["StaticWeb (conditional)"]
     Location["LocationService (conditional)"]
+    Feature["CustomFeatureEnabledConfig"]
 
     Core --> VPC
     Core --> Layers
     Core --> Storage
-    Storage --> Auth
-    Auth --> ApiGw
-    ApiGw --> Api
-    ApiGw --> Web
-    ApiGw --> Search
-    ApiGw --> Pipeline
     Core --> Location
     Core --> Feature
+    Storage --> Names
+    Storage --> Auth
+    Names --> Auth
+    Storage --> Api
+    Names --> Api
+    Storage --> Api2
+    Names --> Api2
+    Api --> Api2
+    Storage --> Search
+    Names --> Search
+    Storage --> Pipeline
+    Api2 --> Pipeline
+    Storage --> Addon
+    Names --> Addon
+    Storage --> Rest
+    Auth --> Rest
+    Api --> Rest
+    Api2 --> Rest
+    Search --> Rest
+    Addon --> Rest
+    Storage --> Web
+    Rest -.->|API endpoint| Web
 ```
 
 ### Key Nested Stacks
 
-| Stack                   | File                                                        | Purpose                                                                                |
-| ----------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                | VPC, subnets, VPC endpoints                                                            |
-| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`        | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS |
-| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`              | Amazon Cognito, SAML, external OAuth                                                   |
-| RestApiBuilder          | `nestedStacks/apiLambda/restApiBuilder-nestedStack.ts`      | REST API, Lambda authorizer, route registry                                            |
-| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`          | All API routes and Lambda wiring                                                       |
-| StaticWebBuilder        | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts` | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
-| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`     | Processing pipeline orchestrator                                                       |
+| Stack                   | File                                                             | Purpose                                                                                |
+| ----------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                     | VPC, subnets, VPC endpoints                                                            |
+| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`             | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS |
+| ResourceNamesBuilder    | `nestedStacks/resourceNames/resourceNamesBuilder-nestedStack.ts` | AWS Systems Manager Parameter Store parameters that publish resource names             |
+| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`                   | Amazon Cognito, SAML, external OAuth                                                   |
+| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`               | Primary API routes and Lambda wiring                                                   |
+| ApiBuilder2             | `nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`              | Secondary API routes and Lambda wiring                                                 |
+| RestApi                 | `nestedStacks/apiLambda/api-nestedStack.ts`                      | Amazon API Gateway REST API and Lambda authorizer, built from the route registry       |
+| StaticWeb               | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`      | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
+| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`          | Processing pipeline orchestrator                                                       |
 
 ### Cross-Stack Shared Interfaces
 
@@ -140,7 +163,7 @@ Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks authorization 
 
 ## API Route Wiring
 
-Routes are wired in `apiBuilder-nestedStack.ts` using the `attachFunctionToApi` helper.
+Routes are wired with the `attachFunctionToApi` helper (`lib/nestedStacks/apiLambda/apiRouteRegistry.ts`) from the nested stack that builds the route's Lambda function. Add new core routes in `apiBuilder2-nestedStack.ts`; use `apiBuilder-nestedStack.ts` only when the function must share a function instance defined there.
 
 ### Attaching a Function to Amazon API Gateway
 
@@ -159,20 +182,20 @@ const myFunction = buildMyNewFunction(
 attachFunctionToApi(this, myFunction, {
     routePath: "/my-resource/{resourceId}",
     method: apigateway.HttpMethod.GET,
-    api: api,
+    registry: registry,
 });
 attachFunctionToApi(this, myFunction, {
     routePath: "/my-resource",
     method: apigateway.HttpMethod.POST,
-    api: api,
+    registry: registry,
 });
 ```
 
-The `attachFunctionToApi` helper creates an `ApiGatewayV2LambdaConstruct` which:
+The `attachFunctionToApi` helper records a route descriptor (path, method, Lambda function, and allow-anonymous flag) in the cross-stack `RouteRegistry` and creates no API resource itself. The `RestApi` nested stack deploys after every stack that registers routes, and its `RestApiGatewayConstruct` (`lib/nestedStacks/apiLambda/constructs/rest-api-gateway-construct.ts`):
 
-1. Grants invoke permission to the Amazon API Gateway service principal
-2. Creates an `HttpLambdaIntegration`
-3. Adds the route to the API
+1. Registers the anonymous `/api/amplify-config` and `/api/version` routes with `registry.register(` directly
+2. Renders every registered route into one OpenAPI definition on an Amazon API Gateway `SpecRestApi`
+3. Adds one `lambda:InvokeFunction` permission for the Amazon API Gateway service principal per registered function
 
 ### Route Conventions
 
@@ -287,7 +310,7 @@ When `config.app.govCloud.enabled` is `true`, several constraints apply.
 
 ### GovCloud-Specific Behavior
 
--   FIPS endpoints used via `config.app.useFips`
+-   `config.app.useFips` (on in the GovCloud template) adds the AWS KMS FIPS interface VPC endpoint; VAMS service calls use the standard endpoints either way
 -   `AwsSolutions-COG3` CDK Nag rule suppressed (AdvancedSecurityMode not available)
 -   ALB deployment replaces Amazon CloudFront for static web hosting
 -   VPC endpoints are conditional on feature flags
@@ -368,7 +391,7 @@ Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persi
 1. Create the builder function in `lib/lambdaBuilder/{domain}Functions.ts`
 2. Follow the standard pattern with all four security calls
 3. Grant Amazon DynamoDB table permissions (`grantReadData` or `grantReadWriteData`)
-4. Wire to Amazon API Gateway in `apiBuilder-nestedStack.ts` using `attachFunctionToApi()`
+4. Wire to Amazon API Gateway using `attachFunctionToApi()`, in `apiBuilder2-nestedStack.ts` for a new core route
 
 ### Adding a New Amazon DynamoDB Table
 

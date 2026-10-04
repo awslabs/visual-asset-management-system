@@ -328,18 +328,24 @@ def delete_assetAuxiliary_files(databaseId, assetLocation):
     logger.info(f"Deleting Temporary Auxiliary Assets Files Under Folder: {s3_assetAuxiliary_bucket}:{key}")
 
     try:
-        # Get all assets in assetAuxiliary bucket (unversioned, temporary files for the auxiliary assets) for deletion
-        # Use assetLocation key as root folder key for assetAuxiliaryFiles
-        paginator = s3.get_paginator('list_objects_v2')
+        # The auxiliary bucket is versioned, so every object version and delete marker under the
+        # prefix is batch-deleted; a delete that names no VersionId would only hide the data
+        deleted_count = 0
+        paginator = s3.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=s3_assetAuxiliary_bucket, Prefix=key):
-            if 'Contents' in page:
-                # Batch-delete the page's objects (up to 1000 per request)
-                objects_to_delete = [{'Key': item['Key']} for item in page['Contents']]
-                logger.info(f"Deleting {len(objects_to_delete)} auxiliary asset files under {key}")
-                s3.delete_objects(
+            entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+            for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
+                batch = entries[i:i + 1000]
+                response = s3.delete_objects(
                     Bucket=s3_assetAuxiliary_bucket,
-                    Delete={'Objects': objects_to_delete}
+                    Delete={'Objects': batch, 'Quiet': True}
                 )
+                errors = response.get('Errors', [])
+                for error in errors:
+                    logger.warning(f"Error deleting auxiliary file version {error.get('Key')} ({error.get('VersionId')}): {error.get('Code')}")
+                deleted_count += len(batch) - len(errors)
+        logger.info(f"Deleted {deleted_count} auxiliary asset file version(s) and delete marker(s) under {key}")
 
     except Exception as e:
         logger.exception(f"Error deleting auxiliary files: {e}")
@@ -1388,6 +1394,12 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         logger.info(f"Asset {assetId} in database {original_db_id} is not in an archived state")
         raise VAMSGeneralErrorResponse("Asset is not archived. Only archived assets can be unarchived.")
 
+    # Only into a database that still exists; a deleted database's archived assets stay archived
+    db_response = db_table.get_item(Key={'databaseId': original_db_id}, ConsistentRead=True)
+    if 'Item' not in db_response:
+        logger.info(f"Database {original_db_id} for asset {assetId} has been deleted; not unarchiving")
+        raise VAMSGeneralErrorResponse("The asset's database has been deleted. Re-create the database before unarchiving this asset.")
+
     # Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
@@ -2096,11 +2108,12 @@ def handle_put_request(event):
         # Otherwise, handle regular update
         update_model = parse(body, model=UpdateAssetRequestModel)
         
-        # Update the asset
+        # Update the asset. A field the body omitted or sent as null is left unchanged; false and an
+        # empty tag list are values and are applied.
         result = update_asset(
             path_parameters['databaseId'], 
             path_parameters['assetId'], 
-            update_model.dict(exclude_unset=True),
+            update_model.dict(exclude_unset=True, exclude_none=True),
             claims_and_roles
         )
 

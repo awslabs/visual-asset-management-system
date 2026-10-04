@@ -239,6 +239,237 @@ describe("documented values match the code that produces them", () => {
                 .filter((l) => /not granted to VAMS roles automatically/i.test(l));
             expect(offending).toEqual([]);
         });
+
+        /** Values Amazon S3 accepts in a CORS rule's `AllowedMethods`. */
+        const S3_CORS_METHODS = ["GET", "PUT", "POST", "DELETE", "HEAD"];
+        const CORS_STEP_HEADING = "### Step 2: Configure CORS";
+        const RESERVED_FOLDERS_TITLE = ":::warning[Reserved folder names]";
+
+        interface CorsRule {
+            AllowedMethods: string[];
+            ExposeHeaders: string[];
+        }
+
+        type CorsConfiguration = CorsRule[] | { CORSRules?: CorsRule[] };
+
+        /** The first fenced `json` block under the CORS step, parsed. */
+        const documentedCorsConfiguration = (): CorsConfiguration | undefined => {
+            const heading = extMd.indexOf(CORS_STEP_HEADING);
+            const fence =
+                heading < 0 ? null : /```json\r?\n([\s\S]*?)\r?\n```/.exec(extMd.slice(heading));
+            return fence ? JSON.parse(fence[1]) : undefined;
+        };
+
+        /** The first rule of the documented configuration, in rule-array or `CORSRules` form. */
+        const documentedCorsRule = (): CorsRule => {
+            const configuration = documentedCorsConfiguration();
+            const rules = Array.isArray(configuration) ? configuration : configuration?.CORSRules;
+            return rules?.[0] ?? { AllowedMethods: [], ExposeHeaders: [] };
+        };
+
+        test("the CORS sample was parsed", () => {
+            // Positive control: a renamed heading or a re-fenced sample would leave the rule empty,
+            // and the subset assertion below passes on an empty list.
+            expect(documentedCorsRule().AllowedMethods.length).toBeGreaterThan(0);
+            expect(documentedCorsRule().ExposeHeaders).toContain("ETag");
+        });
+
+        test("the CORS sample lists only methods Amazon S3 accepts", () => {
+            // Amazon S3 answers the OPTIONS preflight from the rule; OPTIONS is not a list value.
+            const unsupported = documentedCorsRule().AllowedMethods.filter(
+                (m) => !S3_CORS_METHODS.includes(m)
+            );
+            expect(unsupported).toEqual([]);
+        });
+
+        test("the CORS sample is the CORSRules document that put-bucket-cors takes", () => {
+            // --cors-configuration takes {"CORSRules": [...]}. A bare rule array is the format of
+            // the Amazon S3 console's CORS editor, and the AWS CLI rejects it before any request.
+            const configuration = documentedCorsConfiguration();
+            expect(Array.isArray(configuration)).toBe(false);
+            const rules = Array.isArray(configuration) ? undefined : configuration?.CORSRules;
+            expect(rules?.length ?? 0).toBeGreaterThan(0);
+        });
+
+        test("the CORS sample exposes the range-read headers", () => {
+            expect(documentedCorsRule().ExposeHeaders).toEqual(
+                expect.arrayContaining(["Accept-Ranges", "Content-Range"])
+            );
+        });
+
+        test("the reserved-folder warning scopes the check to every folder in the key", () => {
+            // key_has_reserved_segment tests every segment of the raw key and of the
+            // prefix-stripped remainder by exact, case-sensitive membership, so the prefix's own
+            // folders and the file name itself count too.
+            const body = admonitionBody(extMd, RESERVED_FOLDERS_TITLE);
+            expect(body.length).toBeGreaterThan(0);
+            expect(body).not.toMatch(/top-level/i);
+            expect(body).toMatch(/any folder in its key/);
+            expect(body).toMatch(/subfolder inside an asset folder/);
+            expect(body).toMatch(/`baseAssetsPrefix` itself/);
+            expect(body).toMatch(/file whose whole name is one of these names/);
+            expect(body).toMatch(/case-sensitive/);
+        });
+
+        const IAM_STEP_HEADING = "### Step 4: Configure cross-account IAM (conditional)";
+        const MANUAL_KMS_POLICY_INTRO = "The field takes one key";
+        const DEPLOY_INFO_TITLE = ":::info[What happens during deployment]";
+        const AUTO_LIST_START = "VAMS configures automatically (from Account A)";
+        const OWNER_LIST_START = "The bucket owner must configure manually (in Account B)";
+        const STEP_4_ANCHOR = "#step-4-configure-cross-account-iam-conditional";
+
+        /** The actions in the statement `grantExternalAssetBucketKmsKeys` attaches to a role. */
+        const externalKeyGrantActions = (): string[] => {
+            const source = readInfraSource(path.join("lib", "helper", "security.ts"));
+            const start = source.indexOf("export function grantExternalAssetBucketKmsKeys");
+            if (start < 0) return [];
+            const end = source.indexOf("\nexport function ", start + 1);
+            const body = source.slice(start, end < 0 ? undefined : end);
+            const actions = /actions:\s*\[([^\]]*)\]/.exec(body);
+            return actions ? [...actions[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : [];
+        };
+
+        /** The backticked `kms:` actions named in one line of the page. */
+        const kmsActionsIn = (line: string): string[] =>
+            [...line.matchAll(/`(kms:[A-Za-z*]+)`/g)].map((m) => m[1]);
+
+        const asSortedSet = (values: string[]): string[] => [...new Set(values)].sort();
+
+        /** The text between two markers, or "" when either marker is missing. */
+        const textBetween = (text: string, from: string, to: string): string => {
+            const start = text.indexOf(from);
+            const end = start < 0 ? -1 : text.indexOf(to, start + from.length);
+            return end < 0 ? "" : text.slice(start + from.length, end);
+        };
+
+        const numberedLines = (): Array<{ line: string; n: number }> =>
+            extMd.split("\n").map((line, i) => ({ line, n: i + 1 }));
+
+        test("the external-key grant actions were read from security.ts", () => {
+            // Positive control: a renamed helper or a reshaped statement leaves the list empty, and
+            // the set comparisons below would then compare nothing.
+            const actions = externalKeyGrantActions();
+            expect(actions).toContain("kms:Decrypt");
+            expect(actions.length).toBeGreaterThan(1);
+        });
+
+        test("every statement of the external-key grant names the actions the code grants", () => {
+            const expected = asSortedSet(externalKeyGrantActions()).join(", ");
+            const claims = numberedLines()
+                .filter(({ line }) => line.includes("`bucketKmsKeyArn`"))
+                .filter(({ line }) => kmsActionsIn(line).length > 0);
+            // Positive control: the page states the granted actions in more than one place.
+            expect(claims.length).toBeGreaterThanOrEqual(2);
+            const wrong = claims
+                .map(({ line, n }) => ({ n, named: asSortedSet(kmsActionsIn(line)).join(", ") }))
+                .filter(({ named }) => named !== expected)
+                .map(({ n, named }) => `external-s3-setup.md:${n} ${named}`);
+            expect(wrong).toEqual([]);
+        });
+
+        test("the manual external-key policy grants the same actions as the automatic grant", () => {
+            const step4 = extMd.indexOf(IAM_STEP_HEADING);
+            const intro = step4 < 0 ? -1 : extMd.indexOf(MANUAL_KMS_POLICY_INTRO, step4);
+            expect(intro).toBeGreaterThan(0);
+            const fence = /```json\r?\n([\s\S]*?)\r?\n```/.exec(extMd.slice(intro));
+            expect(fence).not.toBeNull();
+            const policy = JSON.parse(fence ? fence[1] : "{}");
+            const actions: string[] = policy.Statement?.[0]?.Action ?? [];
+            expect(asSortedSet(actions)).toEqual(asSortedSet(externalKeyGrantActions()));
+        });
+
+        test("the deployment summary states the conditional external-key grant", () => {
+            // grantExternalAssetBucketKmsKeys grants the key to the VAMS roles whenever the entry
+            // sets bucketKmsKeyArn; only the Account B key policy is the bucket owner's to apply.
+            const body = admonitionBody(extMd, DEPLOY_INFO_TITLE);
+            expect(body.length).toBeGreaterThan(0);
+            expect(body).not.toMatch(/external KMS grants/i);
+            expect(body).toContain("`bucketKmsKeyArn`");
+            expect(body).toMatch(/key policy/);
+        });
+
+        test("the bucket owner's list leaves the IAM grant on the VAMS roles to Account A", () => {
+            const autoList = textBetween(extMd, AUTO_LIST_START, OWNER_LIST_START);
+            const ownerList = textBetween(extMd, OWNER_LIST_START, ":::note");
+            // Positive control: both lists were found.
+            expect(autoList).toMatch(/Lambda and pipeline permissions/);
+            expect(ownerList).toMatch(/KMS key access/);
+            expect(ownerList).not.toMatch(/VAMS roles/);
+            expect(ownerList).not.toContain(STEP_4_ANCHOR);
+            expect(autoList).toContain("`bucketKmsKeyArn`");
+        });
+
+        test("bucketKmsKeyArn is documented as required for a customer managed key on both pages", () => {
+            const refMd = read("deployment/configuration-reference.md");
+            const row = (md: string) =>
+                md.split("\n").find((l) => l.startsWith("| `bucketKmsKeyArn`")) ?? "";
+            expect(row(extMd)).toContain("Required for a customer managed key");
+            expect(row(refMd)).toContain(
+                "Required if the bucket uses SSE-KMS with a customer managed key"
+            );
+            expect(extMd).not.toMatch(/prefer not to set `bucketKmsKeyArn`/);
+        });
+
+        const VAMS_KEY_STEP_HEADING = "#### 3b. VAMS-owned CMK in Account A";
+        const S3_NOTIFICATION_SID = 'sid: "AllowExternalBucketS3Notifications"';
+
+        /** The actions of the key policy statement the storage stack adds for external accounts. */
+        const s3NotificationStatementActions = (): string[] => {
+            const source = readInfraSource(
+                path.join("lib", "nestedStacks", "storage", "storageBuilder-nestedStack.ts")
+            );
+            const start = source.indexOf(S3_NOTIFICATION_SID);
+            if (start < 0) return [];
+            const end = source.indexOf("})", start);
+            const statement = source.slice(start, end < 0 ? undefined : end);
+            const actions = /actions:\s*\[([^\]]*)\]/.exec(statement);
+            return actions ? [...actions[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : [];
+        };
+
+        /** Step 3b, from its heading to the next heading of level 2 to 4. */
+        const vamsKeyStep = (): string => {
+            const start = extMd.indexOf(VAMS_KEY_STEP_HEADING);
+            if (start < 0) return "";
+            const rest = extMd.slice(start + VAMS_KEY_STEP_HEADING.length);
+            const next = rest.search(/\n#{2,4} /);
+            return next < 0 ? rest : rest.slice(0, next);
+        };
+
+        /** The `Action` of the first JSON sample in Step 3b. */
+        const vamsKeyStepSampleActions = (): string[] => {
+            const fence = /```json\r?\n([\s\S]*?)\r?\n```/.exec(vamsKeyStep());
+            const action = fence ? JSON.parse(fence[1]).Action : undefined;
+            if (action === undefined) return [];
+            return Array.isArray(action) ? action : [action];
+        };
+
+        const sortedUnique = (values: string[]): string[] => [...new Set(values)].sort();
+
+        test("the VAMS key's S3 notification statement was read from the storage stack", () => {
+            // Positive control: a renamed Sid or a reshaped statement leaves the list empty, and a
+            // missing sample would then compare equal to it.
+            const actions = s3NotificationStatementActions();
+            expect(actions).toContain("kms:Decrypt");
+            expect(actions.length).toBeGreaterThan(1);
+        });
+
+        test("the Step 3b sample statement names the actions the storage stack grants", () => {
+            // VAMS adds this statement to a key it generated, and the sample is what an operator adds
+            // to an imported key, so the two grant the same actions.
+            expect(sortedUnique(vamsKeyStepSampleActions())).toEqual(
+                sortedUnique(s3NotificationStatementActions())
+            );
+        });
+
+        test("Step 3b states the key policy for a generated and for an imported key", () => {
+            // The storage stack adds the statement only to a key it generated, scoped to each entry's
+            // bucketAccountId; the policy of a key imported through optionalExternalCmkArn is the
+            // operator's to change.
+            const step = vamsKeyStep();
+            expect(step.length).toBeGreaterThan(0);
+            expect(step).toMatch(/\boptionalExternalCmkArn\b/);
+            expect(step).toMatch(/\bbucketAccountId\b/);
+        });
     });
 
     describe("Restricted-partition caveat — NVIDIA GenAI pipelines", () => {

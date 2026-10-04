@@ -113,6 +113,8 @@ class TestAssetServiceHistoryHooks:
     def _prepare(self, m, asset):
         m.asset_table = MagicMock()
         m.asset_table.get_item.return_value = {"Item": dict(asset)}
+        m.db_table = MagicMock()
+        m.db_table.get_item.return_value = {"Item": {"databaseId": "db1"}}
         m.write_asset_history_record = MagicMock()
         m.send_subscription_email = MagicMock()
         m.get_asset_bucket_details = MagicMock(return_value={"bucketName": "bucket"})

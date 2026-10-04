@@ -460,22 +460,28 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         # Update the fields
         logger.info(f"Updating metadata schema {metadataSchemaId}")
         
-        # Update only the editable fields
-        if 'schemaName' in update_data:
+        # Update only the editable fields. schemaName, fields and enabled are required on every
+        # stored schema, so a null leaves them unchanged; a null or empty fileKeyTypeRestriction
+        # removes the restriction.
+        if update_data.get('schemaName') is not None:
             schema['schemaName'] = update_data['schemaName']
         
         if 'fileKeyTypeRestriction' in update_data:
-            if update_data['fileKeyTypeRestriction']:
-                schema['fileKeyTypeRestriction'] = update_data['fileKeyTypeRestriction']
+            file_key_type_restriction = update_data['fileKeyTypeRestriction']
+            if file_key_type_restriction and file_key_type_restriction.strip():
+                # Only fileMetadata and fileAttribute schemas carry a restriction, as on create
+                if schema['metadataSchemaEntityType'] not in [MetadataSchemaEntityType.FILE_METADATA.value, MetadataSchemaEntityType.FILE_ATTRIBUTE.value]:
+                    raise VAMSGeneralErrorResponse("fileKeyTypeRestriction can only be set for fileMetadata or fileAttribute entity types")
+                schema['fileKeyTypeRestriction'] = file_key_type_restriction
             else:
-                # Remove the field if set to None or empty
+                # Remove the field if set to None, empty or whitespace only
                 schema.pop('fileKeyTypeRestriction', None)
         
-        if 'fields' in update_data:
+        if update_data.get('fields') is not None:
             # Convert fields to JSON string for storage
             schema['fields'] = json.dumps(update_data['fields'])
         
-        if 'enabled' in update_data:
+        if update_data.get('enabled') is not None:
             schema['enabled'] = update_data['enabled']
         
         # Update metadata

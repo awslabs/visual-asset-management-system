@@ -24,6 +24,8 @@ Each file in VAMS corresponds to a single Amazon S3 object stored within an asse
 
 ## File operations
 
+Copy, move, rename, unarchive, revert, and setting the primary type keep the content type and the other content headers (`Content-Encoding`, `Content-Disposition`, `Content-Language`, `Cache-Control`, and `Expires`) of the file version they copy from. The final copy of an upload keeps the content headers of the staged object, so a workflow output keeps the content type it was written with.
+
 ### Upload
 
 Files are uploaded using a multipart upload process:
@@ -40,7 +42,7 @@ Two upload types are supported: `assetFile` for regular asset files, and `assetP
 
 ### Download
 
-File downloads are served through pre-signed Amazon S3 URLs that expire after a configurable timeout (default: 24 hours). Downloads can target:
+File downloads are served through pre-signed Amazon S3 URLs that expire after a configurable timeout (default: 24 hours), or earlier if the credentials that signed them expire first. Downloads can target:
 
 -   A specific file by key.
 -   A specific Amazon S3 version by `versionId`.
@@ -95,7 +97,7 @@ Archiving a file creates an Amazon S3 delete marker on the object, which hides t
 
 ### Unarchive (restore)
 
-Unarchiving removes the Amazon S3 delete marker from a file, restoring the most recent non-deleted version to visibility. The file's complete version history remains intact.
+Unarchiving copies the most recent content version of an archived file forward as its new current version, so the file is visible again. The delete marker and the file's complete version history remain intact.
 
 ### Permanent delete
 
@@ -167,7 +169,7 @@ When viewing file details with `includeVersions: true`, the response lists all A
 | `changeSource`    | How this version was created (see [File change history](#file-change-history)). |
 | `changeUserId`    | User (or `SYSTEM_USER`) that created this version.                              |
 
-Each version also carries change provenance fields (`changeWorkflowId`, `changeWorkflowExecutionId`, `changeAssetIdFrom`, `changeDatabaseIdFrom`, `changeAssetFilePathFrom`, `changeAssetFileVersionFrom`) for workflow-produced, copied, moved, renamed, and reverted versions. See [File change history](#file-change-history) for details.
+Each version also carries change provenance fields (`changeWorkflowId`, `changeWorkflowExecutionId`, `changeAssetIdFrom`, `changeDatabaseIdFrom`, `changeAssetFilePathFrom`, `changeAssetFileVersionFrom`) for workflow-produced, copied, moved, renamed, reverted, and primary-type-changed versions. See [File change history](#file-change-history) for details.
 
 ### Asset versions (VAMS snapshots)
 
@@ -198,19 +200,21 @@ VAMS records change provenance for each file version, capturing how the version 
 
 Each tracked file version records a change source, the responsible user, and -- where applicable -- the workflow or source location that produced it. The change source is returned as the `changeSource` field on file and version responses.
 
-| Change source       | Description                                                       |
-| ------------------- | ----------------------------------------------------------------- |
-| `direct`            | The version was changed outside VAMS (a direct Amazon S3 upload). |
-| `upload`            | The version was created through a VAMS file upload.               |
-| `workflowExecution` | The version was produced by a pipeline workflow execution.        |
-| `fileCopy`          | The version was created by copying a file.                        |
-| `fileMove`          | The version was created by moving a file.                         |
-| `fileRename`        | The version was created by renaming a file.                       |
-| `fileArchive`       | The version is a delete marker created by archiving the file.     |
-| `fileUnarchive`     | The version was created by unarchiving (restoring) the file.      |
-| `fileRevert`        | The version was created by reverting the file to a prior version. |
+| Change source        | Description                                                       |
+| -------------------- | ----------------------------------------------------------------- |
+| `direct`             | The version was changed outside VAMS (a direct Amazon S3 upload). |
+| `upload`             | The version was created through a VAMS file upload.               |
+| `workflowExecution`  | The version was produced by a pipeline workflow execution.        |
+| `fileCopy`           | The version was created by copying a file.                        |
+| `fileMove`           | The version was created by moving a file.                         |
+| `fileRename`         | The version was created by renaming a file.                       |
+| `fileArchive`        | The version is a delete marker created by archiving the file.     |
+| `fileUnarchive`      | The version was created by unarchiving (restoring) the file.      |
+| `assetArchive`       | The version is a delete marker created by archiving the asset.    |
+| `fileRevert`         | The version was created by reverting the file to a prior version. |
+| `fileMetadataUpdate` | The version was created by changing the file's primary type.      |
 
-For copy, move, and rename operations, the source location (`changeAssetIdFrom`, `changeDatabaseIdFrom`, `changeAssetFilePathFrom`) and the source Amazon S3 version (`changeAssetFileVersionFrom`) are recorded. For revert operations, `changeAssetFileVersionFrom` records the Amazon S3 version that was reverted to. For workflow-produced versions, the originating `changeWorkflowId` and `changeWorkflowExecutionId` are recorded.
+For copy, move, and rename operations, the source location (`changeAssetIdFrom`, `changeDatabaseIdFrom`, `changeAssetFilePathFrom`) and the source Amazon S3 version (`changeAssetFileVersionFrom`) are recorded. For file revert operations, `changeAssetFileVersionFrom` records the Amazon S3 version that was reverted to; for a primary type change, the version whose content the new version keeps. For workflow-produced versions, the originating `changeWorkflowId` and `changeWorkflowExecutionId` are recorded.
 
 Provenance is recorded as each version is created, and is surfaced in two places:
 
@@ -270,6 +274,8 @@ Each file can be assigned a `primaryType` designation that indicates its role wi
 
 Primary type metadata is stored as Amazon S3 object metadata on the file itself, making it accessible even when reading the file directly from Amazon S3.
 
+Setting or clearing a primary type writes the file as a new Amazon S3 version with the same content, recorded with the change source `fileMetadataUpdate`. Because the content is unchanged, that version does not start `fileUpload` workflow triggers.
+
 ## Folder structure within assets
 
 Assets support virtual folder hierarchies using Amazon S3 key prefixes. For example:
@@ -313,7 +319,7 @@ If the destination file already has metadata with the same keys, the copy operat
 
 ## Viewing files
 
-VAMS includes 20 built-in viewer plugins that render files directly in the browser. When you select a file in the file manager, VAMS automatically selects the best viewer based on the file extension. Viewers cover 3D models, point clouds, Gaussian splats, USD scenes, images, video, audio, documents, and tabular data.
+VAMS includes 20 built-in viewer plugins that render files directly in the browser. When you select a file in the file manager, VAMS opens it in the viewer that supports its file extension, or, when several viewers support it, lets you choose one from a dropdown. Viewers cover 3D models, point clouds, Gaussian splats, USD scenes, images, video, audio, documents, and tabular data.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](viewers.md).
 

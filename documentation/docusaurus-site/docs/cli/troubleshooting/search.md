@@ -185,16 +185,16 @@ python -m json.tool search_params.json
 
 **Cause:**
 
-The `--filters` option accepts two formats: a JSON **array** of OpenSearch clauses, or a query-string expression. A JSON object (not wrapped in an array) and malformed JSON are both rejected.
+The `--filters` option accepts two formats: a JSON **array** of `query_string` clauses, or a query-string expression. A JSON object (not wrapped in an array) and malformed JSON are both rejected.
 
 **Resolution:**
 
 ```bash
 # Query-string format (simplest)
-vamscli search assets --filters 'str_databaseid:"my-db"'
+vamscli search assets --filters 'str_databaseid.keyword:"my-db"'
 
 # JSON array format — note the surrounding brackets
-vamscli search assets --filters '[{"query_string": {"query": "str_databaseid:\"my-db\""}}]'
+vamscli search assets --filters '[{"query_string": {"query": "str_databaseid.keyword:\"my-db\""}}]'
 ```
 
 A bare JSON object such as `'{"query_string": {"query": "test"}}'` is invalid; wrap it in `[ ... ]` or use the query-string form.
@@ -207,21 +207,21 @@ A bare JSON object such as `'{"query_string": {"query": "test"}}'` is invalid; w
 
 **Cause:**
 
-Query-string values must be quoted, field names must exist in the target index, and exact-match comparisons can be case-sensitive.
+Query-string values must be quoted, field names must exist in the target index, and exact-match comparisons can be case-sensitive. Identifier fields such as `str_databaseid` are analyzed text: a quoted id on the field itself matches the id's hyphen-separated words in any letter case, so `smoke-db` also matches `smoke-db-2`, `old-smoke-db` and `Smoke-DB`. The `.keyword` subfield matches the exact, case-sensitive id.
 
 **Resolution:**
 
-1. Quote values and combine clauses with uppercase `AND`/`OR`:
+1. Quote values, filter identifiers on their `.keyword` subfield, and combine clauses with uppercase `AND`/`OR`:
 
     ```bash
-    vamscli search assets --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+    vamscli search assets --filters 'str_databaseid.keyword:"my-db" AND str_assettype:"3d-model"'
     ```
 
 2. Confirm field names against the mapping, and test clauses individually before combining them:
 
     ```bash
     vamscli search mapping
-    vamscli search assets --filters 'str_databaseid:"my-db"'
+    vamscli search assets --filters 'str_databaseid.keyword:"my-db"'
     ```
 
 3. For case-insensitive matching, use wildcards in the value:
@@ -349,14 +349,14 @@ Run `vamscli search mapping --output-format json` to see which fields belong to 
 
 **Cause:**
 
-Overly broad queries (for example, `-q "*"`), broad metadata-mode searches, wide wildcards, and large page sizes all increase load. The `--size` maximum is 2000 for `search assets`/`search files` and 1000 for `search simple`.
+Overly broad queries (for example, `-q "*"`), broad metadata-mode searches, wide wildcards, and large page sizes all increase load. The `--size` maximum is 2000 for `search assets`, `search files`, and `search simple`.
 
 **Resolution:**
 
 1. Narrow the query with filters and a specific database:
 
     ```bash
-    vamscli search assets -q "model" --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+    vamscli search assets -q "model" --filters 'str_databaseid.keyword:"my-db" AND str_assettype:"3d-model"'
     ```
 
 2. Prefer specific metadata modes and exact matches over `both` with broad wildcards:

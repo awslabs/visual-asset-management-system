@@ -50,7 +50,7 @@ Per-document scan targets:
 
 9. **`backendPipelines/CLAUDE.md`**: Scan `backendPipelines/*/*/` (and `backendPipelines/genAi/nvidia/*/*/`) for directories carrying a `vamsSchema/`. Update the pipeline inventory, the execution-type list against `PIPELINE_EXECUTION_TYPES` in `backend/backend/models/pipelines.py`, and the new-pipeline checklist.
 
-10. **`tools/VamsCLI/CLAUDE.md`**: Scan `tools/VamsCLI/vamscli/commands/` for command files and `tools/VamsCLI/vamscli/utils/` for utilities. Update the directory tree, command list, and key files table.
+10. **`tools/VamsCLI/CLAUDE.md`**: Scan `tools/VamsCLI/vamscli/commands/` for command files and `tools/VamsCLI/vamscli/utils/` for utilities. Update the directory tree, command list, and key files table. The `Command Groups (N top-level)` section is restated in `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`; update both copies together against the `cli.add_command()` calls in `tools/VamsCLI/vamscli/main.py`, and write no test-file count into either.
 
 11. **`tools/VamsMCP/CLAUDE.md`**: Scan `tools/VamsMCP/vams_mcp/` for modules and `server.py` for the tools in each gate section. Update the directory tree and tool sections, and check the version pair (`pyproject.toml` and `vams_mcp/__init__.py`).
 

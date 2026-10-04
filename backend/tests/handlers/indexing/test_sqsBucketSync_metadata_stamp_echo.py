@@ -5,7 +5,8 @@
 
 `update_s3_metadata` stamps `databaseid` / `assetid` / `vams-changesource` onto an object by copying
 it onto itself. That copy is an object write, so Amazon S3 raises a second `ObjectCreated:Copy`
-notification for a file that only ever changed once, and every consumer downstream of this handler
+notification (`ObjectCreated:CompleteMultipartUpload` at or above boto3's 8 MiB multipart threshold)
+for a file that only ever changed once, and every consumer downstream of this handler
 acted on it: the indexers re-indexed, and `asset.file.uploaded` was published a second time so a
 `fileUpload` workflow trigger fired TWICE for one written file.
 
@@ -33,7 +34,8 @@ which is what rules out a workflow-trigger loop and attributes the recursion to 
 write.
 
 The discriminator has to be exact in BOTH directions, and the negative arms below are the reason it is
-written as "an ObjectCreated:Copy performed by this function" rather than anything cheaper:
+written as "an ObjectCreated:Copy or ObjectCreated:CompleteMultipartUpload performed by this function"
+rather than anything cheaper:
 
 *   Keying on "the object's metadata already matches" would discard every VAMS upload — `uploadFile`
     stamps the same three keys at upload time, so a real upload arrives already matching.
@@ -245,3 +247,68 @@ class TestOneUploadFiresEachSinkOnce:
 
         (published_records,) = m.publish_to_orchestration_bus.call_args[0]
         assert len(published_records) == 2
+
+
+LARGE_KEY = "myprefix/x-asset-1/scan.e57"
+
+
+@pytest.mark.unit
+class TestMultipartStampEcho:
+    """boto3's managed `copy()` switches to a multipart copy at 8 MiB (`TransferConfig`
+    `multipart_threshold`), so the stamp of a large object completes as `CompleteMultipartUpload` and
+    its echo arrives as `ObjectCreated:CompleteMultipartUpload`, not `ObjectCreated:Copy`. The echo must
+    be recognized under that name too, while a large write by anyone else stays real work."""
+
+    @pytest.mark.parametrize("event_name", [
+        "ObjectCreated:CompleteMultipartUpload",
+        # The same event routed through EventBridge or hand-built may carry the "s3:" prefix.
+        "s3:ObjectCreated:CompleteMultipartUpload",
+    ])
+    def test_recognizes_this_functions_own_multipart_copy(self, event_name):
+        m = _load()
+        m.self_function_name = SELF_FN
+        assert m.is_vams_metadata_stamp_echo(_record(event_name, SELF_FN, key=LARGE_KEY)) is True
+
+    @pytest.mark.parametrize("principal,why", [
+        # A direct `aws s3 cp` of a large file is itself a multipart upload by the writer's principal.
+        ("some-external-role", "a large direct write is real work"),
+        ("operator-cli-session", "a large direct write by a user session is real work"),
+        # A large file copy or move by the file-operations handlers is a genuine change at the key.
+        (OTHER_FN, "a large copy by another VAMS handler is real work"),
+        (None, "unattributable events are treated as real"),
+    ])
+    def test_does_not_recognize_a_multipart_upload_by_anyone_else(self, principal, why):
+        m = _load()
+        m.self_function_name = SELF_FN
+        record = _record("ObjectCreated:CompleteMultipartUpload", principal, key=LARGE_KEY)
+        assert m.is_vams_metadata_stamp_echo(record) is False, why
+
+    def test_multipart_echo_touches_nothing(self):
+        m = _load()
+        _wire(m)
+        success, should_index, message = m.process_s3_record(
+            _record("ObjectCreated:CompleteMultipartUpload", SELF_FN, key=LARGE_KEY))
+
+        assert success is True
+        assert should_index is False
+        assert "metadata stamp echo" in message
+        m.update_s3_metadata.assert_not_called()
+        m.update_asset_type.assert_not_called()
+        m.write_file_version_history.assert_not_called()
+        m.lookup_asset.assert_not_called()
+
+    def test_large_direct_write_then_multipart_echo_forwards_one_record(self):
+        # The large-file half of "one write fires each sink once": the writer's own multipart upload
+        # and this handler's multipart stamp arrive as two CompleteMultipartUpload records.
+        m = _load()
+        _wire(m)
+        event = {"Records": [
+            _record("ObjectCreated:CompleteMultipartUpload", "some-external-role", key=LARGE_KEY),
+            _record("ObjectCreated:CompleteMultipartUpload", SELF_FN, key=LARGE_KEY),
+        ]}
+        m.lambda_handler_created(event, MagicMock())
+
+        m.publish_to_file_indexer_sns.assert_called_once()
+        (published_records,) = m.publish_to_orchestration_bus.call_args[0]
+        assert len(published_records) == 1
+        assert published_records[0]["userIdentity"]["principalId"].endswith(":some-external-role")

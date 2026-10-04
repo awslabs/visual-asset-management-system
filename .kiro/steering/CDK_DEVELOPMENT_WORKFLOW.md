@@ -87,9 +87,10 @@ interface storageResources {
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
     };
-    // No sqs member: the two Amazon SQS queues the builder creates buffer S3 object-created /
-    // object-deleted notifications for the indexers and are wired locally, and each workflow
-    // trigger Lambda owns its own queue + DLQ in lib/lambdaBuilder/workflowFunctions.ts.
+    // No sqs member: for each registered asset-bucket record the builder creates an object-created
+    // and an object-deleted Amazon SQS queue, each with its own DLQ, consumed by that record's
+    // bucket-sync Lambdas and wired locally, and each workflow trigger Lambda owns its own
+    // queue + DLQ in lib/lambdaBuilder/workflowFunctions.ts.
     sns: {
         eventEmailSubscriptionTopic: sns.Topic;
         fileIndexerSnsTopic: sns.Topic;
@@ -113,7 +114,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 46 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 48 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -133,15 +134,17 @@ interface storageResources {
         databaseMetadataStorageTable;
         assetFileMetadataStorageTable;
         fileAttributeStorageTable;
-        pipelineStorageTable;
+        pipelineStorageTable; // V1; name published for migration tooling only
         rolesStorageTable;
         s3AssetBucketsStorageTable;
         subscriptionsStorageTable;
         tagStorageTable;
         tagTypeStorageTable;
+        tagStorageTableLegacy; // legacy tag table; name published for migration tooling only
+        tagTypeStorageTableLegacy; // legacy tag type table; name published for migration tooling only
         userRolesStorageTable;
         userStorageTable;
-        workflowExecutionsStorageTable;
+        workflowExecutionsStorageTable; // V1; name published for migration tooling only
         workflowExecutionsStorageTableV2; // V2: PK workflowExecutionId, SK workflowDatabaseId:workflowId; GSI WorkflowExecutionsByWorkflowGSI
         pipelineExecutionsStorageTable; // PK pipelineExecutionId, SK workflowExecutionId; GSIs PipelineExecByWorkflowExecGSI / PipelineExecChainGSI / PipelineExecEndStateGSI
         pipelineExecutionInputFilesStorageTable; // PK pipelineExecutionId; GSI InputFilesByAssetGSI
@@ -154,7 +157,7 @@ interface storageResources {
         workflowExecutionInputsStorageTable; // PK workflowExecutionId; GSI WorkflowExecInputsByAssetGSI (asset-scoped execution listing)
         workflowExecutionConfigurationStorageTable;
         apiKeyStorageTable: dynamodb.Table; // GSIs: apiKeyHashIndex (PK: apiKeyHash), userIdIndex (PK: userId)
-        workflowStorageTable: dynamodb.Table;
+        workflowStorageTable: dynamodb.Table; // V1; name published for migration tooling only
         // assetVersionsStorageTable has GSI: databaseIdAssetIdIndex (PK: databaseId:assetId, SK: assetVersionId)
 
         // Pipeline + workflow V2 data model tables
@@ -501,22 +504,41 @@ NagSuppressions.addResourceSuppressions(myResource, [
 #### **Rule 7: Encryption Standards**
 
 ```typescript
-// ✅ CORRECT - Use KMS encryption from storage resources
+// ✅ CORRECT - Choose the encryption type from the shared key
+const kmsKey = storageResources.encryption.kmsKey;
 const table = new dynamodb.Table(this, "MyTable", {
-    encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-    encryptionKey: storageResources.encryption.kmsKey,
+    encryption: kmsKey
+        ? dynamodb.TableEncryption.CUSTOMER_MANAGED
+        : dynamodb.TableEncryption.AWS_MANAGED,
+    encryptionKey: kmsKey,
 });
 
-// ✅ CORRECT - S3 bucket encryption
+// ✅ CORRECT - S3 bucket encryption, chosen the same way
+const bucket = new s3.Bucket(this, "MyBucket", {
+    encryption: kmsKey ? s3.BucketEncryption.KMS : s3.BucketEncryption.S3_MANAGED,
+    encryptionKey: kmsKey,
+    bucketKeyEnabled: kmsKey ? true : false,
+});
+
+// ❌ INCORRECT - with the CMK off, CDK creates a new customer managed key for this resource and retains it
 const bucket = new s3.Bucket(this, "MyBucket", {
     encryption: s3.BucketEncryption.KMS,
     encryptionKey: storageResources.encryption.kmsKey,
 });
 ```
 
+Inside the storage nested stack, spread `dynamodbDefaultProps` or `s3DefaultProps` instead. They choose on
+`config.app.useKmsCmkEncryption.enabled`, which is the same choice: the key is defined exactly when the flag
+is on.
+
 **Every resource that supports encryption at rest takes the shared key.** It is `undefined` when
-`config.app.useKmsCmkEncryption.enabled` is false, so the prop is self-guarding — pass it unconditionally
-and the resource falls back to its service's AWS-managed key.
+`config.app.useKmsCmkEncryption.enabled` is false. Log groups (`encryptionKey`), EFS file systems
+(`encrypted: true` plus `kmsKey`) and secrets (`encryptionKey`, imported by ARN as below) have no encryption
+type to choose; they take the key and fall back to their service default without it. DynamoDB tables
+(`encryption` + `encryptionKey`), S3 buckets (the same, plus `bucketKeyEnabled`) and SQS queues
+(`encryption` + `encryptionMasterKey`) choose the encryption type from the key, as above; without it they use
+`AWS_MANAGED`, `S3_MANAGED` (no bucket key) and `SQS_MANAGED`. SNS topics take it as `masterKey` and have no
+server-side encryption without it.
 
 ```typescript
 // ✅ CORRECT - CloudWatch log group
@@ -552,7 +574,7 @@ const secret = new secretsmanager.Secret(this, "MySecret", {
 
 Three traps, each of which passes `cdk synth` and fails later:
 
-1. **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Changing it on an existing file system makes
+1. **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Adding or changing it on an existing file system makes
    AWS CloudFormation create an empty replacement and delete the original, which VAMS declares
    `RemovalPolicy.DESTROY` and therefore does not retain. Treat it as a breaking change: record it in
    `CHANGELOG.md` and the upgrade guide. Log groups and secrets update in place.
@@ -1490,7 +1512,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
-    Six pipelines run in isolated subnets (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Four Batch pipelines run in isolated subnets (Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; seven run in private subnets (Splat Toolbox, ModelOps, RapidPipeline ECS and EKS, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA GR00T) and appear in all three. Isaac Lab training runs its compute in private subnets and appears in the subnet-creation and endpoint conditions, with its ECS endpoint gated separately by `needsEcsIsolated`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) use no Batch and appear in none. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
 
 9. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
 
@@ -1954,7 +1976,7 @@ export class ApiBuilderNestedStack extends cdk.NestedStack {
             props.subnets
         );
 
-        // Register routes into the cross-stack route registry. RestApiBuilder
+        // Register routes into the cross-stack route registry. RestApi (ApiNestedStack)
         // renders the full registry into one OpenAPI spec on a single SpecRestApi.
         attachFunctionToApi(this, createAssetFunction, {
             routePath: "/assets",
@@ -2167,7 +2189,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         );
 
         // The REST authorizer is declared as the OpenAPI security scheme applied
-        // to all non-anonymous routes; RestApiBuilder builds the SpecRestApi from
+        // to all non-anonymous routes; RestApi (ApiNestedStack) builds the SpecRestApi from
         // the route registry and attaches this authorizer via the spec.
     }
 }
@@ -2185,7 +2207,7 @@ export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/ver
 export class AmplifyConfigLambdaConstruct extends Construct {
     public readonly lambdaFn: lambda.Function;
     constructor(parent: Construct, name: string, props: AmplifyConfigLambdaConstructProps) {
-        // ... lambda function creation; RestApiBuilder registers the route:
+        // ... lambda function creation; RestApi (ApiNestedStack) registers the route:
         // registry.register({ path: "/api/amplify-config", method: HttpMethod.GET,
         //                     lambdaFn: this.lambdaFn, allowAnonymous: true });
     }
@@ -2677,10 +2699,13 @@ const dependentStack = new DependentStack(this, "Dependent", {
 ### **Rule 5: Resources MUST Use Proper Encryption**
 
 ```typescript
-// ✅ CORRECT - Use KMS encryption from storage resources
+// ✅ CORRECT - Choose the encryption type from the shared key
+const kmsKey = storageResources.encryption.kmsKey;
 const table = new dynamodb.Table(this, "Table", {
-    encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-    encryptionKey: storageResources.encryption.kmsKey,
+    encryption: kmsKey
+        ? dynamodb.TableEncryption.CUSTOMER_MANAGED
+        : dynamodb.TableEncryption.AWS_MANAGED,
+    encryptionKey: kmsKey,
 });
 
 // ❌ INCORRECT - No encryption or default encryption
@@ -2978,7 +3003,7 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 -   Use `config.env.partition` / `Partition()` when the decision must hold regardless of operator flag hygiene, or is genuinely partition-specific (the commercial-only EventBridge bus CMK, the SAML and Deadline Cloud `=== "aws"` gates, the `aws-eusc` OpenSearch version pick).
 -   **Never write `Partition() === "aws-us-gov"`** — it misses EU Sovereign. When a deny-list is needed, name every restricted partition explicitly (the VPC builder's Cognito-PrivateLink check is the model: it excludes `aws-us-gov`, `aws-eusc`, `aws-iso*` while still allowing `aws-cn`, where the service exists).
 
-> **Known gap:** nothing validates that `app.govCloud.enabled` agrees with `config.env.partition`. Deploying to a restricted partition with the flag left `false` passes synth, then fails at the first EventSourceMapping with "Tags not supported in request."
+> **Validated in `getConfig()`:** a restricted-partition deployment (`aws-us-gov`, `aws-eusc`, `aws-iso*`) with `app.govCloud.enabled` not `true` is rejected, and the ConfigBuilder mirrors it (`restricted-partition-requires-govcloud-flag`). Without that check the deployment would pass synth, then fail at the first EventSourceMapping with "Tags not supported in request."
 
 ### **Checklist for new infrastructure**
 
@@ -3014,7 +3039,7 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 
 5. **Service versions and model ids can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates.
 
-6. **Update all three config templates together** — `commercial`, `govcloud`, `eusovereign`. `useFips` is the one capability flag where the restricted templates disagree (`true` GovCloud, `false` EU Sovereign).
+6. **Update all three config templates together** — `commercial`, `govcloud`, `eusovereign`. `useFips` is the one capability flag where the restricted templates disagree (`true` GovCloud, `false` EU Sovereign). It only adds the AWS KMS FIPS interface endpoint, and `getConfig()` warns when it is `true` in `aws-eusc`, which offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF).
 
 7. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
 

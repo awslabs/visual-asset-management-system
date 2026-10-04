@@ -416,6 +416,105 @@ class TestUpdateReserializesFields:
 
 
 @pytest.mark.unit
+class TestUpdateExplicitNullLeavesRequiredFieldsUnchanged:
+    """`schemaName`, `fields` and `enabled` are required on every stored schema --
+    `MetadataSchemaResponseModel` declares all three -- so a JSON `null` for one of them on update
+    cannot mean "clear". The request model already reads `null` as "not supplied": a body whose only
+    fields are `null` is refused as having nothing to update. The write has to read it the same way.
+    A `null` that reaches the row is stored as NULL (`schemaName`, `enabled`) or as the JSON string
+    "null" (`fields`); the single-schema GET then no longer fits the response model and falls back to
+    the raw row under `message`, and metadata writes skip the schema as disabled or unparsable.
+
+    Each `null` travels beside one non-null field, because a body of only `null`s never reaches the
+    write (pinned below as a control). `fileKeyTypeRestriction` is the one optional stored field, and
+    a `null` for it removes the restriction; that is pinned as a control too.
+    """
+
+    # (field sent as null, the non-null field sent beside it, that field's value)
+    _NULL_CASES = [
+        ("schemaName", "enabled", False),
+        ("fields", "enabled", False),
+        ("enabled", "schemaName", "Renamed Schema"),
+    ]
+    _NULL_IDS = [case[0] for case in _NULL_CASES]
+
+    @pytest.mark.parametrize("null_field, other_field, other_value", _NULL_CASES, ids=_NULL_IDS)
+    def test_a_null_required_field_keeps_its_stored_value(
+            self, enforcer, claims, schema_table, null_field, other_field, other_value):
+        stored_value = _stored_schema()[null_field]
+
+        response = svc.handle_put_request(_update_event(
+            {"metadataSchemaId": SCHEMA_ID, other_field: other_value, null_field: None}))
+
+        assert _status(response) == 200, response
+        item = _written(schema_table)
+        assert item[null_field] == stored_value, (
+            f"the explicit null for {null_field} reached the stored row as {item[null_field]!r}")
+        assert item[other_field] == other_value
+
+    @pytest.mark.parametrize("null_field, other_field, other_value", _NULL_CASES, ids=_NULL_IDS)
+    def test_the_updated_row_still_reads_back_as_a_schema(
+            self, enforcer, claims, schema_table, null_field, other_field, other_value):
+        """The read side of the same contract: the GET serves the row the update wrote as a schema
+        object, not as the raw-row fallback it uses when the response model rejects the row."""
+        svc.handle_put_request(_update_event(
+            {"metadataSchemaId": SCHEMA_ID, other_field: other_value, null_field: None}))
+        schema_table.query.return_value = {"Items": [dict(_written(schema_table))]}
+
+        response = svc.handle_get_request(_get_event())
+
+        assert _status(response) == 200, response
+        body = _body(response)
+        assert "message" not in body, (
+            f"the row written for a null {null_field} no longer fits MetadataSchemaResponseModel")
+        assert body[other_field] == other_value
+        assert body["fields"]["fields"][0]["metadataFieldKeyName"] == "partNumber"
+
+    def test_values_that_are_falsy_but_not_null_are_still_written(
+            self, enforcer, claims, schema_table):
+        """`enabled: false` is a value, not an absence; a truthiness test in place of the null test
+        drops it."""
+        response = svc.handle_put_request(_update_event({
+            "metadataSchemaId": SCHEMA_ID,
+            "schemaName": "Renamed Schema",
+            "fields": _REPLACEMENT_FIELDS,
+            "enabled": False,
+        }))
+
+        assert _status(response) == 200, response
+        item = _written(schema_table)
+        assert item["schemaName"] == "Renamed Schema"
+        assert json.loads(item["fields"]) == _REPLACEMENT_FIELDS
+        assert item["enabled"] is False
+
+    def test_a_null_file_key_type_restriction_still_removes_it(
+            self, enforcer, claims, schema_table):
+        """A `null` `fileKeyTypeRestriction` removes the stored restriction: the optional field keeps
+        its own `null` semantics, while a `null` `schemaName`, `fields` or `enabled` is left unchanged."""
+        stored = {**_stored_schema(), "fileKeyTypeRestriction": ".e57,.las"}
+        schema_table.query.return_value = {"Items": [stored]}
+
+        response = svc.handle_put_request(_update_event(
+            {"metadataSchemaId": SCHEMA_ID, "enabled": False, "fileKeyTypeRestriction": None}))
+
+        assert _status(response) == 200, response
+        assert "fileKeyTypeRestriction" not in _written(schema_table)
+
+    def test_a_body_of_only_nulls_is_refused_and_writes_nothing(
+            self, enforcer, claims, schema_table):
+        response = svc.handle_put_request(_update_event({
+            "metadataSchemaId": SCHEMA_ID,
+            "schemaName": None,
+            "fields": None,
+            "enabled": None,
+        }))
+
+        assert _status(response) == 400, response
+        assert "At least one field must be provided for update" in _body(response)["message"]
+        schema_table.put_item.assert_not_called()
+
+
+@pytest.mark.unit
 class TestDeleteUsesTheStoredCompositeKey:
     def test_the_sort_key_is_read_from_the_stored_row_not_recomputed(
             self, enforcer, claims, schema_table):
@@ -714,4 +813,74 @@ class TestMissingSchemaIsNotFoundOnEveryVerb:
 
         assert _status(response) == 400, verb
         assert "Error retrieving metadata schema" in _body(response)["message"], verb
+
+
+@pytest.mark.unit
+class TestUpdateFileTypeRestrictionFollowsTheStoredEntityType:
+    """Create refuses a `fileKeyTypeRestriction` on a schema that is not fileMetadata or
+    fileAttribute, and the update refuses it the same way. The update body carries no entity type,
+    so the check reads the STORED row. A blank value clears the restriction on any entity type, and
+    a stored restriction the request models would refuse does not block an edit that leaves it
+    alone."""
+
+    def test_a_restriction_on_a_non_file_schema_is_refused_and_writes_nothing(
+            self, enforcer, claims, schema_table):
+        response = svc.handle_put_request(_update_event(
+            {"metadataSchemaId": SCHEMA_ID, "fileKeyTypeRestriction": ".glb"}))
+
+        assert _status(response) == 400, response
+        assert "can only be set for fileMetadata or fileAttribute" in _body(response)["message"]
+        schema_table.put_item.assert_not_called()
+
+    @pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "whitespace"])
+    def test_a_blank_restriction_clears_it_on_any_entity_type(
+            self, enforcer, claims, schema_table, blank):
+        """The stored assetMetadata row carries a restriction, as a row given one through this
+        route can; a blank value is how it is removed."""
+        stored = {**_stored_schema(), "fileKeyTypeRestriction": ".glb"}
+        schema_table.query.return_value = {"Items": [stored]}
+
+        response = svc.handle_put_request(_update_event(
+            {"metadataSchemaId": SCHEMA_ID, "fileKeyTypeRestriction": blank, "enabled": False}))
+
+        assert _status(response) == 200, response
+        assert "fileKeyTypeRestriction" not in _written(schema_table)
+
+    @pytest.mark.parametrize("entity_type", ["fileMetadata", "fileAttribute"])
+    def test_a_restriction_on_a_file_schema_is_written(
+            self, enforcer, claims, schema_table, entity_type):
+        """Positive control: the check refuses only the entity types create refuses."""
+        schema_table.query.return_value = {"Items": [_stored_schema(entity_type=entity_type)]}
+
+        response = svc.handle_put_request(_update_event(
+            {"metadataSchemaId": SCHEMA_ID, "fileKeyTypeRestriction": ".glb"}))
+
+        assert _status(response) == 200, response
+        assert _written(schema_table)["fileKeyTypeRestriction"] == ".glb"
+
+    def test_an_undotted_restriction_is_refused_through_the_request_handler(
+            self, enforcer, claims, schema_table):
+        schema_table.query.return_value = {"Items": [_stored_schema(entity_type="fileMetadata")]}
+
+        response = svc.handle_put_request(_update_event(
+            {"metadataSchemaId": SCHEMA_ID, "fileKeyTypeRestriction": "stp"}))
+
+        assert _status(response) == 400, response
+        assert "must start with a dot" in _body(response)["message"]
+        schema_table.put_item.assert_not_called()
+
+    def test_an_edit_that_leaves_a_stored_undotted_restriction_alone_succeeds(
+            self, enforcer, claims, schema_table):
+        """A row stored with an undotted entry is not locked: only re-sending that entry is
+        refused."""
+        stored = {**_stored_schema(entity_type="fileMetadata"), "fileKeyTypeRestriction": "stp"}
+        schema_table.query.return_value = {"Items": [stored]}
+
+        response = svc.handle_put_request(_update_event(
+            {"metadataSchemaId": SCHEMA_ID, "enabled": False}))
+
+        assert _status(response) == 200, response
+        item = _written(schema_table)
+        assert item["fileKeyTypeRestriction"] == "stp"
+        assert item["enabled"] is False
 

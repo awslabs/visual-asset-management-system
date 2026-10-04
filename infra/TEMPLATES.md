@@ -53,7 +53,7 @@ export function buildMyNewFunction(
 
 ---
 
-## New API Route Wiring (in apiBuilder-nestedStack.ts)
+## New API Route Wiring (in apiBuilder2-nestedStack.ts)
 
 ```typescript
 // Build the function
@@ -70,12 +70,12 @@ const myFunction = buildMyNewFunction(
 attachFunctionToApi(this, myFunction, {
     routePath: "/my-resource/{resourceId}",
     method: apigateway.HttpMethod.GET,
-    api: api,
+    registry: registry,
 });
 attachFunctionToApi(this, myFunction, {
     routePath: "/my-resource",
     method: apigateway.HttpMethod.POST,
-    api: api,
+    registry: registry,
 });
 ```
 

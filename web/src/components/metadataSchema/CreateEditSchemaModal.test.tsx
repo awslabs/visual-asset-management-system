@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CreateEditSchemaModal } from "./CreateEditSchemaModal";
 import { MetadataSchema, MetadataSchemaField } from "./types";
@@ -156,5 +156,61 @@ describe("CreateEditSchemaModal required-field warning", () => {
             screen.getByText(/reviewStatus changed from optional to required/)
         ).toBeInTheDocument();
         expect(screen.queryByText(/assetOwner changed/)).not.toBeInTheDocument();
+    });
+});
+
+const renderWithSubmit = (editingSchema: MetadataSchema) => {
+    const onSubmit = jest.fn().mockResolvedValue(undefined);
+    render(
+        <CreateEditSchemaModal
+            visible={true}
+            onDismiss={jest.fn()}
+            onSubmit={onSubmit}
+            editingSchema={editingSchema}
+            databaseId="db-1"
+        />
+    );
+    return onSubmit;
+};
+
+const buildFileSchema = (fileKeyTypeRestriction: string): MetadataSchema => {
+    const schema: any = buildSchema({ fields: [buildField("partNumber", false, 1)] });
+    schema.metadataSchemaEntityType = "fileMetadata";
+    schema.fileKeyTypeRestriction = fileKeyTypeRestriction;
+    return schema as MetadataSchema;
+};
+
+describe("CreateEditSchemaModal file type restriction", () => {
+    it("sends an empty restriction when an edit clears the stored one", async () => {
+        const user = userEvent.setup();
+        const onSubmit = renderWithSubmit(buildFileSchema(".glb,.usd"));
+
+        await user.clear(screen.getByPlaceholderText(".jpg,.png,.pdf"));
+        await user.click(screen.getByRole("button", { name: "Update Schema" }));
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0]).toHaveProperty("fileKeyTypeRestriction", "");
+    });
+
+    it("re-sends a stored restriction the edit leaves unchanged", async () => {
+        const user = userEvent.setup();
+        const onSubmit = renderWithSubmit(buildFileSchema(".glb,.usd"));
+
+        await user.click(screen.getByRole("button", { name: "Update Schema" }));
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0]).toHaveProperty("fileKeyTypeRestriction", ".glb,.usd");
+    });
+
+    it("sends no restriction for an entity type that cannot carry one", async () => {
+        const user = userEvent.setup();
+        const onSubmit = renderWithSubmit(
+            buildSchema({ fields: [buildField("assetOwner", false, 1)] })
+        );
+
+        await user.click(screen.getByRole("button", { name: "Update Schema" }));
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("fileKeyTypeRestriction");
     });
 });

@@ -125,7 +125,7 @@ The following diagram provides a visual overview of the VAMS architecture across
 
 ## CDK Stack Organization
 
-VAMS deploys as a set of nested AWS CloudFormation stacks managed by the AWS CDK. The root stack (`CoreVAMSStack`) orchestrates all nested stacks with explicit dependency ordering.
+VAMS deploys as a set of nested AWS CloudFormation stacks managed by the AWS CDK. The root stack (`CoreVAMSStack`) creates every nested stack, and the diagram below shows the deployment order between them.
 
 ```mermaid
 graph TD
@@ -133,32 +133,49 @@ graph TD
     VPC["VPCBuilder<br/>(Conditional)"]
     Layers["LambdaLayers"]
     Storage["StorageResourcesBuilder<br/>(DynamoDB, S3, SNS, SQS, KMS)"]
+    Names["ResourceNamesBuilder<br/>(SSM Resource Names)"]
     Auth["AuthBuilder<br/>(Cognito / OAuth)"]
-    API["REST API Builder<br/>(SpecRestApi + Authorizer)"]
-    APIBuilder["ApiBuilder<br/>(All API Route Wiring)"]
-    StaticWeb["StaticWeb<br/>(CloudFront or ALB)"]
+    APIBuilder["ApiBuilder<br/>(Primary API Route Wiring)"]
+    APIBuilder2["ApiBuilder2<br/>(Secondary API Route Wiring)"]
     Search["SearchBuilder<br/>(OpenSearch)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
     Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync)"]
+    API["RestApi<br/>(SpecRestApi + Authorizer)"]
+    StaticWeb["StaticWeb<br/>(CloudFront or ALB, Conditional)"]
     Location["LocationService<br/>(Conditional)"]
     Features["CustomFeatureEnabledConfig<br/>(Feature Flags to DynamoDB)"]
 
     Core --> VPC
     Core --> Layers
     Core --> Storage
-    Storage --> Auth
-    Auth --> API
-    API --> APIBuilder
-    API --> StaticWeb
-    API --> Search
-    API --> Pipelines
-    API --> Addons
     Core --> Location
     Core --> Features
+    Storage --> Names
+    Storage --> Auth
+    Names --> Auth
+    Storage --> APIBuilder
+    Names --> APIBuilder
+    Storage --> APIBuilder2
+    Names --> APIBuilder2
+    APIBuilder --> APIBuilder2
+    Storage --> Search
+    Names --> Search
+    Storage --> Pipelines
+    APIBuilder2 --> Pipelines
+    Storage --> Addons
+    Names --> Addons
+    Storage --> API
+    Auth --> API
+    APIBuilder --> API
+    APIBuilder2 --> API
+    Search --> API
+    Addons --> API
+    Storage --> StaticWeb
+    API -.->|API endpoint| StaticWeb
 ```
 
 :::tip[Stack Dependencies]
-All nested stacks that consume `storageResources` declare an explicit dependency on the `StorageResourcesBuilder` stack using `addDependency()`. This ensures correct deployment ordering regardless of how AWS CloudFormation resolves implicit references.
+Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none. The dotted arrow is a cross-stack reference that AWS CloudFormation orders implicitly: StaticWeb reads the REST API endpoint. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
 :::
 
 ## Next Steps

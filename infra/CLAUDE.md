@@ -149,7 +149,7 @@ CoreVAMSStack (root)
 
 ### Cross-Stack Shared Interfaces
 
-**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 46 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`). There is no `sqs` member: the two Amazon SQS queues the builder creates buffer S3 object-created/deleted notifications for the indexers and are wired locally, and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
+**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 48 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`). Five of them are granted to no Lambda and are exposed only so their names are published to SSM for the migration tooling: the V1 `pipelineStorageTable`, `workflowStorageTable` and `workflowExecutionsStorageTable`, and the legacy `tagStorageTableLegacy` and `tagTypeStorageTableLegacy`. There is no `sqs` member: for each registered asset-bucket record the builder creates an object-created and an object-deleted Amazon SQS queue, each with its own dead-letter queue, which buffer that record's S3 notifications for its bucket-sync Lambdas (`buildSqsBucketSyncFunction`) and are wired locally, and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
 
 **`authResources`** (`authBuilder-nestedStack.ts`): `roles.unAuthenticatedRole`; `cognito.{userPool, webClientUserPool, userPoolId, identityPoolId, webClientId}`.
 
@@ -265,7 +265,7 @@ suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grant
 
 ### Route Registration (attachFunctionToApi helper)
 
-Routes are registered across nested stacks (`apiBuilder-nestedStack.ts`, `apiBuilder2-nestedStack.ts`) via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })`. The pipeline, pipeline-template, workflow, workflow-trigger, and execution routes all live in `apiBuilder2`. For each route this (1) grants the REST API's execution role invoke permission on the Lambda, and (2) adds a descriptor (path, method, function ARN, allow-anonymous flag) to `RouteRegistry`. The REST API builder then renders all descriptors into a single OpenAPI spec and materializes them on the `SpecRestApi`.
+Routes are registered via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })` from the nested stack that builds the route's Lambda. Most routes live in the two API builder stacks, `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts`; the pipeline, pipeline-template, workflow, workflow-trigger, and execution routes all live in `apiBuilder2`. The search stack (`lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts`) registers `/search` and `/search/simple`, and an add-on stack registers its routes only when its add-on is enabled (`lib/nestedStacks/addon/physna/physnaSyncBuilder-nestedStack.ts` registers `/addon/physna/viewer`). `grep -rlE "attachFunctionToApi\(|registry\.register\(" lib` lists every registering file (`apiRouteRegistry.ts` is the helper's definition). For each route the helper adds a descriptor (path, method, Lambda function, allow-anonymous flag) to `RouteRegistry` and creates no API resource itself. `RestApiGatewayConstruct` (`constructs/rest-api-gateway-construct.ts`), which the `RestApi` stack builds after every other registering stack, registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly, then renders all descriptors into a single OpenAPI spec, materializes them on the `SpecRestApi`, and adds one `lambda:InvokeFunction` permission for the API Gateway service principal per registered function. `test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `backend/backend/common/apiRoutes.py`.
 
 ### API Stack Ceilings
 
@@ -274,7 +274,7 @@ The two API builder stacks stay split, and consolidating them would remove headr
 | Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
 | ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
 | CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 71                             |
-| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.49 MB, `apiBuilder2` ~0.29 MB                  |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.47 MB, `apiBuilder2` ~0.29 MB                  |
 | API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 122 path-tree nodes (100 OpenAPI paths) across **both** stacks |
 
 Two consequences worth holding onto:
@@ -337,17 +337,24 @@ Partition(): string  // Returns current partition
 
 **Encryption at rest for a new resource.** Any resource that supports encryption at rest takes
 `storageResources.encryption.kmsKey`, which is `undefined` when `config.app.useKmsCmkEncryption.enabled` is
-false — so the prop is self-guarding and needs no ternary. Pass it and the resource falls back to its
-service's AWS-managed key when the operator has not enabled a CMK.
+false. Log groups, EFS file systems and secrets have no encryption type to choose; they take the key and fall
+back to their service default without it. DynamoDB tables, S3 buckets and SQS queues choose the encryption
+type from the key (`encryption: kmsKey ? <customer managed type> : <service type>`). Given `CUSTOMER_MANAGED`,
+`KMS` or `DSSE` and no key, CDK creates a new customer managed key for that one resource and retains it when
+the stack is deleted, and `kmsKeyLambdaPermissionAddToResourcePolicy`, handed the undefined shared key, grants
+nothing on it. SNS topics take the key as `masterKey` and have no server-side encryption without it. Inside
+the storage nested stack, spread `dynamodbDefaultProps` / `s3DefaultProps`, which choose on the flag; the key
+is defined exactly when the flag is on.
 
-| Resource                  | Prop                           | Notes                                                    |
-| ------------------------- | ------------------------------ | -------------------------------------------------------- |
-| `dynamodb.Table`          | `encryption` + `encryptionKey` | `CUSTOMER_MANAGED` only when a key exists                |
-| `s3.Bucket`               | `encryption` + `encryptionKey` | `BucketEncryption.KMS`; set `bucketKeyEnabled`           |
-| `sns.Topic` / `sqs.Queue` | `masterKey` / `encryptionKey`  |                                                          |
-| `logs.LogGroup`           | `encryptionKey`                | The key policy already admits the Logs service principal |
-| `efs.FileSystem`          | `encrypted: true` + `kmsKey`   | See trap 1                                               |
-| `secretsmanager.Secret`   | `encryptionKey`                | See trap 2                                               |
+| Resource                | Prop                                 | Notes                                                         |
+| ----------------------- | ------------------------------------ | ------------------------------------------------------------- |
+| `dynamodb.Table`        | `encryption` + `encryptionKey`       | `CUSTOMER_MANAGED` with the key, `AWS_MANAGED` without        |
+| `s3.Bucket`             | `encryption` + `encryptionKey`       | `KMS` + `bucketKeyEnabled` with the key, `S3_MANAGED` without |
+| `sqs.Queue`             | `encryption` + `encryptionMasterKey` | `KMS` with the key, `SQS_MANAGED` without                     |
+| `sns.Topic`             | `masterKey`                          | No server-side encryption without the key                     |
+| `logs.LogGroup`         | `encryptionKey`                      | The key policy already admits the Logs service principal      |
+| `efs.FileSystem`        | `encrypted: true` + `kmsKey`         | See trap 1                                                    |
+| `secretsmanager.Secret` | `encryptionKey`                      | See trap 2                                                    |
 
 Three traps, each of which passes `cdk synth` and fails later:
 
@@ -417,7 +424,7 @@ A CSP may allow inline script by hash **or** by `'unsafe-inline'`, never both �
 
 **Additional when `config.app.govCloud.il6Compliant = true`:** Cognito MUST be disabled (`useCognito.enabled = false`); WAF MUST be disabled (`useWaf = false`); KMS CMK encryption MUST be enabled (`useKmsCmkEncryption.enabled = true`).
 
-**GovCloud-specific behavior:** FIPS endpoints via `config.app.useFips` (used by ServiceFormatter); `AwsSolutions-COG3` suppressed (AdvancedSecurityMode unavailable); EventSourceMapping tags removed via `addPropertyDeletionOverride` (some resources don't support tags in GovCloud); VPC endpoints conditional on feature flags; ALB deployment instead of CloudFront for static web hosting.
+**GovCloud-specific behavior:** `config.app.useFips` (on in the GovCloud template, not required) adds the AWS KMS FIPS interface endpoint in the VPC builder, and `Service().Endpoint` returns a `fipsHostname` only to a caller that does not pass `false` (every VAMS caller passes it except the `COGNITO_HOSTED_UI` reads, whose `aws`-only entry carries the standard `auth.{region}.amazoncognito.com` in both fields); `AwsSolutions-COG3` suppressed (AdvancedSecurityMode unavailable); EventSourceMapping tags removed via `addPropertyDeletionOverride` (some resources don't support tags in GovCloud); VPC endpoints conditional on feature flags; ALB deployment instead of CloudFront for static web hosting.
 
 ---
 
@@ -438,7 +445,7 @@ Choose between the two forms deliberately:
 
 When writing a partition deny-list, **name every restricted partition explicitly** — the VPC builder's Cognito-PrivateLink check is the model to copy, because it excludes `aws-us-gov`, `aws-eusc`, and `aws-iso*` while still allowing `aws-cn`, where the service does exist. A check written as `Partition() === "aws-us-gov"` would silently miss EU Sovereign.
 
-> **Known gap:** nothing validates that `app.govCloud.enabled` agrees with `config.env.partition`. Deploying to GovCloud/EU Sovereign while leaving the flag `false` is representable, passes synth, and then fails at the first EventSourceMapping with "Tags not supported in request."
+> **Validated in `getConfig()`:** deploying to `aws-us-gov`, `aws-eusc` or an `aws-iso*` partition with `app.govCloud.enabled` not `true` is rejected (`infra/config/config.ts`, the block that starts "app.govCloud.enabled is the restricted-partition switch"; ConfigBuilder rule `restricted-partition-requires-govcloud-flag`). Without that check the deployment would pass synth and then fail at the first EventSourceMapping with "Tags not supported in request."
 
 ### Checklist for new infrastructure
 
@@ -474,7 +481,7 @@ When writing a partition deny-list, **name every restricted partition explicitly
 
 5. **Service versions can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates. Check availability before pinning a version or a model.
 
-6. **All three config templates must be updated together** (Rule 1 step 4) — `commercial`, `govcloud`, `eusovereign`. They are structurally identical and differ only in values; a missed template silently falls back to a `getConfig()` default and drops the operator's value. Note `useFips` is the one capability flag where the two restricted templates disagree (`true` for GovCloud, `false` for EU Sovereign).
+6. **All three config templates must be updated together** (Rule 1 step 4) — `commercial`, `govcloud`, `eusovereign`. They are structurally identical and differ only in values; a missed template silently falls back to a `getConfig()` default and drops the operator's value. Note `useFips` is the one capability flag where the two restricted templates disagree (`true` for GovCloud, `false` for EU Sovereign); `getConfig()` warns when it is `true` in `aws-eusc`, which offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF).
 
 7. **No internet egress at build time.** A restricted-partition build host generally cannot reach commercial endpoints, so a `curl`/download inside a Docker bundling command hardcoded to a commercial S3 host will fail there.
 
@@ -626,7 +633,7 @@ Copy-paste scaffolds for new lambda builders, API routes, nested stacks, and con
 
 ## Pipeline Stacks
 
-Pipeline nested stacks, their required `backendPipelines/{name}/lambda/` layout, the three VPC builder condition blocks that new Batch/ECS/Fargate pipelines must be added to, the registering lambda's sub-process/log env wiring (`batchJobLogGroupEnvironment()`, `BATCH_JOB_DEFINITION_NAME`, construct id = `stageName`, the three registration tests), and the S3 output path conventions live in `lib/nestedStacks/pipelines/CLAUDE.md` (auto-loaded when editing under that directory).
+Pipeline nested stacks, their required `backendPipelines/{name}/lambda/` layout, which of the three VPC builder condition blocks a new Batch/ECS/Fargate pipeline joins (it depends on the subnets its compute runs in), the registering lambda's sub-process/log env wiring (`batchJobLogGroupEnvironment()`, `BATCH_JOB_DEFINITION_NAME`, construct id = `stageName`, the three registration tests), and the S3 output path conventions live in `lib/nestedStacks/pipelines/CLAUDE.md` (auto-loaded when editing under that directory).
 
 ---
 

@@ -220,7 +220,7 @@ Standard user pages: `/assets`, `/databases`, `/pipelines`, `/search`, `/workflo
 
 Admin-only pages: `/assetIngestion` (restrict from non-admin users)
 
-Auth admin pages (restrict from non-admin): `/auth/constraints`, `/auth/roles`, `/auth/userroles`, `/auth/subscriptions`, `/auth/tags`
+Auth admin pages (restrict from non-admin): `/auth/constraints`, `/auth/roles`, `/auth/userroles`, `/auth/subscriptions`, `/auth/tags`, `/auth/tags/:databaseId`, `/auth/cognitousers`
 
 ### Common API Route Prefixes
 
@@ -229,6 +229,8 @@ Read paths (GET): `/secure-config`, `/amplify-config`, `/auth/routes`, `/asset-l
 Write paths (POST/PUT for editors/admins): `/uploads`, `/ingest-asset` (admin only), `/unsubscribe`
 
 Non-mutating POST paths (needed by all roles including read-only): `/auth/routes`, `/search`, `/check-subscription`
+
+Add-on paths (GET; each is deployed only when its add-on is enabled, and a criterion for an undeployed route matches nothing): `/addon/physna/viewer` (the Physna viewer plugin; granted by every shipped template whose role views files)
 
 Admin paths: `/roles`, `/user-roles`, `/auth/constraints`, `/user/cognito`
 
@@ -248,21 +250,25 @@ Pre-built JSON templates are in `documentation/permissionsTemplates/`:
 
 | Template                  | Constraints | Variables                  | Description                                                                                                                                                                                                                                               |
 | ------------------------- | ----------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `database-admin.json`     | 13          | `DATABASE_ID`, `ROLE_NAME` | Admin: full CRUD + permanent delete + pipeline/workflow/schema management + ingestion. No new DB creation. Tags/tag-types GET-only. Separate scoped + GLOBAL constraints.                                                                                 |
-| `database-user.json`      | 15          | `DATABASE_ID`, `ROLE_NAME` | User: create/update/archive assets, execute workflows. No permanent delete, no management, no ingestion. Archive-only DELETE enforced at Tier 1. Tags/tag-types GET-only. Separate API constraints per HTTP method. Separate scoped + GLOBAL constraints. |
-| `database-readonly.json`  | 10          | `DATABASE_ID`, `ROLE_NAME` | Read-only scoped to a specific database. GET-only on all entities.                                                                                                                                                                                        |
-| `global-readonly.json`    | 10          | `ROLE_NAME`                | Read-only across all databases (uses `contains .*` wildcards). No `DATABASE_ID` variable.                                                                                                                                                                 |
+| `database-admin.json`     | 14          | `DATABASE_ID`, `ROLE_NAME` | Admin: full CRUD + permanent delete + pipeline/workflow/schema management + ingestion. No new DB creation. Tags/tag-types GET-only. Separate scoped + GLOBAL constraints.                                                                                 |
+| `database-user.json`      | 17          | `DATABASE_ID`, `ROLE_NAME` | User: create/update/archive assets, execute workflows. No permanent delete, no management, no ingestion. Archive-only DELETE enforced at Tier 1. Tags/tag-types GET-only. Separate API constraints per HTTP method. Separate scoped + GLOBAL constraints. |
+| `database-readonly.json`  | 12          | `DATABASE_ID`, `ROLE_NAME` | Read-only scoped to a specific database. GET-only on all entities.                                                                                                                                                                                        |
+| `database-tag-admin.json` | 6           | `DATABASE_ID`, `ROLE_NAME` | Tag admin: create/update/delete tags and tag types scoped to one database, GET on all tags and tag types (GLOBAL ones stay read-only). Web access to the `/auth/tags` pages only. No database, asset, pipeline, workflow or metadataSchema constraints.   |
+| `global-readonly.json`    | 12          | `ROLE_NAME`                | Read-only across all databases (uses `contains .*` wildcards). No `DATABASE_ID` variable.                                                                                                                                                                 |
 | `deny-tagged-assets.json` | 1           | `ROLE_NAME`, `TAG_VALUE`   | Overlay: denies PUT/POST/DELETE on assets with a specific tag. Applied on top of existing roles.                                                                                                                                                          |
 
 ### Constraint Count Reference by Role Type
 
 When building a new template, use these as a guide for expected constraint counts:
 
--   **Admin (database-scoped)**: ~13 constraints (1 web + 2 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
--   **User (database-scoped)**: ~15 constraints (1 web + 4 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
--   **Read-only (database-scoped)**: ~10 constraints (1 web + 2 api + 1 database + 1 asset + 1 pipeline + 1 workflow + 1 metadataSchema + 1 tag + 1 tagType)
--   **Read-only (global)**: ~10 constraints (same structure but uses `contains .*` wildcards instead of `equals {{DATABASE_ID}}`)
+-   **Admin (database-scoped)**: ~14 constraints (1 web + 3 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
+-   **User (database-scoped)**: ~17 constraints (1 web + 6 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
+-   **Read-only (database-scoped)**: ~12 constraints (1 web + 4 api + 1 database + 1 asset + 1 pipeline + 1 workflow + 1 metadataSchema + 1 tag + 1 tagType)
+-   **Read-only (global)**: ~12 constraints (same structure but uses `contains .*` wildcards instead of `equals {{DATABASE_ID}}`)
+-   **Tag admin (database-scoped)**: ~6 constraints (1 web + 1 api + 2 tag + 2 tagType)
 -   **Deny overlay**: 1 constraint per deny rule
+
+The api counts include the `{{ROLE_NAME}}-user-api-keys` constraint (all methods on `/auth/user/api-keys`, the caller's own API keys) that the admin, user and read-only templates each carry. The remaining api constraints are the route grants, the admin template's GET-only `/tags` and `/tag-types` constraint, and the execution-route denies described under Workflow Execution Routes: `executions-admin-deny` in the user template and `execution-logs-deny` in the two read-only templates.
 
 ## Workflow
 

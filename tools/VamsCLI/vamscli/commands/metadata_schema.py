@@ -392,8 +392,8 @@ def format_operation_output(result: Dict[str, Any]) -> str:
 @click.option('-f', '--fields', 'fields_input', required=True,
               help='[REQUIRED] Field definitions as a JSON array, or a file path holding one')
 @click.option('--file-key-type-restriction', default=None,
-              help='Comma-delimited file extensions the schema applies to '
-                   '(fileMetadata and fileAttribute schemas only)')
+              help='Comma-delimited file extensions the schema applies to, each with its '
+                   'leading dot, e.g. .stp,.step (fileMetadata and fileAttribute schemas only)')
 @click.option('--enabled/--disabled', default=True, show_default=True,
               help='Whether the schema is enforced on metadata writes')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -481,7 +481,8 @@ def create(ctx: click.Context, database_id: str, entity_type: str, schema_name: 
 @click.option('-f', '--fields', 'fields_input', default=None,
               help='Replacement field definitions as a JSON array, or a file path holding one')
 @click.option('--file-key-type-restriction', default=None,
-              help='Comma-delimited file extensions the schema applies to')
+              help='Comma-delimited file extensions the schema applies to, each with its '
+                   'leading dot, e.g. .stp,.step (fileMetadata and fileAttribute schemas only)')
 @click.option('--enabled/--disabled', default=None,
               help='Whether the schema is enforced on metadata writes')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')

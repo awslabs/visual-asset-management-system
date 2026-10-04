@@ -156,13 +156,13 @@ POST /database
 
 ### Request body
 
-| Field                             | Type    | Required | Description                                                                                                                                                                                                       |
-| --------------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`                      | string  | Yes      | Unique database identifier (4-256 chars, alphanumeric plus `-` and `_`). Cannot be `GLOBAL` or a reserved S3 keyword (`pipeline(s)`, `preview(s)`, `temp-upload(s)`, `workspace(s)`), matched case-insensitively. |
-| `description`                     | string  | Yes      | Description of the database (4-256 chars).                                                                                                                                                                        |
-| `defaultBucketId`                 | string  | Yes      | UUID of a pre-configured S3 bucket and prefix combination. Obtain it from [List bucket configurations](#list-bucket-configurations).                                                                              |
-| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, metadata must conform to an applied metadata schema. Defaults to `false`.                                                                                                                            |
-| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all. Defaults to empty.                                                                              |
+| Field                             | Type    | Required | Description                                                                                                                                                                                                      |
+| --------------------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`                      | string  | Yes      | Unique database identifier (4-63 chars, alphanumeric plus `-` and `_`). Cannot be `GLOBAL` or a reserved S3 keyword (`pipeline(s)`, `preview(s)`, `temp-upload(s)`, `workspace(s)`), matched case-insensitively. |
+| `description`                     | string  | Yes      | Description of the database (4-256 chars).                                                                                                                                                                       |
+| `defaultBucketId`                 | string  | Yes      | UUID of a pre-configured S3 bucket and prefix combination. Obtain it from [List bucket configurations](#list-bucket-configurations).                                                                             |
+| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, metadata must conform to an applied metadata schema. Defaults to `false`.                                                                                                                           |
+| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all. Defaults to empty.                                                                             |
 
 ### Request body example
 

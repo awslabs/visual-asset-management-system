@@ -98,6 +98,12 @@ export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
 
+// The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
+// answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
+// app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
+// getConfig() warns about it at synthesis. Compared against, never assigned.
+export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
+
 // The taskTimeout the RapidPipeline EKS bundle declares
 // (backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json). The parent workflow waits this
 // long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
@@ -475,6 +481,22 @@ export function getConfig(app: cdk.App): Config {
             process.env.PRESIGNED_URL_TIMEOUT_SECONDS ||
             86400)
     );
+
+    // The asset handlers sign presigned URLs with this value as ExpiresIn, most of them through
+    // Python int(), so only a plain decimal whole number from 1 to 7 days signs a usable URL.
+    const presignedUrlTimeout = String(config.app.authProvider.presignedUrlTimeoutSeconds);
+    if (
+        !/^\d+$/.test(presignedUrlTimeout) ||
+        Number(presignedUrlTimeout) < 1 ||
+        Number(presignedUrlTimeout) > PRESIGNED_URL_MAX_TIMEOUT_SECONDS
+    ) {
+        console.warn(
+            `Configuration Warning: app.authProvider.presignedUrlTimeoutSeconds should be a whole number of ` +
+                `seconds between 1 and ${PRESIGNED_URL_MAX_TIMEOUT_SECONDS} (7 days, the longest an Amazon S3 ` +
+                `presigned URL can be signed for). Got: '${presignedUrlTimeout}'. With this value the asset ` +
+                `download, stream, upload and export requests that return a presigned URL fail.`
+        );
+    }
 
     config.app.useFips = resolveConfigBool(
         "useFips",
@@ -1316,8 +1338,30 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    //The AWS European Sovereign Cloud offers FIPS endpoints for only four services (AWS KMS,
+    //Amazon EFS, Amazon ElastiCache and AWS WAF). The hosts VAMS would need, such as s3-fips,
+    //sts-fips, lambda-fips and dynamodb-fips, do not exist there, so app.useFips gives no FIPS
+    //transport in that partition. Nothing in VAMS selects a FIPS hostname at run time; the flag's
+    //one resource effect is the AWS KMS FIPS interface endpoint in the VPC builder. Keyed on the
+    //resolved partition rather than app.govCloud.enabled because GovCloud does publish FIPS
+    //endpoints for those services. A warning rather than an error because the one host the flag
+    //targets exists in the partition.
+    if (config.app.useFips && resolvedPartition === "aws-eusc") {
+        console.warn(
+            "Configuration Warning: app.useFips is true while deploying to the 'aws-eusc' " +
+                "partition. The AWS European Sovereign Cloud offers FIPS endpoints for only AWS " +
+                "KMS, Amazon EFS, Amazon ElastiCache and AWS WAF, so the flag provides no FIPS " +
+                "transport for the services VAMS calls. Its only effect is the AWS KMS FIPS " +
+                "interface VPC endpoint, created when useKmsCmkEncryption.enabled and " +
+                "useGlobalVpc.addVpcEndpoints are true. Unless that endpoint is required, set " +
+                "app.useFips to false and unset AWS_USE_FIPS_ENDPOINT, which also turns the flag " +
+                "on and points the AWS CLI and CDK CLI in that shell at FIPS endpoints the " +
+                "partition does not offer."
+        );
+    }
+
     //If we are govCloud, check for certain features that are required to be on or off.
-    //Note: FIP not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
+    //Note: FIPS not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
     //Note: FedRAMP best practices require all Lambdas/OpenSearch behind VPC but not required for GovCloud
     if (config.app.govCloud.enabled) {
         if (!config.app.useGlobalVpc.enabled) {
@@ -1746,6 +1790,40 @@ export function getConfig(app: cdk.App): Config {
                     `set the image URI before deploying, or disable the pipeline.`
             );
         }
+    }
+
+    // Amazon Rekognition is not offered in the AWS European Sovereign Cloud partition or in the
+    // AWS GovCloud (US-East) Region, and the GenAI metadata labeling pipeline calls DetectLabels on
+    // every rendered image, so every execution there fails at that call. With useForAllLambdas and
+    // addVpcEndpoints the VPC builder also creates a Rekognition interface endpoint, which the
+    // Region does not offer, so that combination is rejected; any other enabled combination is
+    // warned about.
+    if (
+        config.app.pipelines.useGenAiMetadata3dLabeling?.enabled &&
+        (config.env.partition === "aws-eusc" || config.env.region === "us-gov-east-1")
+    ) {
+        const rekognitionUnavailable =
+            `pipelines.useGenAiMetadata3dLabeling is not supported in ${config.env.region} ` +
+            `(${config.env.partition}): the pipeline calls Amazon Rekognition, which is not ` +
+            `offered in that Region`;
+        const disablePipeline = "Set pipelines.useGenAiMetadata3dLabeling.enabled to false.";
+        if (
+            config.app.useGlobalVpc.enabled &&
+            config.app.useGlobalVpc.useForAllLambdas &&
+            config.app.useGlobalVpc.addVpcEndpoints &&
+            !config.env.loadContextIgnoreVPCStacks
+        ) {
+            throw new Error(
+                `Configuration Error: ${rekognitionUnavailable}, and with ` +
+                    `useGlobalVpc.useForAllLambdas and addVpcEndpoints the VPC builder also ` +
+                    `requests a Rekognition interface endpoint the Region does not offer. ` +
+                    `${disablePipeline}`
+            );
+        }
+        console.warn(
+            `Configuration Warning: ${rekognitionUnavailable}, so every execution of the ` +
+                `pipeline fails at its Rekognition call. ${disablePipeline}`
+        );
     }
 
     // The Bedrock model id carries a cross-Region inference-profile prefix, and the prefixes are

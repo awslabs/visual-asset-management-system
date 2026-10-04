@@ -115,6 +115,7 @@ class TestRestoreArchivedAsset:
     def test_moves_record_to_live_partition(self):
         m = _load()
         mock_table = MagicMock()
+        mock_table.get_item.return_value = {"Item": {"databaseId": "db1"}}
         m.dynamodb = MagicMock()
         m.dynamodb.Table.return_value = mock_table
         m.update_asset_count = MagicMock()
@@ -133,6 +134,7 @@ class TestRestoreArchivedAsset:
     def test_concurrent_restore_is_idempotent(self):
         m = _load()
         mock_table = MagicMock()
+        mock_table.get_item.return_value = {"Item": {"databaseId": "db1"}}
         mock_table.put_item.side_effect = ClientError(
             {"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem")
         m.dynamodb = MagicMock()
