@@ -12,6 +12,17 @@ import {
 import { SearchQuery, SearchResponse, MetadataFilter } from "../types";
 
 /**
+ * Filter keys matched on their `.keyword` subfield. These id fields are analyzed text, so a quoted
+ * value on the field itself is a phrase over the id's hyphen-separated words and also matches
+ * similar ids; the `.keyword` subfield holds the exact, case-sensitive id.
+ */
+const EXACT_MATCH_FILTER_KEYS = new Set(["str_databaseid"]);
+
+/** Quote a filter value for a query_string clause, escaping any embedded quote or backslash. */
+const quoteFilterValue = (value: unknown): string =>
+    `"${String(value).replace(/[\\"]/g, (c) => "\\" + c)}"`;
+
+/**
  * Custom hook for search API operations
  */
 export const useSearchAPI = () => {
@@ -45,6 +56,8 @@ export const useSearchAPI = () => {
                     )
                         return;
 
+                    const field = EXACT_MATCH_FILTER_KEYS.has(key) ? `${key}.keyword` : key;
+
                     // Handle boolean filters (relationship filters, etc.)
                     if (key.startsWith("bool_") && filter && typeof filter.value === "boolean") {
                         filters.push({
@@ -61,10 +74,10 @@ export const useSearchAPI = () => {
                         filter.values.length > 0
                     ) {
                         // Build OR query for multiple values: field:("value1" OR "value2" OR "value3")
-                        const orQuery = filter.values.map((val: string) => `"${val}"`).join(" OR ");
+                        const orQuery = filter.values.map(quoteFilterValue).join(" OR ");
                         filters.push({
                             query_string: {
-                                query: `(${key}:(${orQuery}))`,
+                                query: `(${field}:(${orQuery}))`,
                             },
                         });
                     }
@@ -72,7 +85,7 @@ export const useSearchAPI = () => {
                     else if (filter && filter.value !== "all" && filter.value !== "") {
                         filters.push({
                             query_string: {
-                                query: `(${key}:("${filter.value}"))`,
+                                query: `(${field}:(${quoteFilterValue(filter.value)}))`,
                             },
                         });
                     }

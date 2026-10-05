@@ -72,7 +72,7 @@ export const SECTIONS: Section[] = [
     },
     {
         id: "addons",
-        label: "Add-ons (Garnet Framework)",
+        label: "Add-ons",
         advanced: true,
         order: 9,
     },
@@ -311,7 +311,7 @@ export const FIELDS: FieldMeta[] = [
         label: "Use FIPS endpoints",
         input: "boolean",
         section: "security",
-        help: "Hostnames VAMS composes at synthesis use their FIPS variants, and a KMS FIPS VPC endpoint is added when the VPC and a KMS CMK are enabled. SDK clients in Lambdas and containers are not affected. AWS_USE_FIPS_ENDPOINT=true in the synth environment also turns this on.",
+        help: "Adds a KMS FIPS VPC endpoint when the VPC, its VPC endpoints (addVpcEndpoints) and a KMS CMK are enabled. No hostname VAMS composes changes: the Cognito hosted UI domain has the standard domain as its FIPS entry. SDK clients in Lambdas and containers are not affected. AWS_USE_FIPS_ENDPOINT=true in the synth environment also turns this on.",
     },
     {
         path: "app.addStackCloudTrailLogs",
@@ -844,7 +844,7 @@ export const FIELDS: FieldMeta[] = [
         section: "auth",
         advanced: true,
         min: 1,
-        help: "TTL for S3 presigned upload/download URLs (default 86400 = 24h).",
+        help: "Maximum lifetime of S3 presigned upload/download URLs, 1 to 604800 seconds (default 86400 = 24h). A URL stops working sooner if the Lambda role credentials that signed it expire first.",
     },
     {
         path: "app.authProvider.authorizerOptions.allowedIpRanges",
@@ -1427,7 +1427,7 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${COSMOS3}.enabled`),
     })),
 
-    // ===== Add-ons (Garnet) =====
+    // ===== Add-ons =====
     {
         path: "app.addons.useGarnetFramework.enabled",
         label: "Garnet Framework",
@@ -1443,7 +1443,7 @@ export const FIELDS: FieldMeta[] = [
         section: "addons",
         advanced: true,
         placeholder: "https://XXX.execute-api.us-east-1.amazonaws.com",
-        help: "Required when Garnet is enabled. Must be a valid URL.",
+        help: "Required when Garnet is enabled. Must be a valid URL. Validated but not used by the add-on.",
         visibleWhen: garnet,
     },
     {
@@ -1452,7 +1452,7 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "addons",
         advanced: true,
-        help: "Required when Garnet is enabled.",
+        help: 'Required when Garnet is enabled. Validated but not used by the add-on; enter a placeholder such as "not-used", not a Garnet credential.',
         visibleWhen: garnet,
     },
     {

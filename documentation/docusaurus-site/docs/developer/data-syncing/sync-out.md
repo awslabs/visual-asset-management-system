@@ -111,7 +111,7 @@ creating any new streams. Follow the conventions the existing add-ons use:
 -   A GovCloud branch that uses an explicit `EventSourceMapping` with a `Tags` property
     deletion override (Amazon SQS event-source tags are unsupported on GovCloud).
 
-:::note[Two conventions for a failed message]
+:::note[Dead-letter queues for failed messages]
 The Physna queues each have their own dead-letter queue. A message the consumer cannot
 process is moved there after three delivery attempts and retained for 14 days rather than
 deleted, and one dead-letter queue per source queue keeps the file sync's failures
@@ -130,14 +130,16 @@ themselves: a dead-letter queue is the terminal destination for messages the con
 not process, so a redrive policy of its own would only defer the same failure to a further
 queue.
 
-The Garnet queues rely on the Amazon SQS visibility timeout and AWS Lambda retry instead, and
-add an `AwsSolutions-SQS3` CDK Nag suppression on the ground that every message is regenerable
-from authoritative VAMS state — a failed change can be replayed with the
-[reindex utility](../utilities/reindex.md).
+The Garnet indexer queues follow the same convention. Each of the three has its own
+dead-letter queue, which receives a message after three delivery attempts and retains it for
+14 days, and each event source reports partial batch failures. The Garnet stack's
+`AwsSolutions-SQS3` suppression rests on the same ground: the dead-letter queues terminate the
+redrive chain. See [Failure Handling](../garnet-framework.md#failure-handling).
 
-Add a dead-letter queue when the messages your target system rejected need to be inspectable,
-or when the outcome of a push is not fully recoverable from a replay. Rely on replay when the
-target tolerates repeated events.
+Give each source queue your add-on consumes a dead-letter queue of its own, so a message the
+target system rejected stays inspectable and can be redriven. A replay is a narrower recovery
+path: the [reindex utility](../utilities/reindex.md) re-publishes asset and file records only,
+so it does not regenerate a database, database metadata, or asset-link change.
 :::
 
 #### 4. Handle the event envelope

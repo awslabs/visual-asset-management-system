@@ -174,6 +174,8 @@ When deploying to AWS GovCloud (US) regions or the AWS European Sovereign Cloud,
 | OpenSearch Serverless (European Sovereign) | Not offered in the `aws-eusc` partition at all; use `app.openSearch.useProvisioned` there       |
 | Amazon Cognito Advanced Security           | Not available; security check is suppressed                                                     |
 
+Amazon Rekognition is not offered in the AWS European Sovereign Cloud or in AWS GovCloud (US-East) (`us-gov-east-1`), so the GenAI metadata labeling pipeline (`app.pipelines.useGenAiMetadata3dLabeling`) cannot run there; keep it disabled. Configuration validation rejects the pipeline in those Regions when `app.useGlobalVpc.useForAllLambdas` and `app.useGlobalVpc.addVpcEndpoints` are both `true`, and warns otherwise.
+
 A VPC is also required in these partitions (`app.useGlobalVpc.enabled` must be `true`). See [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints) for the authoritative per-field list.
 
 ### Simultaneous CloudFront and ALB Deployment

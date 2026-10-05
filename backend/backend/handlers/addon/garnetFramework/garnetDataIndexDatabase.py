@@ -62,6 +62,14 @@ logger = safeLogger(service_name="GarnetDatabaseIndexer")
 # System type identifier for outbound sync tracking records.
 SYNC_SYSTEM_TYPE = "garnetFramework"
 
+# Deleting a database rewrites its record under the `{databaseId}#deleted` partition key.
+ARCHIVED_DATABASE_SUFFIX = '#deleted'
+
+
+def live_database_id(database_id: str) -> str:
+    """Database id of a database record without the archived-partition suffix."""
+    return database_id.replace(ARCHIVED_DATABASE_SUFFIX, '')
+
 
 def _record_sync(object_type, action, success, database_id, asset_id=None,
                  file_path=None, s3_version_id=None, entity_id=None):
@@ -110,7 +118,7 @@ def get_database_metadata(database_id: str) -> Dict[str, Any]:
         items = query_all_items(
             database_metadata_table,
             IndexName='DatabaseIdIndex',
-            KeyConditionExpression=Key('databaseId').eq(database_id)
+            KeyConditionExpression=Key('databaseId').eq(live_database_id(database_id))
         )
 
         all_metadata = {}
@@ -138,7 +146,7 @@ def convert_database_to_ngsi_ld(database_data: Dict[str, Any], bucket_details: O
     """
     Convert VAMS database data to NGSI-LD format for Garnet Framework.
     
-    NGSI-LD Reference: https://garnet-framework.dev/docs/getting-started/ngsi-ld
+    NGSI-LD Reference: https://garnet-framework.tech/docs/getting-started/ngsi-ld
     
     Args:
         database_data: Database record from DynamoDB
@@ -149,7 +157,10 @@ def convert_database_to_ngsi_ld(database_data: Dict[str, Any], bucket_details: O
         NGSI-LD formatted entity
     """
     try:
-        database_id = database_data.get('databaseId', '')
+        stored_database_id = database_data.get('databaseId', '')
+        # A deleted database's record keeps the live database id in the entity id, scope and
+        # databaseId
+        database_id = live_database_id(stored_database_id)
         
         # Create base NGSI-LD entity
         ngsi_ld_entity = {
@@ -257,8 +268,8 @@ def convert_database_to_ngsi_ld(database_data: Dict[str, Any], bucket_details: O
                 }
             }
         
-        # Check if database is archived (contains #deleted)
-        is_archived = '#deleted' in database_id
+        # Check if database is archived (record stored under the #deleted partition key)
+        is_archived = ARCHIVED_DATABASE_SUFFIX in stored_database_id
         ngsi_ld_entity["isArchived"] = {
             "type": "Property",
             "value": is_archived
@@ -485,9 +496,11 @@ def handle_database_stream(event_record: Dict[str, Any]) -> bool:
             
             logger.info(f"Processing REMOVE event for database: {database_id}")
             
-            # For delete operations, create a minimal NGSI-LD entity for deletion
+            # A minimal entity: the ingestion queue upserts with options=update, so it changes no
+            # attribute of an existing entity. Deleting a database removes the live record after
+            # writing it under the #deleted partition key, and both keys name one entity.
             ngsi_ld_entity = {
-                "id": f"urn:vams:database:{database_id}",
+                "id": f"urn:vams:database:{live_database_id(database_id)}",
                 "type": "VAMSDatabase"
             }
             

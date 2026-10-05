@@ -1155,17 +1155,6 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
         /**
          * CDK Nag Suppressions
          */
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-executing workflows.",
-                },
-            ],
-            true
-        );
-
         const reason =
             "Intended Solution. The Cosmos Predict pipeline lambda functions need appropriate access to S3 for reading asset files and model data.";
 

@@ -79,6 +79,9 @@ await expectTableRendered(page); // rows OR empty state — both valid
 `test.skip()` with a reason is the correct outcome when a precondition is genuinely absent. A skipped
 test is honest; a test that passes because its assertion never ran is not.
 
+A spec that needs a file of a particular type looks one up with `findAssetFiles` and skips when the
+returned map has no entry for that extension — never a fixed database and asset id.
+
 **Why this matters concretely:** the executions board is newest-first and server-paginated (pageSize
 50). A spec that waited for a specific seeded workflow id passed for weeks, then failed once newer
 executions pushed that id off page 1 — the app was fine, the assumption was not.
@@ -120,18 +123,25 @@ An ad-hoc spec may create and clean up its own throwaway data. A core spec may n
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
 locators — the app's markup is not always guessable, and these were established empirically.
 
-| Helper                                          | Use for                                                         |
-| ----------------------------------------------- | --------------------------------------------------------------- |
-| `gotoOrchestration(page, route, heading)`       | Navigate + wait for first load (no data dependency)             |
-| `searchBox(page)`                               | The orchestration filter-bar search input                       |
-| `facet(page, label)`                            | A native `<select>` filter                                      |
-| `firstCardId(page)`                             | Id of the first card, or `null` when the list is empty          |
-| `openCardMenu(page, id)`                        | Filter to a card and open its actions menu                      |
-| `tableRows(page)` / `expectTableRendered(page)` | Table rows / "rendered in any environment" assertion            |
-| `menuSurface(items)`                            | The open menu's own floating surface, from an item              |
-| `wizardRail(page)`                              | The execute dialog's step rail (`navigation` "Execution steps") |
-| `rowValue(page, label)`                         | The value cell of a label/value row in a detail panel           |
-| `collectPageErrors(page)`                       | Uncaught page errors, for crash-regression assertions           |
+| Helper                                                        | Use for                                                                                    |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                        |
+| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages           |
+| `searchBox(page)`                                             | The orchestration filter-bar search input                                                  |
+| `facet(page, label)`                                          | A native `<select>` filter                                                                 |
+| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                     |
+| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                 |
+| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion                                       |
+| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                         |
+| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                            |
+| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                      |
+| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                      |
+| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does       |
+| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike          |
+| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied       |
+| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator |
+| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls            |
+| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context               |
 
 **Selector facts worth not rediscovering:**
 
@@ -204,6 +214,7 @@ npm run e2e                                           # all specs
 npm run e2e:headed                                    # watch a run
 npx playwright test e2e/orchestration.pipelines.spec.ts --retries=0 --workers=2
 E2E_BASE_URL=http://localhost:3001 npm run e2e        # against a local dev server
+E2E_VIEWER_ASSET=<databaseId>/<assetId> npx playwright test e2e/viewers.spec.ts  # one fixture asset
 ```
 
 `retries: 1` is configured, so a spec that fails then passes is reported as **flaky**, not failed —

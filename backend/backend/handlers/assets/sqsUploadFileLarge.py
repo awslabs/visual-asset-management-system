@@ -26,6 +26,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+    replace_metadata_copy_args,
 )
 from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,
@@ -238,9 +239,13 @@ def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_i
 
 def delete_s3_object(bucket: str, key: str) -> bool:
     """
-    Delete an object from S3.
+    Delete a staged upload object, removing its current version rather than hiding it.
     Ported from uploadFile.py.
-    
+
+    On a versioned bucket a delete without a version ID only adds a delete marker and keeps the
+    staged copy as a noncurrent version, so the current version is deleted by its ID. A key with
+    no current version needs no delete; a refused versioned delete falls back to a plain delete.
+
     Args:
         bucket: The S3 bucket name
         key: The S3 object key
@@ -249,6 +254,21 @@ def delete_s3_object(bucket: str, key: str) -> bool:
         True if successful, False otherwise
     """
     try:
+        try:
+            version_id = s3.head_object(Bucket=bucket, Key=key).get('VersionId')
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NotFound'):
+                return True
+            raise
+        if version_id:
+            try:
+                s3.delete_object(Bucket=bucket, Key=key, VersionId=version_id)
+                logger.info(f"Deleted S3 object: {key}")
+                return True
+            except ClientError as e:
+                if e.response.get('Error', {}).get('Code') != 'AccessDenied':
+                    raise
+                logger.warning(f"Version delete of staged object {key} refused; deleting without a version ID")
         s3.delete_object(Bucket=bucket, Key=key)
         logger.info(f"Deleted S3 object: {key}")
         return True
@@ -295,13 +315,16 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             'Key': source_key
         }
 
+        # The final object keeps the content headers of the object it is copied from
+        source_head = s3.head_object(Bucket=source_bucket, Key=source_key)
+        metadata = {
+            DATABASE_ID_METADATA_KEY: database_id,
+            ASSET_ID_METADATA_KEY: asset_id,
+            **(change_metadata or build_upload_change_metadata(None))
+        }
+
         extra_args = {
-            'MetadataDirective': 'REPLACE',
-            'Metadata': {
-                DATABASE_ID_METADATA_KEY: database_id,
-                ASSET_ID_METADATA_KEY: asset_id,
-                **(change_metadata or build_upload_change_metadata(None))
-            },
+            **replace_metadata_copy_args(source_head, metadata),
             # Grant the bucket owner full control so the finalized object written into a
             # cross-account asset bucket is owned/readable by that account.
             'ACL': 'bucket-owner-full-control'
