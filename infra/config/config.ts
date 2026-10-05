@@ -147,6 +147,11 @@ export const COGNITO_USERNAME_MAX_LENGTH = 128;
 export const VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS = 4096;
 export const VECTOR_SEARCH_MIN_INDEXING_CONCURRENCY = 2;
 export const VECTOR_SEARCH_MAX_INDEXING_CONCURRENCY = 1000;
+// The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
+// answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
+// app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
+// getConfig() warns about it at synthesis. Compared against, never assigned.
+export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 
 // The taskTimeout the RapidPipeline EKS bundle declares
 // (backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json). The parent workflow waits this
@@ -542,6 +547,22 @@ export function getConfig(app: cdk.App): Config {
             process.env.PRESIGNED_URL_TIMEOUT_SECONDS ||
             86400)
     );
+
+    // The asset handlers sign presigned URLs with this value as ExpiresIn, most of them through
+    // Python int(), so only a plain decimal whole number from 1 to 7 days signs a usable URL.
+    const presignedUrlTimeout = String(config.app.authProvider.presignedUrlTimeoutSeconds);
+    if (
+        !/^\d+$/.test(presignedUrlTimeout) ||
+        Number(presignedUrlTimeout) < 1 ||
+        Number(presignedUrlTimeout) > PRESIGNED_URL_MAX_TIMEOUT_SECONDS
+    ) {
+        console.warn(
+            `Configuration Warning: app.authProvider.presignedUrlTimeoutSeconds should be a whole number of ` +
+                `seconds between 1 and ${PRESIGNED_URL_MAX_TIMEOUT_SECONDS} (7 days, the longest an Amazon S3 ` +
+                `presigned URL can be signed for). Got: '${presignedUrlTimeout}'. With this value the asset ` +
+                `download, stream, upload and export requests that return a presigned URL fail.`
+        );
+    }
 
     config.app.useFips = resolveConfigBool(
         "useFips",
@@ -1572,8 +1593,30 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    //The AWS European Sovereign Cloud offers FIPS endpoints for only four services (AWS KMS,
+    //Amazon EFS, Amazon ElastiCache and AWS WAF). The hosts VAMS would need, such as s3-fips,
+    //sts-fips, lambda-fips and dynamodb-fips, do not exist there, so app.useFips gives no FIPS
+    //transport in that partition. Nothing in VAMS selects a FIPS hostname at run time; the flag's
+    //one resource effect is the AWS KMS FIPS interface endpoint in the VPC builder. Keyed on the
+    //resolved partition rather than app.govCloud.enabled because GovCloud does publish FIPS
+    //endpoints for those services. A warning rather than an error because the one host the flag
+    //targets exists in the partition.
+    if (config.app.useFips && resolvedPartition === "aws-eusc") {
+        console.warn(
+            "Configuration Warning: app.useFips is true while deploying to the 'aws-eusc' " +
+                "partition. The AWS European Sovereign Cloud offers FIPS endpoints for only AWS " +
+                "KMS, Amazon EFS, Amazon ElastiCache and AWS WAF, so the flag provides no FIPS " +
+                "transport for the services VAMS calls. Its only effect is the AWS KMS FIPS " +
+                "interface VPC endpoint, created when useKmsCmkEncryption.enabled and " +
+                "useGlobalVpc.addVpcEndpoints are true. Unless that endpoint is required, set " +
+                "app.useFips to false and unset AWS_USE_FIPS_ENDPOINT, which also turns the flag " +
+                "on and points the AWS CLI and CDK CLI in that shell at FIPS endpoints the " +
+                "partition does not offer."
+        );
+    }
+
     //If we are govCloud, check for certain features that are required to be on or off.
-    //Note: FIP not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
+    //Note: FIPS not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
     //Note: FedRAMP best practices require all Lambdas/OpenSearch behind VPC but not required for GovCloud
     if (config.app.govCloud.enabled) {
         if (!config.app.useGlobalVpc.enabled) {

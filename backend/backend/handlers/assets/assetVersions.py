@@ -220,16 +220,15 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         if not asset:
             raise VAMSGeneralErrorResponse("Asset not found in database")
         
-        # Check permissions
-        asset["object__type"] = "asset"
-
         # Fail closed: with no authenticated identity no authorization can be
         # evaluated, so deny rather than return the asset.
         if len(claims_and_roles["tokens"]) == 0:
             raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
 
+        # Check permissions against an annotated copy, so the returned record, which callers
+        # write back, carries no object type
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, operation):
+        if not casbin_enforcer.enforce({**asset, 'object__type': 'asset'}, operation):
             raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
 
         return asset
@@ -325,10 +324,13 @@ def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
     return f"{base}/{key}/" if key else f"{base}/"
 
 def delete_assetAuxiliary_files(prefix):
-    """Delete auxiliary files for an asset
+    """Permanently delete the auxiliary files under a prefix, with every version and delete marker
+
+    The auxiliary bucket is versioned, so a delete that names no VersionId would only hide the data.
+    Failures are logged, not raised.
 
     Args:
-        assetLocation: The asset location object with Key (dict or AssetLocationModel)
+        prefix: Auxiliary-bucket prefix (see aux_bucket_asset_file_base); a trailing '/' is added
     """
 
     if not prefix:
@@ -341,16 +343,23 @@ def delete_assetAuxiliary_files(prefix):
     logger.info(f"Deleting Temporary Auxiliary Assets Files Under Folder Prefix: {asset_aux_bucket_name}:{prefix}")
 
     try:
-        # Get all assets in assetAuxiliary bucket (unversioned, temporary files for the auxiliary assets) for deletion
-        # Use assetLocation key as root folder key for assetAuxiliaryFiles
-        assetAuxiliaryBucketFilesDeleted = []
-        paginator = s3_client.get_paginator('list_objects_v2')
+        # Batch-delete every object version and delete marker under the prefix, page by page
+        deleted_count = 0
+        paginator = s3_client.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
-            if 'Contents' in page:
-                for item in page['Contents']:
-                    assetAuxiliaryBucketFilesDeleted.append(item['Key'])
-                    logger.info(f"Deleting auxiliary asset file: {item['Key']}")
-                    s3_client.delete_object(Bucket=asset_aux_bucket_name, Key=item['Key'])
+            entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+            for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
+                batch = entries[i:i + 1000]
+                response = s3_client.delete_objects(
+                    Bucket=asset_aux_bucket_name,
+                    Delete={'Objects': batch, 'Quiet': True}
+                )
+                errors = response.get('Errors', [])
+                for error in errors:
+                    logger.warning(f"Error deleting auxiliary file version {error.get('Key')} ({error.get('VersionId')}): {error.get('Code')}")
+                deleted_count += len(batch) - len(errors)
+        logger.info(f"Deleted {deleted_count} auxiliary file version(s) and delete marker(s) under {prefix}")
 
     except Exception as e:
         logger.exception(f"Error deleting auxiliary files (they may not exist in the first place): {e}")
@@ -518,7 +527,10 @@ def copy_s3_object_version(source_bucket: str, source_key: str, source_version_i
                 'VersionId': source_version_id
             },
             Bucket=dest_bucket,
-            Key=dest_key
+            Key=dest_key,
+            # Grant the bucket owner full control so a version written into a
+            # cross-account asset bucket is owned/readable by that account.
+            ExtraArgs={'ACL': 'bucket-owner-full-control'}
         )
         
         # Get the new version ID by checking the object after copy
@@ -1839,10 +1851,6 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     if not target_version:
         # Create an empty target_version structure if none exists
         target_version = {'files': []}
-    
-    # Get current files in S3
-    current_files = list_s3_files_with_versions(bucket, prefix, include_archived=True)
-    current_files_by_key = {file['relativeKey']: file for file in current_files}
     
     #Get user of request
     username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]

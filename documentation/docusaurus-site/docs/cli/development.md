@@ -112,6 +112,7 @@ pytest -m "not slow"                    # skip slow tests
 | `integration`     | Integration tests                                                  |
 | `asyncio`         | Async tests                                                        |
 | `no_mock_logging` | Opt out of the autouse logging mock when a test needs real logging |
+| `temporary`       | Pins one past change; removed at release cleanup (`-m temporary`)  |
 
 ### The `generic_command_mocks` fixture
 

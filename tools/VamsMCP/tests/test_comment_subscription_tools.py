@@ -398,3 +398,18 @@ def test_the_docstring_checks_are_capable_of_failing():
     docstring = _docstring_of("get_api_key")
     assert docstring, "no docstring was read, so every assertion above is vacuous"
     assert "CANNOT be paged" not in docstring
+
+
+@pytest.mark.parametrize(
+    "tool,fragment",
+    [
+        ("create_metadata_schema", "leading dot"),
+        ("create_metadata_schema", "refused with a 400"),
+        ("update_metadata_schema", "same dotted list"),
+        ("update_metadata_schema", "only a fileMetadata or fileAttribute schema"),
+    ],
+)
+def test_metadata_schema_docstrings_state_the_file_type_restriction_rule(tool, fragment):
+    """An agent writes fileKeyTypeRestriction from the docstring alone, and the API refuses an
+    undotted entry, or a restriction on a schema that is not a file schema, with a 400."""
+    assert fragment in _docstring_of(tool)

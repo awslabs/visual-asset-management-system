@@ -458,7 +458,11 @@ class TestTier2GetAssetWithPermissions:
 
         assert result["bucketId"] == "bucket-1"
         assert result["assetLocation"] == {"Key": f"{_ASSET}/"}
-        assert result["object__type"] == "asset"
+        # The check sees the object type; the returned record, which callers write back, does not
+        assert "object__type" not in result
+        checked = allowing.return_value.enforce.call_args.args[0]
+        assert checked["object__type"] == "asset"
+        assert checked["assetId"] == _ASSET
 
     def test_denying_enforcer_still_raises(self):
         """Control: the pre-existing deny path must keep raising."""

@@ -6,15 +6,15 @@ Before deploying Visual Asset Management System (VAMS), ensure that your develop
 
 The following software must be installed on the machine used to build and deploy VAMS.
 
-| Software                   | Minimum version       | Purpose                                              |
-| -------------------------- | --------------------- | ---------------------------------------------------- |
-| Python                     | 3.12                  | AWS Lambda runtime, backend dependencies             |
-| Docker                     | Latest stable         | Container builds for AWS Lambda layers and pipelines |
-| Node.js                    | 22.22.3               | Frontend build tooling, AWS CDK CLI                  |
-| npm                        | Included with Node.js | Package management for frontend and infrastructure   |
-| Node Version Manager (nvm) | Latest stable         | Ensures the correct Node.js version is active        |
-| AWS CLI                    | v2 (latest)           | AWS account authentication and resource management   |
-| AWS CDK CLI                | Latest stable         | Infrastructure-as-code deployment                    |
+| Software                   | Minimum version | Purpose                                              |
+| -------------------------- | --------------- | ---------------------------------------------------- |
+| Python                     | 3.12            | AWS Lambda runtime, backend dependencies             |
+| Docker                     | Latest stable   | Container builds for AWS Lambda layers and pipelines |
+| Node.js                    | 22.22.3         | Frontend build tooling, AWS CDK CLI                  |
+| npm                        | 11.10.0         | Package management for frontend and infrastructure   |
+| Node Version Manager (nvm) | Latest stable   | Ensures the correct Node.js version is active        |
+| AWS CLI                    | v2 (latest)     | AWS account authentication and resource management   |
+| AWS CDK CLI                | Latest stable   | Infrastructure-as-code deployment                    |
 
 :::tip[Verify installed versions]
 Run the following commands to confirm your tools are at the required versions:
@@ -130,7 +130,7 @@ If your organization requires Federal Information Processing Standards (FIPS) 14
 export AWS_USE_FIPS_ENDPOINT=true
 ```
 
-The same variable turns on `app.useFips` at synthesis. Setting `app.useFips` to `true` in the VAMS configuration file as well keeps the deployment reproducible when the variable is absent. See the [Configuration Reference](configuration-reference.md) for what the flag changes.
+The same variable turns on `app.useFips` at synthesis. Setting `app.useFips` to `true` in the VAMS configuration file as well keeps the deployment reproducible when the variable is absent. See the [Configuration Reference](configuration-reference.md) for what the flag changes. In the AWS European Sovereign Cloud, leave the variable unset and `app.useFips` `false`: the partition offers FIPS endpoints for only four services, which do not include AWS STS, AWS CloudFormation or Amazon S3.
 
 ### Amazon Bedrock model access
 

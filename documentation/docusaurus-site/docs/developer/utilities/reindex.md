@@ -1,6 +1,6 @@
 # Reindex Utility
 
-The reindex utility re-indexes Amazon OpenSearch and any attached downstream indexers (such as the Garnet Framework addon) for assets and files. It reads all asset and file records from Amazon DynamoDB and re-publishes them to the configured indexing pipeline. The vector index used by natural-language search is rebuilt by a separate function, the vector reindexer, described in [Vector Index Reindex](#vector-index-reindex).
+The reindex utility re-indexes Amazon OpenSearch and any attached downstream indexers (such as the Garnet Framework addon) for assets and files. It reads the asset records from Amazon DynamoDB and the file objects in the registered Amazon S3 asset buckets, and re-publishes them to the configured indexing pipeline. The vector index used by natural-language search is rebuilt by a separate function, the vector reindexer, described in [Vector Index Reindex](#vector-index-reindex).
 
 **Script location:** `infra/deploymentDataMigration/tools/reindex_utility.py`
 
@@ -14,8 +14,11 @@ The utility offers two run modes, selected with `--mode`:
 ```mermaid
 flowchart LR
     Script["reindex_utility.py<br/>(local machine)"] -->|Invoke| Lambda["Reindexer Lambda<br/>(deployed in VAMS stack)"]
-    Lambda -->|Scan| DDB["Amazon DynamoDB<br/>Asset & File tables"]
-    Lambda -->|Publish| SNS["Amazon SNS Topics<br/>Asset & File indexers"]
+    Lambda -->|Scan| DDB["Amazon DynamoDB<br/>Asset & S3 asset buckets tables"]
+    Lambda -->|List objects| S3["Amazon S3<br/>Asset buckets"]
+    Lambda -->|Write and delete marker rows| Meta["Amazon DynamoDB<br/>Asset file metadata table"]
+    Meta -->|Stream| Queuing["SNS queuing Lambdas"]
+    Queuing -->|Publish| SNS["Amazon SNS Topics<br/>Asset & File indexers"]
     SNS -->|Trigger| Indexer["Indexer Lambdas"]
     Indexer -->|Write| OS["Amazon OpenSearch<br/>(if enabled)"]
     Indexer -->|Write| Garnet["Garnet Framework<br/>(if enabled)"]
@@ -23,8 +26,8 @@ flowchart LR
 ```
 
 1. The utility script invokes the deployed reindexer Lambda function via the AWS SDK
-2. The Lambda function scans all asset and/or file records from Amazon DynamoDB
-3. For each record, it publishes an indexing event to the appropriate Amazon SNS topic
+2. The Lambda function scans the asset table for an asset reindex; for a file reindex it reads the registered buckets from the S3 asset buckets table and lists each bucket's objects in Amazon S3
+3. For each asset or file, it writes a marker row to the asset file metadata table in Amazon DynamoDB and then deletes it; that table's stream triggers the SNS queuing Lambda functions, which publish the change to the asset and file indexer Amazon SNS topics
 4. The SNS topics trigger the indexer Lambda functions, which write the records to Amazon OpenSearch (and any other configured downstream indexers such as the Garnet Framework addon)
 
 In `lambda` mode (default), all processing runs in the cloud via the deployed Lambda function and the local script is a thin invocation wrapper — no direct access to Amazon DynamoDB or Amazon OpenSearch is required from the local machine. In `direct` mode, the same handler code runs locally in the script's Python process (still calling AWS with your local credentials) so it is not subject to the Lambda execution-time limit. See [Run Modes](#run-modes).
@@ -74,7 +77,7 @@ Invokes the deployed reindexer Lambda. This is the recommended mode and requires
 
 ### Direct mode
 
-Direct mode (`--mode direct`) imports the backend reindexer handler and runs it locally with **no execution-time limit**, which is intended for very large repositories where the Lambda would otherwise time out. The handler still calls AWS (Amazon DynamoDB, AWS Systems Manager, and Amazon OpenSearch) using your local AWS credentials, so direct mode needs the backend source, the handler's configuration inputs, and the handler's Python libraries.
+Direct mode (`--mode direct`) imports the backend reindexer handler and runs it locally with **no execution-time limit**, which is intended for very large repositories where the Lambda would otherwise time out. The handler still calls AWS (Amazon DynamoDB, Amazon S3, AWS Systems Manager, and Amazon OpenSearch) using your local AWS credentials, so direct mode needs the backend source, the handler's configuration inputs, and the handler's Python libraries.
 
 **Additional prerequisites for direct mode:**
 
@@ -87,7 +90,7 @@ Direct mode (`--mode direct`) imports the backend reindexer handler and runs it 
 
     These libraries are only needed for direct mode. The script imports the backend handler lazily — only when `--mode direct` runs — and `opensearch-py` only when `--clear-indexes` is also used. A lambda-mode run loads none of them and requires only `boto3`.
 
--   AWS credentials with the same permissions the reindexer Lambda role has: read on the asset, S3-asset-bucket, and asset-file-metadata Amazon DynamoDB tables; write on the asset-file-metadata table; `ssm:GetParameter` on the index-name and endpoint parameters; and Amazon OpenSearch access (only for `--clear-indexes`).
+-   AWS credentials with the same permissions the reindexer Lambda role has: read on the asset, S3-asset-bucket, and asset-file-metadata Amazon DynamoDB tables; write on the asset-file-metadata table; `s3:ListBucket` and `s3:GetObject` on the asset buckets (the file reindex lists each bucket and reads object metadata); `ssm:GetParameter` on the index-name and endpoint parameters; and Amazon OpenSearch access (only for `--clear-indexes`).
 
 **Direct-mode inputs** (the utility injects the table-name values as environment variables before importing the handler; the backend's resource-name resolver honors these environment-variable overrides ahead of its AWS Systems Manager Parameter Store lookup, so direct mode works without the deployment's resource-name parameters). Find the table-name values under the deployment's `/<name>-<baseStackName>/resourceNames/dynamoTables/` SSM parameters or in the Amazon DynamoDB console. All are required **except** `--backend-path`, `--opensearch-type`, and `--region`, which default as noted:
 
@@ -118,7 +121,7 @@ python reindex_utility.py --mode direct --operation both \
 ```
 
 :::warning[Clearing indexes in direct mode]
-The bulk reindex (touch-and-delete) only uses Amazon DynamoDB and AWS Systems Manager and works from a local machine outside the VPC. `--clear-indexes` is different — it connects to the OpenSearch endpoint directly:
+The bulk reindex (touch-and-delete) only uses Amazon DynamoDB, Amazon S3, and AWS Systems Manager and works from a local machine outside the VPC. `--clear-indexes` is different — it connects to the OpenSearch endpoint directly:
 
 -   **Provisioned** domains are always inside the VPC, so their endpoint is not reachable from a local machine. Direct mode **rejects** `--clear-indexes` when `--opensearch-type` is `provisioned`.
 -   **Serverless** collections are VPC-restricted when the collection is private (`openSearch.useServerless.allowPublic = false`), which routes access through a VPC endpoint. Direct mode allows `--clear-indexes` for serverless but warns, because it will fail against a VPC-restricted (private) collection.
@@ -202,6 +205,8 @@ python reindex_utility.py \
 
 :::warning[Clear Indexes]
 The `--clear-indexes` flag deletes all documents from the Amazon OpenSearch asset and file indexes before reindexing. During the reindexing process, search results in the VAMS web interface will be incomplete. Only use this flag when you need a clean rebuild.
+
+The file reindex lists only the objects whose current version is live, so it does not rebuild the documents of files whose current version is a delete marker: every file of an archived asset and each individually archived file. A reindex that clears the indexes, including the one a deployment runs when [`app.openSearch.reindexOnCdkDeploy`](../../deployment/configuration-reference.md) is `true`, therefore removes the search documents of those files, and searches that include archived files no longer return them. Archived assets keep their asset documents, which the asset reindex rebuilds from the asset table.
 :::
 
 **Asynchronous invocation for large datasets:**
@@ -286,7 +291,7 @@ python reindex_utility.py \
 | `AccessDeniedException`                            | Insufficient IAM permissions                                                                 | Ensure your AWS credentials have `lambda:InvokeFunction` permission for the reindexer function.                                                                                                                                       |
 | Client-side timeout                                | Large dataset exceeds synchronous wait time                                                  | Use `--async` flag and monitor Amazon CloudWatch Logs. The Lambda function continues processing after the client disconnects.                                                                                                         |
 | Lambda 15-minute timeout                           | Dataset too large to reindex within the Lambda limit (watch for this above ~100,000 records) | Monitor the reindexer Lambda's CloudWatch Logs for a timeout. If the run cannot finish within 15 minutes, re-run with `--mode direct`, which runs locally with no execution-time limit.                                               |
-| `ModuleNotFoundError` / import error (direct mode) | Backend source not found or direct-mode libraries missing                                    | Verify `--backend-path` points at the `backend/backend` directory and install the direct-mode libraries (`pip install boto3 botocore urllib3 opensearch-py`).                                                                         |
+| `ModuleNotFoundError` / import error (direct mode) | Backend source not found or direct-mode libraries missing                                    | Verify `--backend-path` points at the `backend/backend` directory and install the direct-mode libraries (`pip install boto3 botocore urllib3 aws-lambda-powertools opensearch-py`).                                                   |
 | Failed items in results                            | Individual record indexing errors                                                            | Check Amazon CloudWatch Logs for the reindexer Lambda function (lambda mode) or the local console output (direct mode) for detailed error messages per record. Common causes include malformed records or OpenSearch capacity limits. |
 
 ## Vector Index Reindex

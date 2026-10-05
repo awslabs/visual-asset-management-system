@@ -22,6 +22,17 @@ const NON_CLAUSE_FILTER_KEYS = new Set([
     "geo_filter",
 ]);
 
+/**
+ * Filter keys matched on their `.keyword` subfield. These id fields are analyzed text, so a quoted
+ * value on the field itself is a phrase over the id's hyphen-separated words and also matches
+ * similar ids; the `.keyword` subfield holds the exact, case-sensitive id.
+ */
+const EXACT_MATCH_FILTER_KEYS = new Set(["str_databaseid"]);
+
+/** Quote a filter value for a query_string clause, escaping any embedded quote or backslash. */
+export const quoteFilterValue = (value: unknown): string =>
+    `"${String(value).replace(/[\\"]/g, (c) => "\\" + c)}"`;
+
 /** Candidates one NLP call returns: the DynamoDB SearchVectors TopK ceiling. */
 export const NLP_SEARCH_SIZE = 100;
 
@@ -59,6 +70,7 @@ export function buildKeywordFilters(
     Object.keys(searchQuery.filters).forEach((key) => {
         if (NON_CLAUSE_FILTER_KEYS.has(key) || omit.has(key)) return;
         const filter = searchQuery.filters[key];
+        const field = EXACT_MATCH_FILTER_KEYS.has(key) ? `${key}.keyword` : key;
 
         if (key.startsWith("bool_") && filter && typeof filter.value === "boolean") {
             filters.push({ query_string: { query: `(${key}:${filter.value})` } });
@@ -68,10 +80,12 @@ export function buildKeywordFilters(
             Array.isArray(filter.values) &&
             filter.values.length > 0
         ) {
-            const orQuery = filter.values.map((val: string) => `"${val}"`).join(" OR ");
-            filters.push({ query_string: { query: `(${key}:(${orQuery}))` } });
+            const orQuery = filter.values.map(quoteFilterValue).join(" OR ");
+            filters.push({ query_string: { query: `(${field}:(${orQuery}))` } });
         } else if (filter && filter.value !== "all" && filter.value !== "") {
-            filters.push({ query_string: { query: `(${key}:("${filter.value}"))` } });
+            filters.push({
+                query_string: { query: `(${field}:(${quoteFilterValue(filter.value)}))` },
+            });
         }
     });
 
@@ -131,7 +145,9 @@ export function buildKeywordFilters(
     // analyzed, so a phrase on it also matches "smoke-db-2" when locked to "smoke-db". It stays a
     // query_string because the backend's SearchFilterModel requires that key.
     if (databaseId && !omit.has("str_databaseid")) {
-        filters.push({ query_string: { query: `str_databaseid.keyword:"${databaseId}"` } });
+        filters.push({
+            query_string: { query: `str_databaseid.keyword:${quoteFilterValue(databaseId)}` },
+        });
     }
 
     return filters;

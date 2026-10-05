@@ -57,7 +57,7 @@ VAMS deploys within the customer's AWS account, supporting AWS GovCloud (US) for
 
 **Key features used:**
 
--   AWS GovCloud (US) deployment with FIPS endpoint support
+-   AWS GovCloud (US) deployment, where Amazon API Gateway is FIPS-compliant by default and `useFips` adds the AWS KMS FIPS interface VPC endpoint
 -   VPC-isolated deployment support for restricted environments
 -   Potree pipeline for facility scan processing and visualization
 -   Permission templates for role-based access by facility or region
@@ -181,11 +181,11 @@ Defense and aerospace organizations work with sensitive 3D data — facility sca
 
 ### How VAMS Solves It
 
-VAMS deploys entirely within your AWS account, including AWS GovCloud (US) regions, ensuring full data sovereignty. The ABAC/RBAC permission system provides fine-grained access control at both the API and data entity level, allowing precise control over who can access which assets. The solution supports VPC-isolated deployments with FIPS endpoints for restricted environments.
+VAMS deploys entirely within your AWS account, including AWS GovCloud (US) regions, ensuring full data sovereignty. The ABAC/RBAC permission system provides fine-grained access control at both the API and data entity level, allowing precise control over who can access which assets. The solution supports VPC-isolated deployments with VPC endpoints for restricted environments.
 
 **Key features used:**
 
--   AWS GovCloud (US) deployment with FIPS endpoint support
+-   AWS GovCloud (US) deployment, where Amazon API Gateway is FIPS-compliant by default and `useFips` adds the AWS KMS FIPS interface VPC endpoint
 -   Two-tier ABAC/RBAC authorization for fine-grained access control
 -   VPC isolation with VPC endpoints for restricted environments
 -   NVIDIA Isaac Lab pipeline for simulation training and evaluation

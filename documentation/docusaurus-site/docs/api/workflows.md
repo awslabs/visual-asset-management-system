@@ -700,7 +700,7 @@ Only the first step's name reaches the output path, and the generated portion of
 2. This reference's `defaultTemplateId`.
 3. The pipeline's own default template (the one whose `isDefault` is `true`) — applied only when the pipeline's `systemConfig.requireTemplate` is `true`. A pipeline that does not require a template stays template-less unless a template is named, so its default is a form pre-selection rather than an automatic fallback.
 
-The value carries the identifier character set, at most 64 characters.
+The value is an identifier: 3–63 characters of letters, numbers, hyphens, and underscores.
 
 ## System configuration
 
@@ -963,7 +963,7 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 | `outputDatabaseId`                     | string | No       | Output database. When the input files resolve to zero or multiple assets, supply it together with `outputAssetId`. For a single-input-asset override it falls back to the input asset's database when omitted.                                                                                                                                                                                                                                                                                                                                                                        |
 | `outputFileBaseExecutionPathExtension` | string | No       | Base path (under the output asset) that output files are written beneath, inserted immediately before each output file's own name. May contain dynamic tag placeholders (e.g. `{{firstAssetFileFileNameNoExt}}`) resolved at launch. **Omit** to inherit the workflow's `defaultOutputFileBaseExecutionPathExtension`; send `""` or `/` to write at the asset root regardless. Must not contain `..` or backslashes. See [Output path prefix](#output-path-prefix).                                                                                                                   |
 | `pipelineExecutionParameters`          | object | No       | Per-pipeline execution parameters, keyed by `pipelineId`. Each value may set `templateId`, `templateTags`, or a `customTemplateOverride`.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `executionGroupId`                     | string | No       | Group id for bulk grouping / abort-by-group.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `executionGroupId`                     | string | No       | Group id for bulk grouping / abort-by-group: 3-63 characters of letters, numbers, `-` and `_`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `triggerType`                          | string | No       | `manual` (default), `fileUpload` (set by the upload trigger dispatcher), or `systemReindex` (set by the vector-search reindex launcher). Stored on the execution as `Manual`, `File-Upload`, or `System-Reindex`; the list endpoints filter on the stored form.                                                                                                                                                                                                                                                                                                                       |
 
 `relativeFileKey` is asset-relative (leading `/`); `/` selects the whole asset and `/folder/` a folder.
@@ -1302,9 +1302,9 @@ POST /workflows/executions/{executionId}/rerun
 
 ### Request body
 
-| Field              | Type   | Required | Description                                                                             |
-| ------------------ | ------ | -------- | --------------------------------------------------------------------------------------- |
-| `executionGroupId` | string | No       | Group id to assign to the new execution, at most 64 characters. Omit to leave it unset. |
+| Field              | Type   | Required | Description                                                                                                        |
+| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `executionGroupId` | string | No       | Group id to assign to the new execution, 3-63 characters of letters, numbers, `-` and `_`. Omit to leave it unset. |
 
 ### Response
 

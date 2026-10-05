@@ -125,65 +125,93 @@ def _asset_bucket_name(bucket_id):
         return ""
 
 
+def _head_object_metadata(bucket_name, s3_key, version_id=""):
+    """The S3 user metadata of one object version, or of the current version when version_id is
+    empty."""
+    head_kwargs = {"Bucket": bucket_name, "Key": s3_key}
+    if version_id:
+        head_kwargs["VersionId"] = version_id
+    return s3_client.head_object(**head_kwargs).get("Metadata", {}) or {}
+
+
 def _resolve_asset_relative_key(bucket_name, s3_key, version_id=""):
     """Resolve (databaseId, assetId, assetRelativeKey) for an uploaded S3 object from its metadata +
     asset record. Returns None when the object has no VAMS asset metadata, the asset is unknown, the
     object sits in a different bucket than the asset, or the object does not sit within the resolved
-    asset's own location."""
+    asset's own location.
+
+    A file written straight to the asset bucket arrives without the asset ids, or with the ids of the
+    asset it was copied from. Bucket sync stamps the ids of the asset the key belongs to by copying
+    the object onto itself, which creates a newer version, before it forwards the event for the
+    uploaded version; so when the pinned version does not bind, the binding is retried with the
+    current version's ids, under the same checks. The provenance of the write is always read from the
+    pinned version."""
     try:
-        head_kwargs = {"Bucket": bucket_name, "Key": s3_key}
-        if version_id:
-            head_kwargs["VersionId"] = version_id
-        head = s3_client.head_object(**head_kwargs)
+        metadata = _head_object_metadata(bucket_name, s3_key, version_id)
     except Exception as e:
         logger.info(f"Could not head uploaded object (skipping): {e}")
         return None
-    metadata = head.get("Metadata", {}) or {}
-    asset_id = metadata.get(ASSET_ID_METADATA_KEY)
-    database_id = metadata.get(DATABASE_ID_METADATA_KEY)
-    if not asset_id or not database_id:
-        logger.info(f"Uploaded object missing asset/database metadata (skipping): {s3_key}")
-        return None
 
-    asset = asset_storage_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id}).get("Item")
-    if not asset:
-        logger.info(f"Asset not found for uploaded object (skipping): {database_id}/{asset_id}")
-        return None
+    def _bind(md):
+        asset_id = md.get(ASSET_ID_METADATA_KEY)
+        database_id = md.get(DATABASE_ID_METADATA_KEY)
+        if not asset_id or not database_id:
+            logger.info(f"Uploaded object missing asset/database metadata (skipping): {s3_key}")
+            return None
 
-    # Same-prefix assets can exist in different buckets, so the binding also requires the object to
-    # sit in the asset's own bucket. An unresolvable bucket row leaves the key check as the only gate.
-    asset_bucket_name = _asset_bucket_name(asset.get("bucketId", ""))
-    if asset_bucket_name and asset_bucket_name != bucket_name:
-        logger.info(f"Uploaded object {s3_key} is in a different bucket than asset "
-                    f"{database_id}/{asset_id} (skipping)")
-        return None
+        asset = asset_storage_table.get_item(
+            Key={"databaseId": database_id, "assetId": asset_id}).get("Item")
+        if not asset:
+            logger.info(f"Asset not found for uploaded object (skipping): {database_id}/{asset_id}")
+            return None
 
-    asset_location = asset.get("assetLocation") or {}
-    asset_base_key = asset_location.get("Key", "") if isinstance(asset_location, dict) else ""
-    # The metadata that named the asset is client-settable on a direct asset-bucket write, so the
-    # binding only holds when the object actually lives inside that asset's own S3 location.
-    normalized_key = s3_key.lstrip("/")
-    normalized_base = (asset_base_key or "").lstrip("/")
-    if not normalized_base:
-        logger.warning(f"Asset {database_id}/{asset_id} has no location key; fileUpload triggers "
-                       f"cannot be dispatched for {s3_key}")
+        # Same-prefix assets can exist in different buckets, so the binding also requires the
+        # object to sit in the asset's own bucket. An unresolvable bucket row leaves the key check
+        # as the only gate.
+        asset_bucket_name = _asset_bucket_name(asset.get("bucketId", ""))
+        if asset_bucket_name and asset_bucket_name != bucket_name:
+            logger.info(f"Uploaded object {s3_key} is in a different bucket than asset "
+                        f"{database_id}/{asset_id} (skipping)")
+            return None
+
+        asset_location = asset.get("assetLocation") or {}
+        asset_base_key = asset_location.get("Key", "") if isinstance(asset_location, dict) else ""
+        # The metadata that named the asset is client-settable on a direct asset-bucket write, so
+        # the binding only holds when the object actually lives inside that asset's own S3 location.
+        normalized_key = s3_key.lstrip("/")
+        normalized_base = (asset_base_key or "").lstrip("/")
+        if not normalized_base:
+            logger.warning(f"Asset {database_id}/{asset_id} has no location key; fileUpload "
+                           f"triggers cannot be dispatched for {s3_key}")
+            return None
+        remainder = None
+        if normalized_key.startswith(normalized_base):
+            candidate = normalized_key[len(normalized_base):]
+            # Containment: the base key is either a prefix ending in '/', or the remainder starts
+            # at a path boundary (or is empty). A shared name prefix ("db/a1" vs "db/a10/x.glb") is
+            # not containment.
+            if normalized_base.endswith("/") or candidate == "" or candidate.startswith("/"):
+                remainder = candidate
+        if remainder is None:
+            logger.info(f"Uploaded object {s3_key} is outside the location of asset "
+                        f"{database_id}/{asset_id} (skipping)")
+            return None
+        return database_id, asset_id, "/" + remainder.lstrip("/")
+
+    binding = _bind(metadata)
+    if binding is None and version_id:
+        try:
+            current_metadata = _head_object_metadata(bucket_name, s3_key)
+        except Exception as e:
+            logger.info(f"Could not head current version of uploaded object (skipping): {e}")
+            return None
+        binding = _bind(current_metadata)
+    if binding is None:
         return None
-    remainder = None
-    if normalized_key.startswith(normalized_base):
-        candidate = normalized_key[len(normalized_base):]
-        # Containment: the base key is either a prefix ending in '/', or the remainder starts at a
-        # path boundary (or is empty). A shared name prefix ("db/a1" vs "db/a10/x.glb") is not
-        # containment.
-        if normalized_base.endswith("/") or candidate == "" or candidate.startswith("/"):
-            remainder = candidate
-    if remainder is None:
-        logger.info(f"Uploaded object {s3_key} is outside the location of asset "
-                    f"{database_id}/{asset_id} (skipping)")
-        return None
-    relative = "/" + remainder.lstrip("/")
+    database_id, asset_id, relative = binding
     # The provenance of the write travels with the binding: who wrote this object decides whether a
-    # workflow may re-fire on it. It comes from the SAME head_object above, so reading it is free.
+    # workflow may re-fire on it. It comes from the pinned version's head_object above, never from
+    # the current version's, so reading it is free.
     change_source = metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY, "") or ""
     change_workflow_id = metadata.get(VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY, "") or ""
     return database_id, asset_id, relative, change_source, change_workflow_id

@@ -565,6 +565,24 @@ def _unwrap_geojson_geometry(value: Any) -> Optional[Dict[str, Any]]:
 
 
 #######################
+# Database Access Filter
+#######################
+
+def build_database_access_filter_clause(accessible_databases: List[str]) -> Dict[str, Any]:
+    """
+    Bool-filter clause restricting an index query to the caller's accessible databases.
+
+    str_databaseid is mapped as analyzed text with a keyword subfield. The standard analyzer
+    lowercases and splits on hyphens, so a phrase on the text field matches every id that holds
+    the same adjacent tokens ("smoke-db" also matches "smoke-db-2"). A terms query on the
+    keyword subfield matches each id exactly. An empty list admits no document.
+    """
+    if not accessible_databases:
+        return {"match_none": {}}
+    return {"terms": {"str_databaseid.keyword": list(accessible_databases)}}
+
+
+#######################
 # Simple Search Query Building
 #######################
 
@@ -773,23 +791,10 @@ class SimpleSearchQueryBuilder:
         must_not_clauses = []
         should_clauses = []
         filter_clauses = []
-        
+
         # Add database access restrictions
-        if accessible_databases:
-            db_query_string = " OR ".join([f'"{db_id}"' for db_id in accessible_databases])
-            filter_clauses.append({
-                "query_string": {
-                    "query": f"str_databaseid:({db_query_string})"
-                }
-            })
-        else:
-            # No accessible databases - return no results
-            filter_clauses.append({
-                "query_string": {
-                    "query": 'str_databaseid:"NOACCESSDATABASE"'
-                }
-            })
-        
+        filter_clauses.append(build_database_access_filter_clause(accessible_databases))
+
         # Add archive exclusions (unless explicitly included)
         if not request.includeArchived:
             must_not_clauses.append({"term": {"bool_archived": True}})
@@ -1198,23 +1203,10 @@ class DualIndexQueryBuilder:
             metadata_search_query = self._build_metadata_search_query(request.metadataQuery, request.metadataSearchMode, index_type)
             if metadata_search_query:
                 must_clauses.append(metadata_search_query)
-        
+
         # Add database access restrictions
-        if accessible_databases:
-            db_query_string = " OR ".join([f'"{db_id}"' for db_id in accessible_databases])
-            filter_clauses.append({
-                "query_string": {
-                    "query": f"str_databaseid:({db_query_string})"
-                }
-            })
-        else:
-            # No accessible databases - return no results
-            filter_clauses.append({
-                "query_string": {
-                    "query": 'str_databaseid:"NOACCESSDATABASE"'
-                }
-            })
-        
+        filter_clauses.append(build_database_access_filter_clause(accessible_databases))
+
         # Add archive exclusions (unless explicitly included)
         if not request.includeArchived:
             must_not_clauses.append({"term": {"bool_archived": True}})

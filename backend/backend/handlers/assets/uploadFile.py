@@ -26,6 +26,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
     VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+    replace_metadata_copy_args,
 )
 from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,
@@ -182,7 +183,7 @@ def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token
             'PartNumber': part_number,
             'UploadId': upload_id
         },
-        ExpiresIn=expiration
+        ExpiresIn=int(expiration)
     )
     return url
 
@@ -467,7 +468,7 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id, extra_metadata=None):
+def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id, extra_metadata=None, source_head=None):
     """Copy an object from one S3 location to another with replaced metadata
 
     Args:
@@ -478,6 +479,7 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
         database_id: Database ID to set in metadata
         asset_id: Asset ID to set in metadata
         extra_metadata: Optional dict of additional metadata fields to merge
+        source_head: Optional head_object response for the source object; fetched when not given
 
     Returns:
         True if successful, False otherwise
@@ -497,9 +499,12 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
         if extra_metadata:
             metadata.update(extra_metadata)
 
+        # The final object keeps the content headers of the object it is copied from
+        if source_head is None:
+            source_head = s3.head_object(Bucket=source_bucket, Key=source_key)
+
         extra_args = {
-            'MetadataDirective': 'REPLACE',
-            'Metadata': metadata,
+            **replace_metadata_copy_args(source_head, metadata),
             # Grant the bucket owner full control so the finalized object written into a
             # cross-account asset bucket is owned/readable by that account.
             'ACL': 'bucket-owner-full-control'
@@ -517,8 +522,26 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
         return False
 
 def delete_s3_object(bucket, key):
-    """Delete an object from S3"""
+    """Delete a staged upload object, removing its current version rather than hiding it.
+
+    On a versioned bucket a delete without a version ID only adds a delete marker and keeps the
+    staged copy as a noncurrent version, so the current version is deleted by its ID. A key with
+    no current version needs no delete; a refused versioned delete falls back to a plain delete."""
     try:
+        try:
+            version_id = s3.head_object(Bucket=bucket, Key=key).get('VersionId')
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NotFound'):
+                return True
+            raise
+        if version_id:
+            try:
+                s3.delete_object(Bucket=bucket, Key=key, VersionId=version_id)
+                return True
+            except ClientError as e:
+                if e.response.get('Error', {}).get('Code') != 'AccessDenied':
+                    raise
+                logger.warning(f"Version delete of staged object {key} refused; deleting without a version ID")
         s3.delete_object(Bucket=bucket, Key=key)
         return True
     except Exception as e:
@@ -1462,7 +1485,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 'relativeKey': file.relativeKey,
                 'temp_s3_key': file.tempKey,
                 'final_s3_key': final_s3_key,
-                'uploadIdS3': "external"
+                'uploadIdS3': "external",
+                'source_head': head_response
             }
             
             # Add to successful files list
@@ -1572,7 +1596,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 file_detail['final_s3_key'],
                 databaseId,
                 assetId,
-                extra_metadata=change_metadata
+                extra_metadata=change_metadata,
+                source_head=file_detail.get('source_head')
             )
 
             if not copy_success:
@@ -2072,7 +2097,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 'relativeKey': file.relativeKey,
                 'temp_s3_key': temp_s3_key,
                 'final_s3_key': final_s3_key,
-                'uploadIdS3': file.uploadIdS3
+                'uploadIdS3': file.uploadIdS3,
+                'source_head': head_response
             }
             
             # Validate file content type
@@ -2295,7 +2321,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 file_detail['final_s3_key'],
                 databaseId,
                 assetId,
-                extra_metadata=change_metadata
+                extra_metadata=change_metadata,
+                source_head=file_detail.get('source_head')
             )
             if not copy_success:
                 logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")

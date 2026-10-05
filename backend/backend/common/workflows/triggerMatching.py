@@ -16,8 +16,9 @@ Matching rules (per trigger row's triggerConfig):
   - Database scope: a GLOBAL trigger fires for any database's upload; a database-scoped trigger fires
     only for uploads in its own database (mirrors the workflow execute database-scope rule).
   - Disabled trigger rows (enabled=false) never fire.
-  - Provenance (the object's vams-changesource): a restore (`RESTORE_CHANGE_SOURCES`) never fires; a
-    workflow-written object fires only under the chaining rule of `chaining_allows_trigger`.
+  - Provenance (the object's vams-changesource): a metadata-only rewrite of a file (change source
+    fileMetadataUpdate) is not an upload and fires nothing; a restore (`RESTORE_CHANGE_SOURCES`) never
+    fires; a workflow-written object fires only under the chaining rule of `chaining_allows_trigger`.
 The built execute body carries pipelineExecutionParameters from the trigger's defaultTemplateIds map
 (keyed "pipelineDatabaseId:pipelineId" -> templateId), triggerType="fileUpload", and the uploaded
 input file — except for an arity-"none" workflow, which takes no input files and uses the uploaded
@@ -27,6 +28,7 @@ file's asset only as the output target.
 from customLogging.logger import safeLogger
 from common.workflows import executionValidation as ev
 from common.s3MetadataKeys import (
+    VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
     VAMS_CHANGE_SOURCE_RESTORE_VALUES,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
@@ -161,6 +163,10 @@ def match_fileupload_triggers(trigger_rows, database_id, asset_id, relative_file
     returning that workflow's `inputFileArity`, so an arity-"none" workflow's trigger fires with no
     input files instead of one its own validation rejects. Omitting it treats every workflow as taking
     the uploaded file."""
+    if change_source == VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE:
+        logger.info(f"Skipping fileUpload triggers for {relative_file_key}: the new version only "
+                    "rewrote the file's metadata")
+        return []
     matches = []
     if change_source in RESTORE_CHANGE_SOURCES:
         # The source alone decides for every row; the rows are not consulted and no workflow is read.

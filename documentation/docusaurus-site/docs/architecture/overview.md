@@ -107,11 +107,13 @@ A centralized configuration system (`config.json`) controls which features, pipe
 
 VAMS supports three deployment modes to accommodate different compliance and network isolation requirements.
 
-| Deployment Mode                  | Web Distribution                      | API Access    | VPC      | Notes                                                                                                                                                    |
-| -------------------------------- | ------------------------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | REST API (v1) | Optional | Default mode. Regional or private endpoint. Supports optional Amazon Location Service.                                                                   |
-| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | REST API (v1) | Required | No Amazon CloudFront. Regional or private endpoint. FIPS endpoints. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
-| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | REST API (v1) | Required | Deploys with the GovCloud guardrails. No Amazon CloudFront. No Amazon Location Service. Region exposes two Availability Zones.                           |
+| Deployment Mode                  | Web Distribution                      | API Access    | VPC      | Notes                                                                                                                                                               |
+| -------------------------------- | ------------------------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | REST API (v1) | Optional | Default mode. Regional or private endpoint. Supports optional Amazon Location Service.                                                                              |
+| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | REST API (v1) | Required | No Amazon CloudFront. Regional or private endpoint, FIPS-compliant by default. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
+| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | REST API (v1) | Required | Deploys with the GovCloud guardrails. No Amazon CloudFront. No Amazon Location Service. Region exposes two Availability Zones.                                      |
+
+In AWS GovCloud (US), Amazon API Gateway APIs are FIPS-compliant by default. The `app.useFips` option, which the GovCloud configuration template turns on, adds the AWS KMS FIPS interface VPC endpoint when VPC endpoints and AWS KMS CMK encryption are enabled; it does not move other VAMS service calls to FIPS endpoints. See [FIPS Endpoints](security.md#fips-endpoints).
 
 :::note[GovCloud and EU Sovereign Cloud Requirements]
 When deploying to AWS GovCloud (US) or the AWS European Sovereign Cloud, the VPC must be enabled, Amazon CloudFront must be disabled, and Amazon Location Service must be disabled.
@@ -125,7 +127,7 @@ The following diagram provides a visual overview of the VAMS architecture across
 
 ## CDK Stack Organization
 
-VAMS deploys as a set of nested AWS CloudFormation stacks managed by the AWS CDK. The root stack (`CoreVAMSStack`) orchestrates all nested stacks with explicit dependency ordering.
+VAMS deploys as a set of nested AWS CloudFormation stacks managed by the AWS CDK. The root stack (`CoreVAMSStack`) creates every nested stack, and the diagram below shows the deployment order between them.
 
 ```mermaid
 graph TD
@@ -133,34 +135,51 @@ graph TD
     VPC["VPCBuilder<br/>(Conditional)"]
     Layers["LambdaLayers"]
     Storage["StorageResourcesBuilder<br/>(DynamoDB, S3, SNS, SQS, KMS)"]
+    Names["ResourceNamesBuilder<br/>(SSM Resource Names)"]
     Auth["AuthBuilder<br/>(Cognito / OAuth)"]
-    API["REST API Builder<br/>(SpecRestApi + Authorizer)"]
-    APIBuilder["ApiBuilder<br/>(API Route Wiring)"]
-    APIBuilder2["ApiBuilder2<br/>(Tags, Auth, Pipelines, Workflows, Executions)"]
-    StaticWeb["StaticWeb<br/>(CloudFront or ALB)"]
+    APIBuilder["ApiBuilder<br/>(Primary API Route Wiring)"]
+    APIBuilder2["ApiBuilder2<br/>(Secondary API Route Wiring)"]
     Search["SearchBuilder<br/>(OpenSearch, vector indexing, /search/nlp)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
     Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync)"]
+    API["RestApi<br/>(SpecRestApi + Authorizer)"]
+    StaticWeb["StaticWeb<br/>(CloudFront or ALB, Conditional)"]
     Location["LocationService<br/>(Conditional)"]
     Features["CustomFeatureEnabledConfig<br/>(Feature Flags to DynamoDB)"]
 
     Core --> VPC
     Core --> Layers
     Core --> Storage
-    Storage --> Auth
-    Auth --> API
-    API --> APIBuilder
-    API --> StaticWeb
-    APIBuilder --> APIBuilder2
-    APIBuilder2 --> Search
-    API --> Pipelines
-    API --> Addons
     Core --> Location
     Core --> Features
+    Storage --> Names
+    Storage --> Auth
+    Names --> Auth
+    Storage --> APIBuilder
+    Names --> APIBuilder
+    Storage --> APIBuilder2
+    Names --> APIBuilder2
+    APIBuilder --> APIBuilder2
+    Storage --> Search
+    Names --> Search
+    APIBuilder2 --> Search
+    Storage --> Pipelines
+    APIBuilder2 --> Pipelines
+    Pipelines -.->|vectorSearch.enabled| Search
+    Storage --> Addons
+    Names --> Addons
+    Storage --> API
+    Auth --> API
+    APIBuilder --> API
+    APIBuilder2 --> API
+    Search --> API
+    Addons --> API
+    Storage --> StaticWeb
+    API -.->|API endpoint| StaticWeb
 ```
 
 :::tip[Stack Dependencies]
-All nested stacks that consume `storageResources` declare an explicit dependency on the `StorageResourcesBuilder` stack using `addDependency()`. `SearchBuilder` additionally depends on `ApiBuilder2`, whose `executeWorkflow` function name the vector indexing construct's system-workflow launcher invokes. This ensures correct deployment ordering regardless of how AWS CloudFormation resolves implicit references.
+Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none. `SearchBuilder` depends on `ApiBuilder2`, whose `executeWorkflow` function name the vector indexing construct's system-workflow launcher invokes, and, when `vectorSearch.enabled` is `true`, on `PipelineBuilder` as well, so the vector reindex custom resource runs after the system pipelines it launches exist. The dotted arrow into StaticWeb is a cross-stack reference that AWS CloudFormation orders implicitly: StaticWeb reads the REST API endpoint. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
 :::
 
 ## Next Steps

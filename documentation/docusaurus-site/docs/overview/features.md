@@ -238,17 +238,17 @@ Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` t
 
 ### Security
 
-| Feature                     | Configuration                                | Description                                                                            |
-| --------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------- |
-| **AWS KMS CMK Encryption**  | `useKmsCmkEncryption.enabled`                | Customer-managed KMS key for all storage resources                                     |
-| **External KMS Key**        | `useKmsCmkEncryption.optionalExternalCmkArn` | Import an existing AWS KMS CMK                                                         |
-| **AWS WAF**                 | `useWaf`                                     | Web Application Firewall protection for Amazon CloudFront or Application Load Balancer |
-| **FIPS Endpoints**          | `useFips`                                    | Federal Information Processing Standards compliant endpoints                           |
-| **IP Range Restrictions**   | `authorizerOptions.allowedIpRanges`          | Network-level access control via the custom Lambda authorizer                          |
-| **TLS Enforcement**         | Always on                                    | All Amazon S3 buckets deny non-TLS connections                                         |
-| **CDK Nag**                 | Always on                                    | AWS Solutions security compliance checks on all resources                              |
-| **AWS CloudTrail**          | `addStackCloudTrailLogs`                     | API-level audit logging (enabled by default)                                           |
-| **Content Security Policy** | Dynamic                                      | CSP headers generated based on deployment configuration                                |
+| Feature                     | Configuration                                | Description                                                                                            |
+| --------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **AWS KMS CMK Encryption**  | `useKmsCmkEncryption.enabled`                | Customer-managed KMS key for all storage resources                                                     |
+| **External KMS Key**        | `useKmsCmkEncryption.optionalExternalCmkArn` | Import an existing AWS KMS CMK                                                                         |
+| **AWS WAF**                 | `useWaf`                                     | Web Application Firewall protection for Amazon CloudFront or Application Load Balancer                 |
+| **AWS KMS FIPS Endpoint**   | `useFips`                                    | Adds the AWS KMS FIPS interface VPC endpoint when VPC endpoints and AWS KMS CMK encryption are enabled |
+| **IP Range Restrictions**   | `authorizerOptions.allowedIpRanges`          | Network-level access control via the custom Lambda authorizer                                          |
+| **TLS Enforcement**         | Always on                                    | All Amazon S3 buckets deny non-TLS connections                                                         |
+| **CDK Nag**                 | Always on                                    | AWS Solutions security compliance checks on all resources                                              |
+| **AWS CloudTrail**          | `addStackCloudTrailLogs`                     | API-level audit logging (enabled by default)                                                           |
+| **Content Security Policy** | Dynamic                                      | CSP headers generated based on deployment configuration                                                |
 
 ### Authentication Providers
 

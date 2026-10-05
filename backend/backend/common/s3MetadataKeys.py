@@ -64,8 +64,9 @@ VAMS_STATUS_DELETED = "deleted"
 # Change-provenance keys (``vams-`` hyphen prefix).
 #
 # Stamped onto each new S3 object version by the creating action (upload, workflow,
-# copy, move, rename, unarchive). sqsBucketSync reads them back and writes a single
-# change-history record. Naming: ``vams-changesource`` / ``vams-changeuserid`` / etc.
+# copy, move, rename, unarchive, file revert, primary type change).
+# sqsBucketSync reads them back and writes a single change-history record. Naming:
+# ``vams-changesource`` / ``vams-changeuserid`` / etc.
 # ---------------------------------------------------------------------------
 VAMS_CHANGE_SOURCE_METADATA_KEY = "vams-changesource"
 VAMS_CHANGE_USER_ID_METADATA_KEY = "vams-changeuserid"
@@ -88,6 +89,7 @@ VAMS_CHANGE_SOURCE_FILE_UNARCHIVE = "fileUnarchive"
 VAMS_CHANGE_SOURCE_ASSET_ARCHIVE = "assetArchive"
 VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE = "assetUnarchive"
 VAMS_CHANGE_SOURCE_FILE_REVERT = "fileRevert"
+VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE = "fileMetadataUpdate"
 
 VAMS_CHANGE_SOURCE_VALUES: FrozenSet[str] = frozenset(
     {
@@ -102,6 +104,7 @@ VAMS_CHANGE_SOURCE_VALUES: FrozenSet[str] = frozenset(
         VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
         VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
         VAMS_CHANGE_SOURCE_FILE_REVERT,
+        VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
     }
 )
 
@@ -136,6 +139,63 @@ CHANGE_PROVENANCE_METADATA_KEYS: FrozenSet[str] = frozenset(
 def normalize_history_file_path(file_path: str) -> str:
     """Return the asset-relative file path with exactly one leading slash."""
     return "/" + (file_path or "").lstrip("/")
+
+
+# ---------------------------------------------------------------------------
+# Copies that replace user metadata.
+#
+# A MetadataDirective=REPLACE copy resets the system-defined headers the request
+# does not restate. COPY_PRESERVED_HEADER_FIELDS are the headers s3transfer
+# carries from the source on a multipart copy made without REPLACE.
+# ---------------------------------------------------------------------------
+COPY_PRESERVED_HEADER_FIELDS = (
+    "CacheControl",
+    "ContentDisposition",
+    "ContentEncoding",
+    "ContentLanguage",
+    "ContentType",
+    "Expires",
+)
+
+# Amazon S3 limits user-defined metadata to 2 KB: the sum of the UTF-8 bytes of every key and value.
+S3_USER_METADATA_LIMIT_BYTES = 2048
+
+
+class UserMetadataTooLargeError(ValueError):
+    """The replacement user metadata of a copy is over the Amazon S3 user-metadata limit."""
+
+
+def user_metadata_size(metadata: dict) -> int:
+    """Return the size Amazon S3 counts against its user-metadata limit, in bytes."""
+    return sum(len(str(key).encode("utf-8")) + len(str(value).encode("utf-8"))
+               for key, value in (metadata or {}).items())
+
+
+def replace_metadata_copy_args(source_head: dict, metadata: dict) -> dict:
+    """Return managed-copy ExtraArgs that replace the user metadata with ``metadata``.
+
+    The source object's system-defined headers are restated from its ``head_object``
+    response, so the new version keeps them. Change-provenance entries with a blank
+    value are left out: a REPLACE copy carries nothing over from the source, and readers
+    treat a missing provenance key as blank.
+
+    Raises:
+        UserMetadataTooLargeError: The remaining user metadata is over the Amazon S3
+            2 KB limit, so Amazon S3 would refuse the copy.
+    """
+    metadata = {key: value for key, value in (metadata or {}).items()
+                if not (key in CHANGE_PROVENANCE_METADATA_KEYS and value in ("", None))}
+    if user_metadata_size(metadata) > S3_USER_METADATA_LIMIT_BYTES:
+        raise UserMetadataTooLargeError(
+            f"User metadata is {user_metadata_size(metadata)} bytes, over the "
+            f"{S3_USER_METADATA_LIMIT_BYTES}-byte Amazon S3 limit")
+    extra_args = {"Metadata": metadata, "MetadataDirective": "REPLACE"}
+    for field in COPY_PRESERVED_HEADER_FIELDS:
+        value = (source_head or {}).get(field)
+        if value:
+            extra_args[field] = value
+    return extra_args
+
 
 # ---------------------------------------------------------------------------
 # Indexing classification sets.

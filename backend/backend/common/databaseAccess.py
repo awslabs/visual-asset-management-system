@@ -106,9 +106,9 @@ class DatabaseAccessManager:
                     'MaxItems': max_databases  # Configurable limit
                 }
             ):
+                # A filtered page can hold no items while more of the table remains; the paginator
+                # ends the scan when DynamoDB returns no LastEvaluatedKey.
                 items = page.get('Items', [])
-                if not items:
-                    break
 
                 # Process items in current page
                 for item in items:

@@ -656,6 +656,21 @@ export const RULES: Rule[] = [
             "Set openSearch.useProvisioned.availabilityZoneCount to 2 when deploying OpenSearch provisioned to this region.",
     },
 
+    // ----- FIPS in the EU Sovereign Cloud
+    // (config.ts: "Sovereign Cloud offers FIPS endpoints for only four services") -----
+    {
+        id: "fips-not-in-eusovereign",
+        severity: "warning",
+        fieldPaths: ["app.useFips", "env.region"],
+        // Keyed on the region's partition rather than app.govCloud.enabled: GovCloud publishes FIPS
+        // endpoints for the services VAMS calls, the EU Sovereign Cloud (aws-eusc) does not.
+        appliesWhen: (c) =>
+            g(c, "app.useFips") === true &&
+            partitionForRegionName(g(c, "env.region")) === "aws-eusc",
+        message:
+            "app.useFips is true in the AWS European Sovereign Cloud (aws-eusc), which offers FIPS endpoints for only AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF. The flag provides no FIPS transport for the services VAMS calls; its only effect is the AWS KMS FIPS interface VPC endpoint. Unless that endpoint is required, set useFips to false and leave AWS_USE_FIPS_ENDPOINT unset.",
+    },
+
     // ----- GovCloud IL6 (config.ts: "Now check additional IL6 compliance") -----
     {
         id: "il6-no-cognito",
@@ -1828,6 +1843,22 @@ export const RULES: Rule[] = [
         appliesWhen: (c) => Number(g(c, "app.api.apiGatewayRest.apiGatewayTimeoutTime")) > 29,
         message:
             "An integration timeout above 29 seconds requires an approved account-level increase to the Amazon API Gateway 'Integration timeout' quota (L-E5AE38E3) in the deployment Region. Request the increase before deploying, otherwise the deployment fails.",
+    },
+
+    // ----- Presigned URL timeout
+    // (config.ts: "presignedUrlTimeoutSeconds should be a whole number of") -----
+    {
+        id: "presigned-url-timeout-range",
+        severity: "warning",
+        fieldPaths: ["app.authProvider.presignedUrlTimeoutSeconds"],
+        appliesWhen: (c) => {
+            const t = g(c, "app.authProvider.presignedUrlTimeoutSeconds");
+            if (!t) return false; // getConfig() falls back to the environment variable or 86400
+            const s = String(t);
+            return !/^\d+$/.test(s) || Number(s) < 1 || Number(s) > 604800;
+        },
+        message:
+            "app.authProvider.presignedUrlTimeoutSeconds should be a whole number of seconds between 1 and 604800 (7 days, the longest an Amazon S3 presigned URL can be signed for). With another value the presigned URLs VAMS returns for downloads, streams, uploads and exports fail.",
     },
 
     // ----- IP ranges (config.ts: "Validate IP ranges configuration") -----

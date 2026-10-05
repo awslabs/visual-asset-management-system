@@ -129,18 +129,18 @@ Below the tabbed container, the metadata section displays all key-value metadata
 
 ## File Viewer Page
 
-When you select a file in the file manager and choose to view it, VAMS opens a dedicated file viewer page. The viewer automatically selects the best plugin based on the file extension.
+When you select a file in the file manager and choose to view it, VAMS opens a dedicated file viewer page. If only one viewer plugin supports the file extension, the page opens the file in it; if several do, you choose one from the viewer dropdown.
 
 ![File viewer page displaying a USDZ 3D model](/img/view_file_page_usdz_20260323_v2.5.png)
 
 ### Supported Viewer Types
 
-VAMS includes 20 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically based on the file extension. If multiple viewers support the same extension, you can switch between them using a dropdown.
+VAMS includes 20 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
 :::tip
-If a file's extension matches multiple viewers, VAMS selects the highest-priority viewer. The preview viewer serves as a fallback for files that have a preview image but no dedicated viewer.
+If a file's extension matches multiple viewers, the viewer dropdown lists them with the lowest priority number first, and the file opens once you choose one. If the file has a preview image, the file page also offers a **Preview** option that shows it in the Preview Viewer.
 :::
 
 ---

@@ -224,7 +224,7 @@ export class CoreVAMSStack extends cdk.Stack {
         //Ignore stacks if we are only loading context (mostly for Imported VPC)
         if (!props.config.env.loadContextIgnoreVPCStacks) {
             // Cross-stack route registry — populated by all API-contributing stacks,
-            // rendered into a single REST API by RestApiBuilder (built last).
+            // rendered into a single REST API by the RestApi stack (ApiNestedStack, built last).
             const apiRouteRegistry = new RouteRegistry();
 
             //Deploy Backend API framework (nested stack)

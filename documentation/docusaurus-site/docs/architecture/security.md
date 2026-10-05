@@ -336,12 +336,14 @@ All VAMS storage resources support encryption at rest:
 | Amazon OpenSearch      | Service-managed                 | Customer-managed KMS key           |
 | Amazon EventBridge bus | AWS owned key                   | Customer-managed KMS key           |
 
+The web app bucket uses Amazon S3 managed keys (SSE-S3) whatever the `useKmsCmkEncryption` setting, and so does its access logs bucket when the web application is served through an Application Load Balancer (`app.useAlb.enabled`).
+
 :::tip[Enabling KMS CMK Encryption]
 Set `useKmsCmkEncryption.enabled = true` in the deployment configuration. An external key can be imported via `useKmsCmkEncryption.optionalExternalCmkArn`. If no external key is provided, VAMS creates a new AWS KMS key with automatic key rotation enabled.
 :::
 
 :::note[EventBridge bus encryption in GovCloud / EU Sovereign Cloud]
-Amazon EventBridge does not support customer managed keys on event buses in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions. In those partitions, the orchestration bus uses EventBridge's default AWS owned key encryption at rest regardless of the `useKmsCmkEncryption` setting. All other storage resources continue to use the customer-managed key.
+Amazon EventBridge does not support customer managed keys on event buses in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions. In those partitions, the orchestration bus uses EventBridge's default AWS owned key encryption at rest regardless of the `useKmsCmkEncryption` setting. The other storage resources use the customer-managed key, except the web app bucket and its Application Load Balancer access logs bucket, which use SSE-S3 as described above, and the log groups that [Log Group Encryption](aws-resources.md#log-group-encryption) lists as always using the AWS-managed key.
 :::
 
 ### KMS Key Policy
@@ -614,7 +616,7 @@ Every CDK Nag suppression must include a detailed justification explaining why t
 | `AwsSolutions-L1`   | Lambda runtimes are explicitly managed (Python 3.12, Node.js 22.x)                                  |
 | `AwsSolutions-COG3` | Amazon Cognito AdvancedSecurityMode not available in AWS GovCloud                                   |
 | `AwsSolutions-S1`   | Access logs bucket cannot log to itself                                                             |
-| `AwsSolutions-SQS3` | Dead-letter queues not used for bucket sync queues (files easily re-driven)                         |
+| `AwsSolutions-SQS3` | A dead-letter queue terminates its source queue's redrive chain, so it takes no redrive policy      |
 
 ## VPC Isolation
 
@@ -622,7 +624,7 @@ When `useGlobalVpc.enabled = true`, all Lambda functions can be deployed into VP
 
 ## FIPS Endpoints
 
-When `useFips = true` (typically in AWS GovCloud), the partition-aware service helper automatically selects FIPS-compliant endpoints for all AWS service calls. The service helper supports the `aws`, `aws-us-gov`, `aws-eusc` (AWS European Sovereign Cloud), `aws-cn`, and `aws-iso*` partitions:
+When `useFips = true` (the shipped GovCloud template's setting), VAMS creates the AWS KMS FIPS interface VPC endpoint beside the standard AWS KMS endpoint when `useGlobalVpc.enabled`, `useGlobalVpc.addVpcEndpoints` and `useKmsCmkEncryption.enabled` are all `true`. The flag does not move VAMS's own service calls to FIPS endpoints: the Lambda functions call each service's default regional endpoint, and the web Content Security Policy names the standard hostnames. The partition-aware service helper, which builds hostnames, ARNs, and service principals in the CDK stacks, supports the `aws`, `aws-us-gov`, `aws-eusc` (AWS European Sovereign Cloud), `aws-cn`, and `aws-iso*` partitions:
 
 | Partition                    | Identifier   | DNS suffix          |
 | ---------------------------- | ------------ | ------------------- |
@@ -632,7 +634,7 @@ When `useFips = true` (typically in AWS GovCloud), the partition-aware service h
 | China                        | `aws-cn`     | `amazonaws.com.cn`  |
 | Isolated                     | `aws-iso*`   | Per isolated Region |
 
-Each partition entry carries both a standard and a FIPS hostname, so `useFips` resolves within whichever partition the deployment targets. The shipped configuration templates set `useFips` to `true` for GovCloud and `false` for the commercial and AWS European Sovereign Cloud partitions.
+Each partition entry carries both a standard and a FIPS hostname, so `useFips` resolves within whichever partition the deployment targets. The shipped configuration templates set `useFips` to `true` for GovCloud and `false` for the commercial and AWS European Sovereign Cloud partitions. The AWS European Sovereign Cloud offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF), so configuration validation warns when `useFips` is `true` there.
 
 ## Blocked File Types
 
@@ -705,7 +707,7 @@ Custom bucket policies can be applied to all VAMS Amazon S3 buckets via `infra/c
 | No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                                                                  |
 | No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable)                                          |
 | No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                                                             |
-| FIPS endpoints                            | Automatically selected by service helper                                                                                       |
+| FIPS endpoints                            | Not enforced; `useFips` adds only the AWS KMS FIPS interface VPC endpoint                                                      |
 | Vector search off by default              | `vectorSearch.enabled` is backfilled to `false`; enabling it is supported after the models are enabled in both linked accounts |
 
 The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain, and no DynamoDB vector search, so `vectorSearch.enabled` must be `false` there.
@@ -725,7 +727,7 @@ The following recommendations should be reviewed with your organization's securi
 1. **Audit frontend dependencies** — Run `npm audit` in the `web/` directory prior to deploying the frontend to ensure all packages are up to date. Run `npm audit fix` to mitigate critical vulnerabilities.
 2. **Use least-privilege IAM roles** — When deploying to an AWS account, create an AWS IAM role for deployment that limits access to the least privilege necessary based on your internal security policies.
 3. **Bootstrap CDK with minimal permissions** — Run AWS CDK bootstrap with the least-privileged AWS IAM role needed to deploy CDK and VAMS environment components.
-4. **Review token timeouts** — Authentication access, ID, and file presigned URL token timeouts default to 1 hour per security best practices. Adjust as necessary for your organization's requirements.
+4. **Review token timeouts** — Amazon Cognito access and ID tokens default to 1 hour (`app.authProvider.useCognito.credTokenTimeoutSeconds`), and Amazon S3 presigned URLs default to 24 hours (`app.authProvider.presignedUrlTimeoutSeconds`). Adjust both as necessary for your organization's requirements.
 5. **Configure IP restrictions** — Consider configuring IP range restrictions using `authorizerOptions.allowedIpRanges` in the [deployment configuration](../deployment/configuration-reference.md) to limit API access to known networks.
 6. **Configure presigned URL network restrictions** — For production deployments where asset access should be restricted to specific networks, configure `assetBuckets.presignedUrlNetworkRestrictions` with `allowedIpRanges` (IPv4/IPv6 CIDR blocks) or `allowedVpceIds` (Amazon S3 VPC endpoint IDs). These restrictions limit presigned URL access to the specified networks through bucket policy deny statements applied to the VAMS-created asset and auxiliary buckets.
 7. **Enable KMS encryption** — For production deployments, enable customer-managed KMS encryption (`useKmsCmkEncryption.enabled: true`) for all storage resources.

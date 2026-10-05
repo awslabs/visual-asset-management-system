@@ -113,7 +113,7 @@ Perform these static checks without running commands:
 
 **Handler-to-CDK mapping**: For each Python handler file in `backend/backend/handlers/`, verify there is a corresponding Lambda builder function in `infra/lib/lambdaBuilder/` that references it.
 
-**API route completeness**: Verify that routes registered via `attachFunctionToApi` in `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` reference Lambda functions that exist, and that each registered route has a matching `ApiRoute` constant in `backend/backend/common/apiRoutes.py` (in a category group array).
+**API route completeness**: Verify that every route registered through an `attachFunctionToApi(` call under `infra/lib/` references a Lambda function that exists, and that each registered route has a matching `ApiRoute` constant in `backend/backend/common/apiRoutes.py` (in a category group array). The calls are not confined to the two API builder stacks: the search stack and add-on stacks such as the Physna one register their own routes, and `rest-api-gateway-construct.ts` registers `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` asserts the same pairing against the synthesized REST API.
 
 **Resource name resolution**: Spot-check that non-pipeline handlers resolve table/bucket/log-group names via `get_table_name(ResourceKeys.*)` / `get_bucket_name` / `get_log_group_name` from `common.resourceNames` (not hardcoded names), and that any handler-specific env vars set in CDK Lambda builders match the `os.environ` calls in the corresponding Python handlers.
 

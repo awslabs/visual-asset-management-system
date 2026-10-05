@@ -37,7 +37,7 @@ The root `CLAUDE.md` file provides project-wide context that applies across all 
 
 ### Layer 2: Component-Specific Steering
 
-Each major component directory contains its own `CLAUDE.md` with patterns specific to that component. These documents cover directory structure, coding standards, key files, anti-patterns, and component-specific checklists.
+Each major component directory contains its own `CLAUDE.md` with patterns specific to that component, and so do four subdirectories with conventions of their own: the backend test suite, the Playwright end-to-end tests, the viewer plugin system, and the pipeline nested stacks. These documents cover directory structure, coding standards, key files, anti-patterns, and component-specific checklists.
 
 ### Layer 3: Workflow Documents
 
@@ -47,15 +47,20 @@ The `.kiro/steering/` directory contains detailed development workflow guides. T
 
 ### CLAUDE.md Files
 
-| File                      | Scope                  | Key Topics                                                                                                  |
-| ------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `CLAUDE.md`               | Project-wide           | Architecture overview, cross-component patterns, critical rules, gold standard references, deployment modes |
-| `web/CLAUDE.md`           | React frontend         | Cloudscape components, HashRouter, Synonyms system, service-layer pattern, viewer plugins, feature switches |
-| `backend/CLAUDE.md`       | Python Lambda backend  | Pydantic v1 models, Casbin authorization, DynamoDB patterns, Lambda handler structure, logging and testing  |
-| `infra/CLAUDE.md`         | AWS CDK infrastructure | Nested stacks, Lambda builders, security helpers, configuration system, multi-partition support             |
-| `tools/VamsCLI/CLAUDE.md` | Python CLI tool        | Click framework, profile management, command groups, constants pattern, JSON output mode                    |
-| `tools/VamsMCP/CLAUDE.md` | MCP server             | Tool definitions and gating tiers, pagination and response shapes, stdout discipline, CLI reuse rules       |
-| `documentation/CLAUDE.md` | Documentation site     | Docusaurus conventions, writing style, sidebar configuration, cross-reference sources                       |
+| File                                         | Scope                       | Key Topics                                                                                                                               |
+| -------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAUDE.md`                                  | Project-wide                | Architecture overview, cross-component patterns, critical rules, gold standard references, deployment modes                              |
+| `web/CLAUDE.md`                              | React frontend              | Cloudscape components, HashRouter, Synonyms system, service-layer pattern, viewer plugins, feature switches                              |
+| `web/e2e/CLAUDE.md`                          | Playwright end-to-end tests | Tracked core specs versus untracked ad-hoc specs, environment-independent and non-mutating specs, shared harness, running the suite      |
+| `web/src/visualizerPlugin/CLAUDE.md`         | Viewer plugin system        | Plugin architecture, current viewers, adding a viewer plugin, plugin config fields, CSP and `unsafe-eval`, signed URLs in framed viewers |
+| `backend/CLAUDE.md`                          | Python Lambda backend       | Pydantic v1 models, Casbin authorization, DynamoDB patterns, Lambda handler structure, logging and testing                               |
+| `backend/tests/CLAUDE.md`                    | Backend test suite          | pytest configuration, mock module hierarchy, per-handler `conftest.py` patterns, event-shape coverage, `xfail` and `temporary` markers   |
+| `backendPipelines/CLAUDE.md`                 | Processing pipelines        | Execution types, S3 output paths, `assetId` threading, vamsSchema registration, sub-process and log registration, new-pipeline checklist |
+| `infra/CLAUDE.md`                            | AWS CDK infrastructure      | Nested stacks, Lambda builders, security helpers, configuration system, multi-partition support                                          |
+| `infra/lib/nestedStacks/pipelines/CLAUDE.md` | Pipeline nested stacks      | Pipeline nested stack pattern, Lambda package layout, VPC builder wiring, sub-process and log registration wiring, S3 output paths       |
+| `tools/VamsCLI/CLAUDE.md`                    | Python CLI tool             | Click framework, profile management, command groups, constants pattern, JSON output mode                                                 |
+| `tools/VamsMCP/CLAUDE.md`                    | MCP server                  | Tool definitions and gating tiers, pagination and response shapes, stdout discipline, CLI reuse rules                                    |
+| `documentation/CLAUDE.md`                    | Documentation site          | Docusaurus conventions, writing style, sidebar configuration, cross-reference sources                                                    |
 
 ### Workflow Documents
 
@@ -256,15 +261,20 @@ VAMS maintains two parallel families of steering documents — `CLAUDE.md` files
 
 ### CLAUDE.md to Kiro Steering Mapping
 
-| `CLAUDE.md` file          | Corresponding Kiro steering document(s)                                                         |
-| :------------------------ | :---------------------------------------------------------------------------------------------- |
-| `CLAUDE.md` (root)        | The workflow document(s) for the changed area; cross-cutting rules go in all affected documents |
-| `web/CLAUDE.md`           | `WEB_DEVELOPMENT_WORKFLOW.md`, `WEB_FRONTEND.md`                                                |
-| `backend/CLAUDE.md`       | `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                                                           |
-| `infra/CLAUDE.md`         | `CDK_DEVELOPMENT_WORKFLOW.md`, `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                            |
-| `tools/VamsCLI/CLAUDE.md` | `CLI_DEVELOPMENT_WORKFLOW.md`                                                                   |
-| `tools/VamsMCP/CLAUDE.md` | `CLI_DEVELOPMENT_WORKFLOW.md` (MCP propagation section)                                         |
-| `documentation/CLAUDE.md` | `DOCUMENTATION_WORKFLOW.md`                                                                     |
+| `CLAUDE.md` file                             | Corresponding Kiro steering document(s)                                                         |
+| :------------------------------------------- | :---------------------------------------------------------------------------------------------- |
+| `CLAUDE.md` (root)                           | The workflow document(s) for the changed area; cross-cutting rules go in all affected documents |
+| `web/CLAUDE.md`                              | `WEB_DEVELOPMENT_WORKFLOW.md`, `WEB_FRONTEND.md`                                                |
+| `web/e2e/CLAUDE.md`                          | `WEB_DEVELOPMENT_WORKFLOW.md` (testing section)                                                 |
+| `web/src/visualizerPlugin/CLAUDE.md`         | `WEB_FRONTEND.md` (viewer plugin section)                                                       |
+| `backend/CLAUDE.md`                          | `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                                                           |
+| `backend/tests/CLAUDE.md`                    | `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` (testing section)                                         |
+| `backendPipelines/CLAUDE.md`                 | `CDK_DEVELOPMENT_WORKFLOW.md` (pipeline development section)                                    |
+| `infra/CLAUDE.md`                            | `CDK_DEVELOPMENT_WORKFLOW.md`, `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                            |
+| `infra/lib/nestedStacks/pipelines/CLAUDE.md` | `CDK_DEVELOPMENT_WORKFLOW.md` (pipeline development section)                                    |
+| `tools/VamsCLI/CLAUDE.md`                    | `CLI_DEVELOPMENT_WORKFLOW.md`                                                                   |
+| `tools/VamsMCP/CLAUDE.md`                    | `CLI_DEVELOPMENT_WORKFLOW.md` (MCP propagation section)                                         |
+| `documentation/CLAUDE.md`                    | `DOCUMENTATION_WORKFLOW.md`                                                                     |
 
 Because the MCP server is downstream of the CLI, the CLI and MCP steering documents share a single Kiro workflow document rather than each having their own. A change to the CLI-to-MCP propagation rules therefore has four destinations, listed in [Keeping the CLI, MCP Server, and Skill Aligned](#keeping-the-cli-mcp-server-and-skill-aligned).
 

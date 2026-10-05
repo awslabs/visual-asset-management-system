@@ -44,6 +44,8 @@ All VAMS Lambda functions share the same configuration:
 | Presigned URL timeout    | 86,400 seconds (24 hours) | Yes          | `app.authProvider.presignedUrlTimeoutSeconds`         |
 | Upload initializations   | 20 per user per minute    | No           | Hardcoded rate limit                                  |
 
+`app.authProvider.presignedUrlTimeoutSeconds` takes a whole number from 1 to 604,800 seconds (7 days), the longest Amazon S3 allows for a presigned URL; synthesis warns about any other value. It is an upper bound: a presigned URL is signed with the Lambda function's temporary role credentials and stops working when they expire, which can be sooner than the configured timeout.
+
 ---
 
 ## Storage Limits

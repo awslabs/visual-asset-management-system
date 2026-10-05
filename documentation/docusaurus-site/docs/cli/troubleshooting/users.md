@@ -22,7 +22,7 @@ The `user cognito` commands operate against the Amazon Cognito user pool and req
 
 **Cause:**
 
-The VAMS deployment was not configured with the Amazon Cognito authentication provider, so the user management API routes are not active.
+The VAMS deployment was not configured with the Amazon Cognito authentication provider. The user management API routes are deployed in every configuration, but without Cognito the API refuses these calls.
 
 **Resolution:**
 
@@ -43,7 +43,7 @@ The VAMS deployment was not configured with the Amazon Cognito authentication pr
 3. If Cognito is not enabled, contact your VAMS administrator to enable the Amazon Cognito authentication provider in the deployment configuration.
 
 :::note
-The `user cognito` command group is feature-gated. When Amazon Cognito is the configured provider for a deployment, these commands manage users directly in the Amazon Cognito user pool.
+The CLI does not gate the `user cognito` command group on a feature switch; the deployment's API decides whether the commands succeed. When Amazon Cognito is the configured provider for a deployment, these commands manage users directly in the Amazon Cognito user pool.
 :::
 
 ---

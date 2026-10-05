@@ -34,15 +34,15 @@ documentation/
     │       └── custom.css           # Custom theme CSS
     ├── static/
     │   └── img/                     # Static images referenced in docs
-    └── docs/                        # Source Markdown files (136 pages)
-        ├── index.md                 # Landing page
+    └── docs/                        # Source Markdown and MDX pages, each listed in sidebars.ts
+        ├── index.mdx                # Landing page
         ├── overview/                # Solution overview, benefits, use cases, features, costs
         ├── concepts/                # Core concepts: databases, assets, files, pipelines, metadata, permissions
         ├── architecture/            # Architecture overview, details, AWS resources, security, networking, data model
         ├── deployment/              # Prerequisites, deploy, config reference, external S3, update, uninstall
         ├── user-guide/              # Getting started, web UI, upload tutorial, asset mgmt, search, metadata, permissions
         ├── cli/                     # CLI getting started, installation, command reference, automation
-        ├── pipelines/               # Pipeline overview + system pipelines (category page + 2 pipelines) + 12 other pipeline docs + custom pipeline guide + porting guide
+        ├── pipelines/               # Pipeline overview, the system pipelines category page and its pipelines, one page per built-in pipeline family, custom pipeline guide, v2.5-to-v2.6 migration guide
         ├── developer/               # Dev setup, backend, frontend, CDK, viewer plugins, audit logging
         ├── api/                     # API overview, auth, assets, files, metadata, search, pipelines, workflows, tags
         ├── troubleshooting/         # Common issues, known limitations, FAQ
@@ -54,19 +54,23 @@ documentation/
 The sidebar uses a hierarchical tree with collapsible categories:
 
 ```
-Home (index.md)
-├── Overview (5 pages)
-├── Core Concepts (11 pages)
-├── Architecture (6 pages)
-├── Deployment (8 pages)
-├── User Guide (13 pages)
-└── Developer Guide
-    ├── Setup, Backend, Frontend, CDK, Viewer Plugins, Audit Logging
-    ├── CLI Reference (4+ pages with commands/ subcategory)
-    ├── Pipelines (18 pages, including the System pipelines subcategory)
-    ├── API Reference (16 pages)
-    └── Troubleshooting (3 pages)
-Additional (5 pages)
+Home (index.mdx)
+├── Overview
+├── Core Concepts
+├── Architecture
+├── Deployment
+├── User Guide
+├── Developer Guide
+│   ├── Setup, Agentic Development, Backend, Frontend, CDK, OpenSearch, Viewer Plugins, Audit Logging, Security, Permissions, Workflow Execution Data Model
+│   ├── Data Syncing
+│   ├── Addons
+│   ├── Pipelines (including the System pipelines subcategory)
+│   ├── CLI Reference (with Command Details and Troubleshooting subcategories)
+│   ├── API Reference
+│   ├── Utilities
+│   ├── External Tool Integrations
+│   └── Troubleshooting
+└── Additional
 ```
 
 ---
@@ -117,7 +121,7 @@ Additional (5 pages)
 #### **Step 5: Cross-Reference Accuracy**
 
 -   [ ] **Verify against source code**: Configuration options match `config.ts`
--   [ ] **Verify API endpoints**: Match `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`), then the registrations in **both** `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts`, and `VAMS_API.yaml`. Enumerating only `apiBuilder-nestedStack.ts` misses the routes registered in `apiBuilder2`, which is where new endpoints go
+-   [ ] **Verify API endpoints**: Match `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`), then the registrations, which are every `attachFunctionToApi(` call under `infra/lib/` and the two direct `registry.register(` calls in `rest-api-gateway-construct.ts`, and `VAMS_API.yaml`. A fixed list of stacks misses routes: new endpoints go in `apiBuilder2`, the search stack and add-on stacks such as the Physna one register their own, and an add-on's routes are registered only when the add-on is enabled. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the registrations against `apiRoutes.py`
 -   [ ] **Verify CLI commands**: Match `tools/VamsCLI/vamscli/commands/`
 -   [ ] **Verify feature flags**: Match `infra/common/vamsAppFeatures.ts`
 -   [ ] **No hardcoded versions**: Reference source of truth files instead
@@ -394,7 +398,7 @@ When writing or verifying documentation, cross-reference these source files to e
 | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Config options                                            | `infra/config/config.ts` (ConfigPublic interface)                                                                                                                                                                                                                                       |
 | ConfigBuilder component (`src/components/ConfigBuilder/`) | `infra/config/config.ts` (`ConfigPublic` + `getConfig()`), `infra/config/config.template.{commercial,govcloud,eusovereign}.json` — `infra/test/config/configBuilderSync.test.ts` guards `schema.ts` and `defaults.ts` only; `validation.ts` and `derived.ts` are kept in sync by review |
-| API endpoints                                             | `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`), then `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` **and** `apiBuilder2-nestedStack.ts`, plus `VAMS_API.yaml`                                                                                                  |
+| API endpoints                                             | `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`) and `VAMS_API.yaml`, then every `attachFunctionToApi(` call under `infra/lib/` and the two `registry.register(` calls in `rest-api-gateway-construct.ts`; `infra/test/api/apiRouteBackendCdkParity.test.ts` checks them        |
 | DynamoDB tables                                           | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                                                                                                                                                                                                          |
 | Feature flags                                             | `infra/common/vamsAppFeatures.ts`                                                                                                                                                                                                                                                       |
 | Backend handlers                                          | `backend/backend/handlers/`                                                                                                                                                                                                                                                             |
@@ -607,7 +611,7 @@ npm run serve
 
 Documentation is deployed automatically via CI/CD when changes are pushed to `main` or `release/*` branches:
 
--   **GitLab**: `.gitlab-ci.yml` -- builds with `node:20-slim`, outputs to `public/` for GitLab Pages
+-   **GitLab**: `.gitlab-ci.yml` -- builds with `node:22-slim`, outputs to `public/` for GitLab Pages
 -   **GitHub**: `.github/workflows/docs.yml` -- builds and deploys via GitHub Pages
 
 Both pipelines only trigger when files under `documentation/docusaurus-site/` change.

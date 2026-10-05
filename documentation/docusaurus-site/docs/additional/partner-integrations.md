@@ -36,12 +36,12 @@ The Isaac Lab Training pipeline uses NVIDIA Isaac Sim container images, which ar
 
 ### Data Synchronization
 
-| Integration                                       | Purpose                                                                                     | License                             | VAMS Component               |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------- |
-| [Garnet Framework](https://garnet-framework.dev/) | Push VAMS data changes to an external NGSI-LD knowledge graph                               | Apache-2.0                          | Addon (`useGarnetFramework`) |
-| [Physna](https://physna.com/)                     | One-way sync of supported 3D/CAD files and metadata to a Physna tenant for geometric search | Commercial (Physna tenant required) | Addon (`usePhysnaSync`)      |
+| Integration                                        | Purpose                                                                                     | License                             | VAMS Component               |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------- |
+| [Garnet Framework](https://garnet-framework.tech/) | Push VAMS data changes to an external NGSI-LD knowledge graph                               | MIT-0                               | Addon (`useGarnetFramework`) |
+| [Physna](https://physna.com/)                      | One-way sync of supported 3D/CAD files and metadata to a Physna tenant for geometric search | Commercial (Physna tenant required) | Addon (`usePhysnaSync`)      |
 
-The Garnet Framework integration allows VAMS to synchronize database, asset, and file changes to a Garnet Framework deployment in the same AWS account. This enables building knowledge graph representations of your visual asset data. Configuration requires specifying the Garnet API endpoint, API token, and Amazon SQS ingestion queue URL.
+The Garnet Framework integration allows VAMS to synchronize database, asset, and file changes to a Garnet Framework deployment in the same AWS account. This enables building knowledge graph representations of your visual asset data. Configuration requires the Amazon SQS ingestion queue URL. The Garnet API endpoint and API token fields must also be set, although the add-on does not use them (see [Garnet Framework configuration](../developer/garnet-framework.md#configuration)).
 
 #### What gets indexed
 
@@ -71,10 +71,10 @@ Data changes flow through the following architecture:
 2. **Amazon S3 event notifications** to Amazon SNS topics to Amazon SQS queues to the Garnet file indexer Lambda function.
 3. **Garnet indexer Lambda functions** convert data to NGSI-LD format and send to the external Garnet ingestion Amazon SQS queue.
 
-VAMS maintains bidirectional relationships between entities and includes all custom metadata fields as NGSI-LD properties. When data is created, updated, or deleted in VAMS, the corresponding NGSI-LD entity is automatically synchronized.
+VAMS maintains bidirectional relationships between entities and includes all custom metadata fields as NGSI-LD properties. When data is created or updated in VAMS, the corresponding NGSI-LD entity is automatically synchronized; deletions are not propagated (see [Garnet Framework limitations](../developer/garnet-framework.md#limitations)).
 
 :::tip[Reindexing existing data]
-If you enable Garnet Framework integration on an existing VAMS deployment and need all current data indexed, use the reindex utility in the migration scripts (without clearing Amazon OpenSearch indexes) to trigger a full data reindex through the global notification queues. This reindexes all relevant VAMS data with the Garnet Framework.
+If you enable Garnet Framework integration on an existing VAMS deployment, use the reindex utility in the migration scripts (without clearing Amazon OpenSearch indexes) to publish existing assets and files to the Garnet Framework through the global notification queues. Existing databases and asset links are not reindexed; each reaches the Garnet Framework on its next change. See [Reindexing Existing Data](../developer/garnet-framework.md#reindexing-existing-data).
 :::
 
 ### Physna Sync

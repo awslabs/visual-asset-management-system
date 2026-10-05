@@ -5,6 +5,7 @@ import json
 import base64
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Attr, Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -12,7 +13,7 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, to_update_expr
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
@@ -38,6 +39,15 @@ try:
 except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
+
+# The database attributes the update API writes. A field is written only when the request supplies a
+# non-None value for it.
+UPDATABLE_DATABASE_FIELDS = (
+    'description',
+    'defaultBucketId',
+    'restrictMetadataOutsideSchemas',
+    'restrictFileUploadsToExtensions',
+)
 
 # The DynamoDB page size the listing scans with when the caller asks for none. validate_pagination_info
 # seeds an absent pageSize from its max-items default, so the listing's own page size is supplied to it.
@@ -257,7 +267,7 @@ def update_database(database_id, update_data, claims_and_roles=None):
         
         # Check authorization. The empty-token and absent-claims cases deny explicitly rather than
         # skipping the check: without an authenticated identity there is nothing to evaluate, and
-        # falling through would reach the put_item below unauthorized (backend/CLAUDE.md Rule 4).
+        # falling through would reach the update_item below unauthorized (backend/CLAUDE.md Rule 4).
         database.update({"object__type": "database"})
         if not claims_and_roles or len(claims_and_roles["tokens"]) == 0:
             raise VAMSGeneralErrorResponse("Access denied")
@@ -274,24 +284,32 @@ def update_database(database_id, update_data, claims_and_roles=None):
             if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
                 raise VAMSGeneralErrorResponse("Bucket ID not found")
         
-        # Update the fields
+        updates = {
+            field: update_data[field]
+            for field in UPDATABLE_DATABASE_FIELDS
+            if update_data.get(field) is not None
+        }
+        if not updates:
+            raise VAMSGeneralErrorResponse("At least one field must be provided for update")
+
+        # Write only the supplied fields, so a concurrent writer's attributes (the recount's assetCount)
+        # are not reverted and the object__type marker set for the Casbin check is never stored. The
+        # condition keeps a database deleted mid-edit from being recreated.
         logger.info(f"Updating database {database_id}")
-        
-        # Update only the provided fields
-        if 'description' in update_data and update_data['description'] is not None:
-            database['description'] = update_data['description']
-        
-        if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
-            database['defaultBucketId'] = update_data['defaultBucketId']
-        
-        if 'restrictMetadataOutsideSchemas' in update_data and update_data['restrictMetadataOutsideSchemas'] is not None:
-            database['restrictMetadataOutsideSchemas'] = update_data['restrictMetadataOutsideSchemas']
-        
-        if 'restrictFileUploadsToExtensions' in update_data and update_data['restrictFileUploadsToExtensions'] is not None:
-            database['restrictFileUploadsToExtensions'] = update_data['restrictFileUploadsToExtensions']
-        
-        # Save the updated database
-        table.put_item(Item=database)
+        keys_map, values_map, expr = to_update_expr(updates)
+        try:
+            table.update_item(
+                Key={'databaseId': database_id},
+                UpdateExpression=expr,
+                ExpressionAttributeNames=keys_map,
+                ExpressionAttributeValues=values_map,
+                ConditionExpression='attribute_exists(databaseId)'
+            )
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                logger.warning(f"Database {database_id} no longer exists, database record not updated")
+                raise VAMSGeneralErrorResponse("Database not found")
+            raise
         
         # Create response
         from datetime import datetime
@@ -319,7 +337,40 @@ def delete_database(database_id, claims_and_roles=None):
                 statusCode=404
             )
 
-        # Check for active workflows, pipelines, and assets before accessing the table
+        table = dynamodb.Table(db_database)
+
+        db_response = table.get_item(
+            Key={
+                'databaseId': database_id
+            }
+        )
+        database = db_response.get("Item", {})
+
+        if not database:
+            return DeleteDatabaseResponseModel(
+                message="Record not found",
+                statusCode=404
+            )
+
+        # Authorize before the content checks, so a caller denied on the database learns
+        # nothing about what it contains
+        allowed = False
+        database.update({
+            "object__type": "database"
+        })
+        
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(database, "DELETE"):
+                allowed = True
+
+        if not allowed:
+            return DeleteDatabaseResponseModel(
+                message="Action not allowed",
+                statusCode=403
+            )
+
+        # Check for active workflows, pipelines, and assets
         if check_workflows(database_id):
             return DeleteDatabaseResponseModel(
                 message="Database contains active workflows",
@@ -338,48 +389,17 @@ def delete_database(database_id, claims_and_roles=None):
                 statusCode=400
             )
 
-        # Only create the table reference if we've passed all the checks
-        table = dynamodb.Table(db_database)
-
-        db_response = table.get_item(
-            Key={
-                'databaseId': database_id
-            }
+        logger.info(f"Deleting database: {database_id}")
+        # The Casbin type marker is not part of the stored record
+        database.pop("object__type", None)
+        database['databaseId'] = database_id + "#deleted"
+        table.put_item(Item=database)
+        table.delete_item(Key={'databaseId': database_id})
+        
+        return DeleteDatabaseResponseModel(
+            message="Database deleted",
+            statusCode=200
         )
-        database = db_response.get("Item", {})
-
-        if database:
-            allowed = False
-            # Add Casbin Enforcer to check if the current user has permissions to DELETE the database
-            database.update({
-                "object__type": "database"
-            })
-            
-            if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if casbin_enforcer.enforce(database, "DELETE"):
-                    allowed = True
-
-            if allowed:
-                logger.info(f"Deleting database: {database_id}")
-                database['databaseId'] = database_id + "#deleted"
-                table.put_item(Item=database)
-                table.delete_item(Key={'databaseId': database_id})
-                
-                return DeleteDatabaseResponseModel(
-                    message="Database deleted",
-                    statusCode=200
-                )
-            else:
-                return DeleteDatabaseResponseModel(
-                    message="Action not allowed",
-                    statusCode=403
-                )
-        else:
-            return DeleteDatabaseResponseModel(
-                message="Record not found",
-                statusCode=404
-            )
     except Exception as e:
         logger.exception(f"Error deleting database: {e}")
         raise VAMSGeneralErrorResponse(f"Error deleting database.")

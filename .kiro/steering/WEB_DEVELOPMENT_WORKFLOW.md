@@ -18,7 +18,7 @@ This document provides comprehensive guidelines for developing and extending the
 | Routing          | React Router v6 with HashRouter                                |
 | State Management | React Context API + useReducer (NO global state libraries)     |
 | API Client       | Custom fetch-based apiClient with auto auth headers            |
-| Package Manager  | npm (NEVER yarn)                                               |
+| Package Manager  | npm 11.10.0+ (NEVER yarn)                                      |
 
 ### **File Structure Standards**
 
@@ -318,7 +318,12 @@ Every source file MUST begin with the Apache-2.0 copyright header:
 
 ### **Rule 9: npm Only -- Never Use yarn**
 
+**Package manager:** npm 11.10.0+. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). Always pin npm before installing:
+
 ```bash
+# Pin npm to the required version first
+npm install -g npm@11.19.1
+
 # CORRECT
 npm install
 npm run start

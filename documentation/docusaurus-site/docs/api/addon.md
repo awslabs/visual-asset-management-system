@@ -90,7 +90,7 @@ ${physnaApiBase}/tenants/${tenantId}/viewer/asset
 
 #### Authorization
 
--   **API tier:** The caller's role must include access to `/addon/physna/viewer` via a permission constraint with `objectType: "api"` or `objectType: "web"`.
+-   **API tier:** The caller's role must allow `GET` on `/addon/physna/viewer` through a permission constraint with `objectType: "api"`; a `web` constraint does not grant it. The seeded `admin` and `basicReadOnly` roles and the Database Admin, Database User, Database Read-Only, and Global Read-Only permission templates grant the route.
 -   **Object tier:** The caller must have `GET` permission on the specific `databaseId` / `assetId` combination (`objectType: "asset"`).
 
 Both tiers must allow for the endpoint to succeed. Failures return `status: "forbidden"` with HTTP `403`.

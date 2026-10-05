@@ -565,7 +565,7 @@ class TestCriteriaForeignToAnIndexMatchNothing:
         assert clause != {"match_none": {}}
         rendered = json.dumps(clause)
         assert rendered.count("/folder/part.glb") == 1
-        assert "str_databaseid.keyword" in rendered, (
+        assert {"term": {"str_databaseid.keyword": "db1"}} in clause["bool"]["filter"], (
             f"the databaseId filter was dropped from the index that can answer: {rendered}"
         )
 
@@ -601,7 +601,8 @@ class TestCriteriaForeignToAnIndexMatchNothing:
             request = search_module.SimpleSearchRequestModel(
                 assetName="widget", **{criterion: "db1"}
             )
-            clause = builder._build_simple_query_clause(request, ["db1"], "asset")
+            # Another accessible database, so "db1" can reach `filter` only through the criterion.
+            clause = builder._build_simple_query_clause(request, ["another-db"], "asset")
             bool_query = clause["bool"]
             assert "db1" in json.dumps(bool_query.get("filter", [])), (
                 f"{criterion} is classified filter-only but appears in no filter clause: "

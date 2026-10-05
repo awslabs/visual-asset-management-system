@@ -31,14 +31,19 @@ Reindexing Strategy:
 - Both operations immediately delete the created records to trigger stream events
 
 File assetId/databaseId Resolution:
-- Files are normally tagged with assetid/databaseid S3 object metadata by sqsBucketSync.
-- For files not yet processed by sqsBucketSync (no such metadata), the reindexer falls
-  back to resolving the asset context the same way sqsBucketSync does: the assetId is the
-  first path segment beneath the bucket's base prefix, and the databaseId is looked up from
-  the asset storage table by (bucketId, assetId) via the BucketIdGSI.
-- Files whose key does not yield a valid asset ID, or whose asset cannot be found as an
-  active (non-archived) asset for the bucket, are ignored (skipped), mirroring how
-  sqsBucketSync declines to process objects that are not valid asset locations.
+- The asset context is resolved from the key first, the same way sqsBucketSync does: the
+  assetId is the first path segment beneath the bucket's base prefix, and the databaseId is
+  looked up from the asset storage table by (bucketId, assetId) via the BucketIdGSI.
+- A key that does not resolve to an active asset (for example a file of an archived asset)
+  falls back to the assetid/databaseid S3 object metadata stamped on the file, read with
+  one HeadObject.
+- Object metadata that names a different asset than the key's first segment, as for a file
+  under a folder given as bucketExistingKey, is used only when that asset's active record
+  belongs to the bucket and its assetLocation.Key holds the key. The file path is then
+  relative to that location.
+- Files left without an asset ID or databaseId, or whose metadata names an asset whose
+  location does not hold the key, are ignored (skipped), mirroring how sqsBucketSync
+  declines to process objects that are not valid asset locations.
 
 Usage:
     Direct Invocation:
@@ -240,6 +245,8 @@ class ReindexUtility:
 
         # Cache of resolved databaseId per (bucketId, assetId) for files missing S3 metadata
         self._asset_db_cache: Dict[str, Optional[str]] = {}
+        # Cache of (bucketId, assetLocation.Key) per (databaseId, assetId) named by object metadata
+        self._stamped_asset_cache: Dict[Tuple[str, str], Optional[Tuple[str, str]]] = {}
 
         logger.info(f"ReindexUtility initialized:")
         logger.info(f"  Asset table (source): {asset_table_name}")
@@ -998,6 +1005,56 @@ class ReindexUtility:
         self._asset_db_cache[cache_key] = database_id
         return database_id
 
+    def _stamped_asset_file_path(
+        self,
+        bucket_id: Optional[str],
+        database_id: Optional[str],
+        asset_id: Optional[str],
+        object_key: str
+    ) -> Optional[str]:
+        """Asset-relative path of object_key under the active asset its metadata names, or None.
+
+        The binding holds only when that asset's record belongs to the bucket and its
+        assetLocation.Key holds the key on a path boundary.
+        """
+        if not database_id or not asset_id:
+            return None
+
+        cache_key = (database_id, asset_id)
+        if cache_key not in self._stamped_asset_cache:
+            location = None
+            try:
+                table = dynamodb_resource.Table(self.asset_table_name)
+                item = table.get_item(Key={'databaseId': database_id, 'assetId': asset_id}).get('Item')
+                if item:
+                    asset_location = item.get('assetLocation') or {}
+                    location_key = asset_location.get('Key', '') if isinstance(asset_location, dict) else ''
+                    location = (item.get('bucketId', ''), location_key or '')
+            except Exception as e:
+                logger.warning(f"Error reading asset {database_id}/{asset_id}: {e}")
+            # Cache hits and misses alike to avoid repeated lookups for the same asset
+            self._stamped_asset_cache[cache_key] = location
+
+        location = self._stamped_asset_cache[cache_key]
+        if not location:
+            return None
+        asset_bucket_id, location_key = location
+        if bucket_id and asset_bucket_id != bucket_id:
+            return None
+
+        normalized_base = location_key.lstrip('/')
+        normalized_key = object_key.lstrip('/')
+        if not normalized_base or not normalized_key.startswith(normalized_base):
+            return None
+        remainder = normalized_key[len(normalized_base):]
+        # Containment: the location is a prefix ending in '/', or the remainder starts at a
+        # path boundary. A shared name prefix ("projects/a1" vs "projects/a10/x.glb") is not
+        # containment.
+        if not (normalized_base.endswith('/') or remainder.startswith('/')):
+            return None
+        remainder = remainder.lstrip('/')
+        return f"/{remainder}" if remainder else None
+
     def _process_bucket(
         self,
         bucket_name: str,
@@ -1071,6 +1128,7 @@ class ReindexUtility:
                         if asset_id and not self._is_valid_asset_id(asset_id):
                             asset_id = None
                         database_id = self._resolve_database_id(bucket_id, asset_id) if asset_id else None
+                        file_path = None
 
                         if not asset_id or not database_id:
                             metadata = s3_client.head_object(
@@ -1079,8 +1137,26 @@ class ReindexUtility:
                             ).get('Metadata', {})
 
                             # Try both lowercase and original case for metadata keys
-                            asset_id = asset_id or metadata.get(ASSET_ID_METADATA_KEY) or metadata.get('assetId')
-                            database_id = database_id or metadata.get(DATABASE_ID_METADATA_KEY) or metadata.get('databaseId')
+                            stamped_asset_id = metadata.get(ASSET_ID_METADATA_KEY) or metadata.get('assetId')
+                            if stamped_asset_id and stamped_asset_id != asset_id:
+                                # The metadata names an asset other than the key's first segment,
+                                # such as one created with bucketExistingKey. It binds only when
+                                # that asset's own location holds the key.
+                                stamped_database_id = metadata.get(DATABASE_ID_METADATA_KEY) or metadata.get('databaseId')
+                                file_path = self._stamped_asset_file_path(
+                                    bucket_id, stamped_database_id, stamped_asset_id, obj['Key'])
+                                if not file_path:
+                                    logger.info(
+                                        f"Skipping {obj['Key']}: object metadata names asset "
+                                        f"{stamped_asset_id}, whose location does not hold the key"
+                                    )
+                                    results['skipped_no_asset'] += 1
+                                    continue
+                                asset_id = stamped_asset_id
+                                database_id = stamped_database_id
+                            else:
+                                asset_id = asset_id or metadata.get(ASSET_ID_METADATA_KEY) or metadata.get('assetId')
+                                database_id = database_id or metadata.get(DATABASE_ID_METADATA_KEY) or metadata.get('databaseId')
 
                         # Files that don't resolve to a valid asset location are skipped.
                         if not asset_id:
@@ -1093,8 +1169,9 @@ class ReindexUtility:
                             results['skipped_no_asset'] += 1
                             continue
 
-                        file_path = relative_file_key(obj['Key'], base_prefix, asset_id)
-                        
+                        if file_path is None:
+                            file_path = relative_file_key(obj['Key'], base_prefix, asset_id)
+
                         files_batch.append({
                             'databaseId': database_id,
                             'assetId': asset_id,

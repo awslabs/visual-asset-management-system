@@ -187,7 +187,9 @@ Keeping a chain finite is therefore an administrative responsibility. Before ena
 
 ### Triggers
 
-Triggers auto-launch a workflow in response to an event. A `fileUpload` trigger runs the workflow when files matching its `inputFileFilters` are uploaded. Filters match by extension (`*.e57`), exact path, file name, or wildcard. A trigger's `defaultTemplateIds` map supplies the template each included pipeline uses when the trigger launches the workflow, keyed by the composite `<pipelineDatabaseId>:<pipelineId>`.
+Triggers auto-launch a workflow in response to an event. A `fileUpload` trigger runs the workflow when files matching its `inputFileFilters` are uploaded. A new file version that changes only the file's primary type is not an upload and starts no trigger. A version restored by a file revert is recorded as that operation rather than as the workflow output it restores, so it starts triggers as an upload does. Filters match by extension (`*.e57`), exact path, file name, or wildcard. A trigger's `defaultTemplateIds` map supplies the template each included pipeline uses when the trigger launches the workflow, keyed by the composite `<pipelineDatabaseId>:<pipelineId>`.
+
+A file written directly to an asset's Amazon S3 location, outside the VAMS upload API, fires matching `fileUpload` triggers once, as an upload does. Bucket sync stamps the object with its database and asset identifiers by copying it onto itself. On a versioned bucket that copy is a newer Amazon S3 version with the same content, and the execution's input file is the version that was written.
 
 A workflow may carry several triggers of one type, each with its own filters and default templates, and an upload launches the workflow once per matching trigger — so one workflow can process different uploads with different templates. Each trigger is addressed by its key: the bare type for a workflow's first trigger of that type, or `<type>#<triggerId>` for an additional one. A workflow that restricts concurrency per asset supports only one trigger of a type, and two triggers of one type may not name the same default templates.
 

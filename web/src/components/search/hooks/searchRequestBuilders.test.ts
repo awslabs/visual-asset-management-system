@@ -51,7 +51,7 @@ describe("buildKeywordSearchRequest", () => {
         expect(body).toEqual({
             query: "red truck",
             filters: [
-                { query_string: { query: '(str_databaseid:("db-a" OR "db-b"))' } },
+                { query_string: { query: '(str_databaseid.keyword:("db-a" OR "db-b"))' } },
                 { query_string: { query: '(str_fileext:(".glb" OR ".obj"))' } },
                 { query_string: { query: "(bool_has_asset_children:true)" } },
                 { query_string: { query: "date_lastmodified:>=2026-01-01" } },

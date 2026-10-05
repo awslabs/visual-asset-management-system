@@ -22,6 +22,23 @@
  * mismatch, so the deployment synthesizes cleanly and then fails partway through creating the core
  * stack. `getConfig()` asserts the flag against the partition so the failure is a config error.
  *
+ * **FIPS in the EU Sovereign Cloud.** The AWS European Sovereign Cloud offers FIPS endpoints for
+ * only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF), so `app.useFips` gives
+ * the services VAMS calls no FIPS transport there. `getConfig()` warns rather than rejects, so the
+ * positive case is paired with a does-not-throw case, and the GovCloud template, which ships
+ * `useFips: true`, is the control that proves the rule is keyed on the partition. The
+ * ConfigBuilder's hand-ported rule is asserted from the same cases, because
+ * `configBuilderSync.test.ts` covers only `schema.ts` and `defaults.ts`.
+ *
+ * **Rekognition availability.** The GenAI metadata labeling pipeline calls Amazon Rekognition
+ * `DetectLabels` on every rendered image, and Rekognition is not offered in the AWS European
+ * Sovereign Cloud or in AWS GovCloud (US-East), so every execution there fails at that call. Under
+ * `useGlobalVpc.useForAllLambdas` with `addVpcEndpoints` the VPC builder also requests a
+ * Rekognition interface endpoint the Region does not offer. `getConfig()` rejects that combination
+ * and warns for every other enabled one. The check is keyed on the `aws-eusc` partition and the
+ * `us-gov-east-1` Region, NOT on `app.govCloud.enabled`: AWS GovCloud (US-West) offers Rekognition,
+ * and it is the control. The ConfigBuilder's hand-ported rules are asserted against the same arms.
+ *
  * `getConfig()` reads `config/config.json` from disk, so these tests mock `fs.readFileSync` to serve
  * a chosen template. Only the config filename is intercepted; every other read (the S3 policy and WAF
  * policy JSON that `getConfig()` also loads) falls through to the real implementation.
@@ -33,6 +50,8 @@ import commercialTemplate from "../../config/config.template.commercial.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
 import { newTestApp } from "../support/testApp";
+import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
+import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
 
@@ -229,5 +248,120 @@ describe("restricted-partition flag agreement", () => {
         });
         expect(run).not.toThrow(TypeError);
         expect(run).not.toThrow(FLAG_REQUIRED_MESSAGE);
+    });
+});
+
+const FIPS_EUSC_WARNING = /app\.useFips is true while deploying to the 'aws-eusc' partition/;
+
+/** The console.warn messages `run` emits that match `pattern`; console.warn is silenced meanwhile. */
+const warningsMatching = (run: () => unknown, pattern: RegExp): string[] => {
+    const captured: string[] = [];
+    const spy = jest.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+        captured.push(args.map(String).join(" "));
+    });
+    try {
+        run();
+    } finally {
+        spy.mockRestore();
+    }
+    return captured.filter((message) => pattern.test(message));
+};
+
+describe("useFips in the EU Sovereign Cloud warns and does not reject", () => {
+    // getConfig() also reads AWS_USE_FIPS_ENDPOINT and the first true source wins, so a shell that
+    // exports it would turn every "does not warn" case below into a false failure.
+    const savedFipsEnv = process.env.AWS_USE_FIPS_ENDPOINT;
+
+    beforeEach(() => {
+        delete process.env.AWS_USE_FIPS_ENDPOINT;
+    });
+
+    afterEach(() => {
+        (fs.readFileSync as unknown as jest.Mock).mockReset();
+    });
+
+    afterAll(() => {
+        if (savedFipsEnv === undefined) delete process.env.AWS_USE_FIPS_ENDPOINT;
+        else process.env.AWS_USE_FIPS_ENDPOINT = savedFipsEnv;
+    });
+
+    test("warns when useFips is true in aws-eusc", () => {
+        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
+            c.app.useFips = true;
+        });
+        expect(warningsMatching(run, FIPS_EUSC_WARNING)).toHaveLength(1);
+    });
+
+    test("warns when AWS_USE_FIPS_ENDPOINT turns the flag on", () => {
+        // The rule reads the resolved flag, not config.json alone.
+        process.env.AWS_USE_FIPS_ENDPOINT = "true";
+        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1");
+        expect(warningsMatching(run, FIPS_EUSC_WARNING)).toHaveLength(1);
+    });
+
+    test("does NOT throw — the rule warns, it does not reject", () => {
+        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
+            c.app.useFips = true;
+        });
+        const spy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+            expect(run).not.toThrow();
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    test("does not warn on the shipped EU Sovereign config, which sets useFips false", () => {
+        expect(eusovereignTemplate.app.useFips).toBe(false);
+        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1");
+        expect(warningsMatching(run, FIPS_EUSC_WARNING)).toEqual([]);
+    });
+
+    test("does not warn in GovCloud, whose shipped template sets useFips true", () => {
+        // Control: proves the rule is keyed on the partition and not on app.govCloud.enabled, which
+        // both restricted templates set.
+        expect(govcloudTemplate.app.useFips).toBe(true);
+        const run = loadConfig(govcloudTemplate, "us-gov-west-1");
+        expect(warningsMatching(run, FIPS_EUSC_WARNING)).toEqual([]);
+    });
+
+    test("does not warn in the commercial partition", () => {
+        const run = loadConfig(commercialTemplate, "us-east-1", (c) => {
+            c.app.useFips = true;
+        });
+        expect(warningsMatching(run, FIPS_EUSC_WARNING)).toEqual([]);
+    });
+});
+
+describe("the ConfigBuilder mirrors the useFips EU Sovereign warning", () => {
+    const fired = (cfg: ReturnType<typeof makeDefaultConfig>) =>
+        evaluateRules(cfg).filter((rule) => rule.id === "fips-not-in-eusovereign");
+
+    test("raises it as a warning for useFips true in eusc-de-east-1", () => {
+        const cfg = makeDefaultConfig("eusovereign");
+        cfg.app.useFips = true;
+        const rules = fired(cfg);
+        expect(rules).toHaveLength(1);
+        expect(rules[0].severity).toBe("warning");
+    });
+
+    test("is silent on the EU Sovereign preset, which sets useFips false", () => {
+        expect(fired(makeDefaultConfig("eusovereign"))).toEqual([]);
+    });
+
+    test("is silent on the GovCloud preset with a GovCloud region", () => {
+        const cfg = makeDefaultConfig("govcloud");
+        cfg.env.region = "us-gov-west-1";
+        expect(cfg.app.useFips).toBe(true);
+        expect(fired(cfg)).toEqual([]);
+    });
+
+    test("is silent while env.region is unset, like every partition rule", () => {
+        // The deploy-time region can come from CDK context or the environment, which the builder
+        // cannot read, so the partition is unknown.
+        const cfg = makeDefaultConfig("eusovereign");
+        cfg.app.useFips = true;
+        cfg.env.region = null;
+        expect(fired(cfg)).toEqual([]);
     });
 });

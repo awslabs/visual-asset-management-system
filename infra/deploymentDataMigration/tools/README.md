@@ -6,12 +6,12 @@ This directory contains standalone utility scripts for VAMS administration and m
 
 ### Reindex Utility (`reindex_utility.py`)
 
-Re-indexes Amazon OpenSearch and any attached downstream indexers (such as the Garnet Framework addon) for assets and files. It reads all asset and file records from Amazon DynamoDB and re-publishes them to the configured indexing pipeline (Amazon SNS topics that trigger the indexer Lambda functions).
+Re-indexes Amazon OpenSearch and any attached downstream indexers (such as the Garnet Framework addon) for assets and files. It reads the asset records from Amazon DynamoDB and the file objects in the registered Amazon S3 asset buckets, and re-publishes them to the configured indexing pipeline (Amazon SNS topics that trigger the indexer Lambda functions).
 
 The utility supports two run modes, selected with `--mode`:
 
 -   **`lambda` (default)** — Invokes the deployed reindexer AWS Lambda function. All reindexing runs in the cloud; no direct AWS resource access is required locally. This is the recommended mode for typical datasets. It is bound by the **15-minute Lambda maximum execution time**.
--   **`direct`** — Imports the backend reindexer handler code and runs it locally in the Python process, with **no execution-time limit**. Use this for very large asset repositories where the Lambda would otherwise exceed 15 minutes and leave records unindexed. The local process still calls AWS (DynamoDB, SSM, and OpenSearch) using your local AWS credentials.
+-   **`direct`** — Imports the backend reindexer handler code and runs it locally in the Python process, with **no execution-time limit**. Use this for very large asset repositories where the Lambda would otherwise exceed 15 minutes and leave records unindexed. The local process still calls AWS (DynamoDB, S3, SSM, and OpenSearch) using your local AWS credentials.
 
 **When to use:**
 
@@ -70,17 +70,18 @@ Direct mode runs the backend reindexer handler locally. Because it executes the 
     -   `boto3`
     -   `botocore`
     -   `urllib3`
+    -   `aws-lambda-powertools` — used by the backend `customLogging` logger that the handler imports
     -   `opensearch-py` — only required when using `--clear-indexes` (the handler imports it lazily to clear the indexes)
 
     ```bash
-    pip install boto3 botocore urllib3 opensearch-py
+    pip install boto3 botocore urllib3 aws-lambda-powertools opensearch-py
     ```
 
     The handler's other imports (`common.validators`, `common.s3MetadataKeys`, `common.s3PathPatterns`, `common.dynamoDbMetadataKeys`) use only the Python standard library, so no further packages are required.
 
     These libraries are only needed for direct mode. The script imports the backend handler lazily — only when `--mode direct` runs — and `opensearch-py` is imported only when `--clear-indexes` is also used. Lambda mode loads none of them, so a lambda-mode run requires only `boto3`.
 
--   AWS credentials with the same permissions the reindexer Lambda role has — read access to the asset, S3-asset-bucket, and asset-file-metadata DynamoDB tables; write access to the asset-file-metadata table (the touch/delete records); `ssm:GetParameter` for the index-name and endpoint parameters; and OpenSearch access (only needed for `--clear-indexes`).
+-   AWS credentials with the same permissions the reindexer Lambda role has — read access to the asset, S3-asset-bucket, and asset-file-metadata DynamoDB tables; write access to the asset-file-metadata table (the touch/delete records); `s3:ListBucket` and `s3:GetObject` on the asset buckets (the file reindex lists each bucket and reads object metadata); `ssm:GetParameter` for the index-name and endpoint parameters; and OpenSearch access (only needed for `--clear-indexes`).
 
 **Inputs:** the table names and SSM parameter names mirror the environment variables configured on the reindexer Lambda and are available in the CDK stack outputs / SSM and on the Lambda's environment configuration. All inputs below are required **except** `--backend-path`, `--opensearch-type`, and `--region`, which default as noted.
 
@@ -112,7 +113,7 @@ python reindex_utility.py --mode direct --operation both \
 
 `--operation`, `--dry-run`, `--limit`, `--profile`, and `--region` work the same in both modes.
 
-**Clearing indexes in direct mode.** The bulk reindex (touch-and-delete) only uses Amazon DynamoDB and AWS Systems Manager, which are reachable from a local machine, so direct mode works from outside the VPC. `--clear-indexes` is different: it connects to the OpenSearch endpoint directly. A **provisioned** domain is always inside the VPC, so direct mode **rejects** `--clear-indexes` for `--opensearch-type provisioned` (the endpoint is not reachable locally). A **serverless** collection is VPC-restricted when it is private (`openSearch.useServerless.allowPublic = false`), which routes access through a VPC endpoint; direct mode allows `--clear-indexes` for serverless but warns, because it will fail against a VPC-restricted (private) collection.
+**Clearing indexes in direct mode.** The bulk reindex (touch-and-delete) only uses Amazon DynamoDB, Amazon S3, and AWS Systems Manager, which are reachable from a local machine, so direct mode works from outside the VPC. `--clear-indexes` is different: it connects to the OpenSearch endpoint directly. A **provisioned** domain is always inside the VPC, so direct mode **rejects** `--clear-indexes` for `--opensearch-type provisioned` (the endpoint is not reachable locally). A **serverless** collection is VPC-restricted when it is private (`openSearch.useServerless.allowPublic = false`), which routes access through a VPC endpoint; direct mode allows `--clear-indexes` for serverless but warns, because it will fail against a VPC-restricted (private) collection.
 
 To clear indexes and then reindex a provisioned (or VPC-restricted serverless) domain, clear in **lambda mode** (which runs inside the VPC) with a tiny limit so it only performs the clear, then run the bulk reindex in **direct mode** without `--clear-indexes`:
 

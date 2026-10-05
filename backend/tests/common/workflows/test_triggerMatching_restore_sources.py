@@ -17,6 +17,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
     VAMS_CHANGE_SOURCE_DIRECT,
     VAMS_CHANGE_SOURCE_FILE_COPY,
+    VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
     VAMS_CHANGE_SOURCE_FILE_MOVE,
     VAMS_CHANGE_SOURCE_FILE_RENAME,
     VAMS_CHANGE_SOURCE_FILE_REVERT,
@@ -68,8 +69,10 @@ class TestRestoreSourceSet:
         assert VAMS_CHANGE_SOURCE_FILE_REVERT not in RESTORE_CHANGE_SOURCES
 
     def test_every_change_source_is_classified(self):
-        """Each recognized value is either a restore, workflow output, or an eligible ordinary write."""
+        """Each recognized value is a restore, workflow output, a metadata-only rewrite (which fires
+        nothing: the bytes are unchanged), or an eligible ordinary write."""
         classified = set(RESTORE_SOURCES) | {VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION} | set(ELIGIBLE_SOURCES)
+        classified |= {VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE}
         # Archive sources create no S3 object version (a delete marker is not a version), so they never
         # reach the trigger path; they are listed so the classification stays total.
         classified |= {"fileArchive", "assetArchive"}

@@ -3,7 +3,6 @@ name = "base"
 version = "0.1.0"
 description = ""
 authors = ["Kurt Scheuringer <scheurik@amazon.com>"]
-readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]

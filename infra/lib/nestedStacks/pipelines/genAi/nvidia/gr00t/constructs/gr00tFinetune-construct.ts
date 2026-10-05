@@ -306,6 +306,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/gr00t-models
 mount -t efs -o tls ${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models
 echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /etc/fstab
+chown -R 10000:10000 /mnt/efs/gr00t-models
 
 --==MYBOUNDARY==--
 `;
@@ -758,17 +759,6 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
         /**
          * CDK Nag Suppressions
          */
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-executing workflows.",
-                },
-            ],
-            true
-        );
-
         const reason =
             "Intended Solution. The Gr00t Finetune pipeline lambda functions need appropriate access to S3 for reading asset files and model data.";
 

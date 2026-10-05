@@ -210,53 +210,15 @@ describe("root, backend, and documentation steering", () => {
         ).toBe(true);
     });
 
-    test("documentation/CLAUDE.md's page count equals the number of pages on disk", () => {
-        const walk = (dir: string): number =>
-            fs.readdirSync(dir, { withFileTypes: true }).reduce((n, e) => {
-                const full = path.join(dir, e.name);
-                return n + (e.isDirectory() ? walk(full) : /\.mdx?$/.test(e.name) ? 1 : 0);
-            }, 0);
+    test("documentation/CLAUDE.md describes the docs tree without page counts and names the landing page", () => {
+        // The counts a steering doc quotes go stale with every page added, so the tree and the
+        // navigation outline are described structurally; the one file named is the landing page.
         const steering = readRepo(path.join("documentation", "CLAUDE.md"));
-        const stated = steering.match(/\((\d+) Markdown and MDX pages\)/);
-        expect(stated).not.toBeNull();
-        expect(Number(stated![1])).toBe(walk(DOCS));
-    });
-
-    test("documentation/CLAUDE.md's navigation counts equal the sidebar's leaf counts", () => {
-        const sidebar = readRepo(path.join("documentation", "docusaurus-site", "sidebars.ts"));
-        const leafCount = (label: string): number => {
-            const at = sidebar.indexOf(`label: "${label}"`);
-            expect(at).toBeGreaterThan(-1);
-            const itemsAt = sidebar.indexOf("items: [", at);
-            let depth = 0;
-            let end = -1;
-            for (let i = itemsAt + "items: ".length; i < sidebar.length; i++) {
-                if (sidebar[i] === "[") depth++;
-                else if (sidebar[i] === "]" && --depth === 0) {
-                    end = i;
-                    break;
-                }
-            }
-            return [...sidebar.slice(itemsAt, end).matchAll(/"([a-z0-9-]+(?:\/[a-z0-9-]+)+)"/g)]
-                .length;
-        };
-        const steering = readRepo(path.join("documentation", "CLAUDE.md"));
-        for (const label of [
-            "Overview",
-            "Core Concepts",
-            "Architecture",
-            "Deployment",
-            "User Guide",
-            "Pipelines",
-            "API Reference",
-            "Additional",
-        ]) {
-            const m = steering.match(new RegExp(`${label.replace(/ /g, "\\s")} \\((\\d+) pages`));
-            expect({ label, stated: m && m[1] }).toEqual({
-                label,
-                stated: String(leafCount(label)),
-            });
-        }
+        expect(steering).not.toMatch(/\(\d+ Markdown and MDX pages\)/);
+        expect(steering).not.toMatch(/\(\d+ pages\)/);
+        expect(steering).toContain("Home (index.mdx)");
+        expect(fs.existsSync(path.join(DOCS, "index.mdx"))).toBe(true);
+        expect(steering).toContain("Pipelines (including the System pipelines subcategory)");
     });
 
     test("documentation/CLAUDE.md's spelled-out pipeline count is the one overview/features.md states", () => {
@@ -311,14 +273,13 @@ describe("Kiro steering mirrors", () => {
         ).toContain("`osVectorSearch/`");
     });
 
-    test("DOCUMENTATION_WORKFLOW.md carries the same page and category counts as documentation/CLAUDE.md", () => {
+    test("DOCUMENTATION_WORKFLOW.md mirrors documentation/CLAUDE.md's count-free docs outline", () => {
         const claude = readRepo(path.join("documentation", "CLAUDE.md"));
         const kiro = readRepo(path.join(".kiro", "steering", "DOCUMENTATION_WORKFLOW.md"));
-        const pages = claude.match(/\((\d+) Markdown and MDX pages\)/)![1];
-        expect(kiro).toContain(`(${pages} pages)`);
-        for (const label of ["Core Concepts", "User Guide", "Pipelines", "API Reference"]) {
-            const c = claude.match(new RegExp(`${label} \\((\\d+) pages`))![1];
-            expect(kiro).toMatch(new RegExp(`${label} \\(${c} pages`));
+        for (const text of [claude, kiro]) {
+            expect(text).not.toMatch(/\(\d+ pages\)/);
+            expect(text).toContain("Home (index.mdx)");
+            expect(text).toContain("Pipelines (including the System pipelines subcategory)");
         }
         expect(kiro).not.toMatch(/user-guide\/getting-started\.md(?!x)/);
         expect(kiro).toContain("user-guide/getting-started.mdx");

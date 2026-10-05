@@ -141,7 +141,7 @@ Each schema targets one entity type:
 
 A **File Type Restriction** is compared against the extension of the file's name:
 
--   Extensions are written with a leading dot (`.glb`). An entry without one matches no file.
+-   Extensions are written with a leading dot (`.glb`). Saving a schema is rejected when an entry has no leading dot, is a bare `.`, has a second dot (`.tar.gz`), or contains `/` or `\`, because no file name can match it. An entry of that form already stored in a restriction matches no file, and the editor sends the stored list with every save, so correct the list when you next edit that schema.
 -   The extension is read from the file's name, not from the whole path. A dot in a folder name is not an extension, so `folder.v2/part.glb` matches a schema restricted to `.glb`.
 -   Matching is case-insensitive, and the last dot in the name decides the extension. `archive.tar.gz` matches `.gz`.
 -   A file whose name carries no extension -- `LICENSE`, `Dockerfile`, `README` -- is matched by every enabled schema for its entity type, restricted schemas included. This is the same for a file at the root of an asset and for one under a folder whose name contains a dot.
