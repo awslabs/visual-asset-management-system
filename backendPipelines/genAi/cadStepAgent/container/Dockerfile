@@ -27,6 +27,7 @@ COPY ./requirements.txt ./requirements.txt
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY ./cad_step_agent/ ./cad_step_agent/
+RUN chmod -R a+rX ./cad_step_agent
 
 # The agent runs as cadagent, never root. A generated script runs in a subprocess of that same account
 # with a scrubbed environment (no credential variables, no task token, no API key), an isolated
