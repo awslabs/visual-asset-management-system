@@ -502,15 +502,21 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return api_gateway_response
 
             except ClientError as e:
-                logger.exception(f"S3 ClientError: {e}")
-                message = "Error Fetching Auxiliary Preview File from Path Provided"
+                if e.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NoSuchVersion'):
+                    logger.error(f"File not found: {object_key}")
+                    message = "File not found"
+                    status_code = 404
+                else:
+                    logger.exception(f"S3 ClientError: {e}")
+                    message = "Error Fetching Auxiliary Preview File from Path Provided"
+                    status_code = 400
                 # Create custom headers for streaming response
                 streaming_headers = {
                     'Access-Control-Allow-Headers': 'Range',
                     'Access-Control-Allow-Origin': '*',
                     'Cache-Control': 'no-cache, no-store',
                 }
-                error_response = general_error(body={"message": message}, event=event)
+                error_response = general_error(body={"message": message}, status_code=status_code, event=event)
                 error_response['headers'].update(streaming_headers)
                 return error_response
         else:

@@ -205,8 +205,8 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
                 schemaData.metadataSchemaEntityType = entityType;
             }
 
-            // Add file type restriction if applicable
-            if (showFileTypeRestriction && fileKeyTypeRestriction) {
+            // Add file type restriction if applicable; in edit mode an empty value removes it
+            if (showFileTypeRestriction && (fileKeyTypeRestriction || isEditMode)) {
                 schemaData.fileKeyTypeRestriction = fileKeyTypeRestriction;
             }
 

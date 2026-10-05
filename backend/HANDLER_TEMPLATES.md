@@ -190,7 +190,7 @@ from typing import Dict, List, Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator, ValidationError
 from customLogging.logger import safeLogger
-from common.validators import validate, id_pattern, object_name_pattern
+from common.validators import validate, trim_name, id_pattern, object_name_pattern
 
 logger = safeLogger(service_name="CHANGE_ME_Models")
 
@@ -199,14 +199,15 @@ class CreateItemRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new item"""
     # `regex=` is the Pydantic v1 spelling. `pattern=` is v2 and is SILENTLY SWALLOWED into
     # FieldInfo.extra — the model imports cleanly, every test passes, and the field is
-    # unconstrained. Same for `strip_whitespace=` on Field(): it is a Config/constr option,
-    # not a field constraint, so use the Config below when a value must be stripped.
-    databaseId: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    # unconstrained. Same for `strip_whitespace=` on Field(). Names, ids and request free text
+    # trim through the `trim_name` validators below; a `class Config` with `anystr_strip_whitespace`
+    # strips every string on the model, including S3 keys and paths.
+    databaseId: str = Field(min_length=4, max_length=63, regex=id_pattern)
     itemName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
     description: str = Field(min_length=4, max_length=256)
 
-    class Config:
-        anystr_strip_whitespace = True
+    _trim_names = validator('databaseId', 'itemName', pre=True, allow_reuse=True)(trim_name)
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -227,14 +228,12 @@ class UpdateItemRequestModel(BaseModel, extra='ignore'):
     itemName: Optional[str] = Field(None, min_length=1, max_length=256, regex=object_name_pattern)
     description: Optional[str] = Field(None, min_length=4, max_length=256)
 
-    class Config:
-        anystr_strip_whitespace = True
+    _trim_names = validator('itemName', pre=True, allow_reuse=True)(trim_name)
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 ```
 
-`tests/models/test_no_dead_field_kwargs.py` fails on any swallowed `pattern=`, so scaffolding a
-model with the v2 spelling breaks the suite rather than shipping an unconstrained field. That test
-also holds a hard count of the pre-existing inert `strip_whitespace=` declarations, so adding one
-more from a template would fail it too — which is why the template no longer carries any.
+`tests/models/test_no_dead_field_kwargs.py` fails on any swallowed `pattern=` or `strip_whitespace=`,
+so scaffolding either breaks the suite rather than shipping an unconstrained field.
 
 ---
 

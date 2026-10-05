@@ -261,6 +261,7 @@ The following web routes can be checked via the `web` object type with the `rout
 | `/auth/roles`                                                        | Role management                       |
 | `/auth/subscriptions`                                                | Subscription management               |
 | `/auth/tags`                                                         | Tag management                        |
+| `/auth/tags/:databaseId`                                             | Tag management (database-scoped)      |
 | `/auth/userroles`                                                    | User-role assignment                  |
 | `/databases`                                                         | Database listing                      |
 | `/databases/:databaseId/assets`                                      | Database assets listing               |
@@ -336,78 +337,78 @@ needs to set a database's default bucket without holding the route can still do 
 
 ### Asset routes
 
-| Route                                                    | Methods                | Tier 2 Object Type | Tier 2 Fields                                             |
-| -------------------------------------------------------- | ---------------------- | ------------------ | --------------------------------------------------------- |
-| `/assets`                                                | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/assets`                                                | POST                   | `asset`            | `assetName`, `databaseId`, `tags`                         |
-| `/database/{databaseId}/assets`                          | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}`                | GET, PUT               | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/archiveAsset`   | DELETE                 | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/deleteAsset`    | DELETE                 | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/unarchiveAsset` | PUT                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/metadata`       | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/metadata/file`  | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/assetHistory`   | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| Route                                                    | Methods                | Tier 2 Object Type | Tier 2 Fields                                  |
+| -------------------------------------------------------- | ---------------------- | ------------------ | ---------------------------------------------- |
+| `/assets`                                                | GET                    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/assets`                                                | POST                   | `asset`            | `assetName`, `databaseId`, `tags`              |
+| `/database/{databaseId}/assets`                          | GET                    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}`                | GET, PUT               | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/archiveAsset`   | DELETE                 | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/deleteAsset`    | DELETE                 | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/unarchiveAsset` | PUT                    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/metadata`       | GET, POST, PUT, DELETE | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/metadata/file`  | GET, POST, PUT, DELETE | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/assetHistory`   | GET                    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Asset file routes
 
-| Route                                                                            | Methods   | Tier 2 Object Type | Tier 2 Fields                                             |
-| -------------------------------------------------------------------------------- | --------- | ------------------ | --------------------------------------------------------- |
-| `/database/{databaseId}/assets/{assetId}/listFiles`                              | GET       | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/fileInfo`                               | GET       | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/moveFile`                               | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/copyFile`                               | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/archiveFile`                            | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/unarchiveFile`                          | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/deleteFile`                             | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/deleteAssetPreview`                     | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles`       | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/createFolder`                           | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/setPrimaryFile`                         | PUT       | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}`          | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`               | GET, HEAD | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` | GET, HEAD | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/export`                                 | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| Route                                                                            | Methods   | Tier 2 Object Type | Tier 2 Fields                                  |
+| -------------------------------------------------------------------------------- | --------- | ------------------ | ---------------------------------------------- |
+| `/database/{databaseId}/assets/{assetId}/listFiles`                              | GET       | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/fileInfo`                               | GET       | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/moveFile`                               | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/copyFile`                               | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/archiveFile`                            | DELETE    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/unarchiveFile`                          | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/deleteFile`                             | DELETE    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/deleteAssetPreview`                     | DELETE    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles`       | DELETE    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/createFolder`                           | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/setPrimaryFile`                         | PUT       | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}`          | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`               | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/export`                                 | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Asset version routes
 
-| Route                                                                              | Methods | Tier 2 Object Type | Tier 2 Fields                                             |
-| ---------------------------------------------------------------------------------- | ------- | ------------------ | --------------------------------------------------------- |
-| `/database/{databaseId}/assets/{assetId}/createVersion`                            | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}`      | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/getVersions`                              | GET     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}`              | GET     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}`           | PUT     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive`   | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive` | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| Route                                                                              | Methods | Tier 2 Object Type | Tier 2 Fields                                  |
+| ---------------------------------------------------------------------------------- | ------- | ------------------ | ---------------------------------------------- |
+| `/database/{databaseId}/assets/{assetId}/createVersion`                            | POST    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}`      | POST    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/getVersions`                              | GET     | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}`              | GET     | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}`           | PUT     | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive`   | POST    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive` | POST    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Upload and ingestion routes
 
-| Route                          | Methods | Tier 2 Object Type | Tier 2 Fields                                             |
-| ------------------------------ | ------- | ------------------ | --------------------------------------------------------- |
-| `/uploads`                     | POST    | `asset`            | `assetId`, `assetName`, `assetType`, `databaseId`, `tags` |
-| `/uploads/{uploadId}/complete` | POST    | `asset`            | `assetId`, `assetName`, `assetType`, `databaseId`, `tags` |
-| `/ingest-asset`                | POST    | `asset`            | `assetId`, `assetName`, `databaseId`                      |
+| Route                          | Methods | Tier 2 Object Type | Tier 2 Fields                                  |
+| ------------------------------ | ------- | ------------------ | ---------------------------------------------- |
+| `/uploads`                     | POST    | `asset`            | `assetName`, `assetType`, `databaseId`, `tags` |
+| `/uploads/{uploadId}/complete` | POST    | `asset`            | `assetName`, `assetType`, `databaseId`, `tags` |
+| `/ingest-asset`                | POST    | `asset`            | `assetName`, `databaseId`                      |
 
 ### Asset link routes
 
-| Route                                                 | Methods                | Tier 2 Object Type                | Tier 2 Fields                                             |
-| ----------------------------------------------------- | ---------------------- | --------------------------------- | --------------------------------------------------------- |
-| `/asset-links`                                        | POST                   | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/asset-links/single/{assetLinkId}`                   | GET                    | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/asset-links/{assetLinkId}`                          | PUT                    | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/asset-links/{assetLinkId}`                          | DELETE                 | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/asset-links/{assetLinkId}/metadata`                 | GET, POST, PUT, DELETE | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/asset-links` | GET                    | `asset`                           | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| Route                                                 | Methods                | Tier 2 Object Type                | Tier 2 Fields                                  |
+| ----------------------------------------------------- | ---------------------- | --------------------------------- | ---------------------------------------------- |
+| `/asset-links`                                        | POST                   | `asset` (both from and to assets) | `databaseId`, `assetName`, `assetType`, `tags` |
+| `/asset-links/single/{assetLinkId}`                   | GET                    | `asset` (both from and to assets) | `databaseId`, `assetName`, `assetType`, `tags` |
+| `/asset-links/{assetLinkId}`                          | PUT                    | `asset` (both from and to assets) | `databaseId`, `assetName`, `assetType`, `tags` |
+| `/asset-links/{assetLinkId}`                          | DELETE                 | `asset` (both from and to assets) | `databaseId`, `assetName`, `assetType`, `tags` |
+| `/asset-links/{assetLinkId}/metadata`                 | GET, POST, PUT, DELETE | `asset` (both from and to assets) | `databaseId`, `assetName`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/asset-links` | GET                    | `asset`                           | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Comment routes
 
-| Route                                                                            | Methods                | Tier 2 Object Type | Tier 2 Fields                                             |
-| -------------------------------------------------------------------------------- | ---------------------- | ------------------ | --------------------------------------------------------- |
-| `/comments/assets/{assetId}`                                                     | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/comments/assets/{assetId}/assetVersionId/{assetVersionId}`                     | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}` | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| Route                                                                            | Methods                | Tier 2 Object Type | Tier 2 Fields                                  |
+| -------------------------------------------------------------------------------- | ---------------------- | ------------------ | ---------------------------------------------- |
+| `/comments/assets/{assetId}`                                                     | GET                    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/comments/assets/{assetId}/assetVersionId/{assetVersionId}`                     | GET                    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}` | GET, POST, PUT, DELETE | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Pipeline and workflow routes
 
@@ -456,27 +457,28 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 
 ### Search route
 
-| Route            | Methods   | Tier 2 Object Type | Tier 2 Fields                                                                                  |
-| ---------------- | --------- | ------------------ | ---------------------------------------------------------------------------------------------- |
-| `/search`        | GET, POST | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (both GET and POST are non-mutating) |
-| `/search/simple` | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (POST is non-mutating)               |
+| Route            | Methods | Tier 2 Object Type  | Tier 2 Fields                                                                                                                                                                               |
+| ---------------- | ------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/search`        | GET     | API-level only      | -- (returns the index field mappings only)                                                                                                                                                  |
+| `/search`        | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset` (POST is non-mutating) |
+| `/search/simple` | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset` (POST is non-mutating) |
 
 ### Subscription routes
 
-| Route                 | Methods                | Tier 2 Object Type | Tier 2 Fields                                                            |
-| --------------------- | ---------------------- | ------------------ | ------------------------------------------------------------------------ |
-| `/subscriptions`      | GET, PUT, POST, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags`                |
-| `/check-subscription` | POST                   | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (non-mutating) |
-| `/unsubscribe`        | DELETE                 | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags`                |
+| Route                 | Methods                | Tier 2 Object Type | Tier 2 Fields                                                 |
+| --------------------- | ---------------------- | ------------------ | ------------------------------------------------------------- |
+| `/subscriptions`      | GET, PUT, POST, DELETE | `asset`            | `assetName`, `databaseId`, `assetType`, `tags`                |
+| `/check-subscription` | POST                   | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` (non-mutating) |
+| `/unsubscribe`        | DELETE                 | `asset`            | `assetName`, `databaseId`, `assetType`, `tags`                |
 
 ### Tag and tag type routes
 
-| Route                    | Methods        | Tier 2 Object Type | Tier 2 Fields |
-| ------------------------ | -------------- | ------------------ | ------------- |
-| `/tags`                  | GET, PUT, POST | `tag`              | `tagName`     |
-| `/tags/{tagId}`          | DELETE         | `tag`              | `tagName`     |
-| `/tag-types`             | GET, PUT, POST | `tagType`          | `tagTypeName` |
-| `/tag-types/{tagTypeId}` | DELETE         | `tagType`          | `tagTypeName` |
+| Route                    | Methods        | Tier 2 Object Type | Tier 2 Fields               |
+| ------------------------ | -------------- | ------------------ | --------------------------- |
+| `/tags`                  | GET, PUT, POST | `tag`              | `tagName`, `databaseId`     |
+| `/tags/{tagId}`          | DELETE         | `tag`              | `tagName`, `databaseId`     |
+| `/tag-types`             | GET, PUT, POST | `tagType`          | `tagTypeName`, `databaseId` |
+| `/tag-types/{tagTypeId}` | DELETE         | `tagType`          | `tagTypeName`, `databaseId` |
 
 ### Role and user role routes
 
@@ -504,9 +506,9 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 
 ### Add-on routes
 
-| Route                  | Methods | Tier 2 Object Type | Tier 2 Fields                                             |
-| ---------------------- | ------- | ------------------ | --------------------------------------------------------- |
-| `/addon/physna/viewer` | GET     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| Route                  | Methods | Tier 2 Object Type | Tier 2 Fields                                  |
+| ---------------------- | ------- | ------------------ | ---------------------------------------------- |
+| `/addon/physna/viewer` | GET     | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ## Performance considerations
 

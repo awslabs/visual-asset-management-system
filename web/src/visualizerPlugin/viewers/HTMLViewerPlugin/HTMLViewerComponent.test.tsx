@@ -11,7 +11,7 @@
  * carrying a signature and session token, so it must not reach the console either.
  *
  * It also must not frame the storage URL directly. VAMS stores asset files with a generic content
- * type — an uploaded `.html` arrives as `binary/octet-stream` — and a frame served that type renders
+ * type — an uploaded `.html` arrives as an octet-stream type — and a frame served that type renders
  * nothing: no error event, no CSP violation, no console output, just an empty panel. The viewer
  * therefore fetches the bytes and frames them as a Blob it types itself.
  */

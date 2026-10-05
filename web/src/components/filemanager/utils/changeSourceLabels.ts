@@ -21,6 +21,7 @@ const CHANGE_SOURCE_LABELS: Record<string, string> = {
     assetArchive: `${Synonyms.Asset} Archive`,
     assetUnarchive: `${Synonyms.Asset} Unarchive`,
     fileRevert: "File Revert",
+    fileMetadataUpdate: "File Metadata Update",
 };
 
 /**

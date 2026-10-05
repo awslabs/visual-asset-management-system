@@ -1138,13 +1138,14 @@ export class ApiBuilderNestedStack extends NestedStack {
             );
         }
 
-        //Nag Supressions
+        // Scoped to the large-file dead-letter queue rather than the stack: the source queue
+        // carries a redrive policy, so a queue added here later without one is still reported.
         NagSuppressions.addResourceSuppressions(
-            this,
+            largeFileProcessingDlq,
             [
                 {
                     id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-uploading files.",
+                    reason: "This queue is the dead-letter queue of the large-file processing queue and so terminates that queue's redrive chain; a redrive policy of its own would only move the same failed upload message to a further queue.",
                 },
             ],
             true

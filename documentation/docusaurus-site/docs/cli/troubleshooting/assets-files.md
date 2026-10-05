@@ -281,7 +281,7 @@ vamscli file info -d my-database -a my-asset -p "/file.gltf" --include-versions
 vamscli file revert -d my-database -a my-asset -p "/file.gltf" -v version-id-123
 ```
 
-An archived asset can be restored in full with `vamscli assets unarchive`, which also removes the delete markers on its files and preview.
+An archived asset is restored with `vamscli assets unarchive`. By default only the asset record is restored; add `--unarchive-files` to also remove the delete markers that the asset archive created on its files, and the delete marker on its preview. Files archived individually before the asset archive stay archived; restore them with `vamscli file unarchive`.
 
 ---
 
@@ -461,7 +461,7 @@ A previously generated shareable link no longer works.
 
 **Cause:**
 
-Presigned download URLs are time-limited and expire 24 hours after they are generated.
+Presigned download URLs are time-limited. A URL expires when `app.authProvider.presignedUrlTimeoutSeconds` elapses after it is generated (24 hours by default), or earlier, when the Lambda role credentials that signed it expire.
 
 **Resolution:**
 

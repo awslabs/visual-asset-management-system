@@ -175,11 +175,11 @@ This software includes third party software subject to the following copyrights:
 | Name                  | Version    | License    |
 | :-------------------- | :--------- | :--------- |
 | aws-lambda-powertools | 2.36.0     | MIT-0      |
-| pydantic              | 1.10.7     | MIT        |
-| opensearch-py         | 2.5.0      | Apache-2.0 |
-| casbin                | 1.33.0     | Apache-2.0 |
+| pydantic              | 1.10.13    | MIT        |
+| opensearch-py         | 2.7.1      | Apache-2.0 |
+| casbin                | 1.36.0     | Apache-2.0 |
 | locked-dict           | 2023.10.22 | MIT        |
-| boto3                 | 1.34.84    | Apache-2.0 |
+| boto3                 | 1.43.45    | Apache-2.0 |
 
 ---
 

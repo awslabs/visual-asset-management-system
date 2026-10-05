@@ -5,9 +5,9 @@
 
 Covers the hand-off from uploadFile.complete_external_upload to the
 sqsUploadFileLarge processor: the queued message must carry the workflow context so
-the finalized object is stamped vams-changesource=workflowExecution (the loop guard
-sqsBucketSync reads), and an externally staged temp object must not be replaced by a
-zero-byte object.
+the finalized object is stamped vams-changesource=workflowExecution (the provenance the
+workflow trigger dispatcher reads to decide whether a workflow may fire on the file), and
+an externally staged temp object must not be replaced by a zero-byte object.
 """
 
 import os

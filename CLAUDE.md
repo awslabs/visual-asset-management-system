@@ -14,7 +14,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 
 ### **Version Info**
 
-VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 22.x (Lambda). React 18.3 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
+VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 22.x (Lambda). npm 11.10.0+ (required for min-release-age support). React 18.3 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
 
 **Rolling the VAMS version** — the version string is duplicated across seven files; update all of them together in the same change:
 
@@ -123,11 +123,11 @@ See `backendPipelines/CLAUDE.md` for output path conventions, `assetId` threadin
 
 ### **Deployment Modes**
 
-| Mode           | Distribution             | Notes                                              |
-| -------------- | ------------------------ | -------------------------------------------------- |
-| Commercial AWS | CloudFront + S3          | Default                                            |
-| GovCloud       | ALB + S3                 | No CloudFront, no Location Service, FIPS endpoints |
-| Air-gapped     | ALB + S3 + VPC endpoints | Full VPC isolation                                 |
+| Mode           | Distribution             | Notes                                                                             |
+| -------------- | ------------------------ | --------------------------------------------------------------------------------- |
+| Commercial AWS | CloudFront + S3          | Default                                                                           |
+| GovCloud       | ALB + S3                 | No CloudFront, no Location Service; `useFips` adds only the AWS KMS FIPS endpoint |
+| Air-gapped     | ALB + S3 + VPC endpoints | Full VPC isolation                                                                |
 
 ---
 
@@ -268,7 +268,7 @@ const arn = `arn:aws:s3:::my-bucket`; // VIOLATION - breaks in GovCloud (arn:aws
 
 ### **Pattern 6: GovCloud Constraints**
 
-When `config.app.govCloud.enabled` is true: no CloudFront (use ALB for static web distribution); no Location Service (conditionally exclude); FIPS endpoints required (use service-helper); certain VPC endpoints are conditional (check partition before creating); no `unsafe-eval` (stricter CSP unless explicitly overridden).
+When `config.app.govCloud.enabled` is true: no CloudFront (use ALB for static web distribution); no Location Service (conditionally exclude); partition-aware hostnames from service-helper (FIPS endpoints are not required: `app.useFips`, on in the GovCloud template, only adds the AWS KMS FIPS interface endpoint); certain VPC endpoints are conditional (check partition before creating); the web CSP is a single ALB listener attribute, which synthesis rejects above 1 KB. `'unsafe-eval'` is not a GovCloud rule: the CSP builder adds it to `script-src` only when `app.webUi.allowUnsafeEvalFeatures` is `true`, in every partition, and every shipped config template sets it `false`; a `scriptSrc` entry in `infra/config/csp/cspAdditionalConfig.json` can also add it.
 
 ---
 
@@ -282,22 +282,22 @@ The backend uses Pydantic **1.10.13**. v2 syntax fails at import time in Lambda.
 
 ```python
 # ✅ v1
-from pydantic import BaseModel, Field, root_validator, validator
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
+from pydantic import Field
 
-class AssetRequest(BaseModel):
+class AssetRequest(BaseModel, extra='ignore'):
     assetName: str = Field(..., description="Name of the asset")
 
     @root_validator
     def validate_fields(cls, values):
         return values
 
-    class Config:
-        extra = "forbid"
-
 # ❌ v2 (will fail)
 from pydantic import model_validator             # not in v1
-model_config = ConfigDict(extra="forbid")        # v2 syntax, VIOLATION
+model_config = ConfigDict(extra='ignore')        # v2 syntax, VIOLATION
 ```
+
+Model classes declare `extra='ignore'` and import `BaseModel` from `aws_lambda_powertools.utilities.parser`; `backend/CLAUDE.md` has the full model pattern.
 
 ### **Rule 2: Never Hardcode Table Names or ARNs**
 
@@ -408,10 +408,10 @@ has to be recorded when the test is written — it cannot be reconstructed at re
 
 Mark a temporary test at the point of writing:
 
-| Stack                                                                    | Marker                                                             |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| Python (`backend`, `backendPipelines`, `tools/VamsCLI`, `tools/VamsMCP`) | `@pytest.mark.temporary` on the test or its class                  |
-| TypeScript (`web`, `infra`)                                              | a `TEMPORARY-TEST` token in a comment directly above the `it(...)` |
+| Stack                                                                                                                            | Marker                                                             |
+| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Python (`backend`, `backendPipelines`, `tools/VamsCLI`, `tools/VamsMCP`, `tools/ExternalIntegrations/isaacsim_vams_integration`) | `@pytest.mark.temporary` on the test or its class                  |
+| TypeScript (`web`, `infra`)                                                                                                      | a `TEMPORARY-TEST` token in a comment directly above the `it(...)` |
 
 Add one line naming what it pins, so a later reader does not have to re-derive it:
 
@@ -422,16 +422,18 @@ Add one line naming what it pins, so a later reader does not have to re-derive i
 Finding them is then one command per stack, which is the whole point of the marker:
 
 ```bash
-cd backend && python -m pytest -m temporary -q --collect-only     # also tools/VamsCLI, tools/VamsMCP
+cd backend && python -m pytest -m temporary -q --collect-only     # also tools/VamsCLI, tools/VamsMCP, tools/ExternalIntegrations/isaacsim_vams_integration
 grep -rn "TEMPORARY-TEST" web/src web/e2e infra/test
 ```
 
-The marker is registered in `backend/pytest.ini`, `tools/VamsCLI/pyproject.toml`, and
-`tools/VamsMCP/pyproject.toml`. **`backend` and `tools/VamsCLI` run `--strict-markers`**, so an
-unregistered marker fails those suites outright rather than being ignored — register it before using
-it in a new Python test tree there. `backendPipelines` has no pytest configuration at all (which is
-why its existing `@pytest.mark.unit` is unregistered too), so a marker there only warns; `-m temporary`
-still selects correctly.
+The marker is registered in `backend/pytest.ini`, `tools/VamsCLI/pyproject.toml`,
+`tools/VamsMCP/pyproject.toml`, and `tools/ExternalIntegrations/isaacsim_vams_integration/pytest.ini`.
+**`backend`, `tools/VamsCLI`, and `tools/ExternalIntegrations/isaacsim_vams_integration` run
+`--strict-markers`**, so an unregistered marker fails those suites outright rather than being ignored —
+register it in any new Python test tree that runs strict before using it there. `backendPipelines` has
+no pytest configuration file and does not run strict; most of its test trees register `unit` through
+`pytest_configure` hooks in their `conftest.py` files, but none registers `temporary`, so a marker there
+only warns; `-m temporary` still selects correctly.
 
 **Which tests are temporary.** Ask whether a future edit could plausibly reintroduce what the test
 forbids:
@@ -587,7 +589,7 @@ VAMS uses single-table design with composite keys. Common patterns:
 
 ### **S3 Bucket Organization**
 
--   **Asset buckets**: One per database, auto-created, KMS encrypted
+-   **Asset buckets**: the VAMS-created bucket (`app.assetBuckets.createNewBucket`) plus any `app.assetBuckets.externalAssetBuckets`; each database points at one through `defaultBucketId`
 -   **Auxiliary bucket**: Staging, thumbnails, temp files
 -   **Web bucket**: Built frontend static assets
 
@@ -596,7 +598,7 @@ VAMS uses single-table design with composite keys. Common patterns:
 ## 🛡️ **Security Considerations**
 
 -   **S3 TLS enforced** — bucket policy denies `aws:SecureTransport=false`
--   **KMS encryption everywhere** — DynamoDB, S3, SNS all use the shared KMS key
+-   **KMS encryption at rest is opt-in** — with `app.useKmsCmkEncryption.enabled` (on in the GovCloud and EU Sovereign templates, off in the commercial template, required for IL6) the storage resources share one customer managed key; with it off, S3 buckets use SSE-S3, DynamoDB tables the AWS managed key, and SNS topics have no server-side encryption. Some resources keep a service-managed key either way: the web app bucket (SSE-S3), its access logs bucket on the ALB path (SSE-S3), and those listed in `infra/CLAUDE.md` "Encryption at rest for a new resource" and `documentation/docusaurus-site/docs/architecture/security.md` "Encryption at Rest"
 -   **IAM least privilege** — Lambda roles get only the permissions they need
 -   **CSP headers** — dynamically generated from config
 -   **IP range restrictions** — optional, via the custom authorizer
@@ -630,14 +632,14 @@ The same three-way constants update applies to new audit CloudWatch log groups. 
 
 ### **Adding a New Viewer Plugin**
 
-1. Create viewer component in `web/src/components/viewers/` and register in the viewer factory/registry
-2. Add the file extension mapping
+1. Create the viewer component as `web/src/visualizerPlugin/viewers/MyViewerPlugin/MyViewerComponent.tsx` (the registry loads only `*Component.tsx` files) and register it in `web/src/visualizerPlugin/viewers/manifest.ts` and `web/src/visualizerPlugin/config/viewerConfig.json` (full walkthrough: `web/src/visualizerPlugin/CLAUDE.md`)
+2. List the file extensions it opens in that `viewerConfig.json` entry's `supportedExtensions`
 3. Add any required npm dependencies to `web/package.json`
 4. If the viewer needs `unsafe-eval`, check `allowUnsafeEvalFeatures` config
 
 ### **Adding a New Processing Pipeline**
 
-See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to all three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, register the step's sub-process and log sources on the orchestration bus (the `pipeline.execution.register` event with stage-aware log entries; a Batch pipeline's lambda gets its log-group env from `infra/lib/helper/batchJobLogGroup.ts`), update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
+See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to the `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` condition blocks for the subnets its compute runs in: the pipeline-only endpoint block always, the subnet-creation block and `needsEcsPrivate` only for a private-subnet pipeline (the subnet-creation block adds a NAT gateway per Availability Zone; see `infra/lib/nestedStacks/pipelines/CLAUDE.md`). Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, register the step's sub-process and log sources on the orchestration bus (the `pipeline.execution.register` event with stage-aware log entries; a Batch pipeline's lambda gets its log-group env from `infra/lib/helper/batchJobLogGroup.ts`), update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
 
 ---
 

@@ -142,7 +142,7 @@ vamscli assets unarchive my-asset -d my-database --reason "Restoring for review"
 ```
 
 :::note
-Only archived assets can be unarchived. Use `vamscli assets get <ASSET_ID> -d <DB> --show-archived` to confirm an asset's archived state.
+Only archived assets can be unarchived. Use `vamscli assets get <ASSET_ID> -d <DB> --show-archived` to confirm an asset's archived state. An asset whose database has been deleted cannot be unarchived; re-create a database with the same ID first.
 :::
 
 :::note

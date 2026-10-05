@@ -285,7 +285,7 @@ class TestDeleteAddressesOneConstraint:
         assert {"initial_admin_allow_all_tags", "initial_admin_allow_all_tagtypes"} <= remaining
 
     def test_post_delete_probe_succeeds_while_the_prefix_sibling_remains(self, constraints_table):
-        """The Limit=1 probe re-scans with the same filter; an unanchored one would see `abcdef`."""
+        """The post-delete probe re-scans with the same filter; an unanchored one would see `abcdef`."""
         result = svc.delete_constraint('abc', dict(_CLAIMS))
         assert result.success is True
         assert 'may still exist' not in result.message

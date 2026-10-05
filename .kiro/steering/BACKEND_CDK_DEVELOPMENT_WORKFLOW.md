@@ -521,9 +521,9 @@ by an earlier release keeps reading back as stored.
 ```python
 class CreateAssetRequestModel(BaseModel, extra='ignore'):
     """Secure request model with proper validation"""
-    assetId: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    assetId: str = Field(min_length=1, max_length=256)
     assetName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
-    databaseId: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    databaseId: str = Field(min_length=4, max_length=63, regex=id_pattern)
 
     @root_validator
     def validate_fields(cls, values):
@@ -703,7 +703,7 @@ from common.validators import validate, trim_name, id_pattern, object_name_patte
 
 class [Domain]RequestModel(BaseModel, extra='ignore'):
     """Request model for [operation] [domain]"""
-    requiredField: str = Field(min_length=1, max_length=256, regex=id_pattern)
+    requiredField: str = Field(min_length=3, max_length=63, regex=id_pattern)
     optionalField: Optional[str] = Field(None, min_length=1, max_length=256)
 
     _trim_names = validator('requiredField', pre=True, allow_reuse=True)(trim_name)
@@ -940,9 +940,9 @@ return {
 
 ### **Rule 6: API Routes MUST Be Registered in an apiBuilder Nested Stack**
 
-Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth.
+Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py`.
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.49 MB template and `apiBuilder2` emits 71 in ~0.29 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.47 MB template and `apiBuilder2` emits 71 in ~0.29 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
@@ -1353,7 +1353,9 @@ To change a dependency version:
     poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
     ```
 
-4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together — a requirements file that drifts from its lock will be silently overwritten by the next export, and the layer bundling build installs from the exported file.
+4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together — a requirements file that drifts from its lock will be silently overwritten by the next export. The layer bundling build never reads the committed file: `layerBundlingCommand()` (`infra/lib/helper/lambda.ts`) re-exports the layer's `poetry.lock` inside the build container and installs that export, so a layer ships what its lock resolves to. The command installs pinned versions of pip, Poetry and `poetry-plugin-export`, with Poetry pinned to the version that writes the layer lock files; regenerate the locks with that Poetry version, or move the pin with them (`infra/test/security/layerBundlingToolPins.test.ts` asserts every tool is pinned).
+
+`backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version: handler Lambdas load their third-party packages from the base layer, while the backend suite installs `backend/requirements-dev.txt`. Change a shared package in both trees in the same change. To match a transitive package to a version other than its newest release, add a temporary exact constraint to `pyproject.toml`, run `poetry lock`, remove the constraint, and run `poetry lock` again — Poetry keeps the locked version. `backend/tests/test_base_layer_dependency_parity.py` fails on any difference. The authorizer layer (`backend/lambdaLayers/authorizer/`) is a separate dependency set and is not compared.
 
 Requirements files with **no** side-by-side `pyproject.toml` (e.g. `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files and are edited directly.
 
@@ -1721,7 +1723,7 @@ class [Domain]ListRequestModel(BaseModel, extra='ignore'):
 
 class [Domain]CreateRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a [domain]"""
-    [domain]Id: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    [domain]Id: str = Field(min_length=4, max_length=63, regex=id_pattern)
     [domain]Name: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
     description: str = Field(min_length=4, max_length=256)
     tags: Optional[List[str]] = []
@@ -1853,7 +1855,7 @@ export function build[Domain]Service(
 
         environment: {
             // Handler-specific env vars only (resource names resolved from SSM)
-            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.presignedUrlTimeoutSeconds.toString(),
+            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
         },
     });
 
@@ -1896,7 +1898,7 @@ export function buildCreate[Domain]Function(
 
         environment: {
             // Handler-specific env vars only (resource names resolved from SSM)
-            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.presignedUrlTimeoutSeconds.toString(),
+            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
         },
     });
 
@@ -2610,8 +2612,9 @@ pytest -m temporary --collect-only
 
 A test written to prove one specific change landed — a deleted file, a removed test seam, a dead branch —
 carries `@pytest.mark.temporary` (registered in `backend/pytest.ini`) plus a line naming what it pins.
-`backend` and `tools/VamsCLI` run `--strict-markers`, so the marker must stay registered there or every
-test using it fails; `backendPipelines` has no pytest configuration, so it only warns.
+`backend`, `tools/VamsCLI`, and `tools/ExternalIntegrations/isaacsim_vams_integration` run
+`--strict-markers`, so the marker must stay registered there or every test using it fails;
+`backendPipelines` has no pytest configuration file, so it only warns.
 
 The marker is required because **a temporary test and a durable guardrail are indistinguishable by reading
 them afterwards** — both scan source, both assert an absence, both explain themselves. Applying it up front
@@ -2726,7 +2729,7 @@ try:
     required_table_name = get_table_name(ResourceKeys.REQUIRED_STORAGE_TABLE)
     required_bucket = get_bucket_name(ResourceKeys.REQUIRED_BUCKET)
     # Handler-specific env vars (direct from os.environ)
-    presigned_url_timeout = os.environ.get("PRESIGNED_URL_TIMEOUT_SECONDS", "3600")
+    presigned_url_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
     logger.exception("Failed loading environment variables and resource names")
     raise e

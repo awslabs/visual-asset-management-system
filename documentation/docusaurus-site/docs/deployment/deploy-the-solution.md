@@ -139,11 +139,13 @@ export STACK_NAME=dev
 
 ### FIPS endpoints (optional)
 
-If deploying with FIPS-compliant endpoints, set the following environment variable in addition to enabling `app.useFips` in `config.json`:
+To point the AWS CLI and AWS CDK CLI at FIPS endpoints, set the following environment variable. It also turns on `app.useFips` at synthesis, the same as setting `app.useFips` to `true` in `config.json`:
 
 ```bash
 export AWS_USE_FIPS_ENDPOINT=true
 ```
+
+In the AWS European Sovereign Cloud, leave the variable unset and `app.useFips` `false`: the partition offers FIPS endpoints for only four services, which do not include AWS STS, AWS CloudFormation or Amazon S3. See the [Configuration Reference](configuration-reference.md) for what `app.useFips` changes.
 
 ## Step 7: Import an external VPC (conditional)
 

@@ -3,7 +3,7 @@
 
 import boto3
 from botocore.config import Config
-from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="AssetCount")
@@ -18,12 +18,6 @@ def update_asset_count(db_database, asset_database, queryParams, databaseId):
     max_items = int(queryParams.get('maxItems', 1000))
     page_size = int(queryParams.get('pageSize', 100))
     
-    table = dynamodb.Table(db_database)
-    resp = table.query(
-        KeyConditionExpression=Key('databaseId').eq(databaseId),
-        ScanIndexForward=False,
-    )
-
     paginator = dynamodb_client.get_paginator('query')
     condition = {
         "databaseId": {
@@ -57,8 +51,21 @@ def update_asset_count(db_database, asset_database, queryParams, databaseId):
         ).build_full_result()
         count += pageIterator['Count']
 
-    item = resp['Items'][0]
-    item['assetCount'] = str(count)
-    logger.info(item)
-    table.put_item(Item=item)
+    # Only assetCount is written, so a database edit committed while counting is not reverted, and
+    # only while the record exists, so a deleted database is not recreated as a live record.
+    table = dynamodb.Table(db_database)
+    try:
+        table.update_item(
+            Key={'databaseId': databaseId},
+            UpdateExpression='SET #assetCount = :assetCount',
+            ExpressionAttributeNames={'#assetCount': 'assetCount'},
+            ExpressionAttributeValues={':assetCount': str(count)},
+            ConditionExpression='attribute_exists(databaseId)'
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"Database {databaseId} no longer exists, asset count not updated")
+            return
+        raise
+    logger.info(f"Asset count for database {databaseId} set to {count}")
     return

@@ -35,7 +35,7 @@ from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
 )
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS, join_asset_location_key
 from common.syncTracking import (
     SYNC_ACTION_CREATE,
     SYNC_ACTION_DELETE,
@@ -1039,7 +1039,7 @@ def _s3_object_still_exists(
     asset_base_key = asset_location.get(
         "Key", f"{bucket_details['baseAssetsPrefix']}{asset_id}/"
     )
-    s3_key = asset_base_key + relative_path.lstrip("/")
+    s3_key = join_asset_location_key(asset_base_key, relative_path)
     bucket_name = bucket_details["bucketName"]
     head_result = _head_object_with_encoding_fallback(bucket_name, s3_key)
     # head_object returning None can be either "genuine 404" or "other
@@ -1276,7 +1276,7 @@ def _handle_file_metadata_stream(record: Dict[str, Any]) -> bool:
     asset_base_key = asset_location.get(
         "Key", f"{bucket_details['baseAssetsPrefix']}{asset_id}/"
     )
-    s3_key = asset_base_key + relative.lstrip("/")
+    s3_key = join_asset_location_key(asset_base_key, relative)
     bucket_name = bucket_details["bucketName"]
 
     client = PhysnaClient()

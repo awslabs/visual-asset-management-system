@@ -197,6 +197,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/workflows"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/physna/viewer"
                 }
             ],
             "groupPermissions": [

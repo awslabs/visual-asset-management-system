@@ -361,7 +361,7 @@ from pydantic import Field
 from common.validators import validate, trim_name, id_pattern, object_name_pattern
 
 class CreateItemRequestModel(BaseModel, extra='ignore'):
-    databaseId: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    databaseId: str = Field(min_length=4, max_length=63, regex=id_pattern)
     itemName:   str = Field(min_length=1, max_length=256, regex=object_name_pattern)
     tags: Optional[list[str]] = []
 
@@ -410,7 +410,7 @@ assert not MyModel.__fields__['databaseId'].field_info.extra          # nothing 
 
 Common shapes:
 
--   String with regex: `Field(min_length=4, max_length=256, regex=id_pattern)`
+-   String with regex: `Field(min_length=4, max_length=63, regex=id_pattern)`
 -   Name, id, or free text: wire `common.validators.trim_name` as a `pre=True` validator — `_trim_names = validator('itemName', pre=True, allow_reuse=True)(trim_name)`. It removes the surrounding whitespace run and preserves interior whitespace, and runs before the length and regex checks. On a field that also carries a control-character rule (`pipelineName`, `category`, `workflowName`, `templateName`), declare `models.pipelines.reject_control_characters` as a `pre=True` validator BEFORE the trim — `.strip()` removes a trailing newline, tab or NEL, so a trim declared first turns that rejection into a silent normalization. Never `strip_whitespace=` on the field (inert), and not `anystr_strip_whitespace = True` on the model's `class Config` either — that strips every string on the model, including S3 keys and asset-relative paths, where a trailing space is a legitimate part of the key. A `description` or `comment` on a REQUEST model trims through the same validator, declared separately as `_trim_text` so the source keeps signalling which fields are ids and which are prose; a response or record model does not, because trimming there rewrites a stored row on the way out. `tests/models/test_no_dead_field_kwargs.py` asserts that partition as a rule — a new free-text field must either trim or be named in its `NO_TRIM_FREE_TEXT` map with the reason it keeps its whitespace
 -   Optional with default: `Optional[list[str]] = []`, `Optional[str] = None`
 -   Numeric constraints: `Field(None, ge=0)`, `Field(None, ge=0, le=10000)`
@@ -854,7 +854,7 @@ Feature switches are the runtime signal for partition-conditional behavior: `GOV
 
 ## Testing
 
-Run `pytest` from `backend/` after `pip install -r requirements-dev.txt`. Tests live under `backend/tests/[domain]/`; markers are `unit`, `integration`, `slow`, `aws`. Full configuration, mock module hierarchy, `conftest.py` layering, and event-shape conventions: see `backend/tests/CLAUDE.md`.
+Run `pytest` from `backend/` after `pip install -r requirements-dev.txt`. Tests live under `backend/tests/[domain]/`; markers are `unit`, `integration`, `slow`, `aws`, `temporary` (root CLAUDE.md Rule 13). Full configuration, mock module hierarchy, `conftest.py` layering, and event-shape conventions: see `backend/tests/CLAUDE.md`.
 
 ## Templates
 
@@ -864,7 +864,7 @@ New-handler / model / test skeletons: `backend/HANDLER_TEMPLATES.md`. Gold Stand
 
 ## Key Dependencies
 
-Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.45 / `botocore` 1.43.45 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
+Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.45 / `botocore` 1.43.45 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.36.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
 
 Dev only: `moto` 5.1.0 (AWS mocks), `pytest` 9.0.3, `mypy` 1.0.0, `flake8` 6.0.0.
 
@@ -889,7 +889,9 @@ To change a dependency version:
     poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
     ```
 
-4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together — a requirements file that drifts from its lock will be silently overwritten by the next export, and the layer bundling build installs from the exported file.
+4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together — a requirements file that drifts from its lock will be silently overwritten by the next export. The layer bundling build never reads the committed file: `layerBundlingCommand()` (`infra/lib/helper/lambda.ts`) re-exports the layer's `poetry.lock` inside the build container and installs that export, so a layer ships what its lock resolves to. The command installs pinned versions of pip, Poetry and `poetry-plugin-export`, with Poetry pinned to the version that writes the layer lock files; regenerate the locks with that Poetry version, or move the pin with them (`infra/test/security/layerBundlingToolPins.test.ts` asserts every tool is pinned).
+
+`backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version: handler Lambdas load their third-party packages from the base layer, while the backend suite installs `backend/requirements-dev.txt`. Change a shared package in both trees in the same change. To match a transitive package to a version other than its newest release, add a temporary exact constraint to `pyproject.toml`, run `poetry lock`, remove the constraint, and run `poetry lock` again — Poetry keeps the locked version. `backend/tests/test_base_layer_dependency_parity.py` fails on any difference. The authorizer layer (`backend/lambdaLayers/authorizer/`) is a separate dependency set and is not compared.
 
 Requirements files with **no** side-by-side `pyproject.toml` (e.g. `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files, edited directly.
 

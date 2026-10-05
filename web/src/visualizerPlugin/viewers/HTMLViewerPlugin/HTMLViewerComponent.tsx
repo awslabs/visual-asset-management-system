@@ -88,7 +88,7 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
                         // iframe at the presigned URL.
                         //
                         // VAMS stores asset files with a generic content type — an uploaded .html
-                        // arrives as `binary/octet-stream` — and neither the object nor the presigned
+                        // arrives as an octet-stream type — and neither the object nor the presigned
                         // URL declares otherwise. A frame served that type renders nothing at all: no
                         // error event, no CSP violation, no console output, just an empty panel. The
                         // bytes are correct and the request succeeds, which is why this reads as the

@@ -521,9 +521,12 @@ def search_assets(
       points), or `geoJson` (GeoJSON geometry/Feature/FeatureCollection), plus
       an optional `relation` of intersects (default) / within / contains /
       disjoint.
-    - size / from_offset: one page of hits. The result reports `total` (all matches) and `returned`
-      (this page); when total exceeds returned, page on by re-issuing the same query with
-      from_offset advanced by size rather than by raising size to swallow everything.
+    - size / from_offset: one page of hits. The result reports `total` and `returned` (this page).
+      `total` counts the matches the caller may read among the records examined for this request,
+      counted from the first hit over a window that grows with from_offset + size, so it rises as
+      you page on and is not the number of all matches. While from_offset + returned is below
+      total, page on by re-issuing the same query with from_offset advanced by size rather than by
+      raising size to swallow everything.
     - sort_field / sort_desc: order by an indexed field instead of relevance, e.g.
       sort_field="dateCreated" for the most recent first. Call get_search_fields() for the field
       names. Ordering by relevance (the default) cannot answer "the newest N".
@@ -754,11 +757,12 @@ def generate_download_url(
 
     The URL is a bearer credential: it carries its own Amazon S3 signature, needs no further
     authentication, and anyone holding it can download the object until it expires. The lifetime is
-    the deployment's `app.authProvider.presignedUrlTimeoutSeconds` — 24 hours by default. Returning
-    one here puts it in the agent transcript, and therefore in whatever conversation log, trace, or
-    telemetry the host retains, so for the whole of that window it is readable by everything with
-    access to those. Generate one only when a download was actually asked for, and treat any URL
-    already generated as disclosed.
+    at most the deployment's `app.authProvider.presignedUrlTimeoutSeconds` — 24 hours by default —
+    and ends sooner if the credentials that signed it expire first. Returning one here puts it in the
+    agent transcript, and therefore in whatever conversation log, trace, or telemetry the host
+    retains, so for the whole of that window it is readable by everything with access to those.
+    Generate one only when a download was actually asked for, and treat any URL already generated as
+    disclosed.
 
     A deployment can bound where the URL works with
     `app.assetBuckets.presignedUrlNetworkRestrictions` (allowedIpRanges / allowedVpceIds), which
@@ -794,7 +798,7 @@ def generate_download_urls_bulk(
     whole call is an error.
 
     Every URL is a bearer credential exactly as generate_download_url describes — it needs no further
-    authentication, is usable until `presignedUrlTimeoutSeconds` elapses (24 hours by default), and
+    authentication, is usable for at most `presignedUrlTimeoutSeconds` (24 hours by default), and
     lands in the agent transcript and whatever logs the host keeps — multiplied here by the number of
     keys. Request only the files a download was actually asked for."""
     return CLIENT.api.download_asset_files_bulk(
@@ -1501,7 +1505,9 @@ if CONFIG.enable_writes:
     @tool_result
     def update_asset(database_id: str, asset_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         """Update fields on an existing asset. At least one of assetName,
-        description, isDistributable, or tags must be supplied."""
+        description, isDistributable, or tags must be supplied with a non-null
+        value. A field sent as null is left unchanged; tags=[] clears the tag
+        list, which a required tag type in the database can refuse."""
         return CLIENT.api.update_asset(database_id, asset_id, updates)
 
     @mcp.tool()
@@ -1841,7 +1847,9 @@ if CONFIG.enable_writes:
         metadataSchemaEntityType (databaseMetadata, assetMetadata, fileMetadata, fileAttribute or
         assetLinkMetadata), schemaName, and fields — which is nested: `{"fields": [ ... ]}`, not a
         bare list. Optional: fileKeyTypeRestriction (a comma-delimited extension list, accepted only
-        for fileMetadata and fileAttribute), and enabled (defaults true).
+        for fileMetadata and fileAttribute), and enabled (defaults true). Write each extension with
+        its leading dot and no other dot or path separator (".stp,.step", or ".all" for every file);
+        an entry in any other form is refused with a 400.
 
         Call list_metadata_schemas() first and copy the shape of an existing schema. The response
         carries the generated metadataSchemaId, which is what update_metadata_schema() takes.
@@ -1858,7 +1866,12 @@ if CONFIG.enable_writes:
         Changeable: schemaName, fields (the same nested `{"fields": [ ... ]}` shape as on create),
         fileKeyTypeRestriction, and enabled. The schema's databaseId and entity type are fixed at
         creation. `fields` REPLACES the whole field list rather than merging into it, so send the
-        complete set — read it with list_metadata_schemas() first.
+        complete set — read it with list_metadata_schemas() first. A schemaName, fields or enabled
+        sent as null is left unchanged; a fileKeyTypeRestriction sent as null or "" removes the
+        restriction when sent beside another field.
+
+        A fileKeyTypeRestriction takes the same dotted list as on create, and only a fileMetadata or
+        fileAttribute schema accepts one; either mistake is refused with a 400.
         """
         return CLIENT.api.update_metadata_schema(metadata_schema_id, update_data)
 
