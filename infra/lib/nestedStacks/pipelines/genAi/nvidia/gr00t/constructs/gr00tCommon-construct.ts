@@ -56,6 +56,8 @@ export class Gr00tCommonConstruct extends Construct {
                 ? s3.BucketEncryption.KMS
                 : s3.BucketEncryption.S3_MANAGED,
             encryptionKey: props.storageResources.encryption.kmsKey,
+            // An S3 Bucket Key lets object requests reuse a data key instead of calling AWS KMS each time
+            bucketKeyEnabled: props.storageResources.encryption.kmsKey ? true : undefined,
             blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
             removalPolicy: RemovalPolicy.RETAIN,
             versioned: false,
@@ -82,6 +84,11 @@ export class Gr00tCommonConstruct extends Construct {
             throughputMode: efs.ThroughputMode.ELASTIC,
             removalPolicy: RemovalPolicy.DESTROY,
         });
+
+        // Non-root GPU containers (issue #327) reach this cache through the launch-template userdata,
+        // which mounts the EFS root at /mnt/efs/gr00t-models and `chown -R 10000:10000` it after the
+        // mount, so the shared model cache is owned by the container uid/gid. No EFS access point is
+        // used for the GR00T cache: the mount is a plain root mount, not AP-fronted.
 
         /**
          * CDK Nag Suppressions

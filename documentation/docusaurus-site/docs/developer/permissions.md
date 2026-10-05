@@ -440,6 +440,8 @@ VAMS includes pre-built permission templates that you can import to quickly set 
 
 Templates are located in the `documentation/permissionsTemplates/` directory.
 
+The Database Admin, Database User, Database Read-Only, and Global Read-Only templates grant `GET` on `/addon/physna/viewer`, the route the Physna viewer plugin calls, with a `starts_with` criterion in their GET API route constraint (the all-methods API route constraint in Database Admin). On a deployment without the Physna add-on the criterion matches no route. The viewer token that route returns is tenant-scoped (see [Physna Viewer](./physna-integration.md#physna-viewer)); to withhold the viewer from a template-built role, remove the `/addon/physna/viewer` criterion from its imported constraint.
+
 ### Applying templates
 
 You can apply templates using the CLI tool or the `POST /auth/constraintsTemplateImport` API endpoint.

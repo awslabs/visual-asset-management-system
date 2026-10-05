@@ -34,15 +34,15 @@ documentation/
     │       └── custom.css           # Custom theme CSS
     ├── static/
     │   └── img/                     # Static images referenced in docs
-    └── docs/                        # Source Markdown files (136 pages)
-        ├── index.md                 # Landing page
+    └── docs/                        # Source Markdown and MDX pages, each listed in sidebars.ts
+        ├── index.mdx                # Landing page
         ├── overview/                # Solution overview, benefits, use cases, features, costs
         ├── concepts/                # Core concepts: databases, assets, files, pipelines, metadata, permissions
         ├── architecture/            # Architecture overview, details, AWS resources, security, networking, data model
         ├── deployment/              # Prerequisites, deploy, config reference, external S3, update, uninstall
         ├── user-guide/              # Getting started, web UI, upload tutorial, asset mgmt, search, metadata, permissions
         ├── cli/                     # CLI getting started, installation, command reference, automation
-        ├── pipelines/               # Pipeline overview + 16 individual pipeline docs + custom pipeline guide + v2.5→v2.6 porting guide
+        ├── pipelines/               # Pipeline overview, one page per built-in pipeline family, custom pipeline guide, v2.5-to-v2.6 migration guide
         ├── developer/               # Dev setup, backend, frontend, CDK, viewer plugins, audit logging
         ├── api/                     # API overview, auth, assets, files, metadata, search, pipelines, workflows, tags
         ├── troubleshooting/         # Common issues, known limitations, FAQ
@@ -54,19 +54,23 @@ documentation/
 The sidebar uses a hierarchical tree with collapsible categories:
 
 ```
-Home (index.md)
-├── Overview (5 pages)
-├── Core Concepts (10 pages)
-├── Architecture (6 pages)
-├── Deployment (8 pages)
-├── User Guide (13 pages)
-└── Developer Guide
-    ├── Setup, Backend, Frontend, CDK, Viewer Plugins, Audit Logging
-    ├── CLI Reference (4+ pages with commands/ subcategory)
-    ├── Pipelines (19 pages)
-    ├── API Reference (16 pages)
-    └── Troubleshooting (3 pages)
-Additional (5 pages)
+Home (index.mdx)
+├── Overview
+├── Core Concepts
+├── Architecture
+├── Deployment
+├── User Guide
+├── Developer Guide
+│   ├── Setup, Agentic Development, Backend, Frontend, CDK, OpenSearch, Viewer Plugins, Audit Logging, Security, Permissions, Workflow Execution Data Model
+│   ├── Data Syncing
+│   ├── Addons
+│   ├── Pipelines
+│   ├── CLI Reference (with Command Details and Troubleshooting subcategories)
+│   ├── API Reference
+│   ├── Utilities
+│   ├── External Tool Integrations
+│   └── Troubleshooting
+└── Additional
 ```
 
 ---
@@ -117,7 +121,7 @@ Additional (5 pages)
 #### **Step 5: Cross-Reference Accuracy**
 
 -   [ ] **Verify against source code**: Configuration options match `config.ts`
--   [ ] **Verify API endpoints**: Match `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`), then the registrations in **both** `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts`, and `VAMS_API.yaml`. Enumerating only `apiBuilder-nestedStack.ts` misses the routes registered in `apiBuilder2`, which is where new endpoints go
+-   [ ] **Verify API endpoints**: Match `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`), then the registrations, which are every `attachFunctionToApi(` call under `infra/lib/` and the two direct `registry.register(` calls in `rest-api-gateway-construct.ts`, and `VAMS_API.yaml`. A fixed list of stacks misses routes: new endpoints go in `apiBuilder2`, the search stack and add-on stacks such as the Physna one register their own, and an add-on's routes are registered only when the add-on is enabled. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the registrations against `apiRoutes.py`
 -   [ ] **Verify CLI commands**: Match `tools/VamsCLI/vamscli/commands/`
 -   [ ] **Verify feature flags**: Match `infra/common/vamsAppFeatures.ts`
 -   [ ] **No hardcoded versions**: Reference source of truth files instead
@@ -366,12 +370,12 @@ When documentation standards, patterns, or structure change, update all affected
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | New or changed API endpoint (incl. path renames) | **Both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md` for `/auth/*`) -- these are two separate sources of truth and both must be kept in sync. Also `cli/command-reference.md` if the CLI changed.                                                                                                                                                                                                                                                                                                                                        |
 | New config option                                | `deployment/configuration-reference.md` + the **ConfigBuilder** component (`src/components/ConfigBuilder/`, embedded in `deployment/config-builder.mdx`) -- then run `infra/test/config/configBuilderSync.test.ts`                                                                                                                                                                                                                                                                                                                                                                                            |
-| New/changed pipeline                             | `pipelines/` new page + `pipelines/overview.md` table + `sidebars.ts`; `overview/features.md` table **and its spelled-out built-in-pipeline count** (bump "VAMS includes _fourteen_ built-in processing pipelines…" to match the row count); and, when the pipeline adds/changes a third-party model, base image, or licensed dependency, the license entries in **both** `additional/notices.md` (per-pipeline license paragraph + closing attribution list) and the repo-root `NOTICE.md` (per-pipeline dependency table + attribution note). Record the exact license and any required attribution string. |
+| New/changed pipeline                             | `pipelines/` new page + `pipelines/overview.md` table + `sidebars.ts`; `overview/features.md` table **and its spelled-out built-in-pipeline count** (bump _N_ in "VAMS includes _N_ built-in processing pipelines…" to match the row count); and, when the pipeline adds/changes a third-party model, base image, or licensed dependency, the license entries in **both** `additional/notices.md` (per-pipeline license paragraph + closing attribution list) and the repo-root `NOTICE.md` (per-pipeline dependency table + attribution note). Record the exact license and any required attribution string. |
 | New viewer plugin                                | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`, `overview/features.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | New DynamoDB table                               | `architecture/aws-resources.md`, `architecture/data-model.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Permission model change                          | `concepts/permissions-model.md`, `user-guide/permissions.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | New CLI command                                  | `cli/commands/<group>.md` (the command-group page), `cli/troubleshooting/<group>.md` (if error scenarios changed), `cli/command-reference.md` (if a new group), `cli/automation.md` (if new patterns), and `sidebars.ts` (if a new page). The `cli/` section is the single source of truth — the legacy `tools/VamsCLI/docs/` is deprecated.                                                                                                                                                                                                                                                                  |
-| UI navigation change                             | `user-guide/web-interface.md`, `user-guide/getting-started.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| UI navigation change                             | `user-guide/web-interface.md`, `user-guide/getting-started.mdx`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Breaking change                                  | `additional/revisions.md`, `deployment/update-the-solution.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | New feature                                      | `overview/features.md`, relevant user guide page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | New sidebar page                                 | `sidebars.ts` -- add the page to the appropriate category                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -393,7 +397,7 @@ When writing or verifying documentation, cross-reference these source files to e
 | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Config options                                            | `infra/config/config.ts` (ConfigPublic interface)                                                                                                                                                                                                                                       |
 | ConfigBuilder component (`src/components/ConfigBuilder/`) | `infra/config/config.ts` (`ConfigPublic` + `getConfig()`), `infra/config/config.template.{commercial,govcloud,eusovereign}.json` — `infra/test/config/configBuilderSync.test.ts` guards `schema.ts` and `defaults.ts` only; `validation.ts` and `derived.ts` are kept in sync by review |
-| API endpoints                                             | `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`), then `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` **and** `apiBuilder2-nestedStack.ts`, plus `VAMS_API.yaml`                                                                                                  |
+| API endpoints                                             | `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`) and `VAMS_API.yaml`, then every `attachFunctionToApi(` call under `infra/lib/` and the two `registry.register(` calls in `rest-api-gateway-construct.ts`; `infra/test/api/apiRouteBackendCdkParity.test.ts` checks them        |
 | DynamoDB tables                                           | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                                                                                                                                                                                                          |
 | Feature flags                                             | `infra/common/vamsAppFeatures.ts`                                                                                                                                                                                                                                                       |
 | Backend handlers                                          | `backend/backend/handlers/`                                                                                                                                                                                                                                                             |
@@ -418,7 +422,7 @@ When writing or verifying documentation, cross-reference these source files to e
 | Config reference format | `docs/deployment/configuration-reference.md` |
 | Pipeline documentation  | `docs/pipelines/overview.md`                 |
 | API reference format    | `docs/api/assets.md`                         |
-| User guide format       | `docs/user-guide/getting-started.md`         |
+| User guide format       | `docs/user-guide/getting-started.mdx`        |
 | Developer setup         | `docs/developer/setup.md`                    |
 | OpenAPI spec            | `VAMS_API.yaml`                              |
 
@@ -606,7 +610,7 @@ npm run serve
 
 Documentation is deployed automatically via CI/CD when changes are pushed to `main` or `release/*` branches:
 
--   **GitLab**: `.gitlab-ci.yml` -- builds with `node:20-slim`, outputs to `public/` for GitLab Pages
+-   **GitLab**: `.gitlab-ci.yml` -- builds with `node:22-slim`, outputs to `public/` for GitLab Pages
 -   **GitHub**: `.github/workflows/docs.yml` -- builds and deploys via GitHub Pages
 
 Both pipelines only trigger when files under `documentation/docusaurus-site/` change.

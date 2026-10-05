@@ -152,8 +152,8 @@ describe("Bedrock Runtime and Transcribe VPC interface endpoint gating", () => {
 });
 
 describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
-    // Every Batch/ECS/Fargate pipeline flag must appear in all three condition blocks:
-    // subnet creation, the Batch/ECR endpoint block, and the ECS endpoint block.
+    // The three condition blocks are subnet creation, the Batch/ECR endpoint block, and the ECS
+    // endpoint block. Which of them a Batch/ECS/Fargate pipeline flag appears in is set out below.
     const source = fs.readFileSync(
         path.join(__dirname, "..", "../lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts"),
         "utf8"

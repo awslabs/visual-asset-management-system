@@ -168,9 +168,9 @@ async function clickWhenActionable(target: Locator, what: string, attempts = 4):
 /**
  * Open one of an asset's files in the File Visualizer, the way a user does.
  *
- * There is no deep link to a file. The app navigates to `.../assets/{id}/file` and passes the file
- * through React Router STATE, so the only route in is the File Manager. Three things about that page
- * are easy to get wrong and cost a long detour each:
+ * The File Manager navigates to `.../assets/{id}/file` and passes the file through React Router
+ * STATE; a direct `.../file/<encoded key>` link also opens a file, but this helper takes the path a
+ * user takes. Three things about that page are easy to get wrong and cost a long detour each:
  *
  *  - Its own heading is an **h2**. The orchestration routes have an h1; this page does not, so waiting
  *    on `heading, level: 1` matches nothing and times out.
@@ -436,4 +436,150 @@ export async function chooseSelectOption(
         await page.waitForTimeout(200);
     }
     await page.keyboard.press("Enter");
+}
+
+// ---------------------------------------------------------------------------------------------
+// API subject lookup
+// ---------------------------------------------------------------------------------------------
+
+/** The app's API base and bearer token, read from what the running app itself holds.
+ *
+ * Two things had to be learned from the deployment rather than assumed:
+ *
+ * - **The API is NOT same-origin `/api/*`.** The app calls the API Gateway origin directly (which is
+ *   why `connect-src` names it). A request to `https://<web-host>/api/database` reaches a path that
+ *   expects SigV4 and answers 403 with "Invalid key=value pair ... in Authorization header", while an
+ *   unknown path falls through to the S3 origin and answers AccessDenied. Both look like auth
+ *   failures and neither is.
+ * - **`page.request` carries no Authorization header**, and every route behind the custom authorizer
+ *   answers 401 without one. The token the authorizer validates is the Cognito ID token.
+ */
+export async function apiContext(page: Page): Promise<{ base: string; token: string } | null> {
+    if (!page.url().startsWith("http")) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+    }
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const ctx = await page.evaluate(() => {
+            let base: string | null = null;
+            try {
+                const raw = localStorage.getItem("vams_cache_config");
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    const config = parsed?.value ?? parsed ?? {};
+                    base = config.api ?? null;
+                }
+            } catch {
+                base = null;
+            }
+            const keys = Object.keys(localStorage);
+            const idKey = keys.find((k) => /CognitoIdentityServiceProvider.*\.idToken$/.test(k));
+            const token = (idKey && localStorage.getItem(idKey)) || null;
+            return { base, token };
+        });
+        if (ctx.base && ctx.token) {
+            return { base: ctx.base.replace(/\/+$/, ""), token: ctx.token };
+        }
+        if (Date.now() > deadline) return null;
+        await page.waitForTimeout(1000);
+    }
+}
+
+/** A file an asset holds, addressed the way the ViewFile route addresses it. */
+export interface AssetFileRef {
+    databaseId: string;
+    assetId: string;
+    /** Asset-relative key with a leading slash, e.g. `/BoomBox.glb`. */
+    key: string;
+}
+
+export interface FindAssetFilesOptions {
+    /** Search only this asset, written `databaseId/assetId`. */
+    asset?: string;
+    /** Skip assets not flagged distributable; the download API refuses their files. */
+    distributableOnly?: boolean;
+    /** Skip files larger than this many bytes. */
+    maxBytes?: number;
+    /** How many databases to scan, in listing order. */
+    maxDatabases?: number;
+    /** How many assets of each database to scan, in listing order. */
+    maxAssetsPerDatabase?: number;
+}
+
+/**
+ * The first file found for each of `extensions`, keyed by the lower-cased extension, or null when the
+ * running app exposes no API base or ID token to look files up with.
+ *
+ * An extension with no file in the scanned assets is absent from the map, which is the caller's cue to
+ * `test.skip` with a reason. The scan stops once every extension has a file and is bounded by
+ * `maxDatabases` × `maxAssetsPerDatabase`, so a large environment costs a fixed number of requests.
+ * Files are listed in basic mode, which skips the per-object enrichment a key match does not need.
+ *
+ * A named `asset` is listed without the scan's filters, and fails the calling test when its files
+ * cannot be listed, so a mistyped or unreadable id does not pass for an asset with no such files.
+ */
+export async function findAssetFiles(
+    page: Page,
+    extensions: string[],
+    options: FindAssetFilesOptions = {}
+): Promise<Map<string, AssetFileRef> | null> {
+    const ctx = await apiContext(page);
+    if (!ctx) return null;
+    const headers = { Authorization: `Bearer ${ctx.token}` };
+    const asJson = async (path: string) => {
+        const r = await page.request.get(`${ctx.base}${path}`, { headers });
+        if (!r.ok()) return null;
+        const b = await r.json().catch(() => null);
+        return b?.message ?? b ?? null;
+    };
+    const itemsOf = (body: any): any[] => {
+        const items = body?.Items ?? body?.items ?? body ?? [];
+        return Array.isArray(items) ? items : [];
+    };
+
+    const wanted = Array.from(new Set(extensions.map((e) => e.toLowerCase())));
+    const found = new Map<string, AssetFileRef>();
+    const collect = async (databaseId: string, assetId: string, maxBytes = Infinity) => {
+        const files = await asJson(
+            `/database/${databaseId}/assets/${assetId}/listFiles?basic=true`
+        );
+        for (const f of itemsOf(files)) {
+            const relative: string = f?.relativePath ?? f?.key ?? "";
+            if (!relative || f.isFolder || Number(f.size) > maxBytes) continue;
+            const lower = relative.toLowerCase();
+            const ext = wanted.find((e) => !found.has(e) && lower.endsWith(e));
+            if (ext) {
+                const key = relative.startsWith("/") ? relative : `/${relative}`;
+                found.set(ext, { databaseId, assetId, key });
+            }
+        }
+        return files !== null;
+    };
+
+    if (options.asset) {
+        const [databaseId, assetId] = options.asset.split("/");
+        const listed = Boolean(databaseId && assetId) && (await collect(databaseId, assetId));
+        expect(
+            listed,
+            `the files of ${options.asset} could not be listed; write it as ` +
+                `<databaseId>/<assetId> and name an asset this user can read`
+        ).toBe(true);
+        return found;
+    }
+
+    const databases = itemsOf(await asJson("/database"));
+    for (const db of databases.slice(0, options.maxDatabases ?? 8)) {
+        if (found.size === wanted.length) break;
+        const databaseId = db?.databaseId;
+        if (!databaseId) continue;
+        const assets = itemsOf(await asJson(`/database/${databaseId}/assets`));
+        for (const asset of assets.slice(0, options.maxAssetsPerDatabase ?? 20)) {
+            if (found.size === wanted.length) break;
+            const assetId = asset?.assetId;
+            if (!assetId) continue;
+            if (options.distributableOnly && asset.isDistributable !== true) continue;
+            await collect(databaseId, assetId, options.maxBytes);
+        }
+    }
+    return found;
 }

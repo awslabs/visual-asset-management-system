@@ -889,6 +889,8 @@ export default function ViewFile() {
                                                 >
                                                     <DynamicViewer
                                                         key={`${viewType}-${effectiveFileViewMode}-${assetId}-${
+                                                            singleFileInfo?.key || "no-file"
+                                                        }-${
                                                             effectiveAssetVersionId ||
                                                             singleFileInfo?.versionId ||
                                                             "no-version"

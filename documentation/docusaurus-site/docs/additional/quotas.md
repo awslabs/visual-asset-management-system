@@ -44,6 +44,8 @@ All VAMS Lambda functions share the same configuration:
 | Presigned URL timeout    | 86,400 seconds (24 hours) | Yes          | `app.authProvider.presignedUrlTimeoutSeconds`         |
 | Upload initializations   | 20 per user per minute    | No           | Hardcoded rate limit                                  |
 
+`app.authProvider.presignedUrlTimeoutSeconds` takes a whole number from 1 to 604,800 seconds (7 days), the longest Amazon S3 allows for a presigned URL; synthesis warns about any other value. It is an upper bound: a presigned URL is signed with the Lambda function's temporary role credentials and stops working when they expire, which can be sooner than the configured timeout.
+
 ---
 
 ## Storage Limits
@@ -57,7 +59,7 @@ All VAMS DynamoDB tables use on-demand (pay-per-request) billing mode, which aut
 | Billing mode                | On-demand (PAY_PER_REQUEST)               |
 | Maximum item size           | 400 KB (DynamoDB service limit)           |
 | Metadata records per entity | 500                                       |
-| Table count                 | 46 tables (plus 5 retained for migration) |
+| Table count                 | 46 tables (plus 7 retained for migration) |
 
 :::info
 On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.

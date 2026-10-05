@@ -279,14 +279,14 @@ The Physna Sync add-on (`app.addons.usePhysnaSync.enabled`) calls the Physna sof
 
 These non-pipeline endpoints are created based on the deployment configuration:
 
-| Endpoint                      | Condition                                                       | Purpose                                                                                                                                                                                             |
-| ----------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Amazon Cognito user pools     | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-idp` — browser SRP sign-in and the Lambda MFA check                                                                                                                                        |
-| Amazon Cognito identity pools | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-identity` — token/credential exchange                                                                                                                                                      |
-| AWS KMS                       | `useKmsCmkEncryption.enabled`                                   | KMS key operations                                                                                                                                                                                  |
-| AWS KMS (FIPS)                | `useKmsCmkEncryption.enabled` + `useFips`                       | FIPS-compliant KMS                                                                                                                                                                                  |
-| Amazon S3 (ALB web)           | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                  | ALB-to-S3 static web file serving                                                                                                                                                                   |
-| AWS Deadline Cloud            | `pipelines.deadlineCloudExecutionTypeEnabled`                   | `deadline.management` — read a job's status and cancel a farm job. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
+| Endpoint            | Condition                                                                       | Purpose                                                                                                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AWS KMS             | `useKmsCmkEncryption.enabled`                                                   | KMS key operations                                                                                                                                                                                  |
+| AWS KMS (FIPS)      | `useKmsCmkEncryption.enabled` + `useFips`                                       | FIPS-compliant KMS                                                                                                                                                                                  |
+| Amazon S3 (ALB web) | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                                  | ALB-to-S3 static web file serving                                                                                                                                                                   |
+| AWS Deadline Cloud  | `pipelines.deadlineCloudExecutionTypeEnabled` + `useGlobalVpc.useForAllLambdas` | `deadline.management` — read a job's status and cancel a farm job. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
+
+VAMS does not create Amazon Cognito interface endpoints. See [MFA-Aware Roles](security.md#mfa-aware-roles) for what that means for Lambda functions running in the VPC.
 
 :::info[ALB Amazon S3 interface endpoint]
 In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3 **interface** VPC endpoint (separate from the S3 **gateway** endpoint above) so the ALB can forward requests for the React web application to the Amazon S3 web-app bucket. This endpoint is created by the static web construct (not the VPC builder) and differs from the common interface endpoints in several ways:
@@ -372,7 +372,7 @@ VAMS VPCs are created with:
 
 ## FIPS Endpoint Usage
 
-`app.useFips` selects a FIPS variant only where the CDK creates a FIPS-specific resource: the AWS KMS interface endpoint (`KMSEndpoint_FIPS`, created alongside the standard AWS KMS endpoint when `useKmsCmkEncryption.enabled` and `useFips` are both set) and the Amazon Cognito hosted-UI hostname. The partition-aware service helper (`service-helper.ts`) carries a standard and a FIPS hostname per service in the `SERVICE_LOOKUP` table in `const.ts`, but every other caller resolves the standard hostname, and the flag is not passed to Lambda functions or containers, so run-time AWS SDK calls use the Regional endpoints the SDK resolves by default. No FIPS variant exists for the Amazon Transcribe or Amazon Bedrock Runtime interface endpoints the Video SOP/BOM Extraction pipeline uses. The flag can be set in `config.json`, as the `useFips` CDK context value, or through the `AWS_USE_FIPS_ENDPOINT=true` environment variable at synthesis time.
+The `SERVICE_LOOKUP` table in `const.ts` maps each service to its standard and FIPS hostname per partition, and the partition-aware service helper (`service-helper.ts`) returns the FIPS hostname when `useFips = true` to a caller that does not ask for the standard one. Every caller in VAMS asks for the standard hostname except the Amazon Cognito hosted UI domain (SAML or OIDC federation, commercial partition only), whose entry carries the standard `auth.{region}.amazoncognito.com` domain in both fields, so the web Content Security Policy names the standard hostnames either way. The Lambda functions receive no FIPS endpoint setting and call each service's default regional endpoint. The resource `useFips` adds is the AWS KMS (FIPS) interface endpoint listed under [Conditional Interface Endpoints](#conditional-interface-endpoints). No FIPS variant exists for the Amazon Transcribe or Amazon Bedrock Runtime interface endpoints the Video SOP/BOM Extraction pipeline uses. The flag can be set in `config.json`, as the `useFips` CDK context value, or through the `AWS_USE_FIPS_ENDPOINT=true` environment variable at synthesis time.
 
 The lookup table records, for example:
 
@@ -383,7 +383,11 @@ The lookup table records, for example:
 | AWS STS         | `sts.{region}.amazonaws.com`      | `sts-fips.{region}.amazonaws.com`      |
 
 :::note[GovCloud FIPS]
-AWS documents that a deployment requiring FIPS 140-3 compliance should use the FIPS endpoints. VAMS does not require `useFips` in AWS GovCloud (US); the GovCloud configuration template sets it to `true`, which adds the AWS KMS FIPS endpoint described above. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
+Some AWS GovCloud (US) service endpoints are FIPS-validated by default and others publish a separate `-fips` hostname; the AWS GovCloud (US) User Guide lists which applies to each service. VAMS does not require `useFips` in AWS GovCloud (US); the GovCloud configuration template sets it to `true`, which adds the AWS KMS (FIPS) interface endpoint described above. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
+:::
+
+:::note[AWS European Sovereign Cloud]
+The AWS European Sovereign Cloud (`aws-eusc`) offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF), so configuration validation warns when `useFips` is `true` there. The shipped `config.template.eusovereign.json` sets it to `false`.
 :::
 
 ## Next Steps

@@ -46,6 +46,7 @@ class TestRestoreArchivedAssetHistory:
     def test_restore_writes_unarchive_direct_record(self):
         m = _load()
         mock_table = MagicMock()
+        mock_table.get_item.return_value = {"Item": {"databaseId": "db1"}}
         m.dynamodb = MagicMock()
         m.dynamodb.Table.return_value = mock_table
         m.update_asset_count = MagicMock()

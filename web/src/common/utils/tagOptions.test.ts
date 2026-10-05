@@ -3,7 +3,33 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { buildTagOptionGroups, isGlobalScope, scopeLabel, GLOBAL_SCOPE } from "./tagOptions";
+import {
+    buildTagOptionGroups,
+    isGlobalScope,
+    readCachedTagTypes,
+    scopeLabel,
+    GLOBAL_SCOPE,
+} from "./tagOptions";
+
+describe("readCachedTagTypes", () => {
+    afterEach(() => localStorage.clear());
+
+    it("returns the stored list", () => {
+        localStorage.setItem("tagTypes", JSON.stringify([{ tagTypeName: "Line", tags: ["a"] }]));
+        expect(readCachedTagTypes()).toEqual([{ tagTypeName: "Line", tags: ["a"] }]);
+    });
+
+    it.each([
+        ["nothing stored yet", null],
+        ["a failed fetch stored as false", "false"],
+        ["an error message stored as a string", JSON.stringify("Network error")],
+        ["an object", JSON.stringify({ tagTypeName: "", tags: [] })],
+        ["text that is not JSON", "undefined"],
+    ])("returns an empty list for %s", (_label, stored) => {
+        if (stored !== null) localStorage.setItem("tagTypes", stored as string);
+        expect(readCachedTagTypes()).toEqual([]);
+    });
+});
 
 describe("scope helpers", () => {
     it("treats an absent or sentinel databaseId as global", () => {

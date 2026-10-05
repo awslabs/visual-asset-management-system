@@ -56,7 +56,7 @@ VAMS provides three primary methods for interacting with your visual asset manag
 | Feature               | Web Interface                        | Command Line Interface (CLI)                | Direct API Access                  |
 | --------------------- | ------------------------------------ | ------------------------------------------- | ---------------------------------- |
 | **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations      | Custom integrations, applications  |
-| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 22 command groups | Full programmatic control via REST |
+| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 23 command groups | Full programmatic control via REST |
 | **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic           | Custom upload with presigned URLs  |
 | **3D Viewing**        | 20 interactive viewer plugins        | Not applicable                              | Not applicable                     |
 | **Automation**        | Manual operations                    | Full automation with profile support        | Complete automation control        |
@@ -71,7 +71,7 @@ The web-based interface provides an intuitive, browser-based experience for visu
 
 ### Command Line Interface (VamsCLI)
 
-The VamsCLI offers powerful automation capabilities through 22 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
+The VamsCLI offers powerful automation capabilities through 23 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
 
 ### Direct API Access
 
@@ -83,11 +83,11 @@ The REST API provides full programmatic access for custom application developmen
 
 VAMS supports three primary deployment modes to meet different organizational and regulatory requirements.
 
-| Deployment Mode                  | Web Distribution                      | Search                                      | Key Characteristics                                                                                                                                       |
-| -------------------------------- | ------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | Amazon OpenSearch Serverless or Provisioned | Default mode. Full feature set including Amazon Location Service, AWS WAF, and all viewer plugins.                                                        |
-| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | Amazon OpenSearch Provisioned               | No Amazon CloudFront. FIPS endpoint support. VPC required. Supports full VPC isolation with VPC endpoints for restricted environments with VPC isolation. |
-| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | Amazon OpenSearch Serverless or Provisioned | Deploys with the GovCloud guardrails (`app.govCloud.enabled: true`): no Amazon CloudFront, no Amazon Location Service, VPC required.                      |
+| Deployment Mode                  | Web Distribution                      | Search                                      | Key Characteristics                                                                                                                                                                                                          |
+| -------------------------------- | ------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | Amazon OpenSearch Serverless or Provisioned | Default mode. Full feature set including Amazon Location Service, AWS WAF, and all viewer plugins.                                                                                                                           |
+| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | Amazon OpenSearch Provisioned               | No Amazon CloudFront. Amazon API Gateway is FIPS-compliant by default, and `useFips` adds the AWS KMS FIPS interface VPC endpoint. VPC required. Supports full VPC isolation with VPC endpoints for restricted environments. |
+| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | Amazon OpenSearch Serverless or Provisioned | Deploys with the GovCloud guardrails (`app.govCloud.enabled: true`): no Amazon CloudFront, no Amazon Location Service, VPC required.                                                                                         |
 
 :::warning[GovCloud Constraints]
 AWS GovCloud deployments require `useGlobalVpc.enabled` set to `true`, `useCloudFront.enabled` set to `false`, and `useLocationService.enabled` set to `false`.
@@ -175,7 +175,7 @@ VAMS integrates with a range of AWS partner solutions and open-source projects f
 | [CADQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Pipeline          | Open-standard CAD conversion and metadata extraction                                          |
 | [Blender](https://www.blender.org/)                                                                                                                         | Pipeline          | Preview file generation and metadata extraction                                               |
 | [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                                    |
-| [Garnet Framework](https://garnet-framework.dev/)                                                                                                           | Addon             | Data synchronization to external NGSI-LD knowledge graphs                                     |
+| [Garnet Framework](https://garnet-framework.tech/)                                                                                                          | Addon             | Data synchronization to external NGSI-LD knowledge graphs                                     |
 | [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search         |
 | [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                                |
 | [FFmpeg](https://ffmpeg.org/)                                                                                                                               | Pipeline          | Audio extraction, FLAC encoding, and key-frame extraction from teardown videos (GPL-licensed) |

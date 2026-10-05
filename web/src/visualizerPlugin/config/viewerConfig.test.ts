@@ -78,6 +78,40 @@ describe("viewerConfig vs the selection paths", () => {
     );
 });
 
+describe("viewerConfig vs the browser's media element", () => {
+    // VideoViewerComponent hands the presigned URL to a native <video> element, which has no
+    // demuxer for AVI, FLV or ASF/WMV in Chrome, Edge, Firefox or Safari. A declared container
+    // the element cannot open auto-selects the Video Player and always ends in "Failed to load
+    // video file".
+    const UNPLAYABLE_VIDEO_CONTAINERS = [".avi", ".flv", ".wmv"];
+
+    it("does not offer the video player for a container no browser can open", () => {
+        const video: string[] = byId("video-viewer").supportedExtensions;
+        expect(UNPLAYABLE_VIDEO_CONTAINERS.filter((ext) => video.includes(ext))).toEqual([]);
+        // The exact list: .mov and .mkv stay because browsers play them when they support the
+        // codecs inside; a new container is added here deliberately, not by editing the config
+        // alone.
+        expect([...video].sort()).toEqual([".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
+    });
+
+    it("offers no viewer but the preview viewer for those containers", () => {
+        // isViewableExtension shows the viewer (eye) icon when ANY non-preview viewer matches, so a
+        // second viewer declaring one of these containers, or a non-preview wildcard, brings the
+        // dead icon back. Matching lowercases the file's extension, so the declared entries are
+        // compared lowercased too.
+        const offering = viewers
+            .filter((viewer) => !viewer.isPreviewViewer)
+            .filter((viewer) =>
+                (viewer.supportedExtensions as string[]).some((ext) => {
+                    const declared = ext.toLowerCase();
+                    return declared === "*" || UNPLAYABLE_VIDEO_CONTAINERS.includes(declared);
+                })
+            )
+            .map((viewer) => viewer.id);
+        expect(offering).toEqual([]);
+    });
+});
+
 describe("visualizerPlugin/CLAUDE.md catalog", () => {
     const claudeMd = fs.readFileSync(path.join(__dirname, "..", "CLAUDE.md"), "utf8");
 

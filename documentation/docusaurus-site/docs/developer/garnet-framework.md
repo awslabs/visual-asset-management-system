@@ -1,6 +1,6 @@
 # Garnet Framework Integration
 
-The [Garnet Framework](https://garnet-framework.dev/) is an open-source solution for building digital twin and knowledge graph applications on AWS using the NGSI-LD standard. VAMS integrates with Garnet Framework to automatically synchronize all data changes into an external NGSI-LD knowledge graph, enabling advanced data federation, querying, and analytics capabilities across your visual asset data.
+The [Garnet Framework](https://garnet-framework.tech/) is an open-source solution for building digital twin and knowledge graph applications on AWS using the NGSI-LD standard. VAMS integrates with Garnet Framework to automatically synchronize all data changes into an external NGSI-LD knowledge graph, enabling advanced data federation, querying, and analytics capabilities across your visual asset data.
 
 ---
 
@@ -18,7 +18,7 @@ Garnet Framework integration is entirely optional. Enabling it does not affect t
 
 ## Configuration
 
-To enable Garnet Framework integration, set `app.addons.useGarnetFramework.enabled` to `true` in `infra/config/config.json` and provide the required connection details for your Garnet Framework deployment.
+To enable Garnet Framework integration, set `app.addons.useGarnetFramework.enabled` to `true` in `infra/config/config.json` and provide the ingestion queue URL of your Garnet Framework deployment.
 
 ```json
 {
@@ -27,7 +27,7 @@ To enable Garnet Framework integration, set `app.addons.useGarnetFramework.enabl
             "useGarnetFramework": {
                 "enabled": true,
                 "garnetApiEndpoint": "https://XXX.execute-api.us-east-1.amazonaws.com",
-                "garnetApiToken": "your-garnet-api-token",
+                "garnetApiToken": "not-used",
                 "garnetIngestionQueueSqsUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/garnet-ingestion-queue"
             }
         }
@@ -35,15 +35,15 @@ To enable Garnet Framework integration, set `app.addons.useGarnetFramework.enabl
 }
 ```
 
-| Field                        | Required | Description                                                                                                                   |
-| ---------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                    | Yes      | Set to `true` to deploy the Garnet Framework indexer Lambda functions and Amazon SQS queues.                                  |
-| `garnetApiEndpoint`          | Yes      | The Garnet Framework API endpoint URL. Must be a valid URL.                                                                   |
-| `garnetApiToken`             | Yes      | API authentication token for the Garnet Framework.                                                                            |
-| `garnetIngestionQueueSqsUrl` | Yes      | Amazon SQS queue URL for the Garnet Framework ingestion queue. Format: `https://sqs.REGION.amazonaws.com/ACCOUNT/QUEUE_NAME`. |
+| Field                        | Required | Description                                                                                                                                                            |
+| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                    | Yes      | Set to `true` to deploy the Garnet Framework indexer Lambda functions and Amazon SQS queues.                                                                           |
+| `garnetApiEndpoint`          | Yes      | The Garnet Framework API endpoint URL. Must be a valid URL. Validated but not used: the indexers do not call the Garnet Framework API.                                 |
+| `garnetApiToken`             | Yes      | Validated but not used: no VAMS resource receives the value. A placeholder such as `not-used` satisfies validation; do not store a Garnet credential in `config.json`. |
+| `garnetIngestionQueueSqsUrl` | Yes      | Amazon SQS queue URL for the Garnet Framework ingestion queue. Format: `https://sqs.REGION.amazonaws.com/ACCOUNT/QUEUE_NAME`.                                          |
 
 :::warning
-When Garnet Framework is enabled, all three fields (`garnetApiEndpoint`, `garnetApiToken`, `garnetIngestionQueueSqsUrl`) are required. Deployment will fail with a configuration validation error if any field is missing or empty.
+When Garnet Framework is enabled, all three fields (`garnetApiEndpoint`, `garnetApiToken`, `garnetIngestionQueueSqsUrl`) are required. Deployment will fail with a configuration validation error if any field is missing or empty. Only `garnetIngestionQueueSqsUrl` is used: each indexer Lambda function sends its NGSI-LD entities to that queue and makes no call to the Garnet Framework API.
 :::
 
 For the complete configuration reference, see the [Configuration Reference](../deployment/configuration-reference.md#garnet-framework-appaddonsusegarnetframework).
@@ -113,6 +113,8 @@ VAMS creates four NGSI-LD entity types in the Garnet Framework knowledge graph. 
 
 The database indexer converts VAMS database records to `VAMSDatabase` NGSI-LD entities.
 
+Deleting a database moves its VAMS record to an archived partition. The database keeps its `VAMSDatabase` entity and entity ID, and the indexer sets `isArchived` to `true` on it.
+
 **Mapped properties:**
 
 | NGSI-LD Property                  | Type        | VAMS Source                                |
@@ -178,6 +180,8 @@ The database indexer converts VAMS database records to `VAMSDatabase` NGSI-LD en
 ### VAMSAsset Entity
 
 The asset indexer converts VAMS asset records to `VAMSAsset` NGSI-LD entities. When an asset changes, the indexer also re-indexes all associated asset links to keep relationship data consistent.
+
+Archiving an asset moves its VAMS record to an archived partition. The asset keeps its `VAMSAsset` entity and entity ID: `scope`, `databaseId`, and `belongsToDatabase` name the database the asset belongs to, and the entity carries the asset's metadata, current version, and relationship properties as before. `isArchived` is `true` while the asset is archived and `false` after it is unarchived, and the `belongsToAsset` relationship of each of the asset's `VAMSFile` entities keeps pointing at the same entity.
 
 **Mapped properties:**
 
@@ -265,6 +269,8 @@ The file indexer converts VAMS file records to `VAMSFile` NGSI-LD entities, enri
 | -------------------- | --------------------------------------- |
 | `belongsToAsset`     | `urn:vams:asset:{databaseId}:{assetId}` |
 
+The file indexer reads the state of the Amazon S3 key that an event names rather than trusting the event. A live key is described by its current version. A key whose current version is a delete marker (an archived file, including each file of an archived asset) is described by its newest remaining version, with `isArchived` set to `true`. A key with no remaining version (a permanently deleted file) leaves its entity unchanged; see [Limitations](#limitations). An Amazon S3 `HeadObject` error other than not-found fails the record so that it is redriven.
+
 :::note
 The file indexer automatically skips folder markers, preview files (`.previewFile.*`), and files in excluded directories such as `pipeline/`, `preview/`, `temp-upload/`, and `workspace/`.
 :::
@@ -300,7 +306,9 @@ For example, a VAMS metadata field named `location` with type `geopoint` becomes
 
 When you enable Garnet Framework integration on an existing VAMS deployment, only new and updated data is automatically synchronized. Existing data that was created before Garnet was enabled is not retroactively indexed.
 
-To index all existing data, use the reindex utility in the deployment migration scripts to trigger a full data reindex through the global notification queues. This process sends change notifications for all existing records through the same Amazon SNS topics that feed the Garnet indexers, causing a complete synchronization without clearing any existing indexes.
+To index existing assets and files, use the [Reindex utility](utilities/reindex.md) in the deployment migration scripts. It re-publishes asset and file records through the same Amazon SNS topics that feed the Garnet indexers, without clearing any existing indexes, so `garnetDataIndexAsset` sends a `VAMSAsset` entity for each asset and `garnetDataIndexFile` a `VAMSFile` entity for each file.
+
+The reindex utility does not publish databases or asset links. An existing database reaches Garnet as a `VAMSDatabase` entity the next time its database record or database metadata changes. An existing asset link reaches Garnet as a `VAMSAssetLink` entity the next time the link or its metadata changes, or the next time the asset record of either linked asset changes. An asset metadata or file change, including the one a reindex writes, does not re-send an asset's links.
 
 :::tip
 The reindex process shares the same notification infrastructure used by Amazon OpenSearch indexing. Running a reindex will update both OpenSearch and Garnet indexes simultaneously. You do not need to clear OpenSearch indexes to trigger the reindex.
@@ -335,14 +343,15 @@ matches the failure handling of the core VAMS indexers.
 ## Limitations
 
 -   **One-way synchronization only.** Data flows from VAMS to the Garnet Framework. Changes made directly in the Garnet Framework knowledge graph are not reflected back into VAMS.
--   **External Garnet deployment required.** VAMS does not deploy the Garnet Framework itself. You must have an existing Garnet Framework deployment and provide the API endpoint, API token, and ingestion queue URL.
+-   **External Garnet deployment required.** VAMS does not deploy the Garnet Framework itself. You must have an existing Garnet Framework deployment and provide its ingestion queue URL. The `garnetApiEndpoint` and `garnetApiToken` fields must also be set, although the add-on does not use them (see [Configuration](#configuration)).
 -   **Metadata key prefixing.** Custom metadata fields are prefixed with `metadata_` in the NGSI-LD entities. Custom file attributes are prefixed with `attribute_`. This prevents conflicts with core NGSI-LD properties but means queries in Garnet must use the prefixed names.
+-   **Deletions are not propagated.** The Garnet ingestion queue upserts entities with `options=update`, which neither removes an entity nor drops an attribute. A permanently deleted database, asset, asset link, or file, and a removed metadata key, remain in the knowledge graph. Remove them through the Garnet Framework API (`DELETE /ngsi-ld/v1/entities/{entityId}`, or `POST /ngsi-ld/v1/entityOperations/delete` for a batch).
 
 ---
 
 ## Related Resources
 
--   [Garnet Framework documentation](https://garnet-framework.dev/)
+-   [Garnet Framework documentation](https://garnet-framework.tech/)
 -   [NGSI-LD specification](https://www.etsi.org/deliver/etsi_gs/CIM/001_099/009/01.06.01_60/gs_CIM009v010601p.pdf)
 -   [Configuration Reference -- Garnet Framework](../deployment/configuration-reference.md#garnet-framework-appaddonsusegarnetframework)
 -   [Partner Integrations](../additional/partner-integrations.md)

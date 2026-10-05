@@ -102,6 +102,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 1. ImageViewerPlugin
 
+-   **ID**: `image-viewer`
 -   **Extensions**: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`
 -   **Features**: Image display with zoom and pan
 -   **Multi-file**: No
@@ -109,21 +110,25 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 2. Online3dViewerPlugin
 
--   **Extensions**: `.3dm`, `.3ds`, `.3mf`, `.amf`, `.bim`, `.dae`, `.fbx`, `.gltf`, `.glb`, `.stl`, `.obj`, `.off`, `.wrl`
+-   **ID**: `online3d-viewer`
+-   **Extensions**: `.3dm`, `.amf`, `.bim`, `.off`, `.wrl`
 -   **Features**: 3D model viewing with Online3DViewer
 -   **Multi-file**: Yes (can load multiple models simultaneously)
 -   **Dependencies**: `online-3d-viewer`
--   **Note**: Excludes `.ply` files which are handled by PotreeViewerPlugin
+-   **Priority**: 2
+-   **Note**: The mesh formats `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.dae`, `.3ds` and `.3mf` are handled by the Three.js viewer (section 20), and `.ply` by the Potree, Gaussian splat and Three.js viewers
 
 ### 3. VideoViewerPlugin
 
--   **Extensions**: `.mp4`, `.webm`, `.mov`, `.avi`, `.mkv`, `.flv`, `.wmv`, `.m4v`
--   **Features**: HTML5 video player with standard controls
+-   **ID**: `video-viewer`
+-   **Extensions**: `.mp4`, `.webm`, `.mov`, `.mkv`, `.m4v`
+-   **Features**: HTML5 video player with standard controls; `.mov` and `.mkv` play only where the browser supports the container and its codecs
 -   **Multi-file**: No
 -   **Dependencies**: None
 
 ### 4. AudioViewerPlugin
 
+-   **ID**: `audio-viewer`
 -   **Extensions**: `.mp3`, `.wav`, `.ogg`, `.aac`, `.flac`, `.m4a`
 -   **Features**: HTML5 audio player with standard controls
 -   **Multi-file**: No
@@ -131,6 +136,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 5. HTMLViewerPlugin
 
+-   **ID**: `html-viewer`
 -   **Extensions**: `.html`
 -   **Features**: Sandboxed iframe rendering
 -   **Multi-file**: No
@@ -138,6 +144,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 6. PotreeViewerPlugin
 
+-   **ID**: `potree-viewer`
 -   **Extensions**: `.e57`, `.las`, `.laz`, `.ply`
 -   **Features**: Point cloud visualization using Potree
 -   **Multi-file**: No
@@ -146,6 +153,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 7. ColumnarViewerPlugin
 
+-   **ID**: `columnar-viewer`
 -   **Extensions**: `.fcs`, `.csv`
 -   **Features**: Tabular data display using DataGrid
 -   **Multi-file**: No
@@ -153,6 +161,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 8. PDFViewerPlugin
 
+-   **ID**: `pdf-viewer`
 -   **Extensions**: `.pdf`
 -   **Features**: PDF document viewing with page navigation, zoom controls, page counter, and responsive design
 -   **Multi-file**: No
@@ -161,9 +170,10 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 9. CesiumViewerPlugin
 
+-   **ID**: `cesium-viewer`
 -   **Extensions**: `.json`
 -   **Features**: 3D Tileset viewing with the CesiumJS engine (`@cesium/engine`) using streaming API, optimized for large-scale 3D Tiles. VAMS custom scene controls provide home, 3D/2D/2.5D scene mode, fullscreen, and a picked-feature properties panel.
--   **Multi-file**: Yes (can load multiple tilesets simultaneously)
+-   **Multi-file**: No (the component reads `multiFileKeys`, but its `supportsMultiFile` is `false`, so the registry offers it for single files only)
 -   **Dependencies**: `@cesium/engine` (via `customInstalls/cesium`)
 -   **Priority**: 2
 -   **Special**: Streams 3D Tileset data directly from VAMS API with authentication, provides Level-of-Detail (LOD) streaming
@@ -175,7 +185,8 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 10. TextViewerPlugin
 
--   **Extensions**: `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`
+-   **ID**: `text-viewer`
+-   **Extensions**: `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`
 -   **Features**: View and syntax highlight text-based files with advanced formatting options
 -   **Multi-file**: No
 -   **Dependencies**: `react-syntax-highlighter`
@@ -184,6 +195,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 11. GaussianSplatViewerPlugin (BabylonJS)
 
+-   **ID**: `gaussian-splat-viewer-babylonjs`
 -   **Extensions**: `.ply`, `.spz`
 -   **Features**: View Gaussian Splat files with 3D visualization using BabylonJS engine
 -   **Multi-file**: No
@@ -198,11 +210,12 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 12. GaussianSplatViewerPlugin (PlayCanvas)
 
+-   **ID**: `gaussian-splat-viewer-playcanvas`
 -   **Extensions**: `.ply`, `.sog`
 -   **Features**: View Gaussian Splat files with 3D visualization using PlayCanvas engine
 -   **Multi-file**: No
 -   **Dependencies**: `playcanvas`
--   **Priority**: 2
+-   **Priority**: 5
 -   **Category**: 3d
 -   **Custom Parameters**:
     -   `enableXR`: Enable XR/AR support (default: true)
@@ -212,6 +225,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 13. VntanaViewerPlugin
 
+-   **ID**: `vntana-viewer`
 -   **Extensions**: `.glb`
 -   **Features**: View GLB files using VNTANA's high-quality 3D viewer
 -   **Multi-file**: No
@@ -223,44 +237,88 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 14. VeerumViewerPlugin
 
+-   **ID**: `veerum-viewer`
 -   **Extensions**: `.e57`, `.las`, `.laz`, `.ply`, `.json`
 -   **Features**: Advanced 3D visualization for point clouds and 3D tilesets using VEERUM's viewer
 -   **Multi-file**: Yes (can load multiple point clouds and/or tilesets simultaneously)
 -   **Dependencies**: `@veerum/viewer`
 -   **Priority**: 2
 -   **Category**: 3d
--   **Enabled**: true
--   **Note**: ⚠️ **VEERUM is a paid commercial viewer service**. This viewer requires your organization to purchase a VEERUM license. To obtain licensing information, visit [https://veerum.com](https://veerum.com). See `web/customInstalls/veerum/README.md` for detailed installation instructions. **VEERUM requires Potree Pipeline to be enabled to view point cloud files**
+-   **Enabled**: false (disabled by default)
+-   **Note**: ⚠️ **VEERUM is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VEERUM license. To obtain licensing information, visit [https://veerum.com](https://veerum.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` in the viewer configuration. See `web/customInstalls/veerum/README.md` for detailed installation instructions. **VEERUM requires Potree Pipeline to be enabled to view point cloud files**
 
 ### 15. PreviewViewerPlugin
 
+-   **ID**: `preview-viewer`
 -   **Extensions**: `*` (all file types)
 -   **Features**: View generated preview images for any file type
 -   **Multi-file**: No
 -   **Dependencies**: None
--   **Priority**: 10 (lowest priority, fallback viewer)
+-   **Priority**: 10
 -   **Category**: preview
--   **Special**: This is a special viewer that displays preview images generated by VAMS for files that don't have a dedicated viewer
+-   **Special**: This is a special viewer that displays a file's preview image when you choose the file page's **Preview** option, which the page offers only for a file that has a preview image. The registry returns it only in preview mode, so it is never listed among a file's viewers and is not a fallback for a file with no dedicated viewer
 
 ### 16. NeedleUSDViewerPlugin
 
+-   **ID**: `needletools-usd-viewer`
 -   **Extensions**: `.usdz`, `.usda`, `.usdc`, `.usd`
--   **Features**: USD (Universal Scene Description) file viewing with interactive 3D visualization, multi-file loading, multi-selection with Ctrl+click, scene graph navigation, transform controls, material editor with color/metalness/roughness/opacity controls
--   **Multi-file**: Yes (can load multiple USD files simultaneously)
--   **Dependencies**: `@needle-tools/engine` (WebAssembly-based)
+-   **Features**: USD (Universal Scene Description) file viewing with interactive 3D visualization, dependency loading, multi-selection with Ctrl+click, scene graph navigation, transform controls, material editor with color/metalness/roughness/opacity controls
+-   **Multi-file**: No (the component reads `multiFileKeys`, but its `supportsMultiFile` is `false`, so the registry offers it for single files only)
+-   **Dependencies**: `usd-wasm` and `three` (installed from the `needle-tools/usd-viewer` repository by `customInstalls/needletools-usd-viewer`)
 -   **Priority**: 1
 -   **Category**: 3d
+-   **Feature restriction**: `ALLOWUNSAFEEVAL` (set `app.webUi.allowUnsafeEvalFeatures` to `true`)
 -   **Note**: ⚠️ **Requires CloudFront deployment** - This viewer uses WebAssembly (WASM) and requires headers to be set by either CloudFront or the implemented COI web service worker script. Local debugging is supported.
 
 ### 17. ThatOpenWebIfcViewerPlugin
 
+-   **ID**: `thatopenwebifc-viewer`
 -   **Extensions**: `.ifc`, `.ifczip`
 -   **Features**: IFC (Industry Foundation Classes) Building Information Model viewing via the open-source That Open Engine (web-ifc, WebAssembly). Spatial model tree (by building storey / category), element property inspection on selection, hide/isolate, clipping/section planes, and length/area measurements. `.ifczip` archives are unzipped client-side.
 -   **Multi-file**: No
 -   **Dependencies**: `@thatopen/components`, `@thatopen/components-front`, `@thatopen/fragments`, `web-ifc` (all vendored in a self-contained `customInstalls/thatopenwebifc` UMD bundle; nothing added to the core `web` dependencies)
 -   **Priority**: 1
 -   **Category**: 3d
--   **Note**: Uses the multithreaded `web-ifc-mt.wasm` when cross-origin isolation is available (COI service worker) and falls back to single-thread otherwise. Does **not** require `ALLOWUNSAFEEVAL`.
+-   **Feature restriction**: `ALLOWUNSAFEEVAL` (set `app.webUi.allowUnsafeEvalFeatures` to `true`)
+-   **Note**: Uses the multithreaded `web-ifc-mt.wasm` when cross-origin isolation is available (COI service worker) and falls back to single-thread otherwise.
+
+### 18. SuperSplatViewerPlugin
+
+-   **ID**: `supersplat-viewer`
+-   **Extensions**: `.lcc`, `.ply`, `.sog`, `.splat`
+-   **Features**: The PlayCanvas SuperSplat Gaussian splat editor, embedded in an iframe: scene panel, transform and selection tools, camera animation, and export menus. Edits and exports stay in the browser and are not saved back to VAMS.
+-   **Multi-file**: No
+-   **Dependencies**: A from-source SuperSplat build that `customInstalls/supersplat` places under `public/viewers/supersplat/`
+-   **Priority**: 1
+-   **Category**: 3d
+-   **Feature restriction**: `ALLOWUNSAFEEVAL` (set `app.webUi.allowUnsafeEvalFeatures` to `true`)
+-   **Custom Parameters**:
+    -   `basePath`: Path of the hosted editor page (default: `/viewers/supersplat/index.html`)
+-   **Note**: The build is WebGPU-only, so the browser must support WebGPU. The editor receives the file as a presigned URL in its `?load=` query parameter, a known issue that `CLAUDE.md` → "A Framed Viewer Must Not Receive a Signed URL in the Query String" tells new viewers not to copy.
+
+### 19. PhysnaViewerPlugin
+
+-   **ID**: `physna-viewer`
+-   **Extensions**: `.3ds`, `.asm`, `.catpart`, `.catproduct`, `.glb`, `.iam`, `.iges`, `.igs`, `.ipt`, `.jt`, `.obj`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.stl`, `.step`, `.stp`, `.x_b`, `.x_t`
+-   **Features**: Embeds the Physna-hosted 3D/CAD viewer in an iframe. The component resolves the file's Physna asset through `GET /addon/physna/viewer` and checks again every 30 seconds while Physna is still indexing the file.
+-   **Multi-file**: No
+-   **Dependencies**: None (Physna serves the viewer page)
+-   **Priority**: 5
+-   **Category**: 3d
+-   **Feature restriction**: `PHYSNA_ADDON` (set when `app.addons.usePhysnaSync.enabled` is `true`)
+-   **Note**: The file must be synced to Physna and finished indexing before it can be viewed.
+
+### 20. ThreeJSViewerPlugin
+
+-   **ID**: `threejs-viewer`
+-   **Extensions**: `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.stp`, `.step`, `.iges`, `.igs`, `.brep`
+-   **Features**: Mesh and CAD viewing with Three.js: scene graph, material editing, and transform controls. Loads a glTF file's external dependencies and renders one selected file at a time.
+-   **Multi-file**: No
+-   **Dependencies**: `three` (bundled by `customInstalls/threejs`); the CAD formats also need its optional OCCT (`occt-import-js`) build
+-   **Priority**: 1
+-   **Category**: 3d
+-   **Feature restriction**: none
+-   **Note**: The mesh formats are always offered. The CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) need a Three.js bundle built with OCCT (`occt-import-js`, LGPL, off by default; see `web/customInstalls/threejs/README.md`) and `SharedArrayBuffer` (cross-origin isolation headers). When either is missing, `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports it on the file instead of hiding the viewer.
 
 ## 🚀 Usage
 
@@ -311,6 +369,7 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
     assetKey,
     multiFileKeys,
     versionId,
+    assetVersionId,
     viewerMode,
     onViewerModeChange,
     onDeletePreview,
@@ -333,6 +392,7 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
                     databaseId,
                     key: assetKey,
                     versionId: versionId || "",
+                    assetVersionId,
                     downloadType: "assetFile",
                 });
 
@@ -354,7 +414,7 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
         };
 
         loadFile();
-    }, [assetId, assetKey, databaseId, versionId]);
+    }, [assetId, assetKey, databaseId, versionId, assetVersionId]);
 
     if (loading) {
         return <div>Loading...</div>;
@@ -495,6 +555,7 @@ const MyMultiFileComponent: React.FC<ViewerPluginProps> = ({
                         databaseId,
                         key,
                         versionId: "",
+                        assetVersionId,
                         downloadType: "assetFile",
                     });
                     if (response && response[0] !== false) {
@@ -639,29 +700,28 @@ export const featuresEnabled = {
 
 ```json
 {
-    "id": "cesium-viewer",
-    "name": "Cesium 3D Tileset Viewer",
-    "description": "View 3D Tileset files with geospatial capabilities",
+    "id": "example-geospatial-viewer",
+    "name": "Example Geospatial Viewer",
+    "description": "A viewer that needs map services",
     "featuresEnabledRestriction": ["LOCATIONSERVICES"]
     // ... other config
 }
 ```
 
-**Use Case**: Only available when location services are enabled for geospatial data visualization.
+**Use Case**: Only available when location services are enabled for geospatial data visualization. No shipped viewer carries this restriction.
 
 #### Example 2: Security-Sensitive Viewer
 
 ```json
 {
-    "id": "potree-viewer",
-    "name": "Potree Viewer",
-    "description": "Point cloud viewer requiring unsafe eval",
+    "id": "needletools-usd-viewer",
+    "name": "Needle USD Viewer (Experimental)",
     "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"]
     // ... other config
 }
 ```
 
-**Use Case**: Requires `ALLOWUNSAFEEVAL` due to dynamic code execution needs in the Potree library.
+**Use Case**: Requires `ALLOWUNSAFEEVAL` because the viewer's USD WebAssembly loader needs the `unsafe-eval` Content Security Policy directive. The SuperSplat Editor and the ThatOpen IFC BIM Viewer carry the same restriction.
 
 #### Example 3: Multiple Requirements
 
@@ -706,9 +766,9 @@ const allFeaturesEnabled = plugin.featuresEnabledRestriction.every((requiredFeat
 The system provides detailed console logging:
 
 ```
-Plugin potree-viewer (Potree Viewer) excluded due to missing features: ALLOWUNSAFEEVAL
-Skipping plugin cesium-viewer (Cesium 3D Tileset Viewer) due to unmet feature requirements
-PluginRegistry initialized with 10 plugins
+Plugin needletools-usd-viewer (Needle USD Viewer (Experimental)) excluded due to missing features: ALLOWUNSAFEEVAL
+Skipping plugin needletools-usd-viewer (Needle USD Viewer (Experimental)) due to unmet feature requirements
+PluginRegistry initialized with <n> plugin metadata entries
 ```
 
 ### Best Practices
@@ -859,11 +919,14 @@ interface ViewerPluginProps {
     databaseId: string; // Database identifier
     assetKey?: string; // Single file key
     multiFileKeys?: string[]; // Multiple file keys
+    multiFiles?: FileInfo[]; // Owning asset and database of each file in multiFileKeys
     versionId?: string; // File version
-    viewerMode: string; // Display mode ("wide", "fullscreen")
+    assetVersionId?: string; // Asset version to read files from
+    viewerMode: string; // Display mode ("collapse", "wide", "fullscreen")
     onViewerModeChange: (mode: string) => void;
     onDeletePreview?: () => void;
     isPreviewFile?: boolean; // Is this a preview file
+    customParameters?: Record<string, any>; // The entry's customParameters from viewerConfig.json
 }
 ```
 
@@ -1210,7 +1273,7 @@ The plugin system successfully delivers:
 -   ✅ **Configuration-Driven** - Everything controlled by JSON files
 -   ✅ **No Hardcoded Paths** - Complete flexibility through configuration
 -   ✅ **Webpack Compatible** - Proper bundling and code splitting
--   ✅ **8 Viewer Plugins** - Complete conversion of existing viewers
+-   ✅ **Viewer Catalog** - Every viewer in `viewerConfig.json` is described under Available Plugins
 -   ✅ **Performance Optimized** - Efficient lazy loading and chunking
 -   ✅ **Ultra-Maintainable** - 3-step process for adding viewers
 -   ✅ **Production Ready** - Comprehensive testing and validation

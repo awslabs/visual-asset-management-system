@@ -583,6 +583,32 @@ function requiresGovCloudFlag(region: unknown): boolean {
     return partition === "aws-us-gov" || partition === "aws-eusc" || isIsoPartitionRegion(region);
 }
 
+/**
+ * The GenAI labeling pipeline is enabled in a Region without Amazon Rekognition: the aws-eusc
+ * partition or the us-gov-east-1 Region. Silent while the region is unset.
+ */
+function genAiRekognitionUnavailable(c: ConfigShape): boolean {
+    const region = g(c, "env.region");
+    return (
+        !!g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled") &&
+        (partitionForRegionName(region) === "aws-eusc" || region === "us-gov-east-1")
+    );
+}
+
+/**
+ * True when the VPC builder creates the Rekognition interface endpoint for the GenAI labeling
+ * pipeline (vpcBuilder-nestedStack.ts: addVpcEndpoints, not loadContextIgnoreVPCStacks, and
+ * useForAllLambdas).
+ */
+function createsRekognitionEndpoint(c: ConfigShape): boolean {
+    return (
+        !!g(c, "app.useGlobalVpc.enabled") &&
+        !!g(c, "app.useGlobalVpc.useForAllLambdas") &&
+        !!g(c, "app.useGlobalVpc.addVpcEndpoints") &&
+        !g(c, "env.loadContextIgnoreVPCStacks")
+    );
+}
+
 export const RULES: Rule[] = [
     // ----- Restricted-partition flag agreement
     // (config.ts: "app.govCloud.enabled is the restricted-partition switch") -----
@@ -654,6 +680,21 @@ export const RULES: Rule[] = [
         message:
             "Region eusc-de-east-1 (EU Sovereign Cloud) only supports up to 2 Availability Zones. " +
             "Set openSearch.useProvisioned.availabilityZoneCount to 2 when deploying OpenSearch provisioned to this region.",
+    },
+
+    // ----- FIPS in the EU Sovereign Cloud
+    // (config.ts: "Sovereign Cloud offers FIPS endpoints for only four services") -----
+    {
+        id: "fips-not-in-eusovereign",
+        severity: "warning",
+        fieldPaths: ["app.useFips", "env.region"],
+        // Keyed on the region's partition rather than app.govCloud.enabled: GovCloud publishes FIPS
+        // endpoints for the services VAMS calls, the EU Sovereign Cloud (aws-eusc) does not.
+        appliesWhen: (c) =>
+            g(c, "app.useFips") === true &&
+            partitionForRegionName(g(c, "env.region")) === "aws-eusc",
+        message:
+            "app.useFips is true in the AWS European Sovereign Cloud (aws-eusc), which offers FIPS endpoints for only AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF. The flag provides no FIPS transport for the services VAMS calls; its only effect is the AWS KMS FIPS interface VPC endpoint. Unless that endpoint is required, set useFips to false and leave AWS_USE_FIPS_ENDPOINT unset.",
     },
 
     // ----- GovCloud IL6 (config.ts: "Now check additional IL6 compliance") -----
@@ -1819,6 +1860,22 @@ export const RULES: Rule[] = [
             "An integration timeout above 29 seconds requires an approved account-level increase to the Amazon API Gateway 'Integration timeout' quota (L-E5AE38E3) in the deployment Region. Request the increase before deploying, otherwise the deployment fails.",
     },
 
+    // ----- Presigned URL timeout
+    // (config.ts: "presignedUrlTimeoutSeconds should be a whole number of") -----
+    {
+        id: "presigned-url-timeout-range",
+        severity: "warning",
+        fieldPaths: ["app.authProvider.presignedUrlTimeoutSeconds"],
+        appliesWhen: (c) => {
+            const t = g(c, "app.authProvider.presignedUrlTimeoutSeconds");
+            if (!t) return false; // getConfig() falls back to the environment variable or 86400
+            const s = String(t);
+            return !/^\d+$/.test(s) || Number(s) < 1 || Number(s) > 604800;
+        },
+        message:
+            "app.authProvider.presignedUrlTimeoutSeconds should be a whole number of seconds between 1 and 604800 (7 days, the longest an Amazon S3 presigned URL can be signed for). With another value the presigned URLs VAMS returns for downloads, streams, uploads and exports fail.",
+    },
+
     // ----- IP ranges (config.ts: "Validate IP ranges configuration") -----
     {
         id: "ip-range-shape",
@@ -2289,6 +2346,29 @@ export const RULES: Rule[] = [
         },
         message: `${label} is enabled but ecrContainerImageURI is still empty or holds the template placeholder. Subscribe to the AWS Marketplace container and set the image URI, or disable the pipeline.`,
     })),
+
+    // ----- Amazon Rekognition availability (config.ts: "Amazon Rekognition is not offered in the AWS European Sovereign Cloud partition") -----
+    {
+        id: "genai-rekognition-endpoint-unavailable-in-region",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useGenAiMetadata3dLabeling.enabled",
+            "app.useGlobalVpc.useForAllLambdas",
+            "app.useGlobalVpc.addVpcEndpoints",
+            "env.region",
+        ],
+        appliesWhen: (c) => genAiRekognitionUnavailable(c) && createsRekognitionEndpoint(c),
+        message:
+            "useGenAiMetadata3dLabeling calls Amazon Rekognition, which is not offered in the AWS European Sovereign Cloud (aws-eusc) or in AWS GovCloud (US-East) (us-gov-east-1). With useGlobalVpc.useForAllLambdas and addVpcEndpoints the VPC builder also requests a Rekognition interface endpoint the Region does not offer. Set useGenAiMetadata3dLabeling.enabled to false for this Region.",
+    },
+    {
+        id: "genai-rekognition-unavailable-in-region",
+        severity: "warning",
+        fieldPaths: ["app.pipelines.useGenAiMetadata3dLabeling.enabled", "env.region"],
+        appliesWhen: (c) => genAiRekognitionUnavailable(c) && !createsRekognitionEndpoint(c),
+        message:
+            "useGenAiMetadata3dLabeling calls Amazon Rekognition, which is not offered in the AWS European Sovereign Cloud (aws-eusc) or in AWS GovCloud (US-East) (us-gov-east-1). The deployment succeeds, but every execution of the pipeline fails at its Rekognition call. Set useGenAiMetadata3dLabeling.enabled to false for this Region.",
+    },
 
     // ----- Bedrock model id (config.ts: "cross-Region inference-profile prefix exists only in the commercial partition") -----
     {

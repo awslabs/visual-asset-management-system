@@ -44,6 +44,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { apiContext } from "./support/fixtures";
 
 /** The Physna viewer's supported set, from visualizerPlugin/config/viewerConfig.json. */
 const PHYSNA_EXTENSIONS = [
@@ -142,49 +143,6 @@ async function features(page: Page): Promise<string[]> {
         });
         if (features && features.length) return features;
         if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
-
-/** The app's API base and bearer token, read from what the running app itself holds.
- *
- * Two things had to be learned from the deployment rather than assumed:
- *
- * - **The API is NOT same-origin `/api/*`.** The app calls the API Gateway origin directly (which is
- *   why `connect-src` names it). A request to `https://<web-host>/api/database` reaches a path that
- *   expects SigV4 and answers 403 with "Invalid key=value pair ... in Authorization header", while an
- *   unknown path falls through to the S3 origin and answers AccessDenied. Both look like auth
- *   failures and neither is.
- * - **`page.request` carries no Authorization header**, and every route behind the custom authorizer
- *   answers 401 without one. The token the authorizer validates is the Cognito ID token.
- */
-async function apiContext(page: Page): Promise<{ base: string; token: string } | null> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const ctx = await page.evaluate(() => {
-            let base: string | null = null;
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                if (raw) {
-                    const parsed = JSON.parse(raw);
-                    const config = parsed?.value ?? parsed ?? {};
-                    base = config.api ?? null;
-                }
-            } catch {
-                base = null;
-            }
-            const keys = Object.keys(localStorage);
-            const idKey = keys.find((k) => /CognitoIdentityServiceProvider.*\.idToken$/.test(k));
-            const token = (idKey && localStorage.getItem(idKey)) || null;
-            return { base, token };
-        });
-        if (ctx.base && ctx.token) {
-            return { base: ctx.base.replace(/\/+$/, ""), token: ctx.token };
-        }
-        if (Date.now() > deadline) return null;
         await page.waitForTimeout(1000);
     }
 }

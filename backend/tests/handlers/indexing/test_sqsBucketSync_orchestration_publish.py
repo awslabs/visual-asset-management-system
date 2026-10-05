@@ -1,8 +1,9 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""WB5b producer tests: publish_to_orchestration_bus publishes a clean, flat asset.file.uploaded
-detail and excludes workflow-sourced records (re-trigger loop guard)."""
+"""Producer tests: publish_to_orchestration_bus publishes a clean, flat asset.file.uploaded detail
+carrying every S3 record, workflow-written ones included; the trigger dispatcher decides per
+workflow whether a workflow-written file may fire it."""
 
 import json
 

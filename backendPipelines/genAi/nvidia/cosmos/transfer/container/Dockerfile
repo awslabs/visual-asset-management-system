@@ -33,6 +33,17 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION
 # Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /uvx /usr/local/bin/
 
+# Create the non-root runtime user up front (issue #327) so HOME is fixed BEFORE the uv steps
+# below, but stay root for the build: /opt is root-owned, so cloning into /opt/cosmos-transfer2.5,
+# apt-get, the /usr/local/cuda symlink and creating /opt/ml/code all need root. uv resolves its
+# download cache (~/.cache/uv) and managed CPython (~/.local/share/uv/python) from $HOME and the
+# venv's python is a symlink into that install; building with HOME=/home/vams puts them where uid
+# 10000 can reach them. Ownership of the venv tree is fixed up in the uv sync layer below; USER is
+# switched to 10000 only after the last root step.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+
 # Clone cosmos-transfer2.5, pinned to a commit. A clone with no ref makes the framework version
 # part of WHEN the image was built rather than of what VAMS commit built it, and two things here
 # depend on the revision being fixed: `uv sync --locked` below resolves against the lockfile AT
@@ -66,6 +77,14 @@ RUN uv pip install --python .venv/bin/python "nvidia-nccl-cu12>=2.26"
 # Must be installed AFTER uv sync to avoid conflicts with uv's standalone Python
 RUN apt-get update && apt-get install -y --no-install-recommends python3-dev && rm -rf /var/lib/apt/lists/*
 
+# Triton JIT compiles cuda_utils.c against Python.h at /usr/include/python3.10/. The uv-managed
+# standalone Python keeps its headers in the venv, so link them into place here at build time (as
+# root) rather than in the entrypoint: the runtime user (uid 10000) cannot write under /usr/include.
+RUN PYTHON_INCLUDE=$(/opt/cosmos-transfer2.5/.venv/bin/python -c "import sysconfig; print(sysconfig.get_path('include'))" 2>/dev/null) && \
+    if [ -n "$PYTHON_INCLUDE" ] && [ -f "$PYTHON_INCLUDE/Python.h" ]; then \
+        mkdir -p /usr/include/python3.10 && ln -sf "$PYTHON_INCLUDE"/* /usr/include/python3.10/; \
+    fi
+
 # Fix for Triton JIT compilation in containerized environments:
 # Create unversioned libcuda.so symlink (compat dir only has .so.1)
 #
@@ -84,13 +103,30 @@ COPY __main__.py model_manager.py inference.py manifest_io.py entrypoint.sh /opt
 # from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
 # and the kernel returns ENOENT ("no such file or directory") on exec.
 RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+# Normalize read/traverse bits: COPY preserves the build host's umask, so on a hardened host
+# (umask 077/027) these files land root-owned 600/640 and the non-root USER below cannot read them
+# (PermissionError at import). a+rX = world-read files + traverse dirs, no plain-file exec bit.
+RUN chmod -R a+rX /opt/ml/code
 
 # Add the venv bin to PATH so python/torchrun are available without activation
 ENV PATH="/opt/cosmos-transfer2.5/.venv/bin:$PATH"
 
+# Point the caches uid 10000 writes to at home-owned dirs (HF cache is redirected to EFS at
+# runtime by the entrypoint; these are the fallbacks and Triton's JIT cache) and pre-create them,
+# then hand the runtime user ownership of everything it writes: the venv/framework tree (the
+# entrypoint re-runs `uv sync` and patches checkpoint_db.py under it), the code dir, and $HOME.
+ENV HF_HOME=/home/vams/.cache/huggingface \
+    UV_CACHE_DIR=/home/vams/.cache/uv \
+    TRITON_CACHE_DIR=/home/vams/.triton
+RUN mkdir -p /home/vams/.cache/uv /home/vams/.cache/huggingface /home/vams/.triton && \
+    chown -R vams:vams /home/vams /opt/cosmos-transfer2.5 /opt/ml/code
+
 WORKDIR /opt/ml/code
-# Isolated AWS Batch GPU job (no inbound listener) built on a root-only NVIDIA base image; running
-# as a non-root USER needs a uid/volume-permission design first -- suppressed for the 2.6.1 gate per
-# release policy, flagged for follow-up.
-# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
+
+# Run as the non-root vams user (issue #327), switched only after the last root-owned build step.
+# The EFS model cache mount point is owned by this uid/gid via userdata chown after mount, so the
+# container can read/write cached model weights without root.
+# Numeric form so runtime runAsNonRoot checks can verify it without reading the image's /etc/passwd.
+USER 10000:10000
+
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

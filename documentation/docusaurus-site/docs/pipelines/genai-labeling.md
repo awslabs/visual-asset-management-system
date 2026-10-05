@@ -71,7 +71,7 @@ You must enable access to the configured Amazon Bedrock model in your deployment
 :::
 
 -   **Amazon Bedrock** -- The deployment region must have access to the model specified in `bedrockModelId`.
--   **Amazon Rekognition** -- Available in the deployment region (used for supplementary label detection).
+-   **Amazon Rekognition** -- Available in the deployment region (used for supplementary label detection). Amazon Rekognition is not offered in the AWS European Sovereign Cloud (`aws-eusc`) or in AWS GovCloud (US-East) (`us-gov-east-1`), so the pipeline cannot run there.
 -   **VPC configuration** -- The pipeline deploys into isolated subnets. Ensure VPC endpoints are configured for Amazon S3, Amazon Bedrock, and Amazon Rekognition if running in a VPC-only environment.
 -   **AWS Batch on AWS Fargate** -- The Blender rendering container runs on AWS Batch with AWS Fargate compute. No GPU is required for this pipeline.
 

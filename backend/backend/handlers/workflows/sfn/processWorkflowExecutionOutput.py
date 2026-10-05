@@ -13,8 +13,10 @@ from common.validators import validate, normalize_userid
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
+    COPY_PRESERVED_HEADER_FIELDS,
     DATABASE_ID_METADATA_KEY,
     UPLOAD_ID_METADATA_KEY,
+    replace_metadata_copy_args,
 )
 from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS
 from common.apiRoutes import (
@@ -158,8 +160,8 @@ def get_default_bucket_details(bucketId):
         raise Exception(f"Error getting bucket details.")
 
 def _head_listed_objects(bucketName: str, objects):
-    """HEAD every listed object once, annotating each with its 'ContentType', 'VersionId' and
-    'Metadata'.
+    """HEAD every listed object once, annotating each with its 'ContentType', 'VersionId',
+    'Metadata' and 'ContentHeaders' (the system-defined headers a metadata-replacing copy restates).
 
     One HEAD per object serves the executable-type check below, the recorded output descriptors and
     the provenance stamp, so an output block costs a single HEAD per object however many consumers
@@ -169,6 +171,7 @@ def _head_listed_objects(bucketName: str, objects):
         obj['ContentType'] = head.get('ContentType', '') or ''
         obj['VersionId'] = head.get('VersionId', '') or ''
         obj['Metadata'] = head.get('Metadata', {}) or {}
+        obj['ContentHeaders'] = {f: head[f] for f in COPY_PRESERVED_HEADER_FIELDS if head.get(f)}
 
     if not objects:
         return
@@ -239,17 +242,19 @@ def create_external_upload_record(asset_id, database_id, upload_type, baseFileKe
         raise e
 
 def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name,
-                              content_type=None, existing_metadata=None):
+                              content_type=None, existing_metadata=None, content_headers=None):
     """Update S3 object metadata with asset and upload information.
 
-    content_type/existing_metadata carry the object's already-read HEAD so a caller that listed the
-    object does not re-read it; either being unset falls back to a head_object here."""
+    content_type/existing_metadata/content_headers carry the object's already-read HEAD so a caller
+    that listed the object does not re-read it; content_type or existing_metadata being unset falls
+    back to a head_object here."""
     try:
         # Get current object metadata
         if content_type is None or existing_metadata is None:
             head_response = s3c.head_object(Bucket=bucket_name, Key=key)
             content_type = head_response.get('ContentType', 'application/octet-stream')
             existing_metadata = head_response.get('Metadata', {})
+            content_headers = head_response
 
         # Merge existing metadata with new metadata
         metadata = {**existing_metadata, DATABASE_ID_METADATA_KEY: database_id, ASSET_ID_METADATA_KEY: asset_id, UPLOAD_ID_METADATA_KEY: upload_id}
@@ -259,17 +264,12 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
             'Bucket': bucket_name,
             'Key': key
         }
-        s3r.Object(bucket_name, key).copy(
-            copy_source,
-            ExtraArgs={
-                'ContentType': content_type,
-                'Metadata': metadata,
-                'MetadataDirective': 'REPLACE',
-                # Grant the bucket owner full control so a version written into a
-                # cross-account asset bucket is owned/readable by that account.
-                'ACL': 'bucket-owner-full-control'
-            }
-        )
+        extra_args = replace_metadata_copy_args(content_headers or {}, metadata)
+        extra_args['ContentType'] = content_type
+        # Grant the bucket owner full control so a version written into a
+        # cross-account asset bucket is owned/readable by that account.
+        extra_args['ACL'] = 'bucket-owner-full-control'
+        s3r.Object(bucket_name, key).copy(copy_source, ExtraArgs=extra_args)
 
         return True
     except Exception as e:
@@ -291,7 +291,8 @@ def _stamp_output_objects(objects, asset_id, database_id, upload_id, bucket_name
         return update_s3_object_metadata(
             obj['Key'], asset_id, database_id, upload_id, bucket_name,
             content_type=obj.get('ContentType') or None,
-            existing_metadata=obj.get('Metadata'))
+            existing_metadata=obj.get('Metadata'),
+            content_headers=obj.get('ContentHeaders'))
 
     max_workers = min(MAX_PARALLEL_S3_WORKERS, len(objects))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:

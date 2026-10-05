@@ -573,16 +573,16 @@ export class VPCBuilderNestedStack extends NestedStack {
                 });
             }
 
-            //Add endpoints for Cognito when Cognito auth is enabled. The browser signs in
-            //against cognito-idp (SRP/InitiateAuth) and exchanges tokens against
-            //cognito-identity, so an isolated VPC needs both to authenticate without
-            //internet egress. FIPS variants are added when FIPS is enabled.
-            //Amazon Cognito PrivateLink (interface endpoints) is not available in the AWS
-            //GovCloud (US), AWS European Sovereign Cloud, or ISO partitions, so these
-            //endpoints are skipped there — creating them would fail the deployment. A VPC
-            //deployment in those partitions must reach Amazon Cognito another way (see
-            //networking docs). This is a deny-list rather than an allow-list of "aws" because
-            //Cognito PrivateLink IS available in the AWS China partition (aws-cn).
+            //Placeholder for the Cognito interface endpoints (cognito-idp, cognito-identity and
+            //their FIPS variants). The endpoint constructors in this block are commented out, so
+            //VAMS creates no Cognito interface endpoint: the web client reaches Amazon Cognito
+            //over its public regional endpoint, and a Lambda function in the VPC has no in-VPC
+            //path to it (isCognitoMfaCheckEnabled turns the authorizer MFA check off for that
+            //placement). Amazon Cognito PrivateLink (interface endpoints) is not available in the
+            //AWS GovCloud (US), AWS European Sovereign Cloud, or ISO partitions, so the block is
+            //skipped there; creating the endpoints would fail the deployment. This is a
+            //deny-list rather than an allow-list of "aws" because Cognito PrivateLink IS
+            //available in the AWS China partition (aws-cn).
             const cognitoVpcEndpointsSupported =
                 props.config.env.partition !== "aws-us-gov" &&
                 props.config.env.partition !== "aws-eusc" &&
