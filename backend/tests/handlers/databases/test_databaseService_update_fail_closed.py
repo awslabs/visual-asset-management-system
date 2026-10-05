@@ -5,7 +5,7 @@
 
 The Tier-2 check sat inside `if claims_and_roles and len(claims_and_roles["tokens"]) > 0:` with no
 `else` that denies -- the shape backend/CLAUDE.md Rule 4 forbids by name -- so the whole block was
-skipped and execution fell through to the `put_item` below. Two inputs reached it: an empty token
+skipped and execution fell through to the database write below. Two inputs reached it: an empty token
 list, and the `claims_and_roles=None` default, which the truthiness test in the same condition let
 through as well. Both are covered here, because a presence check on the token list alone leaves the
 default-parameter path open.
@@ -81,13 +81,14 @@ def spy(monkeypatch):
 
 
 @pytest.fixture
-def database_table(monkeypatch):
+def database_table(monkeypatch, real_to_update_expr):
     """The database row `update_database` reads, and the write it must not reach."""
     table = MagicMock()
     table.get_item.return_value = {"Item": _stored_database()}
     resource = MagicMock()
     resource.Table.return_value = table
     monkeypatch.setattr(svc, "dynamodb", resource)
+    monkeypatch.setattr(svc, "to_update_expr", real_to_update_expr, raising=False)
     return table
 
 
@@ -99,7 +100,8 @@ class TestUpdateDatabaseFailsClosed:
         result = svc.update_database(DATABASE_ID, {"description": "after"}, AUTHENTICATED)
 
         assert isinstance(result, svc.UpdateDatabaseResponseModel)
-        database_table.put_item.assert_called_once()
+        database_table.update_item.assert_called_once()
+        database_table.put_item.assert_not_called()
         assert ("database", DATABASE_ID, "PUT") in spy.decisions()
 
     def test_empty_tokens_denies_without_consulting_casbin(self, spy, database_table):
@@ -107,6 +109,7 @@ class TestUpdateDatabaseFailsClosed:
             svc.update_database(DATABASE_ID, {"description": "after"}, NO_IDENTITY)
 
         database_table.put_item.assert_not_called()
+        database_table.update_item.assert_not_called()
         # The property: with no identity there is nothing to authorize against, so the enforcer must
         # not be built or called at all.
         assert spy.constructions == []
@@ -119,6 +122,7 @@ class TestUpdateDatabaseFailsClosed:
             svc.update_database(DATABASE_ID, {"description": "after"})
 
         database_table.put_item.assert_not_called()
+        database_table.update_item.assert_not_called()
         assert spy.constructions == []
         assert spy.calls == []
 
@@ -129,4 +133,5 @@ class TestUpdateDatabaseFailsClosed:
             svc.update_database(DATABASE_ID, {"description": "after"}, AUTHENTICATED)
 
         database_table.put_item.assert_not_called()
+        database_table.update_item.assert_not_called()
         assert ("database", DATABASE_ID, "PUT") in spy.decisions()

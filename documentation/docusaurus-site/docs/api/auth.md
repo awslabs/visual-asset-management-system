@@ -117,6 +117,8 @@ POST /auth/constraints/{constraintId}
 | `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                |
 | `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                              |
 
+At least one of `criteriaAnd` or `criteriaOr` must contain an entry.
+
 Each entry in `groupPermissions`:
 
 | Field            | Type   | Required | Description                                  |
@@ -165,6 +167,8 @@ A constraint may define both `criteriaAnd` and `criteriaOr`. When both are prese
 
 #### Response
 
+`operation` is `create` for a new constraint, and `update` when a constraint with this ID already exists.
+
 ```json
 {
     "success": true,
@@ -175,6 +179,14 @@ A constraint may define both `criteriaAnd` and `criteriaOr`. When both are prese
     "constraint": "{\"identifier\": \"database-reader\", \"name\": \"Database Reader\", \"description\": \"Read-only access to assets in the production database\", \"objectType\": \"asset\", \"criteriaAnd\": [{\"field\": \"databaseId\", \"value\": \"production-db\", \"operator\": \"equals\"}], \"groupPermissions\": [{\"groupId\": \"viewer-role\", \"permission\": \"GET\", \"permissionType\": \"allow\"}]}"
 }
 ```
+
+#### Error responses
+
+| Status | Description                                                                                                                                                                                                                                                                                   |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, missing required criteria, or a role that does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request. |
+| `403`  | Not authorized                                                                                                                                                                                                                                                                                |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                         |
 
 ---
 
@@ -195,6 +207,10 @@ PUT /auth/constraints/{constraintId}
 #### Request body
 
 Same structure as [Create a constraint](#create-a-constraint).
+
+#### Response
+
+Same structure as [Create a constraint](#create-a-constraint), with `operation` set to `update` when the constraint already exists; a `PUT` to an identifier that is not in use creates the constraint and returns `create`. The error responses are also the same; an update whose existing stored items cannot be removed returns `400` without storing the submitted definition.
 
 ---
 
@@ -223,6 +239,14 @@ DELETE /auth/constraints/{constraintId}
     "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
+
+#### Error responses
+
+| Status | Description                                                                                                                                                                       |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid constraint ID, or the delete could not confirm that all of the constraint's stored items were removed. The constraint may still grant its permissions; repeat the delete. |
+| `403`  | Not authorized                                                                                                                                                                    |
+| `500`  | Internal server error                                                                                                                                                             |
 
 ---
 

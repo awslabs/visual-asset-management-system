@@ -159,7 +159,7 @@ def test_generate_download_urls_bulk_is_the_bulk_method_not_the_single_one(mock_
     # The bulk tool sits in the unconditional read gate beside generate_download_url and hands out
     # N bearer credentials per call, so its docstring must carry the same disclosure, and must tell
     # the agent that a successful call can still have skipped files.
-    ["bearer credential", "presignedUrlTimeoutSeconds", "24 hours", "transcript",
+    ["bearer credential", "presignedUrlTimeoutSeconds", "24 hours", "at most", "transcript",
      "generate_download_url", "success", "SKIPPED"],
 )
 def test_generate_download_urls_bulk_docstring_names_the_exposure_and_partial_success(fragment):

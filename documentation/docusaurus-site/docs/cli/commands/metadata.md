@@ -435,7 +435,7 @@ vamscli metadata-schema create -d my-database -e fileMetadata -n "File fields" -
 ```
 
 :::note[File type restriction]
-`--file-key-type-restriction` accepts extensions with a leading dot (`.glb,.usd`) and is available for `fileMetadata` and `fileAttribute` schemas only. The extension is read from the file's name, so a dot in a folder name is not an extension and a file with no extension is matched by every enabled schema for its entity type. See [File type restriction matching](../../user-guide/metadata-management.md#file-type-restriction-matching).
+`--file-key-type-restriction` takes each extension with its leading dot (`.glb,.usd`) and is available for `fileMetadata` and `fileAttribute` schemas only; an entry without the dot, with a second dot or with a path separator is rejected with a `400`. The extension is read from the file's name, so a dot in a folder name is not an extension and a file with no extension is matched by every enabled schema for its entity type. See [File type restriction matching](../../user-guide/metadata-management.md#file-type-restriction-matching).
 :::
 
 ---

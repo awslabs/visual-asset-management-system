@@ -759,7 +759,7 @@ class CasbinEnforcerService:
         
         #logger.info(f"Generated policy_text with {len(policy_text)} characters")
         if len(policy_text) < 100:
-            logger.warning(f"Policy text seems too short: {policy_text}")
+            logger.warning(f"Policy text seems too short: {len(policy_text)} characters")
         
         return policy_text
 
@@ -787,7 +787,10 @@ class CasbinEnforcerService:
         new_model = model.Model()
         new_model.load_model_from_text(self._model_text)
         new_string_adapter = string_adapter.StringAdapter(policy_text)
-        _enforcer = FastEnforcer(model=new_model, adapter=new_string_adapter, enable_log=True)
+        # Casbin's library logging is off: with it on, every enforce() writes the caller id and the
+        # full checked object to the function log. API-level decisions and data-level denials are
+        # recorded through log_authorization_api / log_authorization.
+        _enforcer = FastEnforcer(model=new_model, adapter=new_string_adapter, enable_log=False)
         return _enforcer
 
     def _scrub_object_fields(self, obj):

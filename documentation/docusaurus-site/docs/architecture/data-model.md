@@ -514,9 +514,11 @@ Where:
 -   `relative_path` is zero or more subdirectory levels within the asset
 -   `filename` is the actual file name
 
+An asset created on an existing bucket folder (`bucketExistingKey`, see [Assets](../concepts/assets.md)) uses that folder as its root instead of `{baseAssetsPrefix}{assetId}/`, so its keys need not contain the asset ID. A file's relative path is the part of its key after the asset's root.
+
 #### File Output Conventions
 
-Pipeline outputs follow specific naming conventions within the asset key structure:
+Pipeline outputs follow specific naming conventions within the asset key structure (shown for an asset whose root is `{assetId}/`):
 
 | Output Type     | Key Pattern                                              | Example                                     |
 | --------------- | -------------------------------------------------------- | ------------------------------------------- |

@@ -252,20 +252,23 @@ from pydantic import Field
 from aws_lambda_powertools.utilities.parser import (
     BaseModel, root_validator, validator, ValidationError
 )
-from common.validators import validate, id_pattern, object_name_pattern
+from common.validators import validate, trim_name, id_pattern, object_name_pattern
 
 class CreateItemRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new item"""
     databaseId: str = Field(
-        min_length=4, max_length=256,
-        strip_whitespace=True, regex=id_pattern
+        min_length=4, max_length=63,
+        regex=id_pattern
     )
     itemName: str = Field(
         min_length=1, max_length=256,
-        strip_whitespace=True, regex=object_name_pattern
+        regex=object_name_pattern
     )
-    description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
+    description: str = Field(min_length=4, max_length=256)
     tags: Optional[list[str]] = []
+
+    _trim_names = validator('databaseId', 'itemName', pre=True, allow_reuse=True)(trim_name)
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):

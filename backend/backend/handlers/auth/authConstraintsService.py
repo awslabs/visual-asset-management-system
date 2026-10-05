@@ -91,6 +91,34 @@ def _constraint_id_filter(base_constraint_id):
     )
 
 
+def _scan_first_match(filter_expression, consistent_read=False):
+    """Return the first constraints-table item a filtered scan matches, or None
+
+    DynamoDB applies the filter after each page is read, so a page can hold no match
+    while a later page does; the scan continues until a page yields an item or no
+    LastEvaluatedKey is returned.
+
+    Args:
+        filter_expression: The boto3 condition expression selecting the items
+        consistent_read: Read with strong consistency, so items removed by a completed
+            write are not returned
+
+    Returns:
+        The first matching item, or None when no item in the table matches
+    """
+    scan_kwargs = {'FilterExpression': filter_expression}
+    if consistent_read:
+        scan_kwargs['ConsistentRead'] = True
+    while True:
+        response = constraints_table.scan(**scan_kwargs)
+        items = response.get('Items', [])
+        if items:
+            return items[0]
+        if 'LastEvaluatedKey' not in response:
+            return None
+        scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
 def _transform_to_denormalized_format(constraint_data):
     """Transform constraint data to denormalized table format
     Creates one item per UNIQUE group/user for efficient GSI queries
@@ -242,16 +270,11 @@ def get_constraint_details(constraint_id):
         # denormalized IDs carrying a #group#/#user# suffix
         logger.info(f"Scanning for constraint with ID: {constraint_id}")
 
-        response = constraints_table.scan(
-            FilterExpression=_constraint_id_filter(constraint_id)
-        )
+        item = _scan_first_match(_constraint_id_filter(constraint_id))
         
-        items = response.get('Items', [])
-        logger.info(f"Scan found {len(items)} items for constraint {constraint_id}")
-        
-        if items:
+        if item is not None:
             logger.debug(f"Retrieved constraint {constraint_id}")
-            return _transform_from_new_format(items[0])
+            return _transform_from_new_format(item)
         
         logger.warning(f"No items found for constraint {constraint_id}")
         return None
@@ -409,11 +432,16 @@ def create_or_update_constraint(constraint_data, claims_and_roles):
             constraint_data['dateCreated'] = now
             constraint_data['createdBy'] = username
         
-        # Delete existing denormalized items for this constraint (if updating)
-        try:
-            _delete_denormalized_items(constraint_id)
-        except Exception as delete_error:
-            logger.warning(f"Error deleting old denormalized items: {delete_error}")
+        # Delete existing denormalized items for this constraint (if updating). A row left behind
+        # would keep granting, so the new items are written only once the old ones are gone.
+        existing_items = _delete_denormalized_items(constraint_id)
+        if existing_items is None:
+            raise VAMSGeneralErrorResponse("Error creating/updating constraint - existing items could not be removed")
+        
+        # An update keeps the creation metadata of the rows it replaces
+        if existing_items:
+            constraint_data['dateCreated'] = existing_items[0].get('dateCreated', constraint_data['dateCreated'])
+            constraint_data['createdBy'] = existing_items[0].get('createdBy', constraint_data['createdBy'])
         
         # Transform to denormalized format (returns array of items)
         denormalized_items = _transform_to_denormalized_format(constraint_data)
@@ -426,7 +454,7 @@ def create_or_update_constraint(constraint_data, claims_and_roles):
         logger.info(f"Successfully wrote {len(denormalized_items)} denormalized items for constraint {constraint_id}")
         
         # Determine if this was a create or update operation
-        operation = "update" if 'dateCreated' in constraint_data and constraint_data['dateCreated'] != now else "create"
+        operation = "update" if existing_items else "create"
         
         # Return success response
         return ConstraintOperationResponseModel(
@@ -448,14 +476,20 @@ def _delete_denormalized_items(base_constraint_id):
     
     Args:
         base_constraint_id: The base constraint ID (without #group# or #user# suffix)
+    
+    Returns:
+        The items found and deleted for the constraint (an empty list when none existed),
+        or None when the scan or the batch delete failed
     """
     try:
         logger.info(f"Scanning for items to delete for constraint: {base_constraint_id}")
 
         # Scan for the constraint's own items only - the base constraintId and its
-        # #group#/#user# denormalized items
+        # #group#/#user# denormalized items - reading with strong consistency so a row
+        # written moments earlier is not missed
         response = constraints_table.scan(
-            FilterExpression=_constraint_id_filter(base_constraint_id)
+            FilterExpression=_constraint_id_filter(base_constraint_id),
+            ConsistentRead=True
         )
         
         items_to_delete = response.get('Items', [])
@@ -465,6 +499,7 @@ def _delete_denormalized_items(base_constraint_id):
         while 'LastEvaluatedKey' in response:
             response = constraints_table.scan(
                 FilterExpression=_constraint_id_filter(base_constraint_id),
+                ConsistentRead=True,
                 ExclusiveStartKey=response['LastEvaluatedKey']
             )
             items_to_delete.extend(response.get('Items', []))
@@ -478,9 +513,11 @@ def _delete_denormalized_items(base_constraint_id):
             logger.info(f"Successfully deleted {len(items_to_delete)} denormalized items for constraint {base_constraint_id}")
         else:
             logger.warning(f"No items found to delete for constraint {base_constraint_id}")
+        return items_to_delete
     except Exception as e:
         logger.exception(f"Error deleting denormalized items: {e}")
         # Don't raise - allow delete to continue even if cleanup fails
+        return None
 
 
 def delete_constraint(constraint_id, claims_and_roles):
@@ -505,13 +542,13 @@ def delete_constraint(constraint_id, claims_and_roles):
         # This handles eventual consistency issues and is more efficient
         _delete_denormalized_items(constraint_id)
         
-        # Check if any items were actually deleted by doing a quick scan
-        check_response = constraints_table.scan(
-            FilterExpression=_constraint_id_filter(constraint_id),
-            Limit=1
+        # Check that none of the constraint's items remain anywhere in the table, reading
+        # with strong consistency so items the batch delete removed are not returned
+        remaining_item = _scan_first_match(
+            _constraint_id_filter(constraint_id), consistent_read=True
         )
         
-        if len(check_response.get('Items', [])) > 0:
+        if remaining_item is not None:
             # Items still exist, deletion may have failed
             logger.warning(f"Items still exist after deletion attempt for constraint {constraint_id}")
             raise VAMSGeneralErrorResponse("Error deleting constraint - items may still exist")

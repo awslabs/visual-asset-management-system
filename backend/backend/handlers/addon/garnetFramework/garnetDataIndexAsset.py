@@ -63,6 +63,14 @@ logger = safeLogger(service_name="GarnetAssetIndexer")
 # System type identifier for outbound sync tracking records.
 SYNC_SYSTEM_TYPE = "garnetFramework"
 
+# Archiving an asset rewrites its record under the `{databaseId}#deleted` partition key.
+ARCHIVED_DATABASE_SUFFIX = '#deleted'
+
+
+def live_database_id(database_id: str) -> str:
+    """Database id of an asset record without the archived-partition suffix."""
+    return database_id.replace(ARCHIVED_DATABASE_SUFFIX, '')
+
 
 def _record_sync(object_type, action, success, database_id, asset_id=None,
                  file_path=None, s3_version_id=None, entity_id=None):
@@ -164,7 +172,7 @@ def get_all_asset_links_for_asset(database_id: str, asset_id: str) -> List[str]:
         List of asset link IDs
     """
     try:
-        asset_key = f"{database_id}:{asset_id}"
+        asset_key = f"{live_database_id(database_id)}:{asset_id}"
         asset_link_ids = []
         
         # Get links where this asset is the 'from' asset
@@ -400,7 +408,7 @@ def convert_asset_to_ngsi_ld(
     """
     Convert VAMS asset data to NGSI-LD format for Garnet Framework.
     
-    NGSI-LD Reference: https://garnet-framework.dev/docs/getting-started/ngsi-ld
+    NGSI-LD Reference: https://garnet-framework.tech/docs/getting-started/ngsi-ld
     
     Args:
         asset_data: Asset record from DynamoDB
@@ -413,8 +421,10 @@ def convert_asset_to_ngsi_ld(
         NGSI-LD formatted entity
     """
     try:
-        database_id = asset_data.get('databaseId', '')
+        stored_database_id = asset_data.get('databaseId', '')
         asset_id = asset_data.get('assetId', '')
+        # An archived record keeps the live database id in the entity id, scope and databaseId
+        database_id = live_database_id(stored_database_id)
         
         # Create base NGSI-LD entity
         ngsi_ld_entity = {
@@ -531,8 +541,8 @@ def convert_asset_to_ngsi_ld(
                 }
             }
         
-        # Check if asset is archived (contains #deleted)
-        is_archived = '#deleted' in database_id or '#deleted' in asset_id
+        # Check if asset is archived (record stored under the #deleted partition key)
+        is_archived = ARCHIVED_DATABASE_SUFFIX in stored_database_id or ARCHIVED_DATABASE_SUFFIX in asset_id
         ngsi_ld_entity["isArchived"] = {
             "type": "Property",
             "value": is_archived
@@ -643,10 +653,9 @@ def convert_asset_to_ngsi_ld(
         
         # Add relationships
         # Relationship to database
-        normalized_database_id = database_id.replace('#deleted', '')
         ngsi_ld_entity["belongsToDatabase"] = {
             "type": "Relationship",
-            "object": f"urn:vams:database:{normalized_database_id}"
+            "object": f"urn:vams:database:{database_id}"
         }
         
         # Relationship to bucket if available
@@ -729,8 +738,9 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
     Returns metadata as a dictionary with value and type information.
     """
     try:
-        # Build composite key for asset-level metadata (file_path = "/")
-        composite_key = f"{database_id}:{asset_id}:/"
+        # Build composite key for asset-level metadata (file_path = "/"). Archiving moves only
+        # the asset record, so the metadata stays under the live database id.
+        composite_key = f"{live_database_id(database_id)}:{asset_id}:/"
         
         all_metadata = {}
         
@@ -765,7 +775,7 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
 def get_asset_version_info(database_id: str, asset_id: str) -> Dict[str, Any]:
     """Get current asset version information using the table PK (databaseId:assetId is now the table PK)"""
     try:
-        composite_key = f"{database_id}:{asset_id}"
+        composite_key = f"{live_database_id(database_id)}:{asset_id}"
         # The isCurrentVersion filter is applied after each page is read, so the current version
         # of an asset with many versions can sit past the first page
         items = query_all_items(
@@ -793,7 +803,7 @@ def get_asset_version_info(database_id: str, asset_id: str) -> Dict[str, Any]:
 def get_asset_relationship_flags(database_id: str, asset_id: str) -> Dict[str, bool]:
     """Get asset relationship flags (children, parents, related)"""
     try:
-        asset_key = f"{database_id}:{asset_id}"
+        asset_key = f"{live_database_id(database_id)}:{asset_id}"
         
         # Check for children (where this asset is the 'from' in parentChild relationships)
         has_children = query_has_match(
@@ -911,9 +921,11 @@ def handle_asset_stream(event_record: Dict[str, Any]) -> bool:
             
             logger.info(f"Processing REMOVE event for asset: {database_id}/{asset_id}")
             
-            # For delete operations, create a minimal NGSI-LD entity for deletion
+            # A minimal entity: the ingestion queue upserts with options=update, so it changes no
+            # attribute of an existing entity. Archive and unarchive remove the record from one
+            # partition key after writing it under the other, and both keys name one entity.
             ngsi_ld_entity = {
-                "id": f"urn:vams:asset:{database_id}:{asset_id}",
+                "id": f"urn:vams:asset:{live_database_id(database_id)}:{asset_id}",
                 "type": "VAMSAsset"
             }
             

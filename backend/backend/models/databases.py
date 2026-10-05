@@ -23,7 +23,7 @@ MAX_LIST_MAX_ITEMS = 30000
 ######################## Create Database API Models ##########################
 class CreateDatabaseRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new database"""
-    databaseId: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    databaseId: str = Field(min_length=4, max_length=63, regex=id_pattern)
     description: str = Field(min_length=4, max_length=256)
     defaultBucketId: str = Field(regex=uuid_pattern)
     restrictMetadataOutsideSchemas: Optional[bool] = False

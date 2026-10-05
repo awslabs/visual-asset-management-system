@@ -56,6 +56,8 @@ export class CosmosCommonConstruct extends Construct {
                 ? s3.BucketEncryption.KMS
                 : s3.BucketEncryption.S3_MANAGED,
             encryptionKey: props.storageResources.encryption.kmsKey,
+            // An S3 Bucket Key lets object requests reuse a data key instead of calling AWS KMS each time
+            bucketKeyEnabled: props.storageResources.encryption.kmsKey ? true : undefined,
             blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
             removalPolicy: RemovalPolicy.RETAIN,
             versioned: false,

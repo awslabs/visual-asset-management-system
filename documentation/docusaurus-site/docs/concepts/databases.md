@@ -141,7 +141,7 @@ Database deletion in VAMS is a **soft delete** operation. When a database is del
 4. The archived record is preserved for audit purposes.
 
 :::warning[Prerequisites for deletion]
-Before a database can be deleted, all assets within it must be removed or archived, and all associated workflows and pipelines must be deleted. The system enforces these checks automatically.
+Before a database can be deleted, all assets within it must be removed or archived, and all associated workflows and pipelines must be deleted. The system enforces these checks automatically. Assets archived before the deletion stay archived and cannot be unarchived until a database with the same ID is created again.
 :::
 
 ## What's next

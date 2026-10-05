@@ -12,7 +12,7 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 -   **Entity Types**: Search results are categorized as either `asset` or `file`. You can filter by entity type.
 -   **AND Query Logic**: The `query`, `metadataQuery`, and `filters` parameters are combined using AND logic. Results must match ALL specified criteria. Within a `metadataQuery`, individual field conditions can use AND or OR (e.g., `"color:red AND size:large"` or `"color:red OR color:blue"`).
 -   **Metadata Search**: Metadata is indexed alongside the core fields, enabling search by metadata keys, values, or both. It is stored differently from a core field -- see [Metadata Fields](#metadata-fields).
--   **Field Prefixes**: The core OpenSearch fields use type prefixes for proper mapping: `str_` (string/keyword), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array). Metadata keys do not carry one.
+-   **Field Prefixes**: The core OpenSearch fields use type prefixes for proper mapping: `str_` (text with a keyword subfield), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array). Metadata keys do not carry one.
 -   **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database).
 
 ---
@@ -41,7 +41,7 @@ Executes a search query across the asset and file indexes with full control over
     "filters": [
         {
             "query_string": {
-                "query": "str_databaseid:my-database"
+                "query": "str_databaseid.keyword:\"my-database\""
             }
         }
     ],
@@ -115,7 +115,7 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
                     "str_databaseid": "my-database",
                     "str_assetid": "asset-001",
                     "str_assetname": "Building Model",
-                    "str_assettype": "ifc",
+                    "str_assettype": ".ifc",
                     "str_description": "Main building 3D model",
                     "list_tags": ["architecture", "building"],
                     "bool_isdistributable": true,
@@ -151,9 +151,9 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
     "aggregations": {
         "str_assettype": {
             "buckets": [
-                { "key": "ifc", "doc_count": 45 },
-                { "key": "obj", "doc_count": 30 },
-                { "key": "glb", "doc_count": 25 }
+                { "key": ".ifc", "doc_count": 45 },
+                { "key": ".obj", "doc_count": 30 },
+                { "key": ".glb", "doc_count": 25 }
             ]
         },
         "str_fileext": {
@@ -205,7 +205,7 @@ Executes a simplified search with basic parameters for easy API integration. The
     "entityTypes": ["asset"],
     "databaseId": "my-database",
     "assetName": "Building",
-    "assetType": "ifc",
+    "assetType": ".ifc",
     "tags": ["architecture"],
     "metadataKey": "material",
     "metadataValue": "concrete",
@@ -271,29 +271,68 @@ The response returns the mappings for both indexes, keyed by `asset_index` and `
         "asset_index": {
             "mappings": {
                 "properties": {
-                    "str_rectype": { "type": "keyword" },
-                    "str_databaseid": { "type": "keyword" },
-                    "str_assetid": { "type": "keyword" },
-                    "str_assetname": { "type": "keyword" },
-                    "str_assettype": { "type": "keyword" },
-                    "str_description": { "type": "keyword" },
+                    "str_rectype": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
+                    "str_databaseid": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
+                    "str_assetid": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
+                    "str_assetname": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
+                    "str_assettype": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
+                    "str_description": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
                     "date_lastmodified": { "type": "date" },
                     "bool_isdistributable": { "type": "boolean" },
-                    "list_tags": { "type": "keyword" }
+                    "list_tags": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    }
                 }
             }
         },
         "file_index": {
             "mappings": {
                 "properties": {
-                    "str_rectype": { "type": "keyword" },
-                    "str_databaseid": { "type": "keyword" },
-                    "str_assetid": { "type": "keyword" },
-                    "str_key": { "type": "keyword" },
-                    "str_fileext": { "type": "keyword" },
+                    "str_rectype": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
+                    "str_databaseid": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
+                    "str_assetid": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
+                    "str_key": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
+                    "str_fileext": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    },
                     "num_filesize": { "type": "long" },
                     "date_lastmodified": { "type": "date" },
-                    "list_tags": { "type": "keyword" }
+                    "list_tags": {
+                        "type": "text",
+                        "fields": { "keyword": { "type": "keyword" } }
+                    }
                 }
             }
         }
@@ -370,7 +409,7 @@ Filters use OpenSearch query_string syntax for advanced filtering.
 ```json
 {
     "query_string": {
-        "query": "str_databaseid:my-database AND str_assettype:ifc"
+        "query": "str_databaseid.keyword:\"my-database\" AND str_assettype:ifc"
     }
 }
 ```
@@ -487,37 +526,39 @@ Documents indexed before the introduction of `geo_MD_location` will not match ge
 
 ## Available Search Fields
 
+Fields typed `text + keyword` are analyzed text with a `.keyword` subfield that holds the exact value. A filter on the text field matches words: an id is split on hyphens and matched in any letter case. Name the subfield, as in `str_databaseid.keyword:"my-database"`, for an exact, case-sensitive match. A sort on a `str_` or `list_` field is applied to the subfield without the suffix being named.
+
 ### Asset Index Fields
 
-| Field                  | Type      | Description                                                                       |
-| ---------------------- | --------- | --------------------------------------------------------------------------------- |
-| `str_rectype`          | keyword   | Always `"asset"`.                                                                 |
-| `str_databaseid`       | keyword   | Database identifier.                                                              |
-| `str_assetid`          | keyword   | Asset identifier.                                                                 |
-| `str_assetname`        | keyword   | Asset display name.                                                               |
-| `str_assettype`        | keyword   | File type classification.                                                         |
-| `str_description`      | keyword   | Asset description.                                                                |
-| `list_tags`            | keyword   | Asset tags (array).                                                               |
-| `bool_isdistributable` | boolean   | Whether asset can be downloaded.                                                  |
-| `date_lastmodified`    | date      | Last modification date.                                                           |
-| `str_asset_version_id` | keyword   | Current asset version ID.                                                         |
-| `geo_MD_location`      | geo_shape | GeoJSON shape derived from metadata. See [Geospatial Search](#geospatial-search). |
+| Field                  | Type           | Description                                                                       |
+| ---------------------- | -------------- | --------------------------------------------------------------------------------- |
+| `str_rectype`          | text + keyword | Always `"asset"`.                                                                 |
+| `str_databaseid`       | text + keyword | Database identifier.                                                              |
+| `str_assetid`          | text + keyword | Asset identifier.                                                                 |
+| `str_assetname`        | text + keyword | Asset display name.                                                               |
+| `str_assettype`        | text + keyword | File type classification.                                                         |
+| `str_description`      | text + keyword | Asset description.                                                                |
+| `list_tags`            | text + keyword | Asset tags (array).                                                               |
+| `bool_isdistributable` | boolean        | Whether asset can be downloaded.                                                  |
+| `date_lastmodified`    | date           | Last modification date.                                                           |
+| `str_asset_version_id` | text + keyword | Current asset version ID.                                                         |
+| `geo_MD_location`      | geo_shape      | GeoJSON shape derived from metadata. See [Geospatial Search](#geospatial-search). |
 
 ### File Index Fields
 
-| Field               | Type      | Description                                                                       |
-| ------------------- | --------- | --------------------------------------------------------------------------------- |
-| `str_rectype`       | keyword   | Always `"file"`.                                                                  |
-| `str_databaseid`    | keyword   | Database identifier.                                                              |
-| `str_assetid`       | keyword   | Parent asset identifier.                                                          |
-| `str_assetname`     | keyword   | Parent asset name.                                                                |
-| `str_key`           | keyword   | S3 object key (relative file path).                                               |
-| `str_fileext`       | keyword   | File extension.                                                                   |
-| `num_filesize`      | long      | File size in bytes.                                                               |
-| `str_etag`          | keyword   | S3 ETag.                                                                          |
-| `str_s3_version_id` | keyword   | S3 version ID.                                                                    |
-| `date_lastmodified` | date      | Last modification date.                                                           |
-| `geo_MD_location`   | geo_shape | GeoJSON shape derived from metadata. See [Geospatial Search](#geospatial-search). |
+| Field               | Type           | Description                                                                       |
+| ------------------- | -------------- | --------------------------------------------------------------------------------- |
+| `str_rectype`       | text + keyword | Always `"file"`.                                                                  |
+| `str_databaseid`    | text + keyword | Database identifier.                                                              |
+| `str_assetid`       | text + keyword | Parent asset identifier.                                                          |
+| `str_assetname`     | text + keyword | Parent asset name.                                                                |
+| `str_key`           | text + keyword | S3 object key (relative file path).                                               |
+| `str_fileext`       | text + keyword | File extension.                                                                   |
+| `num_filesize`      | long           | File size in bytes.                                                               |
+| `str_etag`          | text + keyword | S3 ETag.                                                                          |
+| `str_s3_version_id` | text + keyword | S3 version ID.                                                                    |
+| `date_lastmodified` | date           | Last modification date.                                                           |
+| `geo_MD_location`   | geo_shape      | GeoJSON shape derived from metadata. See [Geospatial Search](#geospatial-search). |
 
 ### Metadata Fields
 

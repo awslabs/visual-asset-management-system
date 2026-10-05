@@ -204,7 +204,7 @@ jobs:
             # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4"),
             # and EVERY line of requirements-dev.txt carries a `; python_version >= "3.13"` marker
             # because it is exported from a lock resolved under that constraint. Under the job's 3.12.7
-            # interpreter all 46 markers evaluate FALSE, so `pip install -r requirements-dev.txt` installs
+            # interpreter every marker evaluates FALSE, so `pip install -r requirements-dev.txt` installs
             # nothing, exits 0, and pytest then fails at collection — a green install followed by an
             # inexplicable failure.
             #

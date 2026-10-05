@@ -38,6 +38,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import govcloudTemplate from "../../config/config.template.govcloud.json";
 import { INDEX_HTML_INLINE_SCRIPT_HASHES } from "../../lib/helper/cspInlineScriptHashes";
 import {
     ALL_TEMPLATES,
@@ -462,9 +463,11 @@ describe("FIX-054 wasm-unsafe-eval in script-src", () => {
 
     test("the emitted CSP fits the delivery mechanism's size cap in every partition", () => {
         // The caps differ (see CSP_DELIVERY_CAP) and the restricted partitions are the ones nearest the
-        // tighter of the two — FIPS in GovCloud and `.amazonaws.eu` in EU Sovereign produce longer
-        // endpoint hostnames — and they are the ones with no environment to fail in. `'wasm-unsafe-eval'`
-        // and its separating space are 19 of the bytes measured here.
+        // tighter of the two: they deliver the CSP as the 1 KB ALB listener attribute, their Region
+        // names (`us-gov-west-1`, `eusc-de-east-1`) lengthen every regional endpoint hostname, and they
+        // are the ones with no environment to fail in. `useFips` does not lengthen it, because every
+        // `Service()` call in generateContentSecurityPolicy() passes `false` (the next test pins
+        // that). `'wasm-unsafe-eval'` and its separating space are 19 of the bytes measured here.
         const measured = ALL_TEMPLATES.map((name) => {
             const { mechanism, value } = csp(synthTemplate(name));
             return {
@@ -477,6 +480,17 @@ describe("FIX-054 wasm-unsafe-eval in script-src", () => {
         // eslint-disable-next-line no-console
         console.log(`[T1 csp size] ${JSON.stringify(measured)}`);
         expect(measured.filter((m) => m.bytes >= m.cap)).toEqual([]);
+    });
+
+    test("useFips puts no FIPS hostname into the CSP", () => {
+        // The GovCloud template ships useFips true, and generateContentSecurityPolicy() passes `false`
+        // to every Service() call, so the policy names the standard regional hostnames.
+        expect(govcloudTemplate.app.useFips).toBe(true);
+        const { mechanism, value } = csp(S.govcloud());
+        expect(mechanism).toBe("alb");
+        // Control: the regional Amazon S3 origin the absence below is about is present.
+        expect(value).toContain("https://s3.us-gov-west-1.amazonaws.com/");
+        expect(value).not.toMatch(/-fips\./);
     });
 
     test("the directive list and its order are pinned", () => {

@@ -24,6 +24,7 @@ const BACKEND_CHANGE_SOURCE_VALUES = [
     "assetArchive",
     "assetUnarchive",
     "fileRevert",
+    "fileMetadataUpdate",
 ];
 
 describe("getChangeSourceLabel", () => {
@@ -37,6 +38,10 @@ describe("getChangeSourceLabel", () => {
     it("labels the whole-asset archive sources", () => {
         expect(getChangeSourceLabel("assetArchive")).toBe(`${Synonyms.Asset} Archive`);
         expect(getChangeSourceLabel("assetUnarchive")).toBe(`${Synonyms.Asset} Unarchive`);
+    });
+
+    it("labels the metadata-only rewrite source", () => {
+        expect(getChangeSourceLabel("fileMetadataUpdate")).toBe("File Metadata Update");
     });
 
     it("keeps the raw value for a genuinely unknown source, and empty for none", () => {

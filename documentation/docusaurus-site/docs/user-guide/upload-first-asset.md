@@ -18,7 +18,7 @@ Assets in VAMS are organized into databases. If your administrator has already c
 
 | Field                                 | Requirements                                                             | Description                                                                                                                       |
 | ------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Database Name**                     | 4-64 characters, alphanumeric plus `-` and `_` only. Cannot be "GLOBAL". | A unique identifier for your database. This cannot be changed after creation.                                                     |
+| **Database Name**                     | 4-63 characters, alphanumeric plus `-` and `_` only. Cannot be "GLOBAL". | A unique identifier for your database. This cannot be changed after creation.                                                     |
 | **Database Description**              | 4-256 characters.                                                        | A human-readable description of the database's purpose.                                                                           |
 | **Default Bucket and Prefix**         | Required. Select from available buckets.                                 | The Amazon S3 bucket where assets in this database will be stored. If only one bucket is available, it is selected automatically. |
 | **Restrict Metadata Outside Schemas** | Optional checkbox.                                                       | When enabled, only metadata fields defined in applied metadata schemas are allowed.                                               |
@@ -226,7 +226,7 @@ If you uploaded a file in a supported format (such as `.gltf`, `.obj`, `.e57`, `
 | `.csv`                                  | Columnar Data Viewer | Tabular data browsing                 |
 
 :::tip
-If a file does not have a dedicated viewer but has a preview image, VAMS falls back to the preview viewer to display the thumbnail.
+If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer.
 :::
 
 ---
