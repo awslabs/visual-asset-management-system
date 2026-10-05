@@ -71,7 +71,8 @@ def _lookup_patches(m, include_s3_client, send_ok):
     if include_s3_client:
         s3_client = MagicMock()
         s3_client.head_object.return_value = {
-            "Metadata": {"assetid": "a1", "databaseid": "db1"}
+            "Metadata": {"assetid": "a1", "databaseid": "db1"},
+            "VersionId": "v7",
         }
         patches.append(patch.object(m, "s3_client", s3_client))
     return patches

@@ -159,14 +159,18 @@ from typing import Dict, List, Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator, ValidationError
 from customLogging.logger import safeLogger
-from common.validators import validate, id_pattern, object_name_pattern
+from common.validators import validate, trim_name, id_pattern, object_name_pattern
 
 logger = safeLogger(service_name="{Domain}Models")
 
 class CreateResourceRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a resource"""
-    name: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    name: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
     description: Optional[str] = Field(None, max_length=256)
+
+    # Names and ids trim their surrounding whitespace; `strip_whitespace=` on Field() does nothing
+    _trim_names = validator('name', pre=True, allow_reuse=True)(trim_name)
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -185,7 +189,7 @@ class ResourceResponseModel(BaseModel, extra='ignore'):
 -   **Pydantic v1 only** (1.10.13): `@root_validator`, `@validator`, never `model_validator`/`ConfigDict`
 -   Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from pydantic directly
 -   Always use `extra='ignore'` on BaseModel
--   Use `Field()` with min_length, max_length, pattern validators
+-   Use `Field()` with `min_length`, `max_length` and `regex=` (pydantic v1 ignores `pattern=` and `strip_whitespace=` without an error); trim names, ids and request free text with `common.validators.trim_name` as a `pre=True` validator
 -   Import validators from `common.validators`: `id_pattern`, `object_name_pattern`, `filename_pattern`, `relative_file_path_pattern`
 -   Separate Request and Response models
 
@@ -329,7 +333,7 @@ The MCP server and the two external connectors sit downstream of the CLI, and no
 
 1. Add an `@mcp.tool()` + `@tool_result` function in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section: reads at the top, writes under `if CONFIG.enable_writes:`, destructive operations under `if CONFIG.enable_destructive:`. A `def` outside its gate block or past the `if __name__` entrypoint is never executed and the module still imports cleanly.
 2. Forward every narrowing parameter the CLI command accepts — an omitted optional parameter silently pins the agent to the server default.
-3. Check pagination: `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope, so confirm the `items_key` matches the new response. Use `_paginate_with_page_metadata(...)` for a list endpoint that reports `warnings` or other out-of-band bound signals, or they are dropped.
+3. Check pagination: `VamsClient.paginate()` is driven by the list field name the handler returns the list under, passed as `items_key` (in use today: `Items`, `items`, `versions` and `metadata`), and unwraps the legacy `message` envelope, so read the handler's response model and confirm the `items_key` matches the new response. Use `_paginate_with_page_metadata(...)` for a list endpoint that reports `warnings` or other out-of-band bound signals, or they are dropped.
 4. Add a unit test in `tools/VamsMCP/tests/` asserting the params that reach the `APIClient`, and add the tool to the `tools/VamsMCP/README.md` tool list (plus the `autoApprove` array of that README's sample host config if it is a safe read).
 5. If the server's contract with the CLI changed, roll `tools/VamsMCP/pyproject.toml`, `tools/VamsMCP/vams_mcp/__init__.py`, and `tools/VamsCLI/vamscli/version.py` together.
 

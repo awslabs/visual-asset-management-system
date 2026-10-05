@@ -16,7 +16,7 @@ from typing import Optional
 
 from pydantic import Field, validator
 
-# The Lambda runtime ships aws_lambda_powertools 2.36.0 + Pydantic 1.10.7,
+# The Lambda runtime ships aws_lambda_powertools 2.36.0 + Pydantic 1.10.13,
 # where root_validator is re-exported from the parser module. In older dev/
 # test environments that ship a newer powertools (3.x) this re-export is
 # missing, so we fall back to importing directly from pydantic. BaseModel is
@@ -50,7 +50,7 @@ class PhysnaViewerRequestModel(BaseModel, extra="ignore"):
 
     databaseId: str = Field(
         min_length=4,
-        max_length=256,
+        max_length=63,
         regex=id_pattern,
     )
     assetId: str = Field(

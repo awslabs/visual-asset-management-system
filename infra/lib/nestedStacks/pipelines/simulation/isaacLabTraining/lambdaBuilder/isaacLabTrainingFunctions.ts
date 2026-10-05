@@ -13,9 +13,11 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import * as Config from "../../../../../../config/config";
 import * as path from "path";
-import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as ServiceHelper from "../../../../../helper/service-helper";
-import { suppressCdkNagLambda } from "../../../../../helper/security";
+import {
+    grantReadPermissionsToAllAssetBuckets,
+    suppressCdkNagLambda,
+} from "../../../../../helper/security";
 import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 
 export interface IsaacLabTrainingFunctionsProps {
@@ -71,10 +73,8 @@ export class IsaacLabTrainingFunctions extends Construct {
             code: lambda.Code.fromAsset(lambdaPath),
         });
 
-        // Grant S3 read access to openPipeline for reading config files from all asset buckets
-        s3AssetBuckets.getS3AssetBucketRecords().forEach((record) => {
-            record.bucket.grantRead(this.openPipelineFunction);
-        });
+        // Asset bucket read access, with any external bucket key, for input config files
+        grantReadPermissionsToAllAssetBuckets(this.openPipelineFunction);
 
         // openPipeline rejects an input before the internal state machine starts, so it owns the
         // external workflow token on that route -- nothing downstream exists yet to report for it.
@@ -159,9 +159,7 @@ export class IsaacLabTrainingFunctions extends Construct {
             // STATE_MACHINE_ARN will be added by the construct after SFN creation
         });
 
-        s3AssetBuckets.getS3AssetBucketRecords().forEach((record) => {
-            record.bucket.grantRead(this.vamsExecuteFunction);
-        });
+        grantReadPermissionsToAllAssetBuckets(this.vamsExecuteFunction);
 
         // The workflow task waits on a callback token, so a failure in this lambda must be reported
         // back to Step Functions instead of leaving the task pending until its timeout.

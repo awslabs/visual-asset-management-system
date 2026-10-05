@@ -377,6 +377,17 @@ class TestCloudFormationResponse:
         assert body["failures"], "a direct invocation reported no failures for a partial run"
 
 
+def _stamped_owner(location, bucket_id="b1"):
+    """The asset record the object metadata below names, stored at `location`."""
+    return {"databaseId": "db1", "assetId": "x-b", "bucketId": bucket_id,
+            "assetLocation": {"Key": location}}
+
+
+def _touch(database_id, asset_id, path):
+    return {"databaseId": database_id, "assetId": asset_id,
+            "original_asset_id": asset_id, "relative_path": path}
+
+
 @pytest.mark.unit
 class TestBucketScanResolvesFromTheKey:
     """S2-BACKEND-033's other half: the scan issued one HeadObject per S3 object
@@ -420,6 +431,101 @@ class TestBucketScanResolvesFromTheKey:
         assert results["total"] == 2
         headed = [call.kwargs["Key"] for call in s3.head_object.call_args_list]
         assert headed == ["zz/orphan.bin"]
+
+    STAMP = {"assetid": "x-b", "databaseid": "db1"}
+
+    def _scan_touches(self, m, keys, metadata, records, base_prefix=""):
+        """Scan with no key-derived asset, returning the touch entries written.
+
+        `records` maps (databaseId, assetId) to the asset record `get_item` returns."""
+        s3 = MagicMock()
+        s3.get_paginator.return_value.paginate.return_value = [
+            {"Contents": [{"Key": key} for key in keys]}]
+        s3.head_object.return_value = {"Metadata": dict(metadata)}
+        table = MagicMock()
+        table.get_item.side_effect = lambda Key: (
+            {"Item": dict(records[(Key["databaseId"], Key["assetId"])])}
+            if (Key["databaseId"], Key["assetId"]) in records else {})
+        dynamodb_resource = MagicMock()
+        dynamodb_resource.Table.return_value = table
+        written = []
+
+        def _capture(files, timestamp):
+            written.extend(dict(entry) for entry in files)
+            return {"success": len(files), "failed": 0, "errors": []}
+
+        utility = _utility(m)
+        with patch.object(m, "s3_client", s3), \
+                patch.object(m, "dynamodb_resource", dynamodb_resource), \
+                patch.object(m.ReindexUtility, "_resolve_database_id", return_value=None), \
+                patch.object(m.ReindexUtility, "_update_files_in_metadata_table",
+                             side_effect=_capture):
+            results = utility._process_bucket("bucket", base_prefix, dry_run=False,
+                                              bucket_id="b1")
+        return written, results, table
+
+    @pytest.mark.parametrize("location", [
+        "projects/building-a/", "projects/building-a", "/projects/building-a/"])
+    def test_a_stamped_file_binds_to_the_asset_whose_location_holds_it(self, crReindexer,
+                                                                         location):
+        """An asset created with bucketExistingKey keeps its files under that folder,
+        whose first segment (`projects`) names no asset. Files uploaded through VAMS
+        carry the owner in their metadata, so the touch goes to that asset with the
+        path relative to its location, as the live file indexer writes the document.
+        Pairing the key-derived `projects` with the metadata's databaseId wrote a touch
+        the metadata stream could not resolve, so a cleared index lost these files."""
+        m = crReindexer
+        written, results, table = self._scan_touches(
+            m, ["projects/building-a/sub/m.glb", "projects/building-a/n.glb"],
+            self.STAMP, {("db1", "x-b"): _stamped_owner(location)})
+
+        assert written == [_touch("db1", "x-b", "/sub/m.glb"),
+                           _touch("db1", "x-b", "/n.glb")]
+        assert results["skipped_no_asset"] == 0
+        assert table.get_item.call_count == 1, \
+            "the named asset's record is read once per scan, not once per file"
+
+    def test_the_binding_holds_under_a_non_root_base_prefix(self, crReindexer):
+        m = crReindexer
+        written, _, _ = self._scan_touches(
+            m, ["assets/projects/building-a/sub/m.glb"], self.STAMP,
+            {("db1", "x-b"): _stamped_owner("assets/projects/building-a/")},
+            base_prefix="assets/")
+
+        assert written == [_touch("db1", "x-b", "/sub/m.glb")]
+
+    @pytest.mark.parametrize("key, records", [
+        ("projects/building-ab/m.glb",
+         {("db1", "x-b"): _stamped_owner("projects/building-a/")}),
+        ("projects/building-ab/m.glb",
+         {("db1", "x-b"): _stamped_owner("projects/building-a")}),
+        ("projects/building-a/m.glb",
+         {("db1", "x-b"): _stamped_owner("projects/building-a/", bucket_id="b2")}),
+        ("projects/building-a/m.glb", {}),
+    ], ids=["sibling-folder", "sibling-folder-slashless-location", "other-bucket",
+            "no-active-record"])
+    def test_a_stamp_whose_asset_does_not_hold_the_key_is_skipped(self, crReindexer,
+                                                                   key, records):
+        """The metadata is client-settable on a direct bucket write, so it binds only
+        inside the named asset's own location in this bucket: a sibling folder that
+        extends the owner's folder name is not inside it. Nor is it paired with the
+        key-derived assetId, which is the mixed entry the touch wrote before."""
+        m = crReindexer
+        written, results, _ = self._scan_touches(m, [key], self.STAMP, records)
+
+        assert written == []
+        assert results["skipped_no_asset"] == 1
+
+    def test_a_stamp_naming_the_key_derived_asset_needs_no_record_read(self, crReindexer):
+        """Control: metadata naming the key's own first segment (an archived asset,
+        whose record has moved to the {databaseId}#deleted partition) resolves from
+        the metadata as before, without reading the asset record."""
+        m = crReindexer
+        written, _, table = self._scan_touches(
+            m, ["zz/orphan.bin"], {"assetid": "zz", "databaseid": "dbZ"}, {})
+
+        assert written == [_touch("dbZ", "zz", "/orphan.bin")]
+        assert table.get_item.call_args_list == []
 
 
 @pytest.mark.unit

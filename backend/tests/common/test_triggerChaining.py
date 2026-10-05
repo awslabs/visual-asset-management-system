@@ -125,3 +125,32 @@ class TestMatchFileUploadTriggersChaining:
         as a non-workflow write, which is the ordinary trigger path."""
         matches = match_fileupload_triggers([_trigger("wfA")], "db1", "a1", "/model.glb", "v1")
         assert [m[1] for m in matches] == ["wfA"]
+
+
+@pytest.mark.unit
+class TestMatchFileUploadTriggersRewriteSources:
+    """Change sources that write a new version by copying an existing one."""
+
+    def test_metadata_only_rewrite_fires_nothing(self):
+        """Setting a file's primary type rewrites the object with its content unchanged. That is
+        not an upload, so no trigger fires -- including one whose workflow wrote the file, which
+        the stamp no longer names."""
+        calls = []
+
+        def lookup(db, wf):
+            calls.append((db, wf))
+            return True
+
+        matches = match_fileupload_triggers(
+            [_trigger("wfA"), _trigger("wfB", database_id="db1")], "db1", "a1", "/model.glb",
+            "v2", change_source="fileMetadataUpdate", change_workflow_id="",
+            chaining_allowed_for=lookup)
+        assert matches == []
+        assert calls == []
+
+    def test_file_revert_fires_the_ordinary_way(self):
+        """A revert restores earlier content as a new version, so it fires the ordinary way."""
+        matches = match_fileupload_triggers(
+            [_trigger("wfA")], "db1", "a1", "/model.glb", "v3",
+            change_source="fileRevert", change_workflow_id="")
+        assert [m[1] for m in matches] == ["wfA"]

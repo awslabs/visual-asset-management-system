@@ -212,6 +212,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/unsubscribe"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/physna/viewer"
                 }
             ],
             "groupPermissions": [

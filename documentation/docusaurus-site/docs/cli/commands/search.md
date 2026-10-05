@@ -47,24 +47,26 @@ vamscli search assets [OPTIONS]
 
 ### Filter syntax
 
-The `--filters` option accepts two formats. A query string is converted to an OpenSearch `query_string` clause; a JSON array is passed through as OpenSearch filter clauses.
+The `--filters` option accepts two formats. A query string is converted to an OpenSearch `query_string` clause. A JSON array is sent as it is, and each item must be a `query_string` clause; the API rejects any other clause type, such as `term` or `range`, with a 400 error.
+
+Identifier fields such as `str_databaseid` are analyzed text: the index splits an id on hyphens and ignores case, so a quoted id on the field itself also matches similar ids (`smoke-db` matches `smoke-db-2` and `Smoke-DB`). Filter an identifier on its `.keyword` subfield, which matches the exact, case-sensitive value.
 
 **Query string format (recommended):**
 
 ```bash
---filters 'str_databaseid:"my-db"'
---filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+--filters 'str_databaseid.keyword:"my-db"'
+--filters 'str_databaseid.keyword:"my-db" AND str_assettype:"3d-model"'
 --filters 'list_tags:("training" OR "simulation")'
 --filters 'str_assetname:model*'
---filters '(str_assettype:"3d-model" OR str_assettype:"texture") AND str_databaseid:"my-db"'
+--filters '(str_assettype:"3d-model" OR str_assettype:"texture") AND str_databaseid.keyword:"my-db"'
 ```
 
-**JSON array format (for advanced OpenSearch clauses):**
+**JSON array format (one `query_string` clause per item; the items are combined with AND):**
 
 ```bash
---filters '[{"term": {"str_assettype": "3d-model"}}]'
---filters '[{"range": {"num_version": {"gte": 1, "lte": 5}}}]'
---filters '[{"term": {"str_assettype": "3d-model"}}, {"range": {"num_version": {"gte": 1}}}]'
+--filters '[{"query_string": {"query": "str_assettype.keyword:\"3d-model\""}}]'
+--filters '[{"query_string": {"query": "bool_has_asset_children:true"}}]'
+--filters '[{"query_string": {"query": "str_assettype.keyword:\"3d-model\""}}, {"query_string": {"query": "bool_isdistributable:true"}}]'
 ```
 
 ### Metadata search
@@ -132,7 +134,7 @@ vamscli search assets -q "tower" --metadata-query "MD_str_status:active" --geo-p
 
 ```bash
 vamscli search assets -q "training model"
-vamscli search assets --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+vamscli search assets --filters 'str_databaseid.keyword:"my-db" AND str_assettype:"3d-model"'
 vamscli search assets -q "model" --sort-field "str_assetname" --sort-desc
 vamscli search assets -q "model" --from 20 --size 50
 vamscli search assets -q "model" --explain-results --json-output
@@ -155,13 +157,13 @@ The options table is identical to [`search assets`](#search-assets), with two di
 
 ```bash
 vamscli search files --filters 'str_fileext:"gltf"'
-vamscli search files --filters 'str_fileext:"png" AND str_databaseid:"my-database"'
+vamscli search files --filters 'str_fileext:"png" AND str_databaseid.keyword:"my-database"'
 vamscli search files --filters 'str_key:*texture* AND str_fileext:"png"'
 vamscli search files --filters 'list_tags:("ui" OR "interface")'
 
-# File size (bytes) requires the JSON array format
-vamscli search files --filters '[{"range": {"num_filesize": {"lte": 1048576}}}]'
-vamscli search files --filters '[{"range": {"num_filesize": {"gte": 1048576, "lte": 10485760}}}]'
+# File size range in bytes, as JSON array items
+vamscli search files --filters '[{"query_string": {"query": "num_filesize:[0 TO 1048576]"}}]'
+vamscli search files --filters '[{"query_string": {"query": "num_filesize:[1048576 TO 10485760]"}}]'
 
 # Metadata and geospatial
 vamscli search files --metadata-query "MD_str_format:GLTF2.0"
@@ -201,7 +203,7 @@ vamscli search simple [OPTIONS]
 | `--geo-geojson`      | PATH    | No       | Path to a GeoJSON file (Geometry, Feature, or FeatureCollection)           |
 | `--geo-relation`     | CHOICE  | No       | Spatial relation: `intersects` (default), `within`, `contains`, `disjoint` |
 | `--from`             | INTEGER | No       | Pagination start offset (default: 0)                                       |
-| `--size`             | INTEGER | No       | Results per page (default: 100, max: 1000)                                 |
+| `--size`             | INTEGER | No       | Results per page (default: 100, max: 2000)                                 |
 | `--output-format`    | CHOICE  | No       | `table` (default), `json`, or `csv`                                        |
 | `--json-output`      | Flag    | No       | Output the raw API response as JSON                                        |
 
@@ -262,7 +264,7 @@ Field names follow type-prefixed conventions. Use `search mapping` to enumerate 
 | Prefix            | Type      | Example fields                                                                                                 |
 | ----------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
 | `str_*`           | String    | `str_assetname`, `str_description`, `str_databaseid`, `str_assettype`, `str_assetid`, `str_key`, `str_fileext` |
-| `num_*`           | Numeric   | `num_version`, `num_filesize`                                                                                  |
+| `num_*`           | Numeric   | `num_filesize` (file index)                                                                                    |
 | `date_*`          | Date      | `date_lastmodified`                                                                                            |
 | `bool_*`          | Boolean   | `bool_isdistributable`, `bool_archived`                                                                        |
 | `list_*`          | List      | `list_tags`                                                                                                    |

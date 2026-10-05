@@ -78,7 +78,12 @@
                 },
                 { "field": "route__path", "operator": "starts_with", "value": "/tags" },
                 { "field": "route__path", "operator": "starts_with", "value": "/tag-types" },
-                { "field": "route__path", "operator": "starts_with", "value": "/workflows" }
+                { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/physna/viewer"
+                }
             ],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },

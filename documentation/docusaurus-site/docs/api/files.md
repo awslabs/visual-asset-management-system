@@ -245,7 +245,7 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteFile`
 
-Permanently deletes a file from the asset. This removes all versions of the file from S3.
+Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files.
 
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
@@ -347,7 +347,7 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 `POST /database/{databaseId}/assets/{assetId}/unarchiveFile`
 
-Restores a previously archived file by removing the S3 delete marker.
+Restores a previously archived file by copying its most recent content version forward as the new current version. The new version is recorded with change source `fileUnarchive`. Archived preview files of the file are restored the same way.
 
 **Request Parameters:**
 
@@ -487,6 +487,8 @@ Reverts a file to a specific previous S3 version by copying the old version as t
 `PUT /database/{databaseId}/assets/{assetId}/setPrimaryFile`
 
 Designates a file as the primary representative of its file type within the asset. Only one file per type can be primary.
+
+The file is written as a new Amazon S3 version with the same content, recorded with change source `fileMetadataUpdate` and, in `changeAssetFileVersionFrom`, the version it was copied from. That version does not start `fileUpload` workflow triggers.
 
 **Request Parameters:**
 
@@ -810,7 +812,7 @@ Deletes the asset-level preview image.
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles`
 
-Deletes auxiliary preview files (e.g., Potree viewer data) from the auxiliary bucket for the specified asset.
+Permanently deletes auxiliary preview files (e.g., Potree viewer data) from the auxiliary bucket for the specified asset, with every stored version.
 
 **Request Parameters:**
 

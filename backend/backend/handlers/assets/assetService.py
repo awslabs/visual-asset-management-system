@@ -328,18 +328,24 @@ def delete_assetAuxiliary_files(databaseId, assetLocation):
     logger.info(f"Deleting Temporary Auxiliary Assets Files Under Folder: {s3_assetAuxiliary_bucket}:{key}")
 
     try:
-        # Get all assets in assetAuxiliary bucket (unversioned, temporary files for the auxiliary assets) for deletion
-        # Use assetLocation key as root folder key for assetAuxiliaryFiles
-        paginator = s3.get_paginator('list_objects_v2')
+        # The auxiliary bucket is versioned, so every object version and delete marker under the
+        # prefix is batch-deleted; a delete that names no VersionId would only hide the data
+        deleted_count = 0
+        paginator = s3.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=s3_assetAuxiliary_bucket, Prefix=key):
-            if 'Contents' in page:
-                # Batch-delete the page's objects (up to 1000 per request)
-                objects_to_delete = [{'Key': item['Key']} for item in page['Contents']]
-                logger.info(f"Deleting {len(objects_to_delete)} auxiliary asset files under {key}")
-                s3.delete_objects(
+            entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+            for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
+                batch = entries[i:i + 1000]
+                response = s3.delete_objects(
                     Bucket=s3_assetAuxiliary_bucket,
-                    Delete={'Objects': objects_to_delete}
+                    Delete={'Objects': batch, 'Quiet': True}
                 )
+                errors = response.get('Errors', [])
+                for error in errors:
+                    logger.warning(f"Error deleting auxiliary file version {error.get('Key')} ({error.get('VersionId')}): {error.get('Code')}")
+                deleted_count += len(batch) - len(errors)
+        logger.info(f"Deleted {deleted_count} auxiliary asset file version(s) and delete marker(s) under {key}")
 
     except Exception as e:
         logger.exception(f"Error deleting auxiliary files: {e}")
@@ -912,9 +918,10 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
     """Tier-2 authorization for a single-asset operation, decided before existence and state.
 
     The verdict is reached before the caller learns anything about the asset, so a refusal
-    cannot be told apart from a not-found or a wrong-state rejection. When the asset exists it
-    is annotated with its object type and evaluated as stored; when it does not, the
-    identifiers the request supplied stand in, so an unauthorized caller is refused rather than
+    cannot be told apart from a not-found or a wrong-state rejection. When the asset exists, a
+    copy of the stored record annotated with its object type is evaluated, so the record the
+    caller goes on to write carries no annotation; when it does not, the identifiers the
+    request supplied stand in, so an unauthorized caller is refused rather than
     told the identifiers are unused. An empty token list is no identity to evaluate, so it
     denies without constructing an enforcer.
 
@@ -932,8 +939,7 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
         return False
 
     if asset:
-        asset.update({"object__type": "asset"})
-        authorization_object = asset
+        authorization_object = {**asset, 'object__type': 'asset'}
     else:
         authorization_object = {
             'databaseId': databaseId,
@@ -1184,10 +1190,11 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         # in the tag list, so the decision isolates the tag change; PUT on the stored tag list is
         # established above, and an unchanged tag list is still gated exactly once.
         if sorted(new_tags) != sorted(existing_tags):
-            post_mutation_asset = {**asset, 'tags': new_tags}
+            stored_asset = {**asset, 'object__type': 'asset'}
+            post_mutation_asset = {**stored_asset, 'tags': new_tags}
             tag_change_enforcer = CasbinEnforcer(claims_and_roles)
             for enforced_asset, enforced_action in (
-                (asset, "GET"),
+                (stored_asset, "GET"),
                 (post_mutation_asset, "GET"),
                 (post_mutation_asset, "PUT"),
             ):
@@ -1332,8 +1339,11 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
             build_asset_snapshot(asset, archived_reason=request_model.reason)
         )
 
-        # Update asset count
-        update_asset_count(db_database, asset_database, {}, databaseId)
+        # Update asset count (best-effort: the archive has already committed)
+        try:
+            update_asset_count(db_database, asset_database, {}, databaseId)
+        except Exception as e:
+            logger.warning(f"Asset count update failed after archiving {assetId}: {e}")
 
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
@@ -1388,6 +1398,12 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         logger.info(f"Asset {assetId} in database {original_db_id} is not in an archived state")
         raise VAMSGeneralErrorResponse("Asset is not archived. Only archived assets can be unarchived.")
 
+    # Only into a database that still exists; a deleted database's archived assets stay archived
+    db_response = db_table.get_item(Key={'databaseId': original_db_id}, ConsistentRead=True)
+    if 'Item' not in db_response:
+        logger.info(f"Database {original_db_id} for asset {assetId} has been deleted; not unarchiving")
+        raise VAMSGeneralErrorResponse("The asset's database has been deleted. Re-create the database before unarchiving this asset.")
+
     # Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
@@ -1441,8 +1457,11 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
             build_asset_snapshot(asset, unarchived_reason=request_model.reason)
         )
 
-        # Update asset count
-        update_asset_count(db_database, asset_database, {}, original_db_id)
+        # Update asset count (best-effort: the unarchive has already committed)
+        try:
+            update_asset_count(db_database, asset_database, {}, original_db_id)
+        except Exception as e:
+            logger.warning(f"Asset count update failed after unarchiving {assetId}: {e}")
 
         # Send email notification
         send_subscription_email(original_db_id, assetId)
@@ -1764,8 +1783,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             except Exception as e:
                 logger.warning(f"Error deleting asset file metadata versions: {e}")
 
-        # 9. Update asset count
-        update_asset_count(db_database, asset_database, {}, original_db_id)
+        # 9. Update asset count (best-effort: the delete has already committed)
+        try:
+            update_asset_count(db_database, asset_database, {}, original_db_id)
+        except Exception as e:
+            logger.warning(f"Asset count update failed after permanently deleting {assetId}: {e}")
 
         # Record permanent delete in asset history (best-effort). History
         # records for the asset are intentionally NOT deleted.
@@ -2096,11 +2118,12 @@ def handle_put_request(event):
         # Otherwise, handle regular update
         update_model = parse(body, model=UpdateAssetRequestModel)
         
-        # Update the asset
+        # Update the asset. A field the body omitted or sent as null is left unchanged; false and an
+        # empty tag list are values and are applied.
         result = update_asset(
             path_parameters['databaseId'], 
             path_parameters['assetId'], 
-            update_model.dict(exclude_unset=True),
+            update_model.dict(exclude_unset=True, exclude_none=True),
             claims_and_roles
         )
 

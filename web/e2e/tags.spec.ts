@@ -248,8 +248,18 @@ test.describe("switching scope replaces the listing", () => {
 
         // ...and the new scope actually loaded. Without this, an empty list would satisfy the
         // assertion above for the wrong reason. A database with no tags of its own is a legitimate
-        // state, so this is a skip rather than a failure.
-        const ownRows = page.getByText("🏢");
+        // state, so this is a skip rather than a failure. Only rendered badges count (the page also
+        // holds hidden ones), and the skip is decided once both tables have loaded: rows, or both
+        // empty states.
+        const ownRows = page.getByText("🏢").filter({ visible: true });
+        const bothEmpty = async () =>
+            (await page.getByText("No tags to display.").isVisible()) &&
+            (await page.getByText("No tag types to display.").isVisible());
+        await expect
+            .poll(async () => (await ownRows.count()) > 0 || (await bothEmpty()), {
+                timeout: 20000,
+            })
+            .toBe(true);
         test.skip(
             (await ownRows.count()) === 0,
             `${databaseName} has no tags or tag types of its own to prove the refetch`

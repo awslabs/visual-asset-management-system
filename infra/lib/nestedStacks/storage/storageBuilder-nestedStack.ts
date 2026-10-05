@@ -2200,6 +2200,16 @@ export function storageResourcesBuilder(
     // Create SNS Queuing Lambdas
     /////////////////////////////////////////////////////////////////////////////
 
+    // Failure handling shared by every SNS queuing stream mapping. snsQueuing reports the records
+    // it could not publish in batchItemFailures, which a mapping reads only with
+    // reportBatchItemFailures; bisectBatchOnError splits a batch that fails outright, and the retry
+    // bound keeps one failing batch from holding its shard for the stream's 24-hour retention.
+    const indexingStreamFailureHandling = {
+        reportBatchItemFailures: true,
+        bisectBatchOnError: true,
+        retryAttempts: 10,
+    };
+
     // Create file indexer SNS queuing Lambda
     const fileIndexerSnsQueuingFunction = buildFileIndexerSnsQueuingFunction(
         scope,
@@ -2221,6 +2231,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmFileIndexerAssetFileMetadata = esmFileIndexerAssetFileMetadata.node
@@ -2236,6 +2247,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: fileAttributeStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmFileIndexerFileAttribute = esmFileIndexerFileAttribute.node
@@ -2251,6 +2263,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
 
@@ -2263,6 +2276,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: fileAttributeStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2288,6 +2302,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmAssetIndexerAsset = esmAssetIndexerAsset.node
@@ -2302,6 +2317,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2317,6 +2333,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmAssetIndexerAssetFileMetadata = esmAssetIndexerAssetFileMetadata.node
@@ -2332,6 +2349,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2346,6 +2364,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetLinksStorageTableV2.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmAssetIndexerLinks = esmAssetIndexerLinks.node
@@ -2360,6 +2379,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetLinksMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmAssetIndexerLinksMetadata = esmAssetIndexerLinksMetadata.node
@@ -2374,6 +2394,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetLinksStorageTableV2.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
 
@@ -2385,6 +2406,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetLinksMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2410,6 +2432,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: databaseStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmDatabaseTableIndexerSns = esmDatabaseTableIndexerSns.node
@@ -2424,6 +2447,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: databaseMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmDatabaseMetadataIndexerSns = esmDatabaseMetadataIndexerSns.node
@@ -2438,6 +2462,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: databaseStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
 
@@ -2449,6 +2474,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: databaseMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2463,6 +2489,8 @@ export function storageResourcesBuilder(
     // `indexerQueueMaxReceiveCount` in searchBuilder, so a record that cannot be processed reaches a
     // DLQ after the same number of attempts wherever it entered VAMS.
     const bucketSyncQueueMaxReceiveCount = 3;
+    // Bucket-sync dead-letter queues, covered by the AwsSolutions-SQS3 suppression below.
+    const bucketSyncDlqs: sqs.Queue[] = [];
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     // A bucket instance can appear in multiple records (same bucket, different
     // prefixes). The sync-queue construct IDs are derived from the bucket instance,
@@ -2499,6 +2527,7 @@ export function storageResourcesBuilder(
                 enforceSSL: true,
             }
         );
+        bucketSyncDlqs.push(onS3ObjectCreatedDlq);
 
         // Create SQS queue for S3 object created events
         const onS3ObjectCreatedQueue = new sqs.Queue(
@@ -2553,6 +2582,7 @@ export function storageResourcesBuilder(
                     target: sqsBucketSyncFunctionCreated,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
             const cfnEsm = esmCreated.node.defaultChild as lambda.CfnEventSourceMapping;
@@ -2566,6 +2596,7 @@ export function storageResourcesBuilder(
                     target: sqsBucketSyncFunctionCreated,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
         }
@@ -2585,6 +2616,7 @@ export function storageResourcesBuilder(
                 enforceSSL: true,
             }
         );
+        bucketSyncDlqs.push(onS3ObjectDeletedDlq);
 
         // Create SQS queue for S3 object deleted events
         const onS3ObjectDeletedQueue = new sqs.Queue(
@@ -2639,6 +2671,7 @@ export function storageResourcesBuilder(
                     target: sqsBucketSyncFunctionRemoved,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
             const cfnEsm = esmDeleted.node.defaultChild as lambda.CfnEventSourceMapping;
@@ -2652,6 +2685,7 @@ export function storageResourcesBuilder(
                     target: sqsBucketSyncFunctionRemoved,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
         }
@@ -2797,17 +2831,20 @@ export function storageResourcesBuilder(
         resourceNameRegistry.register({ paramKey, value });
     });
 
-    // Add Nag suppressions for SQS queues
-    NagSuppressions.addResourceSuppressions(
-        scope,
-        [
-            {
-                id: "AwsSolutions-SQS3",
-                reason: "Intended not to use DLQs for these types of SQS events. Files easily redriven based on the logic of assets.",
-            },
-        ],
-        true
-    );
+    // Scoped to the bucket-sync dead-letter queues rather than the stack: every bucket-sync source queue
+    // carries a redrive policy, so a source queue added here later without one is still reported.
+    if (bucketSyncDlqs.length > 0) {
+        NagSuppressions.addResourceSuppressions(
+            bucketSyncDlqs,
+            [
+                {
+                    id: "AwsSolutions-SQS3",
+                    reason: "This queue is the dead-letter queue of a bucket-sync source queue and so terminates that queue's redrive chain; a redrive policy of its own would only move the same failed S3 notification to a further queue.",
+                },
+            ],
+            true
+        );
+    }
 
     //Return final storage resource object
     return storageResources;

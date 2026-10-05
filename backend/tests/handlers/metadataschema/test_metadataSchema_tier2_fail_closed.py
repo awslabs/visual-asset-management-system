@@ -321,14 +321,15 @@ class TestUpdateMetadataSchema:
         result = svc.update_metadata_schema(SCHEMA_ID, {"enabled": False}, AUTHENTICATED)
 
         assert isinstance(result, MetadataSchemaOperationResponseModel)
-        schema_table.put_item.assert_called_once()
+        schema_table.update_item.assert_called_once()
+        schema_table.put_item.assert_not_called()
         assert _decision("POST") in spy.decisions()
 
     def test_empty_tokens_denies_without_consulting_casbin(self, spy, schema_table):
         response = svc.update_metadata_schema(SCHEMA_ID, {"enabled": False}, NO_IDENTITY)
 
         assert _status(response) == 403
-        schema_table.put_item.assert_not_called()
+        schema_table.update_item.assert_not_called()
         assert spy.constructions == []
         assert spy.calls == []
 
@@ -337,7 +338,7 @@ class TestUpdateMetadataSchema:
         response = svc.update_metadata_schema(SCHEMA_ID, {"enabled": False}, AUTHENTICATED)
 
         assert _status(response) == 403
-        schema_table.put_item.assert_not_called()
+        schema_table.update_item.assert_not_called()
 
 
 @pytest.mark.unit

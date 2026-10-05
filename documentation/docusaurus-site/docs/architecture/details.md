@@ -136,7 +136,8 @@ sequenceDiagram
     participant SNS as Amazon SNS
     participant SQS as Amazon SQS
     participant Sync as Bucket Sync Lambda
-    participant WF as Workflow Auto-Execute
+    participant EB as Amazon EventBridge (Orchestration Bus)
+    participant WF as Workflow Trigger Dispatch
 
     Web->>API: POST /upload (file metadata)
     API->>Upload: Generate Presigned URL
@@ -146,9 +147,10 @@ sequenceDiagram
     SNS->>SQS: Forward to Bucket Sync Queue
     SQS->>Sync: Trigger Bucket Sync Lambda
     Sync->>Sync: Index file metadata in DynamoDB
-    Sync->>SQS: Send to Workflow Auto-Execute Queue
-    SQS->>WF: Trigger Auto-Execute Lambda
-    WF->>WF: Execute matching workflows
+    Sync->>EB: Publish asset.file.uploaded event
+    EB->>SQS: Route to Workflow Trigger Dispatch Queue
+    SQS->>WF: Trigger Dispatch Lambda
+    WF->>WF: Execute workflows for matching fileUpload triggers
 ```
 
 ### Upload Process Details
@@ -288,7 +290,9 @@ Configuration values resolve through a four-tier fallback chain:
 
 ## Nested Stack Dependency Chain
 
-The following diagram shows the complete dependency ordering between VAMS nested stacks.
+The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency. RestApi renders the routes that ApiBuilder, ApiBuilder2, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them.
+
+Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. The dotted arrow marks the one that places StaticWeb: it reads the REST API endpoint, so it deploys after RestApi. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
 
 ```mermaid
 graph TD
@@ -297,19 +301,39 @@ graph TD
     Core --> VPC["VPCBuilder<br/><i>Conditional</i>"]
     Core --> LL["LambdaLayers"]
     Core --> SRB["StorageResourcesBuilder"]
-
-    SRB --> AB["AuthBuilder"]
-
-    AB --> APIGW["ApiGatewayV2Amplify"]
-
-    APIGW --> APIBuild["ApiBuilder"]
-    APIGW --> SW["StaticWeb"]
-    APIGW --> SearchB["SearchBuilder"]
-    APIGW --> PB["PipelineBuilder"]
-    APIGW --> Addon["AddonBuilder"]
-
     Core --> LS["LocationService<br/><i>Conditional</i>"]
     Core --> FE["CustomFeatureEnabledConfig"]
+
+    SRB --> RNB["ResourceNamesBuilder"]
+
+    SRB --> AB["AuthBuilder"]
+    RNB --> AB
+
+    SRB --> APIBuild["ApiBuilder"]
+    RNB --> APIBuild
+
+    SRB --> APIBuild2["ApiBuilder2"]
+    RNB --> APIBuild2
+    APIBuild --> APIBuild2
+
+    SRB --> SearchB["SearchBuilder"]
+    RNB --> SearchB
+
+    SRB --> PB["PipelineBuilder"]
+    APIBuild2 --> PB
+
+    SRB --> Addon["AddonBuilder"]
+    RNB --> Addon
+
+    SRB --> REST["RestApi"]
+    AB --> REST
+    APIBuild --> REST
+    APIBuild2 --> REST
+    SearchB --> REST
+    Addon --> REST
+
+    SRB --> SW["StaticWeb<br/><i>Conditional</i>"]
+    REST -.->|API endpoint| SW
 ```
 
 ## Resource Name Resolution

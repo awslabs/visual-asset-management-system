@@ -16,7 +16,7 @@ Verify VAMS documentation accuracy against source code.
 
 **API Reference** (`docs/api/` pages and `documentation/VAMS_API.yaml`):
 
--   Compare endpoints against the master route list in `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`) and the route registrations in `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` **and** `apiBuilder2-nestedStack.ts`
+-   Compare endpoints against the master route list in `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`) and the route registrations, which are every `attachFunctionToApi(` call under `infra/lib/` plus the two `registry.register(` calls in `infra/lib/nestedStacks/apiLambda/constructs/rest-api-gateway-construct.ts` that register the anonymous `/api/amplify-config` and `/api/version` (`grep -rlE "attachFunctionToApi\(|registry\.register\(" infra/lib` lists the files; `apiRouteRegistry.ts` is the helper's definition). Besides the two API builder stacks, the search stack and add-on stacks such as the Physna one register their own routes, and an add-on's routes are registered only when that add-on is enabled. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized REST API against `apiRoutes.py` in both directions
 -   Verify request/response models against `backend/backend/models/` Pydantic classes
 -   Check for new endpoints not yet documented — remember the API is documented in **two** places (`VAMS_API.yaml` and the `docs/api/<domain>.md` pages) and both must agree
 
