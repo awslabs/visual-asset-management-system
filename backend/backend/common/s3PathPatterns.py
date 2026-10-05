@@ -213,3 +213,30 @@ def key_has_reserved_segment(object_key: str, prefix: str = "", reserved=None) -
             if part in reserved_names:
                 return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Asset location key + asset-relative path.
+#
+# An asset's stored ``assetLocation.Key`` names its folder. Derived and migrated
+# locations end with ``/``; a location supplied as ``bucketExistingKey`` may
+# not. Plain concatenation then runs the folder name into the file path
+# (``projects/building-a`` + ``sub/m.glb`` -> ``projects/building-asub/m.glb``),
+# so every key built from a stored location goes through this join.
+# ---------------------------------------------------------------------------
+def join_asset_location_key(location_key: str, relative_path: str) -> str:
+    """The S3 key of an asset-relative file path under an asset's stored location key.
+
+    Args:
+        location_key: The asset's ``assetLocation.Key``, with or without its
+            trailing ``/``.
+        relative_path: The asset-relative file path, with or without its leading ``/``.
+
+    Returns:
+        str: The location folder and the path joined by exactly one ``/``. An empty
+        location key yields the path without its leading ``/``.
+    """
+    base = location_key or ""
+    if base and not base.endswith("/"):
+        base += "/"
+    return base + (relative_path or "").lstrip("/")

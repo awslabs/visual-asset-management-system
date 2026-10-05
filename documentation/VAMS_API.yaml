@@ -762,13 +762,13 @@ paths:
                 $ref: '#/components/schemas/object_name_pattern_regex'
             responses:
                 "200":
-                    description: Constraint created/updated successfully.
+                    description: "Constraint created/updated successfully. The operation field is create for a new constraint, and update when a constraint with this ID already exists."
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: Invalid parameters, missing required criteria, or role does not exist.
+                    description: "Invalid parameters, missing required criteria, or role does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request."
                     content:
                         application/json:
                             schema:
@@ -805,13 +805,13 @@ paths:
                 $ref: '#/components/schemas/object_name_pattern_regex'
             responses:
                 "200":
-                    description: Constraint created/updated successfully.
+                    description: "Constraint created/updated successfully. The operation field is create for a new constraint, and update when a constraint with this ID already exists."
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: Invalid parameters, missing required criteria, or role does not exist.
+                    description: "Invalid parameters, missing required criteria, or role does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request."
                     content:
                         application/json:
                             schema:
@@ -841,19 +841,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: Invalid constraint ID.
+                    description: "Invalid constraint ID, or the delete could not confirm that all of the constraint's stored items were removed. The constraint may still grant its permissions; repeat the delete."
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to delete constraints.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Constraint not found.
                     content:
                         application/json:
                             schema:
@@ -1743,6 +1737,7 @@ paths:
               - DefaultCognitoAuthorizer: []
         delete:
             summary: "Delete a database (soft-delete)."
+            description: "The dependency check runs after the database is found and the caller is authorized to delete it, so an unauthorized caller receives 403 and a missing database 404 whatever the database contains."
             responses:
                 "200":
                     description: Database deleted.
@@ -1825,6 +1820,20 @@ paths:
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    Items:
+                                        type: array
+                                        items:
+                                            $ref: "#/components/schemas/asset"
+                                    NextToken:
+                                        type: string
+                                        description: "Token for pagination"
+                                required:
+                                    - Items
                 "400":
                     description: Invalid databaseId or query parameters.
                     content:
@@ -1849,13 +1858,13 @@ paths:
             - $ref: "#/components/parameters/startingTokenParam"
             - name: "databaseId"
               in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              description: "Database identifier, 3-63 characters of letters, numbers, hyphens, and underscores."
               required: true
               schema:
                   $ref: '#/components/schemas/id_regex'
-            - name: "showDeleted"
+            - name: "showArchived"
               in: "query"
-              description: "Flag to specify whether to list deleted assets or not."
+              description: "When true, archived assets are returned along with active assets. Defaults to false."
               required: false
               schema:
                   type: "boolean"
@@ -1890,25 +1899,25 @@ paths:
             parameters:
                 - name: "databaseId"
                   in: path
-                  description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+                  description: "Database identifier, 3-63 characters of letters, numbers, hyphens, and underscores."
                   required: true
                   schema:
                     $ref: "#/components/schemas/id_regex"
                 - name: "assetId"
                   in: path
-                  description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+                  description: "Unique identifier for asset."
                   required: true
                   schema:
                     $ref: "#/components/schemas/id_regex"
-                - name: "showDeleted"
+                - name: "showArchived"
                   in: query
-                  description: "Flag to specify whether to list deleted assets or not."
+                  description: "When true, an asset not found among active assets is also looked up among archived assets. Defaults to false."
                   required: false
                   schema:
                     type: "boolean"
         put:
             summary: "Update an asset's editable fields."
-            description: "Update an asset's editable fields (assetName, description, isDistributable, tags)."
+            description: "Update an asset's editable fields (assetName, description, isDistributable, tags). Omitted fields and fields sent as null remain unchanged, so at least one field must carry a non-null value; an empty tags array clears the tag list, subject to the required tag types in scope."
             requestBody:
                 required: true
                 content:
@@ -1921,13 +1930,7 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: object
-                                properties:
-                                    message:
-                                        type: string
-                                        example: "Asset updated successfully"
-                                    asset:
-                                        $ref: "#/components/schemas/asset"
+                                $ref: "#/components/schemas/assetOperationResponse"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -1970,13 +1973,13 @@ paths:
         parameters:
             - name: "databaseId"
               in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              description: "Database identifier, 3-63 characters of letters, numbers, hyphens, and underscores."
               required: true
               schema:
                 $ref: '#/components/schemas/id_regex'
             - name: "assetId"
               in: "path"
-              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              description: "Unique identifier for asset."
               required: true
               schema:
                 $ref: '#/components/schemas/id_regex'
@@ -2035,7 +2038,7 @@ paths:
                                         description: "Presigned URL (first successful URL for bulk requests)."
                                     expiresIn:
                                         type: integer
-                                        description: "URL expiration in seconds."
+                                        description: "Longest the URL can remain valid, in seconds, from the deployment's app.authProvider.presignedUrlTimeoutSeconds. The URL stops working sooner if the Lambda role credentials that signed it expire first."
                                     downloadType:
                                         type: string
                                         enum: [assetFile, assetPreview]
@@ -2098,18 +2101,16 @@ paths:
         parameters:
             - name: "databaseId"
               in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              description: "Database identifier, 3-63 characters of letters, numbers, hyphens, and underscores."
               required: true
               schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                  $ref: '#/components/schemas/id_regex'
             - name: "assetId"
               in: "path"
-              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              description: "Unique identifier for asset, 2-255 characters."
               required: true
               schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                  $ref: '#/components/schemas/asset_id_regex'
     /database/{databaseId}/assets/{assetId}/export:
         post:
             summary: "Export comprehensive asset data including child tree, metadata, files, and relationships"
@@ -2302,7 +2303,7 @@ paths:
                                         description: "Presigned Amazon S3 URL for the staged export payload, identical to the Location header. Provided in the body for clients that do not follow redirects automatically."
                                     presignedExportPayloadExpiresIn:
                                         type: integer
-                                        description: "Lifetime of the presigned URL in seconds, from the deployment's PRESIGNED_URL_TIMEOUT_SECONDS setting"
+                                        description: "Longest the presigned URL can remain valid, in seconds, from the deployment's app.authProvider.presignedUrlTimeoutSeconds. The URL stops working sooner if the Lambda role credentials that signed it expire first."
                 "400":
                     description: "Invalid parameters or pagination token, or `generatePresignedUrls` was requested for an asset on the page that is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`."
                     content:
@@ -3214,6 +3215,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/unarchiveFile:
         post:
             summary: "Unarchive a previously archived file."
+            description: "Restore an archived file by copying its most recent content version forward as the new current version, recorded with change source fileUnarchive. Archived preview files of the file are restored the same way."
             requestBody:
                 required: true
                 content:
@@ -3377,7 +3379,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles:
         delete:
             summary: "Delete auxiliary preview asset files."
-            description: "Deletes auxiliary preview asset files for a specific file path (treated as a prefix). This endpoint is used to clean up temporary auxiliary files that may be created during preview generation."
+            description: "Deletes auxiliary preview asset files for a specific file path (treated as a prefix). This endpoint is used to clean up temporary auxiliary files that may be created during preview generation. Every version and delete marker under the prefix is removed, so the deletion cannot be undone."
             requestBody:
                 required: true
                 content:
@@ -3496,7 +3498,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/setPrimaryFile:
         put:
             summary: "Set or remove primary type metadata for a file."
-            description: "Set or remove primary type metadata for a file in S3. The primary type can be used to categorize files within an asset (e.g., primary, lod1-lod5, other). Only works on files, not folders."
+            description: "Set or remove primary type metadata for a file in S3. The primary type can be used to categorize files within an asset (e.g., primary, lod1-lod5, other). Only works on files, not folders. The file is written as a new S3 version with the same content, recorded with change source fileMetadataUpdate and the version it was copied from in changeAssetFileVersionFrom; that version does not start fileUpload workflow triggers."
             requestBody:
                 required: true
                 content:
@@ -3977,11 +3979,7 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: object
-                                properties:
-                                    message:
-                                        type: string
-                                        example: "Asset archived successfully"
+                                $ref: "#/components/schemas/assetOperationResponse"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -4031,11 +4029,7 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: object
-                                properties:
-                                    message:
-                                        type: string
-                                        example: "Asset deleted successfully"
+                                $ref: "#/components/schemas/assetOperationResponse"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -4118,7 +4112,7 @@ paths:
                                         example: true
                                     message:
                                         type: string
-                                        example: "Asset {assetId} unarchived successfully"
+                                        example: "Asset my-asset-id unarchived successfully. Files previously archived remain archived; unarchive files individually or use the restore-files option."
                                     assetId:
                                         type: string
                                         example: "my-asset-id"
@@ -4127,8 +4121,8 @@ paths:
                                         example: "unarchive"
                                     timestamp:
                                         type: string
-                                        format: date-time
-                                        example: "2024-01-15T10:30:00.000Z"
+                                        description: "UTC time of the operation in ISO 8601 form, without a time zone offset"
+                                        example: "2024-06-15T10:30:00.123456"
                                 required:
                                     - success
                                     - message
@@ -4136,19 +4130,13 @@ paths:
                                     - operation
                                     - timestamp
                 "400":
-                    description: Invalid parameters, asset not archived, or confirmation not provided.
+                    description: Invalid parameters, asset not found, asset not archived, confirmation not provided, or the asset's database has been deleted.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to unarchive this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -4406,8 +4394,10 @@ paths:
                                                     template body is held to.
                                 executionGroupId:
                                     type: string
-                                    maxLength: 64
-                                    description: "Optional group id for bulk grouping / abort-by-group. Must be a valid identifier: it becomes a query key on the executions list and the abort-by-group route."
+                                    minLength: 3
+                                    maxLength: 63
+                                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
+                                    description: "Optional group id for bulk grouping / abort-by-group, 3-63 characters of letters, numbers, hyphens, and underscores. It becomes a query key on the executions list and the abort-by-group route."
                                 triggerType:
                                     type: string
                                     enum: [manual, fileUpload]
@@ -6228,7 +6218,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         put:
             summary: "Update an existing metadata schema."
-            description: "Update an existing metadata schema's name, fields, file restrictions, or enabled status. At least one field must be provided for update."
+            description: "Update an existing metadata schema's name, fields, file restrictions, or enabled status. At least one field must be provided for update with a non-null value. A schemaName, fields, or enabled sent as null is left unchanged; a fileKeyTypeRestriction sent as null or an empty string removes the restriction and does not by itself count as the field to update."
             requestBody:
                 required: true
                 content:
@@ -8329,8 +8319,10 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             properties:
                                 executionGroupId:
                                     type: string
-                                    maxLength: 64
-                                    description: "Optional group id for the new execution. Must be a valid identifier. Omit it to launch the re-run outside any group; send the original's group id to keep the two together."
+                                    minLength: 3
+                                    maxLength: 63
+                                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
+                                    description: "Optional group id for the new execution, 3-63 characters of letters, numbers, hyphens, and underscores. Omit it to launch the re-run outside any group; send the original's group id to keep the two together."
             responses:
                 "200":
                     description: New execution started.
@@ -10257,31 +10249,132 @@ components:
 
         asset:
             type: object
+            description: "An asset record as the asset listing and get operations return it."
             properties:
-                assetId:
-                    $ref: '#/components/schemas/asset_id_regex'
-                    #example: blade-12345
                 databaseId:
                     $ref: '#/components/schemas/id_regex'
                     #example: vr-models-training
+                assetId:
+                    $ref: '#/components/schemas/asset_id_regex'
+                    #example: blade-12345
+                assetName:
+                    $ref: '#/components/schemas/object_name_pattern_regex'
                 description:
                     #example: "Description of uploaded asset."
                     $ref: "#/components/schemas/string256Param"
-                assetName:
-                    # example: 
-                    $ref: '#/components/schemas/object_name_pattern_regex'
-                assetPathKey:
-                    # example
-                    $ref: '#/components/schemas/asset_path_pattern_regex'
+                isDistributable:
+                    type: boolean
+                    description: "Whether the asset can be downloaded."
+                tags:
+                    type: array
+                    nullable: true
+                    items:
+                        type: string
+                    description: "Tag names applied to the asset."
+                assetType:
+                    type: string
+                    nullable: true
+                    description: "Set from the asset's files when files are uploaded or synced: 'none' for no files, 'folder' for more than one, otherwise the single file's lowercase extension with its leading dot (for example '.glb'), or 'unknown' when that file has no extension."
+                status:
+                    type: string
+                    default: active
+                    description: "'archived' for an archived asset, otherwise 'active'."
+                bucketId:
+                    type: string
+                    nullable: true
+                    description: "Identifier of the registered S3 bucket that stores the asset's files."
+                bucketName:
+                    type: string
+                    nullable: true
+                    description: "Name of the S3 bucket that stores the asset's files."
+                currentVersion:
+                    type: object
+                    nullable: true
+                    description: "The asset's current version."
+                    properties:
+                        Version:
+                            type: string
+                        DateModified:
+                            type: string
+                        Comment:
+                            type: string
+                        description:
+                            type: string
+                        createdBy:
+                            type: string
+                        versionAlias:
+                            type: string
+                            nullable: true
+                    required:
+                        - Version
+                        - DateModified
+                assetLocation:
+                    type: object
+                    nullable: true
+                    description: "S3 key prefix of the asset's files, relative to the bucket root."
+                    properties:
+                        Key:
+                            type: string
+                    required:
+                        - Key
                 previewLocation:
-                    # example
-                    $ref: '#/components/schemas/asset_path_pattern_regex'
+                    type: object
+                    nullable: true
+                    description: "S3 key of the asset's preview image, relative to the bucket root."
+                    properties:
+                        Key:
+                            type: string
+                    required:
+                        - Key
+                archivedAt:
+                    type: string
+                    nullable: true
+                    description: "Time the asset was archived."
+                archivedBy:
+                    type: string
+                    nullable: true
+                    description: "User who archived the asset."
+                archivedReason:
+                    type: string
+                    nullable: true
+                    description: "Reason recorded when the asset was archived."
             required:
-                - assetId
                 - databaseId
-                - description
+                - assetId
                 - assetName
-                - assetPathKey
+                - description
+                - isDistributable
+        assetOperationResponse:
+            type: object
+            description: "Result of an asset operation. PUT /database/{databaseId}/assets/{assetId} returns it with operation set to update, archiveAsset with archive, and deleteAsset with delete."
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                assetId:
+                    $ref: '#/components/schemas/asset_id_regex'
+                operation:
+                    type: string
+                    enum: [archive, unarchive, delete, update]
+                    description: "Operation performed"
+                timestamp:
+                    type: string
+                    description: "UTC time of the operation in ISO 8601 form, without a time zone offset"
+            required:
+                - success
+                - message
+                - assetId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "Asset updated successfully"
+                assetId: "asset-001"
+                operation: "update"
+                timestamp: "2024-06-15T10:30:00.123456"
         createAssetRequest:
             type: object
             properties:
@@ -10665,8 +10758,7 @@ components:
                     description: "Operation that was performed"
                 timestamp:
                     type: string
-                    format: date-time
-                    description: "Timestamp of the operation"
+                    description: "UTC time of the operation in ISO 8601 form, without a time zone offset"
                 constraint:
                     type: string
                     description: "JSON string of the constraint data (for create/update operations)"
@@ -10681,14 +10773,14 @@ components:
                 message: "Constraint asset-viewer-constraint created/updated successfully"
                 constraintId: "asset-viewer-constraint"
                 operation: "create"
-                timestamp: "2024-01-15T10:30:00.000Z"
+                timestamp: "2024-06-15T10:30:00.123456"
                 constraint: "{\"identifier\":\"asset-viewer-constraint\",\"name\":\"Asset Viewer Constraint\",...}"
         database:
             type: object
             properties:
                 databaseId:
                     #example: vr-models-training
-                    description: "Unique database identifier. Cannot be GLOBAL or a reserved S3 keyword (pipeline(s), preview(s), temp-upload(s), workspace(s)), matched case-insensitively."
+                    description: "Unique database identifier, 4-63 characters of letters, numbers, hyphens, and underscores. Cannot be GLOBAL or a reserved S3 keyword (pipeline(s), preview(s), temp-upload(s), workspace(s)), matched case-insensitively."
                     $ref: '#/components/schemas/id_regex'
                 description:
                     #example: 3d models used in training programs.
@@ -10703,7 +10795,7 @@ components:
                 restrictFileUploadsToExtensions:
                     type: string
                     default: ""
-                    description: "Comma-delimited list of allowed file extensions (e.g., 'jpg,png,pdf'). Empty string allows all extensions."
+                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions."
                 complianceSchemaName:
                     type: string
                     nullable: true
@@ -10733,12 +10825,12 @@ components:
                     description: "Whether to restrict metadata to only fields defined in schemas (optional)"
                 restrictFileUploadsToExtensions:
                     type: string
-                    description: "Comma-delimited list of allowed file extensions (optional)"
+                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions (optional)"
             required: []
             example:
                 description: "Updated 3d models used in training programs"
                 restrictMetadataOutsideSchemas: true
-                restrictFileUploadsToExtensions: "obj,fbx,gltf,glb"
+                restrictFileUploadsToExtensions: ".obj,.fbx,.gltf,.glb"
         
         updateDatabaseResponse:
             type: object
@@ -10758,8 +10850,7 @@ components:
                     description: "Operation that was performed"
                 timestamp:
                     type: string
-                    format: date-time
-                    description: "Timestamp of the operation"
+                    description: "UTC time of the operation in ISO 8601 form, without a time zone offset"
             required:
                 - success
                 - message
@@ -10771,7 +10862,7 @@ components:
                 message: "Database vr-models-training updated successfully"
                 databaseId: "vr-models-training"
                 operation: "update"
-                timestamp: "2024-01-15T10:30:00.000Z"
+                timestamp: "2024-06-15T10:30:00.123456"
         email_pattern_regex: 
             type: string
             pattern: ^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$
@@ -10928,7 +11019,7 @@ components:
                 pattern: ^[\\.]([a-z0-9]){1,7}
         id_regex:
             type: string
-            pattern: ^[a-z]([-_a-z0-9]){3,63}$
+            pattern: "^[-_a-zA-Z0-9]{3,63}$"
         execution_id_regex:
             type: string
             description: >
@@ -10952,9 +11043,10 @@ components:
             properties:
                 databaseId:
                     type: string
-                    description: "Target database identifier"
+                    description: "Target database identifier, 4-63 characters of letters, numbers, hyphens, and underscores"
                     minLength: 4
-                    maxLength: 256
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                 assetId:
                     type: string
                     description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly."
@@ -10998,7 +11090,8 @@ components:
                 databaseId:
                     type: string
                     minLength: 4
-                    maxLength: 256
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                 assetId:
                     type: string
                     description: "Asset identifier, ASCII characters only. Must match the identifier sent to the initialize stage."
@@ -11163,8 +11256,9 @@ components:
             properties:
                 databaseId:
                     type: string
-                    minLength: 1
-                    maxLength: 256
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Database ID (supports 'GLOBAL' for system-wide schemas)"
                 metadataSchemaEntityType:
                     $ref: "#/components/schemas/metadataSchemaEntityType"
@@ -11174,7 +11268,7 @@ components:
                     description: "Schema name (1-256 characters)"
                 fileKeyTypeRestriction:
                     type: string
-                    description: "Comma-delimited file extensions (e.g., 'jpg,png,pdf'). Only for fileMetadata/fileAttribute types."
+                    description: "Comma-delimited file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'); an entry without the dot, with a second dot or with a path separator is rejected with a 400. Only for fileMetadata/fileAttribute types."
                 fields:
                     $ref: "#/components/schemas/metadataSchemaFields"
                     description: "Field definitions for the schema"
@@ -11212,7 +11306,7 @@ components:
                     description: "Updated schema name (optional)"
                 fileKeyTypeRestriction:
                     type: string
-                    description: "Updated file extension restrictions (optional)"
+                    description: "Updated comma-delimited file extensions, each with its leading dot (e.g., '.glb,.usd') (optional). An entry without the dot, with a second dot or with a path separator is rejected with a 400, as is a restriction on a schema that is not fileMetadata or fileAttribute. An empty string removes the restriction."
                 fields:
                     $ref: "#/components/schemas/metadataSchemaFields"
                     description: "Updated field definitions (optional)"
@@ -11302,8 +11396,7 @@ components:
                     description: "Operation that was performed"
                 timestamp:
                     type: string
-                    format: date-time
-                    description: "Timestamp of the operation"
+                    description: "UTC time of the operation in ISO 8601 form, without a time zone offset"
             required:
                 - success
                 - message
@@ -11315,7 +11408,7 @@ components:
                 message: "Metadata schema 'Engineering Asset Schema' created successfully"
                 metadataSchemaId: "550e8400-e29b-41d4-a716-446655440000"
                 operation: "create"
-                timestamp: "2024-01-15T10:30:00.000Z"
+                timestamp: "2024-06-15T10:30:00.123456"
         
         getMetadataSchemasResponse:
             type: object
@@ -12890,8 +12983,7 @@ components:
                     description: "Operation that was performed"
                 timestamp:
                     type: string
-                    format: date-time
-                    description: "Timestamp of the operation"
+                    description: "UTC time of the operation in ISO 8601 form, without a time zone offset"
             required:
                 - success
                 - message
@@ -12903,7 +12995,7 @@ components:
                 message: "User roles created successfully"
                 userId: "user@example.com"
                 operation: "create"
-                timestamp: "2024-01-15T10:30:00.000Z"
+                timestamp: "2024-06-15T10:30:00.123456"
         
         uuid_regex:
             type: string
@@ -13182,7 +13274,7 @@ components:
                     description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
                 changeSource:
                     type: string
-                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
                     description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
@@ -13291,7 +13383,7 @@ components:
                     description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
                 changeSource:
                     type: string
-                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
                     description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
@@ -13341,7 +13433,7 @@ components:
                                 nullable: true
                             changeSource:
                                 type: string
-                                description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for legacy versions."
+                                description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, assetArchive, fileRevert, fileMetadataUpdate). Blank or absent for legacy versions."
                             changeUserId:
                                 type: string
                                 description: "User (or SYSTEM_USER) that created this version. Blank or absent for legacy versions."
@@ -13398,7 +13490,7 @@ components:
                     type: string
                     description: "Optional destination database ID for cross-database copy. Defaults to the source database if not provided."
                     minLength: 4
-                    maxLength: 256
+                    maxLength: 63
                     pattern: "^[-_a-zA-Z0-9]{3,63}$"
             required:
                 - sourcePath
@@ -14997,7 +15089,7 @@ components:
                 size:
                     type: integer
                     minimum: 1
-                    maximum: 1000
+                    maximum: 2000
                     default: 100
                     description: "Number of results to return"
             required: []
@@ -15602,8 +15694,7 @@ components:
                     description: "Operation that was performed"
                 timestamp:
                     type: string
-                    format: date-time
-                    description: "Timestamp of the operation"
+                    description: "UTC time of the operation in ISO 8601 form, without a time zone offset"
             required:
                 - success
                 - message
@@ -15615,7 +15706,7 @@ components:
                 message: "User user@example.com created successfully. A welcome email with temporary password has been sent to their email."
                 userId: "user@example.com"
                 operation: "create"
-                timestamp: "2024-01-15T10:30:00.000Z"
+                timestamp: "2024-06-15T10:30:00.123456"
         constraintObjectTypeField:
             type: object
             properties:

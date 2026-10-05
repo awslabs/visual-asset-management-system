@@ -492,8 +492,9 @@ deletion is written to the audit trail as `schema_deleted`.
 -   `generate_download_url` and `generate_download_urls_bulk` return presigned Amazon S3 URLs
     (one per requested file for the bulk tool), each a bearer credential: it
     needs no further authentication and anyone holding it can download the
-    object until it expires (`app.authProvider.presignedUrlTimeoutSeconds`, 24
-    hours by default). Because they are returned as tool output they also land in
+    object until it expires: at most `app.authProvider.presignedUrlTimeoutSeconds`
+    (24 hours by default), sooner if the credentials that signed it expire first.
+    Because they are returned as tool output they also land in
     the host's conversation log and telemetry, so neither tool is in the
     `autoApprove` sample above. Where a URL can be used is bounded only by the
     deployment's `app.assetBuckets.presignedUrlNetworkRestrictions`, which is

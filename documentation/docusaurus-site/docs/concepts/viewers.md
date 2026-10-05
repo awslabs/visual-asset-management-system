@@ -12,7 +12,7 @@ The [master viewer table](#master-viewer-table) lists all 20; any other page quo
 
 ## What are file viewers
 
-File viewers are browser-based rendering components that display asset files directly in the VAMS web interface. When you open a file from the file manager, VAMS automatically selects the best viewer based on the file extension and viewer priority. If multiple viewers support the same extension, you can switch between them using a dropdown in the viewer UI.
+File viewers are browser-based rendering components that display asset files directly in the VAMS web interface. When you open a file from the file manager, VAMS finds the viewers that support its file extension. If only one viewer supports it, VAMS opens the file in that viewer. If several do, VAMS lists them in a dropdown in the viewer UI and opens the file once you choose one; you can switch between them from the same dropdown.
 
 The viewer system is built on a **plugin architecture**. Each viewer is an independent module with its own dependencies, configuration, and supported file types. New viewers can be added without modifying any core system code -- only a configuration entry and the viewer component are required.
 
@@ -20,9 +20,9 @@ The viewer system is built on a **plugin architecture**. Each viewer is an indep
 
 1. VAMS reads the file extension (e.g., `.glb`, `.e57`, `.pdf`).
 2. All enabled viewers that support that extension are identified.
-3. The viewer with the **lowest priority number** is selected as the default.
-4. If multiple viewers match, a dropdown allows you to switch between them.
-5. If no viewer matches the extension but a preview image exists, the **Preview Viewer** displays the thumbnail.
+3. If exactly one viewer matches, VAMS opens the file in it.
+4. If multiple viewers match, the dropdown lists them with the **lowest priority number** first, and VAMS loads none of them until you choose one. You can then switch between them from the same dropdown.
+5. If the file has a preview image, the file page also offers a **Preview** option that shows the image in the **Preview Viewer**, including for a file whose extension no viewer matches.
 
 ---
 
@@ -44,11 +44,11 @@ Rendering of PDF, HTML, and text-based files. The Text Viewer provides syntax hi
 
 ### Data
 
-Tabular display of columnar data formats: CSV and FCS files. Other tabular formats, including R serialization (`.rds`) and Apache Parquet (`.parquet`), have no dedicated viewer and fall back to the Preview Viewer.
+Tabular display of columnar data formats: CSV and FCS files. Other tabular formats, including R serialization (`.rds`) and Apache Parquet (`.parquet`), have no dedicated viewer; when such a file has a preview image, the file page's **Preview** option shows it in the Preview Viewer.
 
 ### Preview
 
-A fallback viewer that displays generated preview thumbnails for files that have no dedicated viewer. The Preview Viewer has the lowest priority (10) and matches all file extensions as a wildcard.
+Displays a file's preview image when you choose the **Preview** option on the file page, which offers that option only for a file that has a preview image. The Preview Viewer matches all file extensions as a wildcard (priority 10) but is used only for that option and is never listed among a file's viewers, so the file view of a file with no dedicated viewer reports that no compatible viewers were found.
 
 ---
 
@@ -71,19 +71,19 @@ This table is the definitive reference for all built-in viewer plugins.
 | **VEERUM 3D Viewer**                 | 3D       | `.e57`, `.las`, `.laz`, `.ply`, `.json`                                                                                                                                          | 2        | Yes        | Licensed viewer for point clouds and 3D tilesets. Requires Potree pipeline. Shows latest version only. See [Licensed viewers](#licensed-viewers).                                                                                                                                                                                                                                                 |
 | **Physna Viewer**                    | 3D       | `.3ds`, `.asm`, `.catpart`, `.catproduct`, `.glb`, `.iam`, `.iges`, `.igs`, `.ipt`, `.jt`, `.obj`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.stl`, `.step`, `.stp`, `.x_b`, `.x_t` | 5        | No         | Embeds the Physna-hosted 3D/CAD viewer through a VAMS authorization proxy. Requires the Physna Sync add-on. See [Add-on viewers](#add-on-viewers).                                                                                                                                                                                                                                                |
 | **Image Viewer**                     | Media    | `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`                                                                                                                                          | 1        | No         | Zoom and pan capabilities. Eager load strategy.                                                                                                                                                                                                                                                                                                                                                   |
-| **Video Player**                     | Media    | `.mp4`, `.webm`, `.mov`, `.avi`, `.mkv`, `.flv`, `.wmv`, `.m4v`                                                                                                                  | 1        | No         | Standard browser-native playback controls.                                                                                                                                                                                                                                                                                                                                                        |
+| **Video Player**                     | Media    | `.mp4`, `.webm`, `.mov`, `.mkv`, `.m4v`                                                                                                                                          | 1        | No         | Standard browser-native playback controls.                                                                                                                                                                                                                                                                                                                                                        |
 | **Audio Player**                     | Media    | `.mp3`, `.wav`, `.ogg`, `.aac`, `.flac`, `.m4a`                                                                                                                                  | 1        | No         | Standard browser-native playback controls.                                                                                                                                                                                                                                                                                                                                                        |
 | **PDF Viewer**                       | Document | `.pdf`                                                                                                                                                                           | 1        | No         | Navigation, zoom, and page management controls.                                                                                                                                                                                                                                                                                                                                                   |
 | **HTML Viewer**                      | Document | `.html`                                                                                                                                                                          | 1        | No         | Renders HTML presentations and documents.                                                                                                                                                                                                                                                                                                                                                         |
 | **Text Viewer**                      | Document | `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`          | 1        | No         | Syntax highlighting for 20+ text file types.                                                                                                                                                                                                                                                                                                                                                      |
 | **Columnar Data Viewer**             | Data     | `.fcs`, `.csv`                                                                                                                                                                   | 2        | No         | Tabular data display with column headers.                                                                                                                                                                                                                                                                                                                                                         |
-| **Preview Viewer**                   | Preview  | `*` (all extensions)                                                                                                                                                             | 10       | No         | Displays generated preview thumbnails. Fallback viewer for files with no dedicated viewer.                                                                                                                                                                                                                                                                                                        |
+| **Preview Viewer**                   | Preview  | `*` (all extensions)                                                                                                                                                             | 10       | No         | Displays a file's preview image when you choose the file page's **Preview** option, which appears only for a file that has one. Not offered in the **File** view.                                                                                                                                                                                                                                 |
 
 ---
 
 ## File extension to viewer mapping
 
-This table provides a quick lookup from file extension to the viewer(s) that handle it. When multiple viewers are listed, the **default** column indicates which is selected automatically (lowest priority number). Users can switch to any other listed viewer using the viewer dropdown.
+This table provides a quick lookup from file extension to the viewer(s) that handle it. When more than one viewer is available for an extension, VAMS does not open the file automatically: the viewer dropdown lists the viewers with the lowest priority number first, and the file opens once you choose one. You can switch to any other listed viewer from the same dropdown.
 
 ### 3D model extensions
 
@@ -125,7 +125,7 @@ The tables in this section list the viewers available in every deployment. The P
 | `.spz`    | BabylonJS Gaussian Splat Viewer                                                                 | --                                                 |
 
 :::info[PLY files and multiple viewers]
-The `.ply` extension is used for both point cloud data and Gaussian splat data. Three viewers match at priority 1 (Potree, BabylonJS Gaussian Splat, Three.js). VAMS presents all compatible viewers and you can select the appropriate one for your data type.
+The `.ply` extension is used for both point cloud data and Gaussian splat data. Three viewers match at priority 1 (Potree, BabylonJS Gaussian Splat, Three.js), and the SuperSplat Editor is a fourth when `ALLOWUNSAFEEVAL` is enabled. VAMS presents all compatible viewers and you can select the appropriate one for your data type.
 :::
 
 ### USD extensions
@@ -146,9 +146,7 @@ The Needle USD Viewer is experimental. It may not display all USD files correctl
 | Extension        | Default Viewer | Other Available Viewers |
 | ---------------- | -------------- | ----------------------- |
 | `.aac`           | Audio Player   | --                      |
-| `.avi`           | Video Player   | --                      |
 | `.flac`          | Audio Player   | --                      |
-| `.flv`           | Video Player   | --                      |
 | `.gif`           | Image Viewer   | --                      |
 | `.jpg` / `.jpeg` | Image Viewer   | --                      |
 | `.m4a`           | Audio Player   | --                      |
@@ -162,7 +160,10 @@ The Needle USD Viewer is experimental. It may not display all USD files correctl
 | `.svg`           | Image Viewer   | --                      |
 | `.wav`           | Audio Player   | --                      |
 | `.webm`          | Video Player   | --                      |
-| `.wmv`           | Video Player   | --                      |
+
+:::info[Video formats and browser support]
+The Video Player plays a file through the browser's built-in `<video>` element, so a file plays only when the browser can open its container and decode its codecs. `.mp4`, `.m4v`, and `.webm` are broadly supported. `.mov` and `.mkv` play in some browsers and not in others. When the browser cannot open a file, the player shows `Error: Failed to load video file`; a file whose video codec the browser cannot decode may play only its audio track. Chrome, Edge, Firefox, and Safari cannot open AVI (`.avi`), Flash Video (`.flv`), or Windows Media Video (`.wmv`) files, so VAMS offers no viewer for them. Download these files to play them in a desktop media player.
+:::
 
 ### Document and data extensions
 

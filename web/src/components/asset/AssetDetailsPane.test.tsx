@@ -136,3 +136,40 @@ describe("AssetDetailsPane compliance badge", () => {
         expect(mockFetchComplianceState).not.toHaveBeenCalled();
     });
 });
+
+/**
+ * The tag line labels each tag with its tag type from the list ViewAsset caches in localStorage. That
+ * fetch runs in the background, so a page opened in a fresh browser renders before anything is cached.
+ */
+describe("AssetDetailsPane tags", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCanReadCompliance = false;
+        mockDownloadAsset.mockResolvedValue([true, "https://example.test/preview.png"]);
+    });
+    afterEach(() => localStorage.clear());
+
+    const taggedAsset = { ...baseAsset, isDistributable: true, tags: ["red", "blue"] };
+
+    it("labels each tag with its cached tag type", async () => {
+        localStorage.setItem(
+            "tagTypes",
+            JSON.stringify([{ tagTypeName: "Color", required: "True", tags: ["red"] }])
+        );
+        renderPane(taggedAsset);
+
+        expect(screen.getByText("red (Color [R]), blue")).toBeInTheDocument();
+        await waitFor(() => expect(mockDownloadAsset).toHaveBeenCalled());
+    });
+
+    it.each([
+        ["before any tag types are cached", null],
+        ["when the cached value is a failed fetch", "false"],
+    ])("renders the bare tags %s", async (_label, stored) => {
+        if (stored !== null) localStorage.setItem("tagTypes", stored);
+        renderPane(taggedAsset);
+
+        expect(screen.getByText("red, blue")).toBeInTheDocument();
+        await waitFor(() => expect(mockDownloadAsset).toHaveBeenCalled());
+    });
+});

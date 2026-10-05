@@ -189,7 +189,7 @@ Several operations return presigned S3 URLs for direct file access. These includ
 -   **Asset streaming** (`GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`) -- Streams file content through the API Gateway with byte-range support.
 
 :::warning[Presigned URL Expiration]
-Presigned URLs have a configurable timeout controlled by the `PRESIGNED_URL_TIMEOUT_SECONDS` environment variable. Plan to use generated URLs promptly after receiving them.
+Presigned URLs remain valid for at most the deployment's `app.authProvider.presignedUrlTimeoutSeconds` (24 hours by default), and stop working earlier if the Lambda role credentials that signed them expire first. Plan to use generated URLs promptly after receiving them.
 :::
 
 ---

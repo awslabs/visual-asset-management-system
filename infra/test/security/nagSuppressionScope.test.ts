@@ -448,3 +448,65 @@ describe("no pipeline stack suppresses findings at stack level", () => {
         // asserted L1 was absent and failed on exactly those pre-existing entries.
     });
 });
+
+/**
+ * AwsSolutions-SQS3 suppressions sit on dead-letter queues, not on a whole stack or construct.
+ *
+ * Every VAMS source queue redrives to a dead-letter queue
+ * (`test/storage/sqsQueueRedrivePolicy.test.ts` sweeps the emitted templates for that), so a reason
+ * saying the queues use no dead-letter queue contradicts the constructs beside it. Read from source
+ * for the reason given at the top of this file: `templateSynth` runs no Nag rule. Comment lines are
+ * stripped first, as in the pipelines describe above.
+ */
+describe("AwsSolutions-SQS3 suppressions sit on dead-letter queues", () => {
+    /** A source file with its comment lines removed. */
+    const code = (file: string): string =>
+        fs
+            .readFileSync(file, "utf-8")
+            .split("\n")
+            .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line))
+            .join("\n");
+
+    const files = sourceFiles();
+    const relative = (file: string): string =>
+        path.relative(LIB_DIR, file).split(path.sep).join("/");
+
+    test("no source under infra/lib says its queues are not to use DLQs", () => {
+        // Control: the ban is vacuous if the walk or the comment filter drops every SQS3 entry.
+        const withSqs3 = files.filter((file) => /id:\s*"AwsSolutions-SQS3"/.test(code(file)));
+        expect(withSqs3.length).toBeGreaterThanOrEqual(6);
+        const offenders = files.filter((file) => /not to use DLQs/i.test(code(file))).map(relative);
+        expect(offenders).toEqual([]);
+    });
+
+    test("the API builder and Garnet stacks suppress AwsSolutions-SQS3 on their dead-letter queues", () => {
+        const apiBuilder = code(
+            path.join(LIB_DIR, "nestedStacks", "apiLambda", "apiBuilder-nestedStack.ts")
+        );
+        const garnet = code(
+            path.join(
+                LIB_DIR,
+                "nestedStacks",
+                "addon",
+                "garnetFramework",
+                "garnetFrameworkBuilder-nestedStack.ts"
+            )
+        );
+        const sqs3On = (target: string): RegExp =>
+            new RegExp(
+                String.raw`addResourceSuppressions\(\s*` +
+                    target +
+                    String.raw`\s*,\s*\[\s*\{\s*id:\s*"AwsSolutions-SQS3"`
+            );
+        expect(apiBuilder).toMatch(sqs3On("largeFileProcessingDlq"));
+        expect(garnet).toMatch(
+            sqs3On(
+                String.raw`\[\s*garnetDatabaseIndexerSqsDlq\s*,\s*garnetAssetIndexerSqsDlq\s*,\s*garnetFileIndexerSqsDlq\s*,?\s*\]`
+            )
+        );
+        // Neither stack applies it to its whole scope.
+        for (const source of [apiBuilder, garnet]) {
+            expect(source).not.toMatch(sqs3On("this"));
+        }
+    });
+});

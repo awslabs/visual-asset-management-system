@@ -32,6 +32,10 @@ COPY ./coord_xform/ ./coord_xform/
 # Copy container pipeline application
 COPY ./coord_transform_pipeline/ ./coord_transform_pipeline/
 
+# Normalize read bits: COPY preserves the build host's umask, so a hardened checkout (umask 077/027)
+# leaves these root-owned 600/640 and unreadable to the non-root USER below.
+RUN chmod -R a+rX ./coord_xform ./coord_transform_pipeline
+
 # Drop root; the pipeline reads /app and writes only to a temporary directory under /tmp
 RUN useradd --create-home --uid 10001 --user-group coordxform
 USER coordxform

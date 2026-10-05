@@ -35,6 +35,7 @@ tools/VamsCLI/
       auth.py                # Login, change-password, forgot-password, logout, status, refresh, set-override, routes (API route listing)
       apiKey.py              # API key management (admin: list/get/create/update/delete) + 'user' sub-group (self-service own keys)
       assets.py              # Asset CRUD operations + lifecycle history lookup (history)
+      assetsExport.py        # 'assets export' sub-command, registered on the assets group in assets.py
       asset_version.py       # Asset version management (list, get, create, update, archive, unarchive, revert)
       asset_links.py         # Asset relationship/link management
       file.py                # File management (upload, download, move, copy)
@@ -81,7 +82,8 @@ tools/VamsCLI/
       glb_combiner.py        # GLB binary file combination
   tests/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
-    test_*.py                # 67 test files, one per command group or behavior area
+    test_*.py                # One file per command group or behavior area
+    industry/                # Engineering BOM and PLM command tests (engineering/bom/, engineering/plm/)
 ```
 
 ### Command Groups (25 top-level)
@@ -268,11 +270,11 @@ output_info("Hint text", json_output)          # Suppressed in JSON mode
 
 Three decorators in `utils/decorators.py` and `utils/global_exceptions.py`:
 
-| Decorator                         | Purpose                                  | Use When                                               |
-| --------------------------------- | ---------------------------------------- | ------------------------------------------------------ |
-| `@requires_setup_and_auth`        | Validates setup, checks API, logs timing | All authenticated commands (default)                   |
-| `@requires_feature(feature_name)` | Gates behind feature switches            | Feature-gated commands (e.g., Cognito user management) |
-| `@handle_global_exceptions()`     | Top-level infrastructure error handler   | Only on `cli()` group and `main()` in main.py          |
+| Decorator                         | Purpose                                  | Use When                                                                                            |
+| --------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `@requires_setup_and_auth`        | Validates setup, checks API, logs timing | All authenticated commands (default)                                                                |
+| `@requires_feature(feature_name)` | Gates behind feature switches            | Commands that run only when a feature switch is enabled (e.g., `vamscli features example-govcloud`) |
+| `@handle_global_exceptions()`     | Top-level infrastructure error handler   | Only on `cli()` group and `main()` in main.py                                                       |
 
 **Decorator stacking order** (bottom of stack executes first):
 
@@ -284,14 +286,16 @@ Three decorators in `utils/decorators.py` and `utils/global_exceptions.py`:
 def my_command(ctx, ...):
 ```
 
-For feature-gated commands:
+For feature-gated commands, pass the switch as a `FEATURE_*` constant from `constants.py`:
 
 ```python
+from ..constants import FEATURE_GOVCLOUD
+
 @domain.command()
 @click.option(...)
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature('AUTHPROVIDER_COGNITO')
+@requires_feature(FEATURE_GOVCLOUD, "GovCloud features are not enabled for this environment.")
 def my_feature_command(ctx, ...):
 ```
 
@@ -301,6 +305,7 @@ def my_feature_command(ctx, ...):
 2. `@requires_setup_and_auth` goes on every command that needs API access
 3. `@requires_feature()` goes AFTER `@requires_setup_and_auth` in the stack (closer to function)
 4. Never add `@requires_api_access` to new commands -- it is legacy, use `@requires_setup_and_auth`
+5. `@requires_feature()` takes a `FEATURE_*` constant from `constants.py`, never a string literal; `vamscli features example-govcloud` and `vamscli features example-location` (`commands/features.py`) are the reference uses. The `user cognito` commands carry no feature gate: a deployment with Cognito disabled answers them with a `400`, which `APIClient` reports as `Cognito not enabled: ...` (`_is_cognito_unavailable` in `utils/api_client.py`)
 
 ### 6. Profile Management
 
@@ -569,7 +574,7 @@ Treat a command whose output includes another command's output as this bug until
 ### Framework and Configuration
 
 -   **Framework**: pytest with Click's `CliRunner`
--   **Test files**: `tests/test_*.py` (67 files)
+-   **Test files**: `tests/test_*.py`, one per command group or behavior area; the `industry engineering` (BOM, PLM) command tests are under `tests/industry/engineering/`
 -   **Shared fixtures**: `tests/conftest.py`
 
 ### Key Fixtures (conftest.py)
@@ -784,7 +789,7 @@ Follow this checklist:
 
     - Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed, and update the call site
     - Add an `@mcp.tool()` + `@tool_result` function for a new method agents should be able to use, in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`)
-    - Confirm the pagination `items_key` still matches the endpoint's list field (`Items`, `items`, `versions`, `metadata`, and the compliance fields `evaluations`, `entries`, `quarantinedAssets`); `VamsClient.paginate()` also unwraps the legacy `message` envelope
+    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions`, `metadata`, and the compliance fields `evaluations`, `entries`, `quarantinedAssets`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
     - Verify the new `def` is unique and correctly positioned. The tools are module-level functions, so a duplicate name silently shadows the earlier one and a `def` placed after the `if __name__` entrypoint or outside its gate block never executes — the tool goes missing with no import error. `tests/test_server_tools.py` asserts the source layout for this
     - Add the tool to the `tools/VamsMCP/README.md` tool list (and the `autoApprove` sample if it is a safe read)
     - Run `cd tools/VamsMCP && pytest` in that server's own virtual environment — tests mock the client, so no live deployment is needed, but the `mcp` SDK needs Pydantic v2 and installing it into a shared environment breaks the Pydantic-v1 backend suite

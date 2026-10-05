@@ -4,25 +4,26 @@
  */
 
 import { test, expect, Page } from "@playwright/test";
+import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
  * and several (Three.js, NeedleUSD, Gaussian-splat, IFC) rely on lifecycle/init guards
- * that StrictMode's double-invoke can trip. This drives the real ViewFile route for each
- * seeded file and asserts the viewer mounts (canvas/iframe/content) with no init-time
+ * that StrictMode's double-invoke can trip. This drives the real ViewFile route for one
+ * file per viewer and asserts the viewer mounts (canvas/iframe/content) with no init-time
  * console/page errors.
  *
  * Run this suite on its own (`npx playwright test viewers.spec.ts`) — each test downloads a
  * multi-MB 3D file, so batching it with the full orchestration suite can trip the edge WAF
  * rate limit (transient 403), which is environmental, not a viewer defect.
  *
- * Fixtures live on a distributable smoke-db asset (uploaded via the CLI): BoomBox.glb
- * (Three.js), gramophone.usdz (NeedleUSD), simpleCube.usda (NeedleUSD), benchmelb.spz
- * (Gaussian splat), Ifc4_CubeAdvancedBrep.ifc (IFC BIM). The asset must be distributable —
- * the download API refuses non-distributable assets ("Asset not distributable").
+ * Subjects are derived from the environment (`e2e/CLAUDE.md` Rule 1): each case asks the API for
+ * a file with its extension on a distributable asset — the download API refuses non-distributable
+ * assets ("Asset not distributable") — and skips with the reason when the environment has none.
+ * `E2E_VIEWER_ASSET="<databaseId>/<assetId>"` confines the lookup to one asset, which is how a run
+ * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda,
+ * benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one distributable asset.
  */
-const DB = "smoke-db";
-const ASSET = "x8bb80063-79e4-4b37-90e3-64f073eec790";
 
 // Benign noise to ignore (network aborts on teardown, third-party analytics, favicon).
 const IGNORE = [
@@ -60,12 +61,14 @@ function watchErrors(page: Page): string[] {
     return errors;
 }
 
-async function openFile(page: Page, file: string) {
+async function openFile(page: Page, subject: AssetFileRef) {
     // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
     // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(`/#/databases/${DB}/assets/${ASSET}/file/${encodeURIComponent("/" + file)}`, {
-        waitUntil: "domcontentloaded",
-    });
+    await page.goto(
+        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
+            `/file/${encodeURIComponent(subject.key)}`,
+        { waitUntil: "domcontentloaded" }
+    );
 }
 
 const cases = [
@@ -75,20 +78,53 @@ const cases = [
     // isolation via the COI service worker); on the first headless load the SW may not be
     // active, in which case the viewer shows a graceful "WASM Support Not Available" notice
     // instead of a canvas. That is a valid, error-free outcome for this smoke test.
-    { file: "BoomBox.glb", viewer: "Three.js", select: /Three\.js/i },
-    { file: "gramophone.usdz", viewer: "NeedleUSD", wasm: true },
-    { file: "simpleCube.usda", viewer: "NeedleUSD", wasm: true },
-    { file: "benchmelb.spz", viewer: "Gaussian splat" },
-    { file: "Ifc4_CubeAdvancedBrep.ifc", viewer: "IFC BIM" },
+    { ext: ".glb", viewer: "Three.js", select: /Three\.js/i },
+    { ext: ".usdz", viewer: "NeedleUSD", wasm: true },
+    { ext: ".usda", viewer: "NeedleUSD", wasm: true },
+    { ext: ".spz", viewer: "Gaussian splat" },
+    { ext: ".ifc", viewer: "IFC BIM" },
 ];
 
-for (const c of cases) {
-    test(`viewer loads ${c.file} (${c.viewer}) without init errors`, async ({ page }) => {
-        const errors = watchErrors(page);
-        await openFile(page, c.file);
+// `maxBytes` keeps the scan off very large files, whose download alone can outlast a case's waits.
+const SCAN = { maxDatabases: 8, maxAssetsPerDatabase: 20, maxBytes: 50 * 1024 * 1024 };
+const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
+    ? `asset ${process.env.E2E_VIEWER_ASSET} (E2E_VIEWER_ASSET)`
+    : `the distributable assets among the first ${SCAN.maxAssetsPerDatabase} of each of the ` +
+      `first ${SCAN.maxDatabases} databases (files up to ${SCAN.maxBytes / 1024 / 1024} MB)`;
 
-        // Wait for the ViewFile shell (the file heading) to render.
-        await expect(page.getByRole("heading", { name: new RegExp(c.file) })).toBeVisible({
+// One lookup per worker, shared by every case: the scan covers all five extensions at once.
+let subjects: Map<string, AssetFileRef> | null = null;
+
+async function viewerSubject(page: Page, ext: string): Promise<AssetFileRef | null> {
+    if (!subjects) {
+        const found = await findAssetFiles(
+            page,
+            cases.map((c) => c.ext),
+            { ...SCAN, asset: process.env.E2E_VIEWER_ASSET, distributableOnly: true }
+        );
+        expect(
+            found,
+            "the running app exposed no API base or ID token in localStorage, so no file could be " +
+                "looked up — the session in e2e/.auth/admin.json may have expired (E2E_FORCE_LOGIN=1)"
+        ).not.toBeNull();
+        subjects = found;
+    }
+    return subjects!.get(ext) ?? null;
+}
+
+for (const c of cases) {
+    test(`viewer loads a ${c.ext} file (${c.viewer}) without init errors`, async ({ page }) => {
+        const subject = await viewerSubject(page, c.ext);
+        test.skip(!subject, `No ${c.ext} file was found via the API in ${LOOKUP_SCOPE}`);
+        const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
+        console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
+
+        const errors = watchErrors(page);
+        await openFile(page, subject!);
+
+        // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
+        // constructed RegExp: a file name carries regex metacharacters (`.` at minimum).
+        await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
             timeout: 60_000,
         });
 
@@ -120,6 +156,6 @@ for (const c of cases) {
         await page.waitForTimeout(6000);
 
         // No uncaught page errors or viewer-init console errors.
-        expect(errors, `viewer errors for ${c.file}:\n${errors.join("\n")}`).toEqual([]);
+        expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
     });
 }

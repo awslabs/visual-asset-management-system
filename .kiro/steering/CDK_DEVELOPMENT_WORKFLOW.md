@@ -88,9 +88,10 @@ interface storageResources {
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
     };
-    // No sqs member: the two Amazon SQS queues the builder creates buffer S3 object-created /
-    // object-deleted notifications for the indexers and are wired locally, and each workflow
-    // trigger Lambda owns its own queue + DLQ in lib/lambdaBuilder/workflowFunctions.ts.
+    // No sqs member: for each registered asset-bucket record the builder creates an object-created
+    // and an object-deleted Amazon SQS queue, each with its own DLQ, consumed by that record's
+    // bucket-sync Lambdas and wired locally, and each workflow trigger Lambda owns its own
+    // queue + DLQ in lib/lambdaBuilder/workflowFunctions.ts.
     sns: {
         eventEmailSubscriptionTopic: sns.Topic;
         fileIndexerSnsTopic: sns.Topic;
@@ -114,7 +115,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 51 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 53 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -134,15 +135,17 @@ interface storageResources {
         databaseMetadataStorageTable;
         assetFileMetadataStorageTable;
         fileAttributeStorageTable;
-        pipelineStorageTable;
+        pipelineStorageTable; // V1; name published for migration tooling only
         rolesStorageTable;
         s3AssetBucketsStorageTable;
         subscriptionsStorageTable;
         tagStorageTable;
         tagTypeStorageTable;
+        tagStorageTableLegacy; // legacy tag table; name published for migration tooling only
+        tagTypeStorageTableLegacy; // legacy tag type table; name published for migration tooling only
         userRolesStorageTable;
         userStorageTable;
-        workflowExecutionsStorageTable;
+        workflowExecutionsStorageTable; // V1; name published for migration tooling only
         workflowExecutionsStorageTableV2; // V2: PK workflowExecutionId, SK workflowDatabaseId:workflowId; GSI WorkflowExecutionsByWorkflowGSI
         pipelineExecutionsStorageTable; // PK pipelineExecutionId, SK workflowExecutionId; GSIs PipelineExecByWorkflowExecGSI / PipelineExecChainGSI / PipelineExecEndStateGSI
         pipelineExecutionInputFilesStorageTable; // PK pipelineExecutionId; GSI InputFilesByAssetGSI
@@ -155,7 +158,7 @@ interface storageResources {
         workflowExecutionInputsStorageTable; // PK workflowExecutionId; GSI WorkflowExecInputsByAssetGSI (asset-scoped execution listing)
         workflowExecutionConfigurationStorageTable;
         apiKeyStorageTable: dynamodb.Table; // GSIs: apiKeyHashIndex (PK: apiKeyHash), userIdIndex (PK: userId)
-        workflowStorageTable: dynamodb.Table;
+        workflowStorageTable: dynamodb.Table; // V1; name published for migration tooling only
         // assetVersionsStorageTable has GSI: databaseIdAssetIdIndex (PK: databaseId:assetId, SK: assetVersionId)
 
         // Pipeline + workflow V2 data model tables
@@ -511,22 +514,41 @@ NagSuppressions.addResourceSuppressions(myResource, [
 #### **Rule 7: Encryption Standards**
 
 ```typescript
-// ✅ CORRECT - Use KMS encryption from storage resources
+// ✅ CORRECT - Choose the encryption type from the shared key
+const kmsKey = storageResources.encryption.kmsKey;
 const table = new dynamodb.Table(this, "MyTable", {
-    encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-    encryptionKey: storageResources.encryption.kmsKey,
+    encryption: kmsKey
+        ? dynamodb.TableEncryption.CUSTOMER_MANAGED
+        : dynamodb.TableEncryption.AWS_MANAGED,
+    encryptionKey: kmsKey,
 });
 
-// ✅ CORRECT - S3 bucket encryption
+// ✅ CORRECT - S3 bucket encryption, chosen the same way
+const bucket = new s3.Bucket(this, "MyBucket", {
+    encryption: kmsKey ? s3.BucketEncryption.KMS : s3.BucketEncryption.S3_MANAGED,
+    encryptionKey: kmsKey,
+    bucketKeyEnabled: kmsKey ? true : false,
+});
+
+// ❌ INCORRECT - with the CMK off, CDK creates a new customer managed key for this resource and retains it
 const bucket = new s3.Bucket(this, "MyBucket", {
     encryption: s3.BucketEncryption.KMS,
     encryptionKey: storageResources.encryption.kmsKey,
 });
 ```
 
+Inside the storage nested stack, spread `dynamodbDefaultProps` or `s3DefaultProps` instead. They choose on
+`config.app.useKmsCmkEncryption.enabled`, which is the same choice: the key is defined exactly when the flag
+is on.
+
 **Every resource that supports encryption at rest takes the shared key.** It is `undefined` when
-`config.app.useKmsCmkEncryption.enabled` is false, so the prop is self-guarding — pass it unconditionally
-and the resource falls back to its service's AWS-managed key.
+`config.app.useKmsCmkEncryption.enabled` is false. Log groups (`encryptionKey`), EFS file systems
+(`encrypted: true` plus `kmsKey`) and secrets (`encryptionKey`, imported by ARN as below) have no encryption
+type to choose; they take the key and fall back to their service default without it. DynamoDB tables
+(`encryption` + `encryptionKey`), S3 buckets (the same, plus `bucketKeyEnabled`) and SQS queues
+(`encryption` + `encryptionMasterKey`) choose the encryption type from the key, as above; without it they use
+`AWS_MANAGED`, `S3_MANAGED` (no bucket key) and `SQS_MANAGED`. SNS topics take it as `masterKey` and have no
+server-side encryption without it.
 
 ```typescript
 // ✅ CORRECT - CloudWatch log group
@@ -562,7 +584,7 @@ const secret = new secretsmanager.Secret(this, "MySecret", {
 
 Three traps, each of which passes `cdk synth` and fails later:
 
-1. **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Changing it on an existing file system makes
+1. **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Adding or changing it on an existing file system makes
    AWS CloudFormation create an empty replacement and delete the original, which VAMS declares
    `RemovalPolicy.DESTROY` and therefore does not retain. Treat it as a breaking change: record it in
    `CHANGELOG.md` and the upgrade guide. Log groups and secrets update in place.
@@ -1397,69 +1419,120 @@ version. Coverage: the NVIDIA block of `infra/test/pipelines/containerBuildSourc
 names the Dockerfiles explicitly because a `**/Dockerfile` glob passes locally and fails in CI on
 the gitignored splat Dockerfile.
 
+#### **Read Bits on COPY'd Source in a Non-Root Container**
+
+A pipeline container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line
+immediately after every `COPY` of source it will read:
+
+```dockerfile
+COPY ./preview_pipeline /app/preview_pipeline
+RUN chmod -R a+rX /app/preview_pipeline
+...
+USER appuser
+```
+
+`docker COPY` preserves the build host's umask and copies the files root-owned. A hardened build
+host — umask `077` (the STIG default on RHEL and Amazon Linux) or `027` (locked-down CI) — therefore
+produces root-owned `600`/`640` files the non-root user cannot read, and Python raises
+`PermissionError: [Errno 13]` at import. It is NOT `ModuleNotFoundError`: the directory is recreated
+`0755`, so the package is traversable and found, but its files are unreadable. This is invisible at
+build time — the image builds green and fails only at container runtime, and only for images built on
+such a host. The Batch job definition sets no user override, so the image's `USER` is what runs.
+`a+rX` grants world-read on files and traverse on directories without adding an execute bit to plain
+files. `COPY --chown=<user>` is NOT sufficient — it makes the file readable by that one owner while
+the mode stays restrictive. Worked examples: `backendPipelines/preview/3dThumbnail/container/Dockerfile`
+and `backendPipelines/conversion/coordinateTransform/container/Dockerfile`.
+
 #### **Container Lambda Handler Pattern**
 
-```python
-# ✅ CORRECT - Container orchestration Lambda
-"""
-Pipeline Lambda that orchestrates container-based processing.
-"""
+A pipeline's VAMS-facing `vamsExecute` Lambda reads its inputs from the workflow manifest, not from the event body. The Step Functions task body (`stepfunctions_builder.py`) carries only the workflow-execution identity, the I/O bucket, the executing-user fields, `inputManifestS3Location`, `inputConfigurationS3Location`, and `TaskToken` when the pipeline is registered with `waitForCallback: "Enabled"`. The handler resolves input files, output paths and asset identity with `manifestHelper.resolve_pipeline_inputs`, then invokes the pipeline's `openPipeline` Lambda, which starts the pipeline state machine (`vamsExecute` → `openPipeline` → `constructPipeline` → container task → `pipelineEnd`). The full pattern — output paths, `assetId` threading, sub-process registration and failure reporting — is in `backendPipelines/CLAUDE.md` and the `/add-pipeline` skill (`.claude/commands/add-pipeline.md`).
 
+```python
+# ✅ CORRECT - vamsExecute Lambda (modeled on
+# backendPipelines/conversion/coordinateTransform/lambda/vamsExecuteCoordinateTransformPipeline.py)
+import os
 import json
 import boto3
-import logging
 from botocore.config import Config
-from typing import Dict, Any
-
-logger = logging.getLogger(__name__)
+from customLogging.logger import safeLogger
+import manifestHelper
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
-batch_client = boto3.client('batch', config=retry_config)
 
-def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """
-    Pipeline Lambda handler that submits jobs to AWS Batch.
+logger = safeLogger(service="VamsExecuteMyPipeline")
+lambda_client = boto3.client('lambda', config=retry_config)
+s3_client = boto3.client('s3', config=retry_config)
+sfn_client = boto3.client('stepfunctions', config=retry_config)
+OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]  # set by the CDK builder
 
-    For container-based pipelines, this Lambda:
-    1. Validates input parameters
-    2. Submits job to AWS Batch
-    3. Returns job information for tracking
-    """
+
+def abort_external_workflow(error, task_token):
+    """Fail the workflow's callback task so it does not wait for its full taskTimeout."""
+    if not task_token:
+        return
     try:
-        # Extract pipeline parameters
-        body = json.loads(event.get('body', '{}'))
+        sfn_client.send_task_failure(taskToken=task_token, error="MyPipelineError",
+                                     cause=str(error)[:256])
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
 
-        # Prepare Batch job parameters
-        job_params = {
-            'jobName': f"pipeline-job-{context.aws_request_id}",
-            'jobQueue': 'pipeline-job-queue',
-            'jobDefinition': 'pipeline-job-definition',
-            'parameters': {
-                'inputS3Path': body.get('inputS3AssetFilePath'),
-                'outputS3Path': body.get('outputS3AssetFilesPath'),
-                'pipelineConfig': json.dumps(body.get('inputParameters', {}))
-            }
+
+def lambda_handler(event, context):
+    logger.info("Event", event=event)
+    task_token = None
+    try:
+        if not event.get('body'):
+            raise ValueError('Request body is required')
+        # The Step Functions task passes the body as a dict; a direct invoke may pass a string
+        data = json.loads(event['body']) if isinstance(event['body'], str) else event['body']
+
+        # Capture the token BEFORE resolving inputs, so a manifest read failure is reported
+        task_token = data.get('TaskToken')
+        if not task_token:
+            raise Exception("VAMS Workflow TaskToken not found in pipeline input")
+
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        manifestHelper.enforce_single_input_file(resolved)
+
+        # Pass every resolved output path through; never hardcode an empty one
+        payload = {
+            "inputS3AssetFilePath": resolved['inputS3AssetFilePath'],
+            "outputS3AssetFilesPath": resolved['outputS3AssetFilesPath'],
+            "outputS3AssetPreviewPath": resolved['outputS3AssetPreviewPath'],
+            "outputS3AssetMetadataPath": resolved['outputS3AssetMetadataPath'],
+            "inputOutputS3AssetAuxiliaryFilesPath": resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+            "assetId": resolved['assetId'],
+            "databaseId": resolved['databaseId'],
+            "inputMetadataS3Location": resolved['inputMetadataS3Location'],
+            "inputConfigurationS3Location": resolved['inputConfigurationS3Location'],
+            "orchestrationEventPrefix": resolved['orchestrationEventPrefix'],
+            "sfnExternalTaskToken": task_token,
+            "executingUserName": data.get('executingUserName', ''),
+            "executingRequestContext": data.get('executingRequestContext', ''),
         }
 
-        # Submit job to Batch
-        response = batch_client.submit_job(**job_params)
+        # openPipeline starts the pipeline state machine named by its STATE_MACHINE_ARN env var
+        lambda_response = lambda_client.invoke(
+            FunctionName=OPEN_PIPELINE_FUNCTION_NAME,
+            InvocationType='RequestResponse',
+            Payload=json.dumps(payload).encode('utf-8')
+        )
+        if lambda_response.get('StatusCode') != 200:
+            raise Exception("Invoke Open Pipeline Lambda Failed")
+        # A function that raised still returns StatusCode 200; the failure is in FunctionError
+        if lambda_response.get('FunctionError'):
+            raise Exception(
+                "Invoke Open Pipeline Lambda Failed: " + str(lambda_response.get('FunctionError')))
 
-        return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'jobId': response['jobId'],
-                'jobName': response['jobName'],
-                'status': 'SUBMITTED'
-            })
-        }
+        return {'statusCode': 200, 'body': 'Success'}
 
     except Exception as e:
-        logger.error(f"Pipeline execution failed: {e}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': str(e)})
-        }
+        logger.exception(e)
+        abort_external_workflow(e, task_token)
+        return {'statusCode': 500, 'body': json.dumps({"message": "Internal Server Error"})}
 ```
+
+The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, grants it `states:SendTaskFailure` and invoke on `openPipeline`, and sets `STATE_MACHINE_ARN` on `openPipeline`. A pipeline without an `openPipeline` Lambda starts the state machine from `vamsExecute` itself, as `simulation/isaacLabTraining/lambda/vamsExecuteIsaacLabPipeline.py` does.
 
 ### **Pipeline Best Practices**
 
@@ -1478,7 +1551,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
-    Six pipelines run in isolated subnets (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Four Batch pipelines run in isolated subnets (Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; seven run in private subnets (Splat Toolbox, ModelOps, RapidPipeline ECS and EKS, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA GR00T) and appear in all three. Isaac Lab training runs its compute in private subnets and appears in the subnet-creation and endpoint conditions, with its ECS endpoint gated separately by `needsEcsIsolated`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) use no Batch and appear in none. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
 
 9. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
 
@@ -1489,6 +1562,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     Declare the constant **above the first client**, not merely after the imports: a few modules interleave imports with executable code (`multi/rapidPipelineEKS/lambda/consolidated_handler.py` builds a client and then keeps importing), and a constant placed after the last import lands below the client that uses it — `NameError` at module import, which in a Lambda is a cold-start 500 on every request. A deliberate departure (a non-idempotent call a retry would duplicate) needs a comment saying why, because the ratchet cannot tell it from an oversight. Coverage: `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`.
 
 11. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
+
+12. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above.
 
 #### **Pipeline Configuration Rules**
 
@@ -1940,7 +2015,7 @@ export class ApiBuilderNestedStack extends cdk.NestedStack {
             props.subnets
         );
 
-        // Register routes into the cross-stack route registry. RestApiBuilder
+        // Register routes into the cross-stack route registry. RestApi (ApiNestedStack)
         // renders the full registry into one OpenAPI spec on a single SpecRestApi.
         attachFunctionToApi(this, createAssetFunction, {
             routePath: "/assets",
@@ -2050,7 +2125,8 @@ if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
 // ✅ CORRECT - Custom authorizer builder pattern
 export function buildApiGatewayAuthorizerRestFunction(
     scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
+    lambdaAuthorizerLayer: LayerVersion,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -2090,7 +2166,7 @@ export function buildApiGatewayAuthorizerRestFunction(
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
+        layers: [lambdaAuthorizerLayer],
         timeout: Duration.minutes(1),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
@@ -2114,50 +2190,83 @@ export function buildApiGatewayAuthorizerRestFunction(
 
 #### **API Gateway Integration Pattern**
 
+The REST API (v1) is one `SpecRestApi`, built by `RestApiGatewayConstruct` (`constructs/rest-api-gateway-construct.ts`) inside the RestApi stack (`ApiNestedStack`). The authorizer is not a CDK authorizer construct: `buildOpenApiSpec.ts` declares it as two REQUEST-type OpenAPI security schemes that both invoke the same authorizer Lambda, and every route in the registry carries one of them.
+
 ```typescript
-// ✅ CORRECT - Custom authorizer integration
-export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
-    constructor(parent: Construct, name: string, props: ApiGatewayV2AmplifyNestedStackProps) {
-        super(parent, name);
-
-        // Create custom authorizer Lambda function
-        const customAuthorizerFunction = buildApiGatewayAuthorizerRestFunction(
-            this,
-            props.lambdaCommonBaseLayer,
-            props.config,
-            props.vpc,
-            props.subnets
-        );
-
-        // Update environment variables with actual Cognito values if using Cognito
-        if (props.config.app.authProvider.useCognito.enabled) {
-            customAuthorizerFunction.addEnvironment(
-                "USER_POOL_ID",
-                props.authResources.cognito.userPoolId
-            );
-            customAuthorizerFunction.addEnvironment(
-                "APP_CLIENT_ID",
-                props.authResources.cognito.webClientId
-            );
-        }
-
-        // Setup custom Lambda authorizer
-        const apiGatewayAuthorizer = new apigwAuthorizers.HttpLambdaAuthorizer(
-            "CustomHttpAuthorizer",
-            customAuthorizerFunction,
-            {
-                authorizerName: "VamsCustomAuthorizer",
-                resultsCacheTtl: cdk.Duration.seconds(30),
-                identitySource: ["method.request.header.Authorization"],
-            }
-        );
-
-        // The REST authorizer is declared as the OpenAPI security scheme applied
-        // to all non-anonymous routes; RestApiBuilder builds the SpecRestApi from
-        // the route registry and attaches this authorizer via the spec.
-    }
+// ✅ CORRECT - RestApiGatewayConstruct: authorizer Lambda, invoke role, spec, SpecRestApi
+const authorizerFn = buildApiGatewayAuthorizerRestFunction(
+    this,
+    props.lambdaAuthorizerLayer,
+    storageResources,
+    config,
+    props.vpc,
+    props.subnets
+);
+if (config.app.authProvider.useCognito.enabled) {
+    authorizerFn.addEnvironment("USER_POOL_ID", props.authResources.cognito.userPoolId);
+    authorizerFn.addEnvironment("APP_CLIENT_ID", props.authResources.cognito.webClientId);
 }
+
+// Role API Gateway assumes to invoke the authorizer (the spec's authorizerCredentials)
+const authInvokeRole = new iam.Role(this, "RestAuthorizerInvokeRole", {
+    assumedBy: new iam.PrincipalWithConditions(Service("APIGATEWAY").Principal, {
+        StringEqualsIfExists: { "aws:SourceAccount": config.env.account },
+    }),
+});
+authorizerFn.grantInvoke(authInvokeRole);
+
+const spec = buildOpenApiSpec(registry.list(), {
+    authorizerFnArn: authorizerFn.functionArn,
+    authorizerRole: authInvokeRole.roleArn,
+    // ... region, partition, cors, endpointType, vpcEndpointIds, title, timeoutSeconds
+});
+this.restApi = new apigw.SpecRestApi(this, "Api", {
+    apiDefinition: apigw.ApiDefinition.fromInline(spec),
+    // ... endpointTypes, deploy: false (explicit Deployment + Stage)
+});
 ```
+
+```typescript
+// ✅ CORRECT - buildOpenApiSpec.ts: two REQUEST schemes on the same authorizer Lambda
+const SECURITY_SCHEME_NAME = "VamsAuthorizer"; // authenticated routes, 30s cache TTL
+const ANON_SECURITY_SCHEME_NAME = "VamsAnonymousAuthorizer"; // anonymous routes, 900s cache TTL
+
+// Every route names one scheme, so no route is left without an authorizer
+op.security = [{ [r.allowAnonymous ? ANON_SECURITY_SCHEME_NAME : SECURITY_SCHEME_NAME]: [] }];
+
+const spec: any = {
+    // ... openapi, info, paths
+    components: {
+        securitySchemes: {
+            [SECURITY_SCHEME_NAME]: {
+                type: "apiKey",
+                name: "Authorization",
+                in: "header",
+                "x-amazon-apigateway-authtype": "custom",
+                "x-amazon-apigateway-authorizer": {
+                    type: "request",
+                    identitySource: "method.request.header.Authorization",
+                    authorizerUri: lambdaProxyUri(
+                        opts.partition,
+                        opts.region,
+                        opts.authorizerFnArn
+                    ),
+                    authorizerCredentials: opts.authorizerRole,
+                    authorizerResultTtlInSeconds: AUTH_CACHE_TTL_SECONDS,
+                },
+            },
+            // Same shape, keyed on the source IP: the authorizer always runs (IP-restriction
+            // check) and an anonymous route never answers 401 for a missing Authorization header
+            [ANON_SECURITY_SCHEME_NAME]: {
+                // ... identitySource: "context.identity.sourceIp",
+                //     authorizerResultTtlInSeconds: ANON_AUTH_CACHE_TTL_SECONDS
+            },
+        },
+    },
+};
+```
+
+The authorizer (`backend/backend/handlers/auth/apiGatewayAuthorizerRest.py`) returns an IAM policy. An authenticated Allow uses a wildcard resource scoped to the API and stage, so a cached result applies to every method; an ignored-path Allow is scoped to the ignored paths.
 
 #### **Path-Based Authorization Bypass**
 
@@ -2171,7 +2280,7 @@ export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/ver
 export class AmplifyConfigLambdaConstruct extends Construct {
     public readonly lambdaFn: lambda.Function;
     constructor(parent: Construct, name: string, props: AmplifyConfigLambdaConstructProps) {
-        // ... lambda function creation; RestApiBuilder registers the route:
+        // ... lambda function creation; RestApi (ApiNestedStack) registers the route:
         // registry.register({ path: "/api/amplify-config", method: HttpMethod.GET,
         //                     lambdaFn: this.lambdaFn, allowAnonymous: true });
     }
@@ -2192,21 +2301,31 @@ CORS on the REST API is set in **three** places because REST responses come from
 
 #### **Rule 9: Use Custom Authorizer Pattern**
 
-```typescript
-// ✅ CORRECT - Use custom Lambda authorizer
-const customAuthorizer = new apigwAuthorizers.HttpLambdaAuthorizer(
-    "CustomAuthorizer",
-    authorizerFunction,
-    {
-        authorizerName: "VamsCustomAuthorizer",
-        resultsCacheTtl: cdk.Duration.seconds(300),
-        identitySource: ["$request.header.Authorization"],
-        responseTypes: [apigwAuthorizers.HttpLambdaResponseType.IAM],
-    }
-);
+Register routes through `attachFunctionToApi()`; the REQUEST authorizer reaches each route through its OpenAPI security scheme, not through an authorizer construct on the route.
 
-// ❌ INCORRECT - Don't use built-in authorizers
-const builtInAuthorizer = new apigwAuthorizers.HttpUserPoolAuthorizer(); // VIOLATION
+```typescript
+// ✅ CORRECT - Authenticated route: the spec applies the VamsAuthorizer scheme
+attachFunctionToApi(this, myFunction, {
+    routePath: "/database/{databaseId}/things",
+    method: apigateway.HttpMethod.GET,
+    registry: registry,
+});
+
+// ✅ CORRECT - Anonymous route: the spec applies VamsAnonymousAuthorizer, and the path is also
+// listed in CUSTOM_AUTHORIZER_IGNORED_PATHS, or the authorizer (which still runs the IP check)
+// finds no token and denies it
+attachFunctionToApi(this, publicFunction, {
+    routePath: "/api/public-info",
+    method: apigateway.HttpMethod.GET,
+    registry: registry,
+    allowAnonymous: true,
+});
+
+// ❌ INCORRECT - Don't use built-in authorizers or add a second authorizer construct
+const builtInAuthorizer = new apigw.CognitoUserPoolsAuthorizer(this, "Authorizer", {
+    cognitoUserPools: [userPool],
+}); // VIOLATION
+const httpAuthorizer = new apigwAuthorizers.HttpUserPoolAuthorizer("Authorizer", userPool); // VIOLATION
 ```
 
 #### **Rule 10: Configure IP Restrictions Properly**
@@ -2663,10 +2782,13 @@ const dependentStack = new DependentStack(this, "Dependent", {
 ### **Rule 5: Resources MUST Use Proper Encryption**
 
 ```typescript
-// ✅ CORRECT - Use KMS encryption from storage resources
+// ✅ CORRECT - Choose the encryption type from the shared key
+const kmsKey = storageResources.encryption.kmsKey;
 const table = new dynamodb.Table(this, "Table", {
-    encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-    encryptionKey: storageResources.encryption.kmsKey,
+    encryption: kmsKey
+        ? dynamodb.TableEncryption.CUSTOMER_MANAGED
+        : dynamodb.TableEncryption.AWS_MANAGED,
+    encryptionKey: kmsKey,
 });
 
 // ❌ INCORRECT - No encryption or default encryption
@@ -2964,7 +3086,7 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 -   Use `config.env.partition` / `Partition()` when the decision must hold regardless of operator flag hygiene, or is genuinely partition-specific (the commercial-only EventBridge bus CMK, the SAML and Deadline Cloud `=== "aws"` gates, the `aws-eusc` OpenSearch version pick).
 -   **Never write `Partition() === "aws-us-gov"`** — it misses EU Sovereign. When a deny-list is needed, name every restricted partition explicitly (the VPC builder's Cognito-PrivateLink check is the model: it excludes `aws-us-gov`, `aws-eusc`, `aws-iso*` while still allowing `aws-cn`, where the service exists).
 
-> **Known gap:** nothing validates that `app.govCloud.enabled` agrees with `config.env.partition`. Deploying to a restricted partition with the flag left `false` passes synth, then fails at the first EventSourceMapping with "Tags not supported in request."
+> **Validated in `getConfig()`:** a restricted-partition deployment (`aws-us-gov`, `aws-eusc`, `aws-iso*`) with `app.govCloud.enabled` not `true` is rejected, and the ConfigBuilder mirrors it (`restricted-partition-requires-govcloud-flag`). Without that check the deployment would pass synth, then fail at the first EventSourceMapping with "Tags not supported in request."
 
 ### **Checklist for new infrastructure**
 
@@ -3000,7 +3122,7 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 
 5. **Service versions and model ids can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates.
 
-6. **Update all three config templates together** — `commercial`, `govcloud`, `eusovereign`. `useFips` is the one capability flag where the restricted templates disagree (`true` GovCloud, `false` EU Sovereign).
+6. **Update all three config templates together** — `commercial`, `govcloud`, `eusovereign`. `useFips` is the one capability flag where the restricted templates disagree (`true` GovCloud, `false` EU Sovereign). It only adds the AWS KMS FIPS interface endpoint, and `getConfig()` warns when it is `true` in `aws-eusc`, which offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF).
 
 7. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
 

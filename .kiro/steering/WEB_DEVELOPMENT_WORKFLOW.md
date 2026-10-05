@@ -18,7 +18,7 @@ This document provides comprehensive guidelines for developing and extending the
 | Routing          | React Router v6 with HashRouter                                |
 | State Management | React Context API + useReducer (NO global state libraries)     |
 | API Client       | Custom fetch-based apiClient with auto auth headers            |
-| Package Manager  | npm (NEVER yarn)                                               |
+| Package Manager  | npm 11.10.0+ (NEVER yarn)                                      |
 
 ### **File Structure Standards**
 
@@ -327,7 +327,12 @@ Every source file MUST begin with the Apache-2.0 copyright header:
 
 ### **Rule 9: npm Only -- Never Use yarn**
 
+**Package manager:** npm 11.10.0+. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). Always pin npm before installing:
+
 ```bash
+# Pin npm to the required version first
+npm install -g npm@11.19.1
+
 # CORRECT
 npm install
 npm run start
@@ -433,14 +438,14 @@ const session = await AmplifyAuth.currentSession();
 
 When frontend changes affect user-facing functionality, update the relevant Docusaurus documentation:
 
-| Change Type          | Documentation to Update                                        |
-| -------------------- | -------------------------------------------------------------- |
-| UI navigation change | `user-guide/web-interface.md`, `user-guide/getting-started.md` |
-| New feature/page     | `overview/features.md`, relevant user guide page               |
-| New viewer plugin    | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`  |
-| Config/feature flag  | `deployment/configuration-reference.md`                        |
-| Search UI change     | `user-guide/search.md`                                         |
-| Upload flow change   | `user-guide/upload-tutorial.md`                                |
+| Change Type          | Documentation to Update                                         |
+| -------------------- | --------------------------------------------------------------- |
+| UI navigation change | `user-guide/web-interface.md`, `user-guide/getting-started.mdx` |
+| New feature/page     | `overview/features.md`, relevant user guide page                |
+| New viewer plugin    | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`   |
+| Config/feature flag  | `deployment/configuration-reference.md`                         |
+| Search UI change     | `user-guide/search-and-discovery.md`                            |
+| Upload flow change   | `user-guide/upload-first-asset.md`                              |
 
 ### **Rule 17: Update Steering Files When Standards Change**
 

@@ -26,9 +26,10 @@ Two things this file exists to stop drifting:
   they feed the search index's `str_fileext` field. Unifying the three into one helper needs both
   forms; a verbatim copy of either into the other's place silently stops every stored restriction
   from matching.
-* **An undotted stored restriction (`glb`) matches nothing**, because the extracted value is dotted
-  and `models/metadataSchema.py` does not require a leading dot on what it stores. That is today's
-  behaviour, pinned below so that normalising it later is a visible change rather than an accident.
+* **An undotted stored restriction (`glb`) matches nothing**, because the extracted value is dotted.
+  The request models in `models/metadataSchema.py` refuse an undotted entry on create and update,
+  but a row already in the table is not rewritten; the matcher applies such a row to no file rather
+  than normalising it, pinned below so that changing that is a visible decision.
 
 Sibling coverage over the same module: `test_metadataSchemaValidation_paging.py` (the query pages to
 exhaustion), `test_metadataSchemaValidation_fetch_fails_closed.py` (a failed query refuses rather than
@@ -248,10 +249,10 @@ class TestWhichSchemasApplyToAFile:
             assert _RESTRICTED_FIELD in _aggregate(path, restriction=restriction), path
 
     def test_a_restriction_stored_without_a_leading_dot_matches_nothing(self):
-        """Today's behaviour, pinned so a future normalisation is a visible change.
+        """Pinned so a normalisation on comparison is a visible change.
 
-        `models/metadataSchema.py` validates only that each entry is non-empty and at most 10
-        characters, so `glb` can be stored -- and the extracted value is `.glb`, which never equals
+        The request models in `models/metadataSchema.py` refuse `glb` on create and update, but a
+        row already in the table can carry it, and the extracted value is `.glb`, which never equals
         it. Normalising on comparison would widen which schemas apply and is a separate decision.
         """
         assert _RESTRICTED_FIELD not in _aggregate("part.glb", restriction="glb")

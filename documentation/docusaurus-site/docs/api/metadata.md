@@ -936,14 +936,16 @@ POST /metadataschema
 
 #### Request body
 
-| Field                      | Type    | Required | Description                                                                                                                                           |
-| -------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`               | string  | Yes      | Database the schema applies to. Use `GLOBAL` for a schema that applies across every database. The database must exist.                                |
-| `metadataSchemaEntityType` | string  | Yes      | Entity type the schema governs. See [Entity types](#entity-types).                                                                                    |
-| `schemaName`               | string  | Yes      | Schema name (1-256 chars).                                                                                                                            |
-| `fields`                   | object  | Yes      | Field definitions. See [Field definitions](#field-definitions).                                                                                       |
-| `fileKeyTypeRestriction`   | string  | No       | Comma-delimited file extensions the schema applies to, each at most 10 characters. Accepted only for `fileMetadata` and `fileAttribute` entity types. |
-| `enabled`                  | boolean | No       | Whether the schema is enforced. Defaults to `true`.                                                                                                   |
+| Field                      | Type    | Required | Description                                                                                                                                                           |
+| -------------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`               | string  | Yes      | Database the schema applies to. Use `GLOBAL` for a schema that applies across every database. The database must exist.                                                |
+| `metadataSchemaEntityType` | string  | Yes      | Entity type the schema governs. See [Entity types](#entity-types).                                                                                                    |
+| `schemaName`               | string  | Yes      | Schema name (1-256 chars).                                                                                                                                            |
+| `fields`                   | object  | Yes      | Field definitions. See [Field definitions](#field-definitions).                                                                                                       |
+| `fileKeyTypeRestriction`   | string  | No       | Comma-delimited file extensions the schema applies to, each written with its leading dot (`.glb`). Accepted only for `fileMetadata` and `fileAttribute` entity types. |
+| `enabled`                  | boolean | No       | Whether the schema is enforced. Defaults to `true`.                                                                                                                   |
+
+Write each `fileKeyTypeRestriction` entry with its leading dot (for example `.glb,.usd`). A file is matched by its dotted extension, so an entry without the dot, with a second dot or with a path separator is rejected with a `400`. See [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching).
 
 #### Request body example
 
@@ -987,11 +989,11 @@ POST /metadataschema
 
 #### Error responses
 
-| Status | Description                                                                                                       |
-| ------ | ----------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, a `fileKeyTypeRestriction` on an unsupported entity type, or a `databaseId` that does not exist |
-| `403`  | Not authorized                                                                                                    |
-| `500`  | Internal server error                                                                                             |
+| Status | Description                                                                                                                                                                                                           |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, a `fileKeyTypeRestriction` on an unsupported entity type, a `fileKeyTypeRestriction` entry with no leading dot, a bare dot, a second dot or a path separator, or a `databaseId` that does not exist |
+| `403`  | Not authorized                                                                                                                                                                                                        |
+| `500`  | Internal server error                                                                                                                                                                                                 |
 
 ---
 
@@ -1005,14 +1007,14 @@ PUT /metadataschema
 
 #### Request body
 
-At least one field other than `metadataSchemaId` must be provided. Supplying `fields` replaces the schema's entire field set.
+At least one field other than `metadataSchemaId` must be provided with a non-null value. Supplying `fields` replaces the schema's entire field set. A `schemaName`, `fields`, or `enabled` sent as `null` is left unchanged. A `fileKeyTypeRestriction` sent as `null` or an empty string removes the restriction; it does not count as the field to update, so send it beside another field.
 
 | Field                    | Type    | Required | Description                                                                 |
 | ------------------------ | ------- | -------- | --------------------------------------------------------------------------- |
 | `metadataSchemaId`       | string  | Yes      | Identifier of the schema to update                                          |
 | `schemaName`             | string  | No       | Updated schema name (1-256 chars)                                           |
 | `fields`                 | object  | No       | Replacement field definitions. See [Field definitions](#field-definitions). |
-| `fileKeyTypeRestriction` | string  | No       | Updated comma-delimited file extensions                                     |
+| `fileKeyTypeRestriction` | string  | No       | Updated comma-delimited file extensions, each written with its leading dot  |
 | `enabled`                | boolean | No       | Toggle schema enforcement                                                   |
 
 #### Response
@@ -1029,12 +1031,12 @@ At least one field other than `metadataSchemaId` must be provided. Supplying `fi
 
 #### Error responses
 
-| Status | Description                                     |
-| ------ | ----------------------------------------------- |
-| `400`  | Validation error or no updatable field supplied |
-| `403`  | Not authorized                                  |
-| `404`  | Metadata schema not found                       |
-| `500`  | Internal server error                           |
+| Status | Description                                                                                                                                                                                                                                             |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, no updatable field supplied, a `fileKeyTypeRestriction` entry with no leading dot, a bare dot, a second dot or a path separator, or a `fileKeyTypeRestriction` on a schema whose entity type is not `fileMetadata` or `fileAttribute` |
+| `403`  | Not authorized                                                                                                                                                                                                                                          |
+| `404`  | Metadata schema not found                                                                                                                                                                                                                               |
+| `500`  | Internal server error                                                                                                                                                                                                                                   |
 
 ---
 

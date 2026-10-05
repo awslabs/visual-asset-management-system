@@ -9,7 +9,7 @@ import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
 import Synonyms from "../../synonyms";
-import { buildTagOptionGroups } from "../../common/utils/tagOptions";
+import { buildTagOptionGroups, readCachedTagTypes } from "../../common/utils/tagOptions";
 import Input from "@cloudscape-design/components/input";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
@@ -137,15 +137,17 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             if (res && Array.isArray(res)) {
                 // Grouped, scope-labelled and ordered by the shared helper so this picker and the
                 // upload form present tags identically.
-                const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
-                buildTagOptionGroups(res, storedTypes).forEach((group) => tags.push(group));
+                buildTagOptionGroups(res, readCachedTagTypes()).forEach((group) =>
+                    tags.push(group)
+                );
             }
         });
-        const tagTypesString = localStorage.getItem("tagTypes");
-        const tagTypes = tagTypesString ? JSON.parse(tagTypesString) : [];
+        const tagTypes = readCachedTagTypes();
         const initTags = asset.tags
             ? asset.tags.map((tagName: string) => {
-                  const tagType = tagTypes.find((type: any) => type.tags.includes(tagName));
+                  const tagType = tagTypes.find(
+                      (type: any) => Array.isArray(type?.tags) && type.tags.includes(tagName)
+                  );
                   const label = tagType ? `${tagName} (${tagType.tagTypeName})` : tagName;
 
                   return {

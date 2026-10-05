@@ -255,7 +255,12 @@ When adding a new API endpoint, add the function to the appropriate service file
 
 ### Rule 4: npm Only
 
+**Package manager:** npm 11.10.0+. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). Always pin npm before installing:
+
 ```bash
+# Pin npm to the required version first
+npm install -g npm@11.19.1
+
 # CORRECT
 npm install
 npm run start
@@ -400,14 +405,16 @@ A CSP may allow inline script by hash **or** by the `'unsafe-inline'` keyword, n
 hash source is present browsers ignore `'unsafe-inline'` entirely. So the two are not additive, and
 `'unsafe-inline'` cannot be left in as a safety net.
 
-Because of this, `generateContentSecurityPolicy()` adds `'unsafe-inline'` **only** when the Physna
-add-on is enabled: that viewer renders Physna-hosted HTML in a `blob:` iframe, a `blob:` document
-inherits the parent page's CSP, and its inline scripts are not ours to hash. Enabling that add-on
-therefore trades hash protection for viewer compatibility, scoped to deployments that opt in.
+Because of this, `generateContentSecurityPolicy()` adds `'unsafe-inline'` in **no** configuration,
+the Physna add-on included. The add-on's viewer frames Physna's own HTTPS origin rather than a
+`blob:` document, so that page loads under Physna's own CSP and its inline scripts are outside this
+policy's reach; the keyword would also be ignored on a VAMS page, because the hash sources are
+present. The add-on contributes `frame-src` and `connect-src` origins and no `script-src` source.
 
-If a **new** viewer plugin needs inline script, widen that condition (or add a dedicated
-`app.webUi` flag) rather than moving `'unsafe-inline'` back into the base `script-src` list -- the
-base list is what keeps a default deployment protected.
+If a **new** viewer plugin needs inline script, hash that document's own inline blocks rather than
+adding `'unsafe-inline'` to `script-src` -- with the hash sources present the keyword permits
+nothing, and a `scriptSrc` entry carrying it in `infra/config/csp/cspAdditionalConfig.json` is
+skipped with a warning at synth.
 :::
 
 Adding a `<script src="...">` (external) needs no hash; it is matched by host-source instead. It may
@@ -843,7 +850,7 @@ The 3D/media viewer system is a plugin-based architecture under `src/visualizerP
 -   **PluginRegistry** singleton at `visualizerPlugin/core/PluginRegistry.ts` manages all viewers
 -   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json`
 -   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports
--   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, Three.js CAD formats); the SuperSplat Editor is iframe-embedded under `public/viewers/supersplat/`
+-   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats); the SuperSplat Editor is iframe-embedded under `public/viewers/supersplat/`
 -   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
@@ -894,7 +901,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and Three.js CAD formats (WASM loaders use eval)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1016,7 +1023,7 @@ which the column is visible under the wrong declaration, and that is the one tha
 
 -   Test files are colocated with source: `MyComponent.test.tsx` next to `MyComponent.tsx`
 -   OR in `__tests__/` directories
--   Coverage is sparse (~10 test files total) -- adding tests is welcome
+-   `npx jest --listTests | wc -l` (from `web/`) prints the current test-file count -- adding tests is welcome
 
 ### 11.3 Test Template
 
@@ -1070,7 +1077,7 @@ describe("MyComponent", () => {
 
 ### 11.4 Jest Configuration Notes
 
--   Axios requires special mapping: `"^axios$": "axios/dist/axios.js"`
+-   Axios requires special mapping: `"^axios$": "axios/dist/browser/axios.cjs"` (the browser CommonJS build; `dist/axios.js` is not in axios's `exports` map, so Jest cannot resolve it)
 -   Cloudscape components need custom transformers (configured in `jest.config.js`)
 -   `transformIgnorePatterns` must stay a SINGLE pattern: a file matching ANY ignore pattern is excluded from transformation, so every ESM package that needs transforming (Cloudscape, d3-\*, internmap, react-leaflet, axios) must be exempted in one combined negative lookahead
 -   Jest 30 removed deprecated matcher aliases (`toBeCalled`, `toBeCalledWith`, ...) — use the `toHaveBeenCalled*` forms

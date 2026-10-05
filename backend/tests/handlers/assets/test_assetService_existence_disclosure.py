@@ -157,6 +157,8 @@ def _wire(asset, tokens=("u1",), denied_actions=()):
     m.get_asset_bucket_details = MagicMock(return_value={"bucketName": "bucket-1"})
     m.enhance_asset_with_version_info = MagicMock(side_effect=lambda a: dict(a))
     m.asset_table = MagicMock()
+    m.db_table = MagicMock()
+    m.db_table.get_item.return_value = {"Item": {"databaseId": _DB}}
     m.write_asset_history_record = MagicMock()
     m.send_subscription_email = MagicMock()
 

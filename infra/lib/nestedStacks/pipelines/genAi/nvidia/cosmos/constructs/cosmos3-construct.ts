@@ -337,6 +337,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/cosmos-models
 mount -t efs -o tls ${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models
 echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
+chown -R 10000:10000 /mnt/efs/cosmos-models
 
 --==MYBOUNDARY==--
 `;
@@ -495,6 +496,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/cosmos-models
 mount -t efs -o tls ${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models
 echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
+chown -R 10000:10000 /mnt/efs/cosmos-models
 
 --==MYBOUNDARY==--
 `;
@@ -1133,17 +1135,6 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
         /**
          * CDK Nag Suppressions
          */
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-executing workflows.",
-                },
-            ],
-            true
-        );
-
         const reason =
             "Cosmos 3 pipeline Lambdas read asset objects whose keys are created after deployment, so the S3 resource cannot be enumerated at synthesis.";
 

@@ -35,7 +35,8 @@ from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse, MAX_S3_KEY_LENGTH
 from common.indexing.geoLocation import build_geo_location
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
+from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN, join_asset_location_key
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 
 # Configure AWS clients with retry configuration
@@ -49,6 +50,10 @@ retry_config = Config(
 #Excluded patterns or prefixes from file paths to exclude
 excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
 excluded_patterns = [] # PREVIEW_FILE_PATTERN not included here as the fileIndexer processes these in a special way
+
+# HeadObject error codes for a key or version that does not exist. A HeadObject error
+# carries no body, so botocore reports the HTTP status as the code.
+S3_NOT_FOUND_ERROR_CODES = ('NoSuchKey', '404', 'NotFound')
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 s3_client = boto3.client('s3', config=retry_config)
@@ -735,74 +740,56 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> tuple[
 
     return metadata, attributes
 
+def file_info_from_head(response: Dict[str, Any]) -> Dict[str, Any]:
+    """File information carried on a HeadObject response"""
+    file_info = {
+        'size': response.get('ContentLength'),
+        'lastModified': response.get('LastModified').isoformat() if response.get('LastModified') else None,
+        'etag': response.get('ETag', '').strip('"'),
+        'versionId': response.get('VersionId', 'null'),
+        'contentType': response.get('ContentType')
+    }
+
+    # Extract additional metadata from S3 object metadata
+    s3_metadata = response.get('Metadata', {})
+    for key, value in s3_metadata.items():
+        if not is_system_metadata_key(key):
+            file_info[f"s3_{key}"] = value
+        if key in SEARCHABLE_VAMS_METADATA_KEYS:  # We do want to add this vams metadata key to search.
+            file_info[f"s3_{key}"] = value
+
+    return file_info
+
 def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, Any]], bool]:
-    """Get S3 file information and archive status"""
+    """Get S3 file information and archive status.
+
+    A live key is described by its current version. A key whose current version is a
+    delete marker is archived and is described by its newest remaining version
+    (ListObjectVersions lists a key's versions newest first). Only the first page of that
+    listing is read; the key's own entries lead it, ahead of any longer sibling key. A key
+    with no remaining version returns (None, False), as does any S3 error, which is logged.
+    """
     try:
-        # Try to get current object
         try:
             response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-            
-            file_info = {
-                'size': response.get('ContentLength'),
-                'lastModified': response.get('LastModified').isoformat() if response.get('LastModified') else None,
-                'etag': response.get('ETag', '').strip('"'),
-                'versionId': response.get('VersionId', 'null'),
-                'contentType': response.get('ContentType')
-            }
-            
-            # Extract additional metadata from S3 object metadata
-            s3_metadata = response.get('Metadata', {})
-            for key, value in s3_metadata.items():
-                if not is_system_metadata_key(key):
-                    file_info[f"s3_{key}"] = value
-                if key in SEARCHABLE_VAMS_METADATA_KEYS:  # We do want to add this vams metadata key to search.
-                    file_info[f"s3_{key}"] = value
-            
-            return file_info, False  # Not archived
-            
+            return file_info_from_head(response), False  # Not archived
         except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                # File might be archived, check for delete markers
-                try:
-                    versions_response = s3_client.list_object_versions(
-                        Bucket=bucket_name,
-                        Prefix=s3_key,
-                        MaxKeys=10
-                    )
-                    
-                    # Check if there are any delete markers
-                    delete_markers = versions_response.get('DeleteMarkers', [])
-                    versions = versions_response.get('Versions', [])
-                    
-                    # Find if this specific key has a delete marker
-                    has_delete_marker = any(marker['Key'] == s3_key for marker in delete_markers)
-                    
-                    if has_delete_marker:
-                        # File is archived, try to get info from latest version
-                        latest_version = None
-                        for version in versions:
-                            if version['Key'] == s3_key:
-                                if latest_version is None or version['LastModified'] > latest_version['LastModified']:
-                                    latest_version = version
-                        
-                        if latest_version:
-                            file_info = {
-                                'size': latest_version.get('Size'),
-                                'lastModified': latest_version.get('LastModified').isoformat() if latest_version.get('LastModified') else None,
-                                'etag': latest_version.get('ETag', '').strip('"'),
-                                'versionId': latest_version.get('VersionId', 'null'),
-                                'contentType': None
-                            }
-                            return file_info, True  # Archived
-                    
-                    return None, False  # File doesn't exist
-                    
-                except Exception as inner_e:
-                    logger.warning(f"Error checking versions for {s3_key}: {inner_e}")
-                    return None, False
-            else:
-                raise e
-                
+            if e.response.get('Error', {}).get('Code') not in S3_NOT_FOUND_ERROR_CODES:
+                raise
+
+        if not is_object_version_archived(bucket_name, s3_key, client=s3_client):
+            return None, False  # File doesn't exist
+
+        versions = list_all_object_versions(
+            bucket_name, s3_key, client=s3_client, max_keys=S3_VERSIONS_PAGE_SIZE
+        ).get('Versions', [])
+        newest = next((version for version in versions if version.get('Key') == s3_key), None)
+        if newest is None:
+            return None, False
+
+        response = s3_client.head_object(Bucket=bucket_name, Key=s3_key, VersionId=newest['VersionId'])
+        return file_info_from_head(response), True  # Archived
+
     except Exception as e:
         logger.exception(f"Error getting S3 file info for {bucket_name}/{s3_key}: {e}")
         return None, False
@@ -1400,10 +1387,9 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
             
             # Check versioning to determine if archived or permanently deleted
             try:
-                versions_response = s3_client.list_object_versions(
-                    Bucket=bucket_name,
-                    Prefix=s3_key,
-                    MaxKeys=10
+                # A key's own entries lead its prefix listing, newest first, so one page holds its current state
+                versions_response = list_all_object_versions(
+                    bucket_name, s3_key, client=s3_client, max_keys=S3_VERSIONS_PAGE_SIZE
                 )
                 
                 delete_markers = versions_response.get('DeleteMarkers', [])
@@ -1487,14 +1473,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                 # Get file metadata and attributes (returned as separate dicts)
                                 file_metadata, file_attributes = get_file_metadata(database_id, asset_id, relative_path)
                                 
-                                # Get S3 file info from the version we already have
-                                s3_file_info = {
-                                    'size': latest_version.get('Size'),
-                                    'lastModified': latest_version.get('LastModified').isoformat() if latest_version.get('LastModified') else None,
-                                    'etag': latest_version.get('ETag', '').strip('"'),
-                                    'versionId': latest_version.get('VersionId', 'null'),
-                                    'contentType': None
-                                }
+                                # Get S3 file info, with its S3 metadata, from the version's HeadObject response
+                                s3_file_info = file_info_from_head(version_response)
                                 
                                 # Build document with archived flag
                                 document = build_file_document(
@@ -1884,7 +1864,7 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
             # Calculate S3 key
             asset_location = asset_details.get('assetLocation', {})
             asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-            s3_key = asset_base_key + file_path.lstrip('/')
+            s3_key = join_asset_location_key(asset_base_key, file_path)
             
             # Ensure relative path starts with a slash
             if not file_path.startswith('/'):
@@ -1998,7 +1978,7 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
         # Calculate S3 key
         asset_location = asset_details.get('assetLocation', {})
         asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        s3_key = asset_base_key + file_path.lstrip('/')
+        s3_key = join_asset_location_key(asset_base_key, file_path)
         
         # Ensure relative path starts with a slash
         if not file_path.startswith('/'):

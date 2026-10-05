@@ -24,14 +24,24 @@ RUN git clone https://github.com/nvidia-cosmos/cosmos-predict1.git /opt/cosmos-p
 RUN cp /opt/cosmos-predict1/cosmos-predict1.yaml /cosmos-predict1.yaml && \
     cp /opt/cosmos-predict1/requirements.txt /requirements.txt
 
+# Create the non-root runtime user before installing Miniconda (issue #327) so Miniconda can be
+# installed directly under its home. Conda is NOT relocatable — every script shebang and the
+# activate scripts hardcode the install prefix — so it must be installed at its final path
+# (/home/vams/miniconda3), never installed elsewhere and moved. The build stays root (cloning into
+# /opt needs it); ownership is handed to vams after the install and USER is switched last.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+ENV CONDA_DIR=/home/vams/miniconda3
+
 # Install all dependencies in a single RUN matching the official NVIDIA Dockerfile exactly.
 # This includes: miniconda, conda env, pip requirements, symlinks, transformer-engine, APEX
 RUN echo "Installing dependencies. This will take a while..." && \
-    mkdir -p ~/miniconda3 && \
-    wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh && \
-    bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3 && \
-    rm ~/miniconda3/miniconda.sh && \
-    source ~/miniconda3/bin/activate && \
+    mkdir -p ${CONDA_DIR} && \
+    wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ${CONDA_DIR}/miniconda.sh && \
+    bash ${CONDA_DIR}/miniconda.sh -b -u -p ${CONDA_DIR} && \
+    rm ${CONDA_DIR}/miniconda.sh && \
+    source ${CONDA_DIR}/bin/activate && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
     conda env create --file /cosmos-predict1.yaml && \
@@ -51,10 +61,20 @@ RUN echo "Installing dependencies. This will take a while..." && \
 RUN mkdir -p /opt/ml/code
 COPY __main__.py model_manager.py inference.py entrypoint.sh /opt/ml/code/
 RUN chmod +x /opt/ml/code/entrypoint.sh
+# Normalize read/traverse bits: COPY preserves the build host's umask, so on a hardened host
+# (umask 077/027) these files land root-owned 600/640 and the non-root USER below cannot read them
+# (PermissionError at import). a+rX = world-read files + traverse dirs, no plain-file exec bit.
+RUN chmod -R a+rX /opt/ml/code
+
+# Hand the runtime user ownership of Miniconda (installed at its final path above), the code dir,
+# and the cloned framework. The entrypoint activates the env via `source ~/miniconda3/bin/activate`,
+# which resolves to /home/vams/miniconda3 under HOME=/home/vams.
+RUN chown -R vams:vams /home/vams /opt/ml/code /opt/cosmos-predict1
 
 WORKDIR /opt/ml/code
-# Isolated AWS Batch GPU job (no inbound listener) built on a root-only NVIDIA base image; running
-# as a non-root USER needs a uid/volume-permission design first -- suppressed for the 2.6.1 gate per
-# release policy, flagged for follow-up.
-# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
+
+# Run as the non-root vams user (issue #327), switched only after the last root-owned build step.
+# The EFS model cache is owned by this uid/gid via userdata chown after mount.
+USER 10000:10000
+
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

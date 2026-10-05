@@ -152,8 +152,8 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         authorizerFn.grantInvoke(authInvokeRole);
 
         // Cognito hosted UI domain for federated (SAML or OIDC) sign-in. Amplify's oauth.domain
-        // expects a bare hostname (it prepends https:// itself), and the suffix is
-        // partition-specific (GovCloud uses auth-fips; EU Sovereign uses its own TLD).
+        // expects a bare hostname (it prepends https:// itself). The entry exists only in the
+        // commercial partition and is read as the standard auth.{region} domain.
         const cognitoHostedUiDomain = config.app.authProvider.useCognito.useSaml
             ? `${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
             : config.app.authProvider.useCognito.useOidc
