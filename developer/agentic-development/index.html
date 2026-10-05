@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Agentic Development | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/developer/agentic-development"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Agentic Development | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="AI-assisted coding tools are used at your own risk. Configure agent permissions according to your organizational security standards. All AI-generated code, configuration, and infrastructure changes must be reviewed and validated by qualified personnel before deploying to any production environment."><meta data-rh="true" property="og:description" content="AI-assisted coding tools are used at your own risk. Configure agent permissions according to your organizational security standards. All AI-generated code, configuration, and infrastructure changes must be reviewed and validated by qualified personnel before deploying to any production environment."><link data-rh="true" rel="icon" href="/visual-asset-management-system/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/developer/agentic-development"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/developer/agentic-development" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/developer/agentic-development" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Agentic Development","item":"https://awslabs.github.io/visual-asset-management-system/developer/agentic-development"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/assets/js/runtime~main.e75af41c.js" defer="defer"></script>
+<script src="/visual-asset-management-system/assets/js/runtime~main.c3efa080.js" defer="defer"></script>
 <script src="/visual-asset-management-system/assets/js/main.a4361309.js" defer="defer"></script>
 </head>
 <body>
@@ -51,7 +51,7 @@
 <li class="">Git workflow and naming conventions</li>
 </ul>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="layer-2-component-specific-steering">Layer 2: Component-Specific Steering<a href="#layer-2-component-specific-steering" class="hash-link" aria-label="Direct link to Layer 2: Component-Specific Steering" title="Direct link to Layer 2: Component-Specific Steering" translate="no">​</a></h3>
-<p>Each major component directory contains its own <code>CLAUDE.md</code> with patterns specific to that component. These documents cover directory structure, coding standards, key files, anti-patterns, and component-specific checklists.</p>
+<p>Each major component directory contains its own <code>CLAUDE.md</code> with patterns specific to that component, and so do four subdirectories with conventions of their own: the backend test suite, the Playwright end-to-end tests, the viewer plugin system, and the pipeline nested stacks. These documents cover directory structure, coding standards, key files, anti-patterns, and component-specific checklists.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="layer-3-workflow-documents">Layer 3: Workflow Documents<a href="#layer-3-workflow-documents" class="hash-link" aria-label="Direct link to Layer 3: Workflow Documents" title="Direct link to Layer 3: Workflow Documents" translate="no">​</a></h3>
 <p>The <code>.kiro/steering/</code> directory contains detailed development workflow guides. These documents provide step-by-step checklists, code templates, and mandatory rules for complex multi-file tasks such as adding a new backend API endpoint or building a new AWS CDK nested stack.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="available-steering-documents">Available Steering Documents<a href="#available-steering-documents" class="hash-link" aria-label="Direct link to Available Steering Documents" title="Direct link to Available Steering Documents" translate="no">​</a></h2>
@@ -101,7 +101,32 @@
 
 
 
-<table><thead><tr><th>File</th><th>Scope</th><th>Key Topics</th></tr></thead><tbody><tr><td><code>CLAUDE.md</code></td><td>Project-wide</td><td>Architecture overview, cross-component patterns, critical rules, gold standard references, deployment modes</td></tr><tr><td><code>web/CLAUDE.md</code></td><td>React frontend</td><td>Cloudscape components, HashRouter, Synonyms system, service-layer pattern, viewer plugins, feature switches</td></tr><tr><td><code>backend/CLAUDE.md</code></td><td>Python Lambda backend</td><td>Pydantic v1 models, Casbin authorization, DynamoDB patterns, Lambda handler structure, logging and testing</td></tr><tr><td><code>infra/CLAUDE.md</code></td><td>AWS CDK infrastructure</td><td>Nested stacks, Lambda builders, security helpers, configuration system, multi-partition support</td></tr><tr><td><code>tools/VamsCLI/CLAUDE.md</code></td><td>Python CLI tool</td><td>Click framework, profile management, command groups, constants pattern, JSON output mode</td></tr><tr><td><code>tools/VamsMCP/CLAUDE.md</code></td><td>MCP server</td><td>Tool definitions and gating tiers, pagination and response shapes, stdout discipline, CLI reuse rules</td></tr><tr><td><code>documentation/CLAUDE.md</code></td><td>Documentation site</td><td>Docusaurus conventions, writing style, sidebar configuration, cross-reference sources</td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>File</th><th>Scope</th><th>Key Topics</th></tr></thead><tbody><tr><td><code>CLAUDE.md</code></td><td>Project-wide</td><td>Architecture overview, cross-component patterns, critical rules, gold standard references, deployment modes</td></tr><tr><td><code>web/CLAUDE.md</code></td><td>React frontend</td><td>Cloudscape components, HashRouter, Synonyms system, service-layer pattern, viewer plugins, feature switches</td></tr><tr><td><code>web/e2e/CLAUDE.md</code></td><td>Playwright end-to-end tests</td><td>Tracked core specs versus untracked ad-hoc specs, environment-independent and non-mutating specs, shared harness, running the suite</td></tr><tr><td><code>web/src/visualizerPlugin/CLAUDE.md</code></td><td>Viewer plugin system</td><td>Plugin architecture, current viewers, adding a viewer plugin, plugin config fields, CSP and <code>unsafe-eval</code>, signed URLs in framed viewers</td></tr><tr><td><code>backend/CLAUDE.md</code></td><td>Python Lambda backend</td><td>Pydantic v1 models, Casbin authorization, DynamoDB patterns, Lambda handler structure, logging and testing</td></tr><tr><td><code>backend/tests/CLAUDE.md</code></td><td>Backend test suite</td><td>pytest configuration, mock module hierarchy, per-handler <code>conftest.py</code> patterns, event-shape coverage, <code>xfail</code> and <code>temporary</code> markers</td></tr><tr><td><code>backendPipelines/CLAUDE.md</code></td><td>Processing pipelines</td><td>Execution types, S3 output paths, <code>assetId</code> threading, vamsSchema registration, sub-process and log registration, new-pipeline checklist</td></tr><tr><td><code>infra/CLAUDE.md</code></td><td>AWS CDK infrastructure</td><td>Nested stacks, Lambda builders, security helpers, configuration system, multi-partition support</td></tr><tr><td><code>infra/lib/nestedStacks/pipelines/CLAUDE.md</code></td><td>Pipeline nested stacks</td><td>Pipeline nested stack pattern, Lambda package layout, VPC builder wiring, sub-process and log registration wiring, S3 output paths</td></tr><tr><td><code>tools/VamsCLI/CLAUDE.md</code></td><td>Python CLI tool</td><td>Click framework, profile management, command groups, constants pattern, JSON output mode</td></tr><tr><td><code>tools/VamsMCP/CLAUDE.md</code></td><td>MCP server</td><td>Tool definitions and gating tiers, pagination and response shapes, stdout discipline, CLI reuse rules</td></tr><tr><td><code>documentation/CLAUDE.md</code></td><td>Documentation site</td><td>Docusaurus conventions, writing style, sidebar configuration, cross-reference sources</td></tr></tbody></table>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-documents">Workflow Documents<a href="#workflow-documents" class="hash-link" aria-label="Direct link to Workflow Documents" title="Direct link to Workflow Documents" translate="no">​</a></h3>
 <p>The following workflow documents live in <code>.kiro/steering/</code>.</p>
 
@@ -439,7 +464,27 @@
 
 
 
-<table><thead><tr><th style="text-align:left"><code>CLAUDE.md</code> file</th><th style="text-align:left">Corresponding Kiro steering document(s)</th></tr></thead><tbody><tr><td style="text-align:left"><code>CLAUDE.md</code> (root)</td><td style="text-align:left">The workflow document(s) for the changed area; cross-cutting rules go in all affected documents</td></tr><tr><td style="text-align:left"><code>web/CLAUDE.md</code></td><td style="text-align:left"><code>WEB_DEVELOPMENT_WORKFLOW.md</code>, <code>WEB_FRONTEND.md</code></td></tr><tr><td style="text-align:left"><code>backend/CLAUDE.md</code></td><td style="text-align:left"><code>BACKEND_CDK_DEVELOPMENT_WORKFLOW.md</code></td></tr><tr><td style="text-align:left"><code>infra/CLAUDE.md</code></td><td style="text-align:left"><code>CDK_DEVELOPMENT_WORKFLOW.md</code>, <code>BACKEND_CDK_DEVELOPMENT_WORKFLOW.md</code></td></tr><tr><td style="text-align:left"><code>tools/VamsCLI/CLAUDE.md</code></td><td style="text-align:left"><code>CLI_DEVELOPMENT_WORKFLOW.md</code></td></tr><tr><td style="text-align:left"><code>tools/VamsMCP/CLAUDE.md</code></td><td style="text-align:left"><code>CLI_DEVELOPMENT_WORKFLOW.md</code> (MCP propagation section)</td></tr><tr><td style="text-align:left"><code>documentation/CLAUDE.md</code></td><td style="text-align:left"><code>DOCUMENTATION_WORKFLOW.md</code></td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th style="text-align:left"><code>CLAUDE.md</code> file</th><th style="text-align:left">Corresponding Kiro steering document(s)</th></tr></thead><tbody><tr><td style="text-align:left"><code>CLAUDE.md</code> (root)</td><td style="text-align:left">The workflow document(s) for the changed area; cross-cutting rules go in all affected documents</td></tr><tr><td style="text-align:left"><code>web/CLAUDE.md</code></td><td style="text-align:left"><code>WEB_DEVELOPMENT_WORKFLOW.md</code>, <code>WEB_FRONTEND.md</code></td></tr><tr><td style="text-align:left"><code>web/e2e/CLAUDE.md</code></td><td style="text-align:left"><code>WEB_DEVELOPMENT_WORKFLOW.md</code> (testing section)</td></tr><tr><td style="text-align:left"><code>web/src/visualizerPlugin/CLAUDE.md</code></td><td style="text-align:left"><code>WEB_FRONTEND.md</code> (viewer plugin section)</td></tr><tr><td style="text-align:left"><code>backend/CLAUDE.md</code></td><td style="text-align:left"><code>BACKEND_CDK_DEVELOPMENT_WORKFLOW.md</code></td></tr><tr><td style="text-align:left"><code>backend/tests/CLAUDE.md</code></td><td style="text-align:left"><code>BACKEND_CDK_DEVELOPMENT_WORKFLOW.md</code> (testing section)</td></tr><tr><td style="text-align:left"><code>backendPipelines/CLAUDE.md</code></td><td style="text-align:left"><code>CDK_DEVELOPMENT_WORKFLOW.md</code> (pipeline development section)</td></tr><tr><td style="text-align:left"><code>infra/CLAUDE.md</code></td><td style="text-align:left"><code>CDK_DEVELOPMENT_WORKFLOW.md</code>, <code>BACKEND_CDK_DEVELOPMENT_WORKFLOW.md</code></td></tr><tr><td style="text-align:left"><code>infra/lib/nestedStacks/pipelines/CLAUDE.md</code></td><td style="text-align:left"><code>CDK_DEVELOPMENT_WORKFLOW.md</code> (pipeline development section)</td></tr><tr><td style="text-align:left"><code>tools/VamsCLI/CLAUDE.md</code></td><td style="text-align:left"><code>CLI_DEVELOPMENT_WORKFLOW.md</code></td></tr><tr><td style="text-align:left"><code>tools/VamsMCP/CLAUDE.md</code></td><td style="text-align:left"><code>CLI_DEVELOPMENT_WORKFLOW.md</code> (MCP propagation section)</td></tr><tr><td style="text-align:left"><code>documentation/CLAUDE.md</code></td><td style="text-align:left"><code>DOCUMENTATION_WORKFLOW.md</code></td></tr></tbody></table>
 <p>Because the MCP server is downstream of the CLI, the CLI and MCP steering documents share a single Kiro workflow document rather than each having their own. A change to the CLI-to-MCP propagation rules therefore has four destinations, listed in <a href="#keeping-the-cli-mcp-server-and-skill-aligned" class="">Keeping the CLI, MCP Server, and Skill Aligned</a>.</p>
 <p>The agent skill (<code>tools/VamsAgentSkill/SKILL.md</code>) sits outside both families. It is a runtime operating instruction rather than a development steering document, and it is agent-agnostic — the Claude Code <code>/vams-agent</code> command is a thin entry point that loads the same file. Update the skill directly; there is no Kiro mirror to keep in sync.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="adding-new-steering-documents">Adding New Steering Documents<a href="#adding-new-steering-documents" class="hash-link" aria-label="Direct link to Adding New Steering Documents" title="Direct link to Adding New Steering Documents" translate="no">​</a></h2>

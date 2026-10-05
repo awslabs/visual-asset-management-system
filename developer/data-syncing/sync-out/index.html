@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Syncing Data Out | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/developer/data-syncing/sync-out"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Syncing Data Out | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="Sync-out moves data from VAMS to an external system as it changes in VAMS. There are"><meta data-rh="true" property="og:description" content="Sync-out moves data from VAMS to an external system as it changes in VAMS. There are"><link data-rh="true" rel="icon" href="/visual-asset-management-system/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/developer/data-syncing/sync-out"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/developer/data-syncing/sync-out" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/developer/data-syncing/sync-out" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Syncing Data Out","item":"https://awslabs.github.io/visual-asset-management-system/developer/data-syncing/sync-out"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/assets/js/runtime~main.e75af41c.js" defer="defer"></script>
+<script src="/visual-asset-management-system/assets/js/runtime~main.c3efa080.js" defer="defer"></script>
 <script src="/visual-asset-management-system/assets/js/main.a4361309.js" defer="defer"></script>
 </head>
 <body>
@@ -94,7 +94,7 @@ ignores the report and deletes every message in a batch that returned successful
 <li class="">A GovCloud branch that uses an explicit <code>EventSourceMapping</code> with a <code>Tags</code> property
 deletion override (Amazon SQS event-source tags are unsupported on GovCloud).</li>
 </ul>
-<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Two conventions for a failed message</div><div class="admonitionContent_BuS1"><p>The Physna queues each have their own dead-letter queue. A message the consumer cannot
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Dead-letter queues for failed messages</div><div class="admonitionContent_BuS1"><p>The Physna queues each have their own dead-letter queue. A message the consumer cannot
 process is moved there after three delivery attempts and retained for 14 days rather than
 deleted, and one dead-letter queue per source queue keeps the file sync&#x27;s failures
 distinguishable from the asset sync&#x27;s. Both Physna consumers report partial batch failures,
@@ -110,12 +110,14 @@ resolved to a VAMS asset — is acknowledged, because a redelivery has nothing t
 The <code>AwsSolutions-SQS3</code> CDK Nag suppression sits on the dead-letter queues
 themselves: a dead-letter queue is the terminal destination for messages the consumer could
 not process, so a redrive policy of its own would only defer the same failure to a further
-queue.</p><p>The Garnet queues rely on the Amazon SQS visibility timeout and AWS Lambda retry instead, and
-add an <code>AwsSolutions-SQS3</code> CDK Nag suppression on the ground that every message is regenerable
-from authoritative VAMS state — a failed change can be replayed with the
-<a class="" href="/visual-asset-management-system/developer/utilities/reindex">reindex utility</a>.</p><p>Add a dead-letter queue when the messages your target system rejected need to be inspectable,
-or when the outcome of a push is not fully recoverable from a replay. Rely on replay when the
-target tolerates repeated events.</p></div></div>
+queue.</p><p>The Garnet indexer queues follow the same convention. Each of the three has its own
+dead-letter queue, which receives a message after three delivery attempts and retains it for
+14 days, and each event source reports partial batch failures. The Garnet stack&#x27;s
+<code>AwsSolutions-SQS3</code> suppression rests on the same ground: the dead-letter queues terminate the
+redrive chain. See <a class="" href="/visual-asset-management-system/developer/garnet-framework#failure-handling">Failure Handling</a>.</p><p>Give each source queue your add-on consumes a dead-letter queue of its own, so a message the
+target system rejected stays inspectable and can be redriven. A replay is a narrower recovery
+path: the <a class="" href="/visual-asset-management-system/developer/utilities/reindex">reindex utility</a> re-publishes asset and file records only,
+so it does not regenerate a database, database metadata, or asset-link change.</p></div></div>
 <h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="4-handle-the-event-envelope">4. Handle the event envelope<a href="#4-handle-the-event-envelope" class="hash-link" aria-label="Direct link to 4. Handle the event envelope" title="Direct link to 4. Handle the event envelope" translate="no">​</a></h4>
 <p>Each Amazon SQS message wraps an Amazon SNS notification, which in turn wraps either a
 DynamoDB stream record or an Amazon S3 event notification. In your handler, unwrap the

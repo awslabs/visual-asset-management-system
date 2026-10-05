@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Files | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/api/files"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Files | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page documents the file operation endpoints in the VAMS API. These endpoints manage individual files within assets, including listing, moving, copying, archiving, uploading, and streaming."><meta data-rh="true" property="og:description" content="This page documents the file operation endpoints in the VAMS API. These endpoints manage individual files within assets, including listing, moving, copying, archiving, uploading, and streaming."><link data-rh="true" rel="icon" href="/visual-asset-management-system/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/api/files"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/api/files" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/api/files" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Files","item":"https://awslabs.github.io/visual-asset-management-system/api/files"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/assets/js/runtime~main.e75af41c.js" defer="defer"></script>
+<script src="/visual-asset-management-system/assets/js/runtime~main.c3efa080.js" defer="defer"></script>
 <script src="/visual-asset-management-system/assets/js/main.a4361309.js" defer="defer"></script>
 </head>
 <body>
@@ -364,7 +364,7 @@
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="delete-file">Delete File<a href="#delete-file" class="hash-link" aria-label="Direct link to Delete File" title="Direct link to Delete File" translate="no">​</a></h3>
 <p><code>DELETE /database/{databaseId}/assets/{assetId}/deleteFile</code></p>
-<p>Permanently deletes a file from the asset. This removes all versions of the file from S3.</p>
+<p>Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files.</p>
 <div class="theme-admonition theme-admonition-danger admonition_xJq3 alert alert--danger"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M5.05.31c.81 2.17.41 3.38-.52 4.31C3.55 5.67 1.98 6.45.9 7.98c-1.45 2.05-1.7 6.53 3.53 7.7-2.2-1.16-2.67-4.52-.3-6.61-.61 2.03.53 3.33 1.94 2.86 1.39-.47 2.3.53 2.27 1.67-.02.78-.31 1.44-1.13 1.81 3.42-.59 4.78-3.42 4.78-5.56 0-2.84-2.53-3.22-1.25-5.61-1.52.13-2.03 1.13-1.89 2.75.09 1.08-1.02 1.8-1.86 1.33-.67-.41-.66-1.19-.06-1.78C8.18 5.31 8.68 2.45 5.05.32L5.03.3l.02.01z"></path></svg></span>Irreversible Operation</div><div class="admonitionContent_BuS1"><p>This permanently deletes the file and all its versions. Consider using <a href="#archive-file" class="">Archive File</a> for soft-deletion instead.</p></div></div>
 <p><strong>Request Parameters:</strong></p>
 
@@ -545,7 +545,7 @@
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="unarchive-file">Unarchive File<a href="#unarchive-file" class="hash-link" aria-label="Direct link to Unarchive File" title="Direct link to Unarchive File" translate="no">​</a></h3>
 <p><code>POST /database/{databaseId}/assets/{assetId}/unarchiveFile</code></p>
-<p>Restores a previously archived file by removing the S3 delete marker.</p>
+<p>Restores a previously archived file by copying its most recent content version forward as the new current version. The new version is recorded with change source <code>fileUnarchive</code>. Archived preview files of the file are restored the same way.</p>
 <p><strong>Request Parameters:</strong></p>
 
 
@@ -792,6 +792,7 @@
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="set-primary-file-type">Set Primary File Type<a href="#set-primary-file-type" class="hash-link" aria-label="Direct link to Set Primary File Type" title="Direct link to Set Primary File Type" translate="no">​</a></h3>
 <p><code>PUT /database/{databaseId}/assets/{assetId}/setPrimaryFile</code></p>
 <p>Designates a file as the primary representative of its file type within the asset. Only one file per type can be primary.</p>
+<p>The file is written as a new Amazon S3 version with the same content, recorded with change source <code>fileMetadataUpdate</code> and, in <code>changeAssetFileVersionFrom</code>, the version it was copied from. That version does not start <code>fileUpload</code> workflow triggers.</p>
 <p><strong>Request Parameters:</strong></p>
 
 
@@ -1291,7 +1292,7 @@ returns <code>400</code> with a message naming the three. Supplying none streams
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="delete-auxiliary-preview-files">Delete Auxiliary Preview Files<a href="#delete-auxiliary-preview-files" class="hash-link" aria-label="Direct link to Delete Auxiliary Preview Files" title="Direct link to Delete Auxiliary Preview Files" translate="no">​</a></h3>
 <p><code>DELETE /database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles</code></p>
-<p>Deletes auxiliary preview files (e.g., Potree viewer data) from the auxiliary bucket for the specified asset.</p>
+<p>Permanently deletes auxiliary preview files (e.g., Potree viewer data) from the auxiliary bucket for the specified asset, with every stored version.</p>
 <p><strong>Request Parameters:</strong></p>
 
 
