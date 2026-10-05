@@ -547,3 +547,42 @@ class TestTheDoubleAnswersLikeTheShippedHelper:
 
         assert module.S3_VERSIONS_PAGE_SIZE == 1000
         assert module.S3_OBJECTS_PAGE_SIZE == 1000
+
+
+class _DeleteMarkerCodeS3(_FakeS3):
+    """A versioned HeadObject on a delete marker, answered with a chosen error code.
+
+    S3 answers 405 with no response body, so botocore cannot read an error code from the body and
+    reports the status code, ``'405'``, as the code; ``'MethodNotAllowed'`` is the code S3 names
+    for the same answer.
+    """
+
+    def __init__(self, objects, marker_code):
+        super().__init__(objects)
+        self.marker_code = marker_code
+
+    def head_object(self, Bucket, Key, VersionId=None):
+        state = self.objects.get(Key)
+        if VersionId is not None and state is not None and VersionId == state.get("marker"):
+            raise _client_error(self.marker_code)
+        return super().head_object(Bucket, Key, VersionId=VersionId)
+
+
+@pytest.mark.unit
+class TestDeleteMarkerVersionErrorCodes:
+    """Both codes a delete-marker version can be reported with mean archived, in both bodies."""
+
+    @pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
+    @pytest.mark.parametrize("code", ["405", "MethodNotAllowed"])
+    def test_a_delete_marker_version_is_archived_under_either_code(self, implementation, code):
+        s3 = _DeleteMarkerCodeS3({"a/model.glb": _archived("v1")}, code)
+
+        assert _implementation(implementation)(BUCKET, "a/model.glb", "dm-1", client=s3) is True
+        assert s3.listing_calls == []
+
+    @pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
+    def test_a_live_version_of_the_same_key_is_still_not_archived(self, implementation):
+        """Paired control: recognizing 405 does not turn other versioned answers into archived."""
+        s3 = _DeleteMarkerCodeS3({"a/model.glb": _archived("v1")}, "405")
+
+        assert _implementation(implementation)(BUCKET, "a/model.glb", "v1", client=s3) is False

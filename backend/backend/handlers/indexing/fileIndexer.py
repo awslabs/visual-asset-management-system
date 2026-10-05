@@ -35,7 +35,7 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse, MAX_S3_KEY_LENGTH
 from common.indexing.geoLocation import build_geo_location
 from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN, join_asset_location_key
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 
 # Configure AWS clients with retry configuration
@@ -1863,7 +1863,7 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
             # Calculate S3 key
             asset_location = asset_details.get('assetLocation', {})
             asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-            s3_key = asset_base_key + file_path.lstrip('/')
+            s3_key = join_asset_location_key(asset_base_key, file_path)
             
             # Ensure relative path starts with a slash
             if not file_path.startswith('/'):
@@ -1977,7 +1977,7 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
         # Calculate S3 key
         asset_location = asset_details.get('assetLocation', {})
         asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        s3_key = asset_base_key + file_path.lstrip('/')
+        s3_key = join_asset_location_key(asset_base_key, file_path)
         
         # Ensure relative path starts with a slash
         if not file_path.startswith('/'):

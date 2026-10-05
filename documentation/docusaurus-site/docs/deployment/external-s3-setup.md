@@ -701,6 +701,14 @@ PREFIX="projects/"
 aws s3 ls "s3://${BUCKET}/${PREFIX}" | grep PRE | awk '{print $2}' | while read folder; do
     asset_id="${folder%/}"  # Remove trailing slash
 
+    # Skip folder names VAMS reserves for system data (matched case-sensitively)
+    case "${asset_id}" in
+        pipeline|pipelines|preview|previews|temp-upload|temp-uploads|workspace|workspaces)
+            echo "Skipping reserved folder: ${asset_id}"
+            continue
+            ;;
+    esac
+
     echo "Creating init file for asset: ${asset_id}"
     # Create an empty init file in each asset folder
     echo -n "" | aws s3 cp - "s3://${BUCKET}/${PREFIX}${asset_id}/init"
@@ -709,8 +717,8 @@ aws s3 ls "s3://${BUCKET}/${PREFIX}" | grep PRE | awk '{print $2}' | while read 
     sleep 0.5
 done
 
-echo "Done. VAMS will process each init file and create asset records automatically."
-echo "The init files are deleted by VAMS after processing."
+echo "Done. VAMS creates an asset record for each folder it imports and deletes that folder's init file."
+echo "A folder whose name is not a valid asset ID is not imported, and its init file remains in the bucket."
 ```
 
 :::tip[PowerShell alternative]
@@ -720,12 +728,20 @@ On Windows, use the following PowerShell script:
 $BUCKET = "my-3d-models"
 $PREFIX = "projects/"
 
+# Folder names VAMS reserves for system data (matched case-sensitively)
+$RESERVED = @("pipeline", "pipelines", "preview", "previews", "temp-upload", "temp-uploads", "workspace", "workspaces")
+
 # List folders and create init files
 $folders = aws s3 ls "s3://$BUCKET/$PREFIX" | Select-String "PRE" | ForEach-Object {
     ($_ -split '\s+')[-1].TrimEnd('/')
 }
 
 foreach ($assetId in $folders) {
+    if ($RESERVED -ccontains $assetId) {
+        Write-Host "Skipping reserved folder: $assetId"
+        continue
+    }
+
     Write-Host "Creating init file for asset: $assetId"
     $emptyFile = [System.IO.Path]::GetTempFileName()
     Set-Content -Path $emptyFile -Value "" -NoNewline
@@ -734,7 +750,8 @@ foreach ($assetId in $folders) {
     Start-Sleep -Milliseconds 500
 }
 
-Write-Host "Done. VAMS will process each init file and create asset records automatically."
+Write-Host "Done. VAMS creates an asset record for each folder it imports and deletes that folder's init file."
+Write-Host "A folder whose name is not a valid asset ID is not imported, and its init file remains in the bucket."
 ```
 
 :::
@@ -805,10 +822,10 @@ After assets are created (via init files or API):
 
 1. **Viewing in VAMS**: The assets appear in the VAMS web interface under the specified database. You can browse files, view metadata, and use any compatible viewer plugin.
 2. **File listing**: VAMS lists files by querying Amazon S3 with the asset's `assetLocation.Key` prefix. All files under that prefix appear in the file manager.
-3. **Asset type detection**: The sync Lambda automatically determines the asset type based on the files present (file extension for single-file assets, `folder` for multi-file assets).
+3. **Asset type detection**: The sync Lambda automatically determines the asset type based on the files present (file extension for single-file assets, `folder` for multi-file assets). It does not do so for an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID; see **Ongoing sync** below.
 4. **Presigned URLs**: Downloads and viewer access use presigned URLs generated against the original bucket location.
 5. **Pipelines**: You can run processing pipelines (for example, 3D preview generation) on imported assets. Pipeline outputs are written to the appropriate output paths within the same bucket.
-6. **Ongoing sync**: Any files added to or deleted from an asset folder in Amazon S3 are automatically detected by the sync Lambda and reflected in VAMS (file indexing, asset type updates, metadata cleanup). Bucket sync identifies an asset from the first folder below `baseAssetsPrefix`. For an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID (such as `projects/building-a/`), files added to or deleted from the folder directly in Amazon S3 are not attributed to the asset. They are not indexed for search, do not update the asset type, and do not start `fileUpload` workflow triggers. The same applies to files that were already in the folder when the asset was created. Files uploaded through VAMS (web interface, CLI, or API) are recorded against the asset and indexed, but when one of them is permanently deleted its search entry is not removed. Reindexing with index clearing removes those entries and restores the files uploaded through VAMS.
+6. **Ongoing sync**: For an asset whose folder is a top-level folder named after its asset ID, which includes every asset created from an `init` file or without `bucketExistingKey`, files added to or deleted from the folder in Amazon S3 are automatically detected by the sync Lambda and reflected in VAMS (file indexing, asset type updates, metadata cleanup). Bucket sync identifies an asset from the first folder below `baseAssetsPrefix`. For an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID (such as `projects/building-a/`), files added to or deleted from the folder directly in Amazon S3 are not attributed to the asset. They are not indexed for search, do not update the asset type, and do not start `fileUpload` workflow triggers. The same applies to files that were already in the folder when the asset was created. Files uploaded through VAMS (web interface, CLI, or API) are recorded against the asset and indexed, but when one of them is permanently deleted its search entry is not removed. Reindexing with index clearing removes those entries and restores the files uploaded through VAMS.
 7. **No data movement**: Files remain at their original S3 location. VAMS does not copy, move, or reorganize the files.
 
 ### Common questions
@@ -827,7 +844,7 @@ If your 3D models are individual files (not in folders), you need to reorganize 
 
 **Can I add files to an imported asset after creation?**
 
-Yes. After creating an asset, you can upload additional files to the asset through the VAMS web interface or API. New files are placed under the same S3 prefix as the original files. You can also add files directly to the asset folder in Amazon S3 and the sync Lambda will detect them automatically.
+Yes. After creating an asset, you can upload additional files to the asset through the VAMS web interface or API. New files are placed under the same S3 prefix as the original files. You can also add files directly to the asset folder in Amazon S3 and the sync Lambda will detect them automatically, except for an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID. Add files to such an asset through VAMS; see **Ongoing sync** under [What happens after import](#what-happens-after-import).
 
 **What if I have thousands of assets to import?**
 
@@ -835,7 +852,7 @@ The init-file approach scales well. Add a short delay (0.5-1 second) between cre
 
 **Will the init files remain in my bucket?**
 
-No. The sync Lambda automatically deletes the `init` file from Amazon S3 after processing. If bucket versioning is enabled, all versions of the `init` file (including delete markers) are also removed.
+Not in the folders VAMS imports. The sync Lambda deletes the `init` file of each folder it imports from Amazon S3 after processing. If bucket versioning is enabled, all versions of the `init` file (including delete markers) are also removed. A folder whose name is reserved or is not a valid asset ID (see [Step 1](#step-1-organize-your-data-to-match-vams-conventions)) is not imported, so an `init` file written to it remains in the bucket until you delete it. The sample scripts above skip reserved folder names.
 
 ## Related resources
 

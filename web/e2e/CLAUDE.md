@@ -123,20 +123,25 @@ An ad-hoc spec may create and clean up its own throwaway data. A core spec may n
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
 locators — the app's markup is not always guessable, and these were established empirically.
 
-| Helper                                          | Use for                                                                         |
-| ----------------------------------------------- | ------------------------------------------------------------------------------- |
-| `gotoOrchestration(page, route, heading)`       | Navigate + wait for first load (no data dependency)                             |
-| `searchBox(page)`                               | The orchestration filter-bar search input                                       |
-| `facet(page, label)`                            | A native `<select>` filter                                                      |
-| `firstCardId(page)`                             | Id of the first card, or `null` when the list is empty                          |
-| `openCardMenu(page, id)`                        | Filter to a card and open its actions menu                                      |
-| `tableRows(page)` / `expectTableRendered(page)` | Table rows / "rendered in any environment" assertion                            |
-| `menuSurface(items)`                            | The open menu's own floating surface, from an item                              |
-| `wizardRail(page)`                              | The execute dialog's step rail (`navigation` "Execution steps")                 |
-| `rowValue(page, label)`                         | The value cell of a label/value row in a detail panel                           |
-| `collectPageErrors(page)`                       | Uncaught page errors, for crash-regression assertions                           |
-| `apiContext(page)`                              | The app's API base and Cognito ID token, for authenticated `page.request` calls |
-| `findAssetFiles(page, extensions, options)`     | First file per extension found via the API, or `null` without an API context    |
+| Helper                                                        | Use for                                                                                    |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                        |
+| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages           |
+| `searchBox(page)`                                             | The orchestration filter-bar search input                                                  |
+| `facet(page, label)`                                          | A native `<select>` filter                                                                 |
+| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                     |
+| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                 |
+| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion                                       |
+| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                         |
+| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                            |
+| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                      |
+| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                      |
+| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does       |
+| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike          |
+| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied       |
+| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator |
+| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls            |
+| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context               |
 
 **Selector facts worth not rediscovering:**
 

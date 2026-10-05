@@ -1737,6 +1737,7 @@ paths:
               - DefaultCognitoAuthorizer: []
         delete:
             summary: "Delete a database (soft-delete)."
+            description: "The dependency check runs after the database is found and the caller is authorized to delete it, so an unauthorized caller receives 403 and a missing database 404 whatever the database contains."
             responses:
                 "200":
                     description: Database deleted.

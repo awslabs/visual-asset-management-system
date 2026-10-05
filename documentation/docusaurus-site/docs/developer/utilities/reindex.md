@@ -205,6 +205,8 @@ python reindex_utility.py \
 
 :::warning[Clear Indexes]
 The `--clear-indexes` flag deletes all documents from the Amazon OpenSearch asset and file indexes before reindexing. During the reindexing process, search results in the VAMS web interface will be incomplete. Only use this flag when you need a clean rebuild.
+
+The file reindex lists only the objects whose current version is live, so it does not rebuild the documents of files whose current version is a delete marker: every file of an archived asset and each individually archived file. A reindex that clears the indexes, including the one a deployment runs when [`app.openSearch.reindexOnCdkDeploy`](../../deployment/configuration-reference.md) is `true`, therefore removes the search documents of those files, and searches that include archived files no longer return them. Archived assets keep their asset documents, which the asset reindex rebuilds from the asset table.
 :::
 
 **Asynchronous invocation for large datasets:**

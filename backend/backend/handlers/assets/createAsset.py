@@ -881,8 +881,11 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     # Save asset to DynamoDB
     save_asset_details(asset)
 
-    # Update asset count
-    update_asset_count(db_database, asset_storage_table_name, {}, databaseId)
+    # Update asset count (best-effort: the asset record has already been saved)
+    try:
+        update_asset_count(db_database, asset_storage_table_name, {}, databaseId)
+    except Exception as e:
+        logger.warning(f"Asset count update failed after creating {assetId}: {e}")
 
     # Record creation in asset history (best-effort)
     write_asset_history_record(

@@ -29,6 +29,7 @@ import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
+import { readCachedTagTypes } from "../../common/utils/tagOptions";
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -396,11 +397,10 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                         {Array.isArray(asset?.tags) && asset.tags.length > 0
                                             ? asset.tags
                                                   .map((tag: any) => {
-                                                      const tagType = JSON.parse(
-                                                          localStorage.getItem("tagTypes") ||
-                                                              '{"tagTypeName": "", "tags": []}'
-                                                      ).find((type: any) =>
-                                                          type.tags.includes(tag)
+                                                      const tagType = readCachedTagTypes().find(
+                                                          (type: any) =>
+                                                              Array.isArray(type?.tags) &&
+                                                              type.tags.includes(tag)
                                                       );
                                                       if (tagType && tagType.required === "True") {
                                                           tagType.tagTypeName += " [R]";

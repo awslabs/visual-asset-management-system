@@ -302,7 +302,7 @@ discovering the limit at the deploy that crosses it. Counted from a fresh synth,
 
 ### RESTful Route Convention
 
-Routes use path parameters: `/database/{databaseId}/assets/{assetId}`. Asset version subresource routes include `PUT .../assetversions/{assetVersionId}` (update alias/comment), `POST .../{assetVersionId}/archive`, and `POST .../{assetVersionId}/unarchive`. Unauthenticated paths (no authorizer): `/api/amplify-config`, `/api/version`.
+Routes use path parameters: `/database/{databaseId}/assets/{assetId}`. Asset version subresource routes include `PUT .../assetversions/{assetVersionId}` (update alias/comment), `POST .../{assetVersionId}/archive`, and `POST .../{assetVersionId}/unarchive`. Unauthenticated paths (`VamsAnonymousAuthorizer`: IP check only, no token): `/api/amplify-config`, `/api/version`.
 
 ---
 

@@ -107,11 +107,13 @@ A centralized configuration system (`config.json`) controls which features, pipe
 
 VAMS supports three deployment modes to accommodate different compliance and network isolation requirements.
 
-| Deployment Mode                  | Web Distribution                      | API Access    | VPC      | Notes                                                                                                                                                    |
-| -------------------------------- | ------------------------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | REST API (v1) | Optional | Default mode. Regional or private endpoint. Supports optional Amazon Location Service.                                                                   |
-| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | REST API (v1) | Required | No Amazon CloudFront. Regional or private endpoint. FIPS endpoints. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
-| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | REST API (v1) | Required | Deploys with the GovCloud guardrails. No Amazon CloudFront. No Amazon Location Service. Region exposes two Availability Zones.                           |
+| Deployment Mode                  | Web Distribution                      | API Access    | VPC      | Notes                                                                                                                                                               |
+| -------------------------------- | ------------------------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | REST API (v1) | Optional | Default mode. Regional or private endpoint. Supports optional Amazon Location Service.                                                                              |
+| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | REST API (v1) | Required | No Amazon CloudFront. Regional or private endpoint, FIPS-compliant by default. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
+| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | REST API (v1) | Required | Deploys with the GovCloud guardrails. No Amazon CloudFront. No Amazon Location Service. Region exposes two Availability Zones.                                      |
+
+In AWS GovCloud (US), Amazon API Gateway APIs are FIPS-compliant by default. The `app.useFips` option, which the GovCloud configuration template turns on, adds the AWS KMS FIPS interface VPC endpoint when VPC endpoints and AWS KMS CMK encryption are enabled; it does not move other VAMS service calls to FIPS endpoints. See [FIPS Endpoints](security.md#fips-endpoints).
 
 :::note[GovCloud and EU Sovereign Cloud Requirements]
 When deploying to AWS GovCloud (US) or the AWS European Sovereign Cloud, the VPC must be enabled, Amazon CloudFront must be disabled, and Amazon Location Service must be disabled.

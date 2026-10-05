@@ -220,16 +220,15 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         if not asset:
             raise VAMSGeneralErrorResponse("Asset not found in database")
         
-        # Check permissions
-        asset["object__type"] = "asset"
-
         # Fail closed: with no authenticated identity no authorization can be
         # evaluated, so deny rather than return the asset.
         if len(claims_and_roles["tokens"]) == 0:
             raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
 
+        # Check permissions against an annotated copy, so the returned record, which callers
+        # write back, carries no object type
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, operation):
+        if not casbin_enforcer.enforce({**asset, 'object__type': 'asset'}, operation):
             raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
 
         return asset

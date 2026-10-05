@@ -183,7 +183,7 @@ def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token
             'PartNumber': part_number,
             'UploadId': upload_id
         },
-        ExpiresIn=expiration
+        ExpiresIn=int(expiration)
     )
     return url
 

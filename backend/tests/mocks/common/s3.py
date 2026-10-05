@@ -32,7 +32,7 @@ def is_object_version_archived(bucket, key, version_id=None, client=None):
                 return False
             except Exception as e:
                 code = getattr(e, "response", {}).get("Error", {}).get("Code") if hasattr(e, "response") else None
-                if code == "MethodNotAllowed":
+                if code in ("405", "MethodNotAllowed"):
                     return True
                 if code in ("NoSuchKey", "404", "NotFound"):
                     return False

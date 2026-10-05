@@ -337,7 +337,40 @@ def delete_database(database_id, claims_and_roles=None):
                 statusCode=404
             )
 
-        # Check for active workflows, pipelines, and assets before accessing the table
+        table = dynamodb.Table(db_database)
+
+        db_response = table.get_item(
+            Key={
+                'databaseId': database_id
+            }
+        )
+        database = db_response.get("Item", {})
+
+        if not database:
+            return DeleteDatabaseResponseModel(
+                message="Record not found",
+                statusCode=404
+            )
+
+        # Authorize before the content checks, so a caller denied on the database learns
+        # nothing about what it contains
+        allowed = False
+        database.update({
+            "object__type": "database"
+        })
+        
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(database, "DELETE"):
+                allowed = True
+
+        if not allowed:
+            return DeleteDatabaseResponseModel(
+                message="Action not allowed",
+                statusCode=403
+            )
+
+        # Check for active workflows, pipelines, and assets
         if check_workflows(database_id):
             return DeleteDatabaseResponseModel(
                 message="Database contains active workflows",
@@ -356,50 +389,17 @@ def delete_database(database_id, claims_and_roles=None):
                 statusCode=400
             )
 
-        # Only create the table reference if we've passed all the checks
-        table = dynamodb.Table(db_database)
-
-        db_response = table.get_item(
-            Key={
-                'databaseId': database_id
-            }
+        logger.info(f"Deleting database: {database_id}")
+        # The Casbin type marker is not part of the stored record
+        database.pop("object__type", None)
+        database['databaseId'] = database_id + "#deleted"
+        table.put_item(Item=database)
+        table.delete_item(Key={'databaseId': database_id})
+        
+        return DeleteDatabaseResponseModel(
+            message="Database deleted",
+            statusCode=200
         )
-        database = db_response.get("Item", {})
-
-        if database:
-            allowed = False
-            # Add Casbin Enforcer to check if the current user has permissions to DELETE the database
-            database.update({
-                "object__type": "database"
-            })
-            
-            if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if casbin_enforcer.enforce(database, "DELETE"):
-                    allowed = True
-
-            if allowed:
-                logger.info(f"Deleting database: {database_id}")
-                # The Casbin type marker is not part of the stored record
-                database.pop("object__type", None)
-                database['databaseId'] = database_id + "#deleted"
-                table.put_item(Item=database)
-                table.delete_item(Key={'databaseId': database_id})
-                
-                return DeleteDatabaseResponseModel(
-                    message="Database deleted",
-                    statusCode=200
-                )
-            else:
-                return DeleteDatabaseResponseModel(
-                    message="Action not allowed",
-                    statusCode=403
-                )
-        else:
-            return DeleteDatabaseResponseModel(
-                message="Record not found",
-                statusCode=404
-            )
     except Exception as e:
         logger.exception(f"Error deleting database: {e}")
         raise VAMSGeneralErrorResponse(f"Error deleting database.")

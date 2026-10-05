@@ -14,6 +14,19 @@ import { isGlobalScope, scopeLabel } from "./databaseScope";
  */
 const GROUP_KEY_SEPARATOR = "\u0000";
 
+/**
+ * The tag-type list the asset page caches in localStorage under `tagTypes`. Empty until that fetch
+ * has stored a list, and when the stored value is not a list: a failed fetch is stored as returned.
+ */
+export function readCachedTagTypes(): any[] {
+    try {
+        const parsed = JSON.parse(localStorage.getItem("tagTypes") || "[]");
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+}
+
 interface TagOption {
     label: string;
     value: string;

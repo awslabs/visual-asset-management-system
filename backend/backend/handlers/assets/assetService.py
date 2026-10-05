@@ -918,9 +918,10 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
     """Tier-2 authorization for a single-asset operation, decided before existence and state.
 
     The verdict is reached before the caller learns anything about the asset, so a refusal
-    cannot be told apart from a not-found or a wrong-state rejection. When the asset exists it
-    is annotated with its object type and evaluated as stored; when it does not, the
-    identifiers the request supplied stand in, so an unauthorized caller is refused rather than
+    cannot be told apart from a not-found or a wrong-state rejection. When the asset exists, a
+    copy of the stored record annotated with its object type is evaluated, so the record the
+    caller goes on to write carries no annotation; when it does not, the identifiers the
+    request supplied stand in, so an unauthorized caller is refused rather than
     told the identifiers are unused. An empty token list is no identity to evaluate, so it
     denies without constructing an enforcer.
 
@@ -938,8 +939,7 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
         return False
 
     if asset:
-        asset.update({"object__type": "asset"})
-        authorization_object = asset
+        authorization_object = {**asset, 'object__type': 'asset'}
     else:
         authorization_object = {
             'databaseId': databaseId,
@@ -1190,10 +1190,11 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         # in the tag list, so the decision isolates the tag change; PUT on the stored tag list is
         # established above, and an unchanged tag list is still gated exactly once.
         if sorted(new_tags) != sorted(existing_tags):
-            post_mutation_asset = {**asset, 'tags': new_tags}
+            stored_asset = {**asset, 'object__type': 'asset'}
+            post_mutation_asset = {**stored_asset, 'tags': new_tags}
             tag_change_enforcer = CasbinEnforcer(claims_and_roles)
             for enforced_asset, enforced_action in (
-                (asset, "GET"),
+                (stored_asset, "GET"),
                 (post_mutation_asset, "GET"),
                 (post_mutation_asset, "PUT"),
             ):
@@ -1338,8 +1339,11 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
             build_asset_snapshot(asset, archived_reason=request_model.reason)
         )
 
-        # Update asset count
-        update_asset_count(db_database, asset_database, {}, databaseId)
+        # Update asset count (best-effort: the archive has already committed)
+        try:
+            update_asset_count(db_database, asset_database, {}, databaseId)
+        except Exception as e:
+            logger.warning(f"Asset count update failed after archiving {assetId}: {e}")
 
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
@@ -1453,8 +1457,11 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
             build_asset_snapshot(asset, unarchived_reason=request_model.reason)
         )
 
-        # Update asset count
-        update_asset_count(db_database, asset_database, {}, original_db_id)
+        # Update asset count (best-effort: the unarchive has already committed)
+        try:
+            update_asset_count(db_database, asset_database, {}, original_db_id)
+        except Exception as e:
+            logger.warning(f"Asset count update failed after unarchiving {assetId}: {e}")
 
         # Send email notification
         send_subscription_email(original_db_id, assetId)
@@ -1776,8 +1783,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             except Exception as e:
                 logger.warning(f"Error deleting asset file metadata versions: {e}")
 
-        # 9. Update asset count
-        update_asset_count(db_database, asset_database, {}, original_db_id)
+        # 9. Update asset count (best-effort: the delete has already committed)
+        try:
+            update_asset_count(db_database, asset_database, {}, original_db_id)
+        except Exception as e:
+            logger.warning(f"Asset count update failed after permanently deleting {assetId}: {e}")
 
         # Record permanent delete in asset history (best-effort). History
         # records for the asset are intentionally NOT deleted.

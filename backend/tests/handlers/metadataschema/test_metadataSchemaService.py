@@ -204,9 +204,40 @@ def _body(response):
     return json.loads(response["body"])
 
 
+def _apply_update(row, update_kwargs):
+    """`row` with an `update_item` call's SET and REMOVE clauses applied, as DynamoDB stores it."""
+    names = update_kwargs["ExpressionAttributeNames"]
+    values = update_kwargs.get("ExpressionAttributeValues", {})
+    expression = update_kwargs["UpdateExpression"]
+    set_clause, _, remove_clause = expression.partition(" REMOVE ")
+    assert set_clause.startswith("SET "), expression
+    updated = dict(row)
+    for assignment in set_clause[len("SET "):].split(", "):
+        name, value = assignment.split(" = ")
+        updated[names[name]] = values[value]
+    for name in filter(None, remove_clause.split(", ")):
+        updated.pop(names[name], None)
+    return updated
+
+
 def _written(table):
-    """The Item handed to put_item."""
+    """The row as stored after the write: the Item a create puts, or the row an update read with
+    the update applied."""
+    if table.update_item.called:
+        assert not table.put_item.called, "an update replaced the whole item"
+        kwargs = table.update_item.call_args.kwargs
+        stored = table.query.return_value["Items"][0]
+        assert kwargs["Key"] == {
+            "metadataSchemaId": stored["metadataSchemaId"],
+            "databaseId:metadataEntityType": stored["databaseId:metadataEntityType"],
+        }
+        return _apply_update(stored, kwargs)
     return table.put_item.call_args.kwargs["Item"]
+
+
+def _assert_nothing_written(table):
+    table.put_item.assert_not_called()
+    table.update_item.assert_not_called()
 
 
 def _create_event(database_id=GLOBAL_DATABASE_ID, entity_type=ENTITY_TYPE, fields=None):
@@ -331,7 +362,7 @@ class TestCreateStoresFieldsAndKeys:
         response = svc.handle_post_request(_create_event(database_id=OWNING_DATABASE_ID))
 
         assert _status(response) == 400
-        schema_table.put_item.assert_not_called()
+        _assert_nothing_written(schema_table)
 
 
 @pytest.mark.unit
@@ -397,13 +428,12 @@ class TestUpdateReserializesFields:
         assert json.loads(item["fields"]) == _FIELDS
         assert item["enabled"] is False
 
-    def test_the_composite_sort_key_survives_the_update(self, enforcer, claims, schema_table):
-        """put_item replaces the whole item, so a dropped sort key writes a second row rather than
-        updating this one."""
+    def test_the_update_targets_the_stored_composite_key(self, enforcer, claims, schema_table):
+        """The sort key is part of the item key, so a wrong one would update a different item."""
         response = svc.handle_put_request(_update_event())
 
         assert _status(response) == 200
-        assert (_written(schema_table)["databaseId:metadataEntityType"]
+        assert (schema_table.update_item.call_args.kwargs["Key"]["databaseId:metadataEntityType"]
                 == f"{OWNING_DATABASE_ID}:{ENTITY_TYPE}")
 
     def test_an_update_to_a_missing_schema_writes_nothing(self, enforcer, claims, schema_table):
@@ -412,7 +442,7 @@ class TestUpdateReserializesFields:
         response = svc.handle_put_request(_update_event())
 
         assert _status(response) == 404
-        schema_table.put_item.assert_not_called()
+        _assert_nothing_written(schema_table)
 
 
 @pytest.mark.unit
@@ -511,7 +541,7 @@ class TestUpdateExplicitNullLeavesRequiredFieldsUnchanged:
 
         assert _status(response) == 400, response
         assert "At least one field must be provided for update" in _body(response)["message"]
-        schema_table.put_item.assert_not_called()
+        _assert_nothing_written(schema_table)
 
 
 @pytest.mark.unit
@@ -574,7 +604,7 @@ class TestAuthorizationScopeFollowsTheRightDatabase:
         response = svc.handle_post_request(_create_event(database_id=OTHER_DATABASE_ID))
 
         assert _status(response) == 403
-        schema_table.put_item.assert_not_called()
+        _assert_nothing_written(schema_table)
         # The denial precedes the database-existence lookup, so it discloses nothing about which
         # databases exist.
         database_table.get_item.assert_not_called()
@@ -637,7 +667,7 @@ class TestAuthorizationScopeFollowsTheRightDatabase:
         response = svc.handle_put_request(_update_event())
 
         assert _status(response) == 403
-        schema_table.put_item.assert_not_called()
+        _assert_nothing_written(schema_table)
 
     def test_update_succeeds_for_a_role_scoped_to_the_stored_database(
             self, enforcer, claims, schema_table):
@@ -646,7 +676,7 @@ class TestAuthorizationScopeFollowsTheRightDatabase:
         response = svc.handle_put_request(_update_event())
 
         assert _status(response) == 200
-        schema_table.put_item.assert_called_once()
+        schema_table.update_item.assert_called_once()
 
 
 @pytest.mark.unit
@@ -787,7 +817,7 @@ class TestMissingSchemaIsNotFoundOnEveryVerb:
 
         assert _status(response) == 404, verb
         assert "Metadata schema not found" in _body(response)["message"], verb
-        schema_table.put_item.assert_not_called()
+        _assert_nothing_written(schema_table)
         schema_table.delete_item.assert_not_called()
 
     @pytest.mark.parametrize("verb, call", _VERBS, ids=[v for v, _ in _VERBS])
@@ -830,7 +860,7 @@ class TestUpdateFileTypeRestrictionFollowsTheStoredEntityType:
 
         assert _status(response) == 400, response
         assert "can only be set for fileMetadata or fileAttribute" in _body(response)["message"]
-        schema_table.put_item.assert_not_called()
+        _assert_nothing_written(schema_table)
 
     @pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "whitespace"])
     def test_a_blank_restriction_clears_it_on_any_entity_type(
@@ -867,7 +897,7 @@ class TestUpdateFileTypeRestrictionFollowsTheStoredEntityType:
 
         assert _status(response) == 400, response
         assert "must start with a dot" in _body(response)["message"]
-        schema_table.put_item.assert_not_called()
+        _assert_nothing_written(schema_table)
 
     def test_an_edit_that_leaves_a_stored_undotted_restriction_alone_succeeds(
             self, enforcer, claims, schema_table):

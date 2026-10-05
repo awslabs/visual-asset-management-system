@@ -463,8 +463,10 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         # Update only the editable fields. schemaName, fields and enabled are required on every
         # stored schema, so a null leaves them unchanged; a null or empty fileKeyTypeRestriction
         # removes the restriction.
+        updates = {}
+        removed = []
         if update_data.get('schemaName') is not None:
-            schema['schemaName'] = update_data['schemaName']
+            updates['schemaName'] = update_data['schemaName']
         
         if 'fileKeyTypeRestriction' in update_data:
             file_key_type_restriction = update_data['fileKeyTypeRestriction']
@@ -472,26 +474,47 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
                 # Only fileMetadata and fileAttribute schemas carry a restriction, as on create
                 if schema['metadataSchemaEntityType'] not in [MetadataSchemaEntityType.FILE_METADATA.value, MetadataSchemaEntityType.FILE_ATTRIBUTE.value]:
                     raise VAMSGeneralErrorResponse("fileKeyTypeRestriction can only be set for fileMetadata or fileAttribute entity types")
-                schema['fileKeyTypeRestriction'] = file_key_type_restriction
+                updates['fileKeyTypeRestriction'] = file_key_type_restriction
             else:
                 # Remove the field if set to None, empty or whitespace only
-                schema.pop('fileKeyTypeRestriction', None)
+                removed.append('fileKeyTypeRestriction')
         
         if update_data.get('fields') is not None:
             # Convert fields to JSON string for storage
-            schema['fields'] = json.dumps(update_data['fields'])
+            updates['fields'] = json.dumps(update_data['fields'])
         
         if update_data.get('enabled') is not None:
-            schema['enabled'] = update_data['enabled']
+            updates['enabled'] = update_data['enabled']
         
         # Update metadata
         now = datetime.utcnow().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
-        schema['dateModified'] = now
-        schema['modifiedBy'] = username
+        updates['dateModified'] = now
+        updates['modifiedBy'] = username
         
-        # Save the updated schema
-        metadata_schema_table.put_item(Item=schema)
+        # Write only the changed attributes, and only to a schema that still exists, so a
+        # concurrent delete is not undone and a concurrent update of other fields is kept
+        keys_map = {f"#f{index}": attribute for index, attribute in enumerate(updates)}
+        values_map = {f":v{index}": value for index, value in enumerate(updates.values())}
+        update_expression = "SET " + ", ".join(f"#f{index} = :v{index}" for index in range(len(updates)))
+        if removed:
+            keys_map.update({f"#r{index}": attribute for index, attribute in enumerate(removed)})
+            update_expression += " REMOVE " + ", ".join(f"#r{index}" for index in range(len(removed)))
+        try:
+            metadata_schema_table.update_item(
+                Key={
+                    'metadataSchemaId': metadataSchemaId,
+                    'databaseId:metadataEntityType': schema.get('databaseId:metadataEntityType')
+                },
+                UpdateExpression=update_expression,
+                ConditionExpression='attribute_exists(metadataSchemaId)',
+                ExpressionAttributeNames=keys_map,
+                ExpressionAttributeValues=values_map,
+            )
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                raise VAMSGeneralErrorResponse("Metadata schema not found", status_code=404)
+            raise
         
         # Return success response
         return MetadataSchemaOperationResponseModel(

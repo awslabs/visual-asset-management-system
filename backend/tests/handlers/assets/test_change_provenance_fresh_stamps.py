@@ -66,16 +66,22 @@ def _workflow_written_metadata(**overrides):
 
 
 def _assert_fresh_stamp(metadata, change_source, user_id, from_version):
-    """Every provenance key describes the copying operation; nothing of the source's survives."""
+    """Every provenance key describes the copying operation; nothing of the source's survives.
+
+    A provenance key the operation leaves blank is not written, so a blank key reads as absent.
+    """
     assert metadata[VAMS_CHANGE_SOURCE_METADATA_KEY] == change_source
     assert metadata[VAMS_CHANGE_USER_ID_METADATA_KEY] == user_id
-    assert metadata[VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY] == from_version
-    assert metadata[VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY] == ""
-    assert metadata[VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY] == ""
-    assert metadata[VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY] == ""
-    assert metadata[VAMS_CHANGE_DATABASE_ID_FROM_METADATA_KEY] == ""
-    assert metadata[VAMS_CHANGE_ASSET_FILE_PATH_FROM_METADATA_KEY] == ""
-    assert CHANGE_PROVENANCE_METADATA_KEYS <= set(metadata)
+    assert metadata.get(VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY, "") == from_version
+    for key in (
+        VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
+        VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
+        VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY,
+        VAMS_CHANGE_DATABASE_ID_FROM_METADATA_KEY,
+        VAMS_CHANGE_ASSET_FILE_PATH_FROM_METADATA_KEY,
+    ):
+        assert key not in metadata, key
+    assert all(metadata[key] for key in CHANGE_PROVENANCE_METADATA_KEYS & set(metadata))
 
 
 class _ManagedCopyS3:

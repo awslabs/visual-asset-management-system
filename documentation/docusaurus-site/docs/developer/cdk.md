@@ -209,7 +209,7 @@ PUT    /database/{databaseId}/assets/{assetId}      # Update asset
 DELETE /database/{databaseId}/assets/{assetId}      # Delete asset
 ```
 
-Unauthenticated paths (no authorizer): `/api/amplify-config`, `/api/version`.
+Unauthenticated paths (`VamsAnonymousAuthorizer`: IP check only, no token): `/api/amplify-config`, `/api/version`.
 
 ## Configuration System
 

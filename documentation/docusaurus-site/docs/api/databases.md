@@ -261,6 +261,8 @@ DELETE /database/{databaseId}
 A database cannot be deleted if it contains active assets, pipelines, or workflows. Remove all dependent resources before deleting the database.
 :::
 
+The dependency check runs after the database is found and the caller is authorized to delete it, so a caller who is not authorized receives `403`, and a database that does not exist returns `404`, whatever the database contains.
+
 ### Response
 
 ```json

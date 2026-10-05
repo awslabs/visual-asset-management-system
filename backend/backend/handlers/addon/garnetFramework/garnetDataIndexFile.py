@@ -46,7 +46,7 @@ from common.s3MetadataKeys import (
     is_system_metadata_key,
 )
 from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS, join_asset_location_key
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
 
@@ -509,7 +509,7 @@ def convert_file_to_ngsi_ld(
             # Calculate full S3 key
             asset_location = asset_data.get('assetLocation', {})
             asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-            s3_key = asset_base_key + file_path.lstrip('/')
+            s3_key = join_asset_location_key(asset_base_key, file_path)
             
             ngsi_ld_entity["s3Key"] = {
                 "type": "Property",
@@ -871,7 +871,7 @@ def handle_file_metadata_stream(event_record: Dict[str, Any]) -> bool:
         # Get S3 file information
         asset_location = asset_details.get('assetLocation', {})
         asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        s3_key = asset_base_key + file_path.lstrip('/')
+        s3_key = join_asset_location_key(asset_base_key, file_path)
         
         s3_file_info = None
         is_archived = False

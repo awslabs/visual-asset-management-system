@@ -35,6 +35,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
     normalize_history_file_path,
     replace_metadata_copy_args,
+    UserMetadataTooLargeError,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE
@@ -139,6 +140,11 @@ DEFAULT_LIST_MAX_ITEMS = 10000
 # caller does not specify maxItems.
 DEFAULT_ARCHIVED_MARKERS_MAX_ITEMS = 1000
 
+# Response for a new file version whose user metadata would be over the Amazon S3 2 KB limit.
+USER_METADATA_TOO_LARGE_MESSAGE = (
+    "The file's Amazon S3 user metadata would exceed the 2 KB limit, so the new version cannot be written."
+)
+
 # Change-provenance columns surfaced on file version-history entries.
 CHANGE_HISTORY_COLUMNS = (
     "changeSource", "changeUserId", "changeWorkflowId",
@@ -231,16 +237,15 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         if not asset:
             raise VAMSGeneralErrorResponse("Asset not found in database.")
         
-        # Check permissions
-        asset["object__type"] = "asset"
-
         # An empty token list carries no authenticated identity, so authorization
         # cannot be evaluated and the request is denied.
         if len(claims_and_roles["tokens"]) == 0:
             raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
 
+        # Check permissions against an annotated copy, so the returned record, which callers
+        # write back, carries no object type
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, operation):
+        if not casbin_enforcer.enforce({**asset, 'object__type': 'asset'}, operation):
             raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
 
         return asset
@@ -895,10 +900,6 @@ def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claim
     Returns:
         True if user has permissions on both assets, False otherwise
     """
-    # Check permissions on both assets
-    source_asset["object__type"] = "asset"
-    dest_asset["object__type"] = "asset"
-
     # An empty token list carries no authenticated identity, so authorization
     # cannot be evaluated and the request is denied.
     if len(claims_and_roles["tokens"]) == 0:
@@ -906,9 +907,10 @@ def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claim
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
 
-    # Need GET permission on source and POST permission on destination
-    source_allowed = casbin_enforcer.enforce(source_asset, "GET")
-    dest_allowed = casbin_enforcer.enforce(dest_asset, "POST")
+    # Need GET permission on source and POST permission on destination, checked against annotated
+    # copies so neither record gains an object type
+    source_allowed = casbin_enforcer.enforce({**source_asset, 'object__type': 'asset'}, "GET")
+    dest_allowed = casbin_enforcer.enforce({**dest_asset, 'object__type': 'asset'}, "POST")
 
     if not source_allowed:
         raise VAMSGeneralErrorResponse("Not authorized to read from source asset")
@@ -2543,6 +2545,9 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
             affectedFiles=affected_files
         )
         
+    except UserMetadataTooLargeError as e:
+        logger.warning(f"Error unarchiving file: {e}")
+        raise VAMSGeneralErrorResponse(USER_METADATA_TOO_LARGE_MESSAGE)
     except ClientError as e:
         logger.exception(f"Error unarchiving file: {e}")
         raise VAMSGeneralErrorResponse(f"Error unarchiving file.")
@@ -2902,6 +2907,9 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         copy_response = s3_client.head_object(Bucket=bucket, Key=full_key)
         new_version_id = copy_response.get('VersionId', 'null')
 
+    except UserMetadataTooLargeError as e:
+        logger.warning(f"Error reverting file version: {e}")
+        raise VAMSGeneralErrorResponse(USER_METADATA_TOO_LARGE_MESSAGE)
     except Exception as e:
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
@@ -3251,6 +3259,9 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
             primaryType=final_primary_type
         )
         
+    except UserMetadataTooLargeError as e:
+        logger.warning(f"Error setting primary type metadata: {e}")
+        raise VAMSGeneralErrorResponse(USER_METADATA_TOO_LARGE_MESSAGE)
     except Exception as e:
         logger.exception(f"Error setting primary type metadata: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata.")
