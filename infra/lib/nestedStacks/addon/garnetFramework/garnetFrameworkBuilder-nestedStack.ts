@@ -258,13 +258,14 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
             );
         }
 
-        //Nag supressions
+        // Scoped to the three dead-letter queues rather than the stack: each indexer source queue
+        // carries a redrive policy, so a queue added here later without one is still reported.
         NagSuppressions.addResourceSuppressions(
-            this,
+            [garnetDatabaseIndexerSqsDlq, garnetAssetIndexerSqsDlq, garnetFileIndexerSqsDlq],
             [
                 {
                     id: "AwsSolutions-SQS3",
-                    reason: "Each Garnet indexer queue redrives to its own dead-letter queue; the finding remains only on those dead-letter queues, which terminate the redrive chain by definition.",
+                    reason: "This queue is the dead-letter queue of a Garnet indexer source queue and so terminates that queue's redrive chain; a redrive policy of its own would only move the same failed indexing message to a further queue.",
                 },
             ],
             true

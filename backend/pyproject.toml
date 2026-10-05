@@ -11,7 +11,7 @@ dependencies = [
     "aws-lambda-powertools (==2.36.0)",
     "pydantic (==1.10.13)",
     "opensearch-py (==2.7.1)",
-    "casbin (==1.33.0)",
+    "casbin (==1.36.0)",
     "locked-dict (==2023.10.22)",
     "boto3 (==1.43.45)",
     "urllib3 (>=2.6.0,<3)"
@@ -30,7 +30,7 @@ mypy = "1.0"
 boto3 = "1.43.45"
 geojson = "3.2.0"
 joserfc = "1.7.2"
-pyjwt = { extras = ["crypto"], version = "2.13.0" }
+pyjwt = { extras = ["crypto"], version = "2.15.1" }
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

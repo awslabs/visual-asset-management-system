@@ -4,8 +4,8 @@
  */
 
 /**
- * Browsing files inside one asset version does not remount DynamicViewer, so the
- * compatibility effect is the only thing that can notice the file changed. It used
+ * A host that keeps DynamicViewer mounted while its files change leaves the
+ * compatibility effect as the only thing that can notice the file changed. It used
  * to touch the selection only when nothing was selected, which left the previously
  * chosen viewer mounted against a file it cannot render, and left a resolved "no
  * compatible viewers" error on screen as the only visible state.

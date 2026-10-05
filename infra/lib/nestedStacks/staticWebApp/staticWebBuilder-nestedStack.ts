@@ -172,8 +172,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
         //Generate CSP
         //Generate Auth Domain and Global CSP policy
-        //Cognito hosted UI domain suffix is partition-aware (commercial-only; config
-        //validation rejects SAML in partitions without hosted UI support)
+        //Cognito hosted UI domain suffix (commercial-only; config validation rejects SAML and
+        //OIDC elsewhere), read as the standard auth.{region} domain
         const cognitoHostedUiUrl = props.config.app.authProvider.useCognito.useSaml
             ? `https://${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
             : props.config.app.authProvider.useCognito.useOidc

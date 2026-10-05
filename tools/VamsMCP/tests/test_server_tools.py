@@ -887,6 +887,15 @@ def test_execute_workflow_docstring_describes_the_metadata_source_fields(fragmen
 
 @pytest.mark.parametrize(
     "fragment",
+    # A null schemaName, fields or enabled is not a way to clear it; a null restriction is.
+    ["sent as null is left unchanged", "removes the restriction"],
+)
+def test_update_metadata_schema_docstring_states_the_null_semantics(fragment):
+    assert fragment in _docstring_of("update_metadata_schema")
+
+
+@pytest.mark.parametrize(
+    "fragment",
     ["inputMetadata", "inputDatabaseMetadata", "metadataSourceDatabases", "truncatedCollections",
      # Where an agent goes when a metadata collection is flagged partial. Without this the
      # truncation flag reads as a dead end and the agent reports the shortened count.
@@ -903,6 +912,15 @@ def test_get_execution_details_docstring_describes_the_metadata_collections(frag
 )
 def test_page_execution_detail_metadata_docstring_describes_collections_and_rows(fragment):
     assert fragment in _docstring_of("page_execution_detail_metadata")
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # A null field is not a way to clear it; an empty tag list is.
+    ["sent as null is left unchanged", "tags=[] clears the tag list"],
+)
+def test_update_asset_docstring_states_the_null_and_empty_list_semantics(fragment):
+    assert fragment in _docstring_of("update_asset")
 
 
 @pytest.mark.parametrize(
@@ -1090,6 +1108,8 @@ def test_the_docstring_bound_check_would_fire_on_a_one_liner():
         "bearer credential",
         "presignedUrlTimeoutSeconds",
         "24 hours",
+        "at most",
+        "credentials that signed",
         "transcript",
         "presignedUrlNetworkRestrictions",
         "allowedIpRanges",

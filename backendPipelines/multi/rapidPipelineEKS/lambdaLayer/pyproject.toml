@@ -3,7 +3,6 @@ name = "kubernetes-layer"
 version = "0.1.0"
 description = "Kubernetes Python client Lambda layer for EKS operations"
 authors = ["VAMS Team"]
-readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]

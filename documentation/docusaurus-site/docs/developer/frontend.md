@@ -593,16 +593,13 @@ export default MyComponent;
 
 ## Content Security Policy and Inline Scripts
 
-The VAMS web app ships with a Content Security Policy generated at deploy time by `infra/lib/helper/security.ts` and embedded in the static-web nested stack's response headers. The policy is permissive enough to accommodate external viewer plugins whose inline `<script>` blocks we cannot pre-hash, while remaining restrictive elsewhere (`default-src 'none'`, `object-src 'none'`, `frame-ancestors 'self'` for same-origin framing only, HTTPS upgrades, etc.).
+The VAMS web app ships with a Content Security Policy generated at deploy time by `infra/lib/helper/security.ts` and embedded in the static-web nested stack's response headers. The policy allows the inline `<script>` blocks in `web/index.html` by SHA-256 hash and is restrictive elsewhere (`default-src 'none'`, `object-src 'none'`, `frame-ancestors 'self'` for same-origin framing only, HTTPS upgrades, etc.).
 
-### `script-src` uses `'unsafe-inline'`
+### `script-src` allows inline scripts by hash
 
-`script-src` includes `'unsafe-inline'` to allow add-on viewers (such as Physna's hosted viewer, which embeds inline `<script>` blocks inside its iframe HTML) to run without requiring VAMS to maintain a rolling per-version SHA allowlist. Maintaining hashes or a CSP nonce per external-viewer release is not sustainable because:
+`script-src` carries a SHA-256 hash for each inline `<script>` block in `web/index.html` and includes `'unsafe-inline'` in no configuration, so an injected inline script is blocked. A hash covers the exact text of its block, so editing or reformatting an inline block in `web/index.html` requires regenerating the hashes with `web/scripts/cspInlineScriptHashes.js` and updating `infra/lib/helper/cspInlineScriptHashes.ts` with its output; `infra/test/web/cspInlineScriptHashes.test.ts` fails on drift.
 
--   Viewer vendors rev their bundles frequently, which would break VAMS on every upstream publish until someone updated the allowlist.
--   Most add-on viewers inject inline scripts from a sandboxed iframe whose origin is not VAMS, and the browser will not forward a nonce across origins.
-
-Browsers ignore `'unsafe-inline'` whenever any hash or nonce source is also present, so the directive only actually takes effect in this deployment because neither is used.
+Browsers ignore `'unsafe-inline'` whenever a hash source is also present, so the keyword would permit nothing alongside the hashes, and a `scriptSrc` entry carrying it in `infra/config/csp/cspAdditionalConfig.json` is skipped with a warning at synth. An add-on viewer that frames a third-party origin, such as Physna's hosted viewer, loads under that origin's own policy and needs only the `frame-src` and `connect-src` entries described in [Add-on origins](#add-on-origins). See [Security Architecture](../architecture/security.md#content-security-policy-csp) for the full directive list.
 
 ### `app.webUi.allowUnsafeEvalFeatures`
 

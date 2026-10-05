@@ -414,7 +414,7 @@ def run_reindexer_direct(
         error_msg = (
             f"Failed to import the backend reindexer handler from {resolved_backend_path}: {e}. "
             f"Ensure --backend-path is correct and the direct-mode Python libraries are installed "
-            f"(boto3, botocore, urllib3, and opensearch-py when using --clear-indexes)."
+            f"(boto3, botocore, urllib3, aws-lambda-powertools, and opensearch-py when using --clear-indexes)."
         )
         logger.exception(error_msg)
         return {'error': error_msg}

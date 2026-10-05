@@ -28,7 +28,7 @@
  * one this needs to catch.
  */
 
-import { SynthResult, synthTemplate, TemplateName } from "../support/templateSynth";
+import { Resource, SynthResult, synthTemplate, TemplateName } from "../support/templateSynth";
 
 const TEMPLATES: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
 
@@ -340,5 +340,106 @@ describe("bucket-sync queues dead-letter, per bucket and per direction", () => {
             );
             expect(denies).toBe(true);
         }
+    });
+});
+
+/**
+ * The storage stack's AwsSolutions-SQS3 suppression covers its dead-letter queues and nothing else.
+ *
+ * AwsSolutions-SQS3 reports a queue that has no redrive policy. In the storage stack the queues without
+ * one are the dead-letter queues, so the suppression belongs on them alone. A suppression applied to the
+ * whole nested stack with `applyToChildren` also covers every DynamoDB table, bucket and topic there and
+ * every source queue added later, so CDK Nag would accept a new storage queue with no dead-letter queue
+ * without a finding.
+ *
+ * This tier runs no Nag rule (`templateSynth` sets `enableCdkNag = false`), so what is asserted is the
+ * `cdk_nag.rules_to_suppress` metadata that `NagSuppressions` stamps onto each emitted resource, which
+ * is the metadata the AwsSolutionsChecks aspect reads during a Nag-enabled synth.
+ */
+
+/** Every resource emitted into the storage nested stack's template. */
+function storageStackResources(synth: SynthResult): Resource[] {
+    return synth.resources.filter((r) => /StorageResourcesBuilder/.test(r.stack));
+}
+
+/** One entry of the `cdk_nag.rules_to_suppress` metadata `NagSuppressions` stamps on a resource. */
+interface NagRuleSuppression {
+    id: string;
+    reason: string;
+}
+
+/** The AwsSolutions-SQS3 entries in one resource's cdk-nag suppression metadata. */
+function sqs3Suppressions(resource: Resource): NagRuleSuppression[] {
+    const rules: NagRuleSuppression[] = resource.raw.Metadata?.cdk_nag?.rules_to_suppress ?? [];
+    return rules.filter((rule) => rule.id === "AwsSolutions-SQS3");
+}
+
+describe.each(TEMPLATES)("%s: storage stack SQS3 suppression scope", (templateName) => {
+    let storage: Resource[];
+    let storageDlqIds: Set<string>;
+
+    beforeAll(() => {
+        const synth = synthTemplate(templateName);
+        storage = storageStackResources(synth);
+        const failureDestinations = deadLetterTargets(synth);
+        storageDlqIds = new Set(
+            storage
+                .filter((r) => r.type === "AWS::SQS::Queue")
+                .filter((r) => failureDestinations.has(r.logicalId))
+                .map((r) => r.logicalId)
+        );
+    });
+
+    /**
+     * True for a queue policy attached to one of the storage dead-letter queues. `applyToChildren` stamps
+     * the suppression onto a queue's children too, and `enforceSSL` gives each queue a policy child.
+     */
+    const isDlqQueuePolicy = (r: Resource): boolean => {
+        if (r.type !== "AWS::SQS::QueuePolicy") return false;
+        const queues = SynthResult.flatten(r.properties.Queues);
+        return Array.from(storageDlqIds).some((id) => queues.includes(`\${${id}}`));
+    };
+
+    test("the storage stack is located and emits dead-letter queues", () => {
+        // The control. Every assertion below is satisfied by a synth whose storage stack was not found
+        // or emitted no dead-letter queue. Both bucket-sync directions contribute one per bucket.
+        expect(storage.length).toBeGreaterThan(0);
+        expect(storageDlqIds.size).toBeGreaterThanOrEqual(2);
+    });
+
+    test("every storage dead-letter queue carries the AwsSolutions-SQS3 suppression", () => {
+        // Keeps the dead-letter-queue-scoped convention of the search and Physna stacks. cdk-nag
+        // already passes a queue that another queue redrives to, so this pins the documented
+        // justification on the dead-letter queues for a cdk-nag release that detects them
+        // differently. A change that dropped the suppression instead of narrowing it would also
+        // satisfy the scope check below.
+        const missing = storage
+            .filter((r) => storageDlqIds.has(r.logicalId) && sqs3Suppressions(r).length === 0)
+            .map((r) => r.logicalId);
+        expect(missing).toEqual([]);
+    });
+
+    test("only dead-letter queues and their queue policies carry the suppression", () => {
+        // A suppression over the whole stack stamps every table, bucket, topic and source queue here,
+        // and so covers a storage queue added later with no redrive policy.
+        const offenders = storage
+            .filter((r) => sqs3Suppressions(r).length > 0)
+            .filter((r) => !storageDlqIds.has(r.logicalId) && !isDlqQueuePolicy(r))
+            .map((r) => `${r.type}/${r.logicalId}`);
+        expect(offenders).toEqual([]);
+    });
+
+    test("every AwsSolutions-SQS3 reason in the storage stack states the dead-letter role", () => {
+        const reasons = Array.from(
+            new Set(storage.flatMap((r) => sqs3Suppressions(r).map((s) => s.reason)))
+        );
+        // Control: the filter below is vacuous if the stack carries no SQS3 reason at all.
+        expect(reasons.length).toBeGreaterThan(0);
+        // The suppressed queues are dead-letter queues, so a reason stating that the stack uses no
+        // dead-letter queues contradicts the redrive policies beside it.
+        const offenders = reasons.filter(
+            (reason) => /not to use DLQs/i.test(reason) || !/dead-letter queue/i.test(reason)
+        );
+        expect(offenders).toEqual([]);
     });
 });

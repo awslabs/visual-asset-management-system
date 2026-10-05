@@ -338,26 +338,41 @@ The VAMS workflow generates several Amazon S3 paths that are passed to each pipe
 
 When a pipeline writes output files that correspond to a specific input file (for example, `.previewFile.X` thumbnails), the output must preserve the input file's relative path within the asset. The process-output step expects outputs at the same relative location as the input.
 
-Asset files are stored at `{assetId}/{relative_path}/{filename}`. The relative path may include zero or more subdirectories between the asset ID and the filename.
+An asset file's key is the asset's root key followed by the file's relative path:
+`{assetRoot}{relative_path}/{filename}`, where the relative path has zero or more subdirectories. The
+root is usually `{baseAssetsPrefix}{assetId}/`. An asset created on an existing bucket folder
+(`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID.
+
+The output paths point to the run's output folders, not to the asset. The process-output step writes
+each file it finds there to the same relative path within the asset.
 
 ```
-Input key:  xd130a6d6.../test/pump.e57
-Output dir: xd130a6d6.../
+Input key:      xd130a6d6.../test/pump.e57
+Output dir:     {outputS3AssetFilesPath}
 
-Correct output: xd130a6d6.../test/pump.e57.previewFile.gif
-Wrong output:   xd130a6d6.../pump.e57.previewFile.gif   (relative path lost)
+Correct output: {outputS3AssetFilesPath}test/pump.e57.previewFile.gif
+Wrong output:   {outputS3AssetFilesPath}pump.e57.previewFile.gif   (relative path lost)
 ```
 
 ### Computing the relative subdirectory
 
 The `assetId` is resolved from the manifest in the `vamsExecute` Lambda and threaded from there through
-the rest of the chain. Use it in the container to compute the relative subdirectory:
+the rest of the chain. Use it in the container to compute the relative subdirectory. The input's Amazon
+S3 key does not always contain the asset ID: an asset created on an existing bucket folder keeps that
+folder as its root, and from the second step of a workflow on, an input can be a file an earlier step
+wrote, which is keyed under the run's output folder. Allow for a key that does not contain the asset ID:
+for such a key the search below returns `""`, and the output is written at the top of the output folder.
+
+To keep the subfolder for such a key, take it from the input file's path within its asset, which is that
+file's manifest `relativePath` (with a leading `/`). In a `vamsExecute` Lambda it is
+`resolved['inputFiles'][0]['relativePath']`, which `manifestHelper.resolved_file_key(resolved)` returns
+normalized (`/` when the run has no input file).
 
 ```python
 # assetId comes from the pipeline definition (resolved from the manifest in vamsExecute)
 input_parts = stage_input.objectKey.split("/")
-asset_id_idx = input_parts.index(assetId)
-relative_subdir = "/".join(input_parts[asset_id_idx + 1:-1])  # "" if file is at asset root
+relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
+                   if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
 ```
 
 ## Threading assetId through the pipeline

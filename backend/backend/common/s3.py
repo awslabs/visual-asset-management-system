@@ -28,8 +28,9 @@ def is_object_version_archived(bucket: str, key: str, version_id: str = None, cl
     Uses a single head_object call rather than listing versions, which is O(1)
     regardless of how many versions the key has:
       - With version_id: heads that exact version. A delete marker returns
-        405 MethodNotAllowed (archived=True); a live version returns 200
-        (archived=False); a missing version returns 404 (archived=False).
+        405 (archived=True), whose error code botocore reports as '405' because a
+        HeadObject error carries no body, or as 'MethodNotAllowed'; a live version
+        returns 200 (archived=False); a missing version returns 404 (archived=False).
       - Without version_id: heads the current version. A live current version
         returns 200 (archived=False). A current version that is a delete marker
         returns 404, which is indistinguishable from a key that never existed, so
@@ -53,7 +54,7 @@ def is_object_version_archived(bucket: str, key: str, version_id: str = None, cl
                 return False  # Version exists and is not a delete marker
             except ClientError as e:
                 error_code = e.response.get('Error', {}).get('Code')
-                if error_code == 'MethodNotAllowed':
+                if error_code in ('405', 'MethodNotAllowed'):
                     return True  # This version is a delete marker
                 if error_code in ('NoSuchKey', '404', 'NotFound'):
                     return False  # Version doesn't exist

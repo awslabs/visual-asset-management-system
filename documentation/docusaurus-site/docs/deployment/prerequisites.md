@@ -130,7 +130,7 @@ If your organization requires Federal Information Processing Standards (FIPS) 14
 export AWS_USE_FIPS_ENDPOINT=true
 ```
 
-The same variable turns on `app.useFips` at synthesis. Setting `app.useFips` to `true` in the VAMS configuration file as well keeps the deployment reproducible when the variable is absent. See the [Configuration Reference](configuration-reference.md) for what the flag changes.
+The same variable turns on `app.useFips` at synthesis. Setting `app.useFips` to `true` in the VAMS configuration file as well keeps the deployment reproducible when the variable is absent. See the [Configuration Reference](configuration-reference.md) for what the flag changes. In the AWS European Sovereign Cloud, leave the variable unset and `app.useFips` `false`: the partition offers FIPS endpoints for only four services, which do not include AWS STS, AWS CloudFormation or Amazon S3.
 
 ## Network requirements
 
