@@ -10094,7 +10094,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/audit:
         get:
             summary: "Query the compliance audit trail."
-            description: "Returns audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it every event type is read in turn. Entries are filtered to those whose database the caller may read (an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId`), so a page may be empty while `NextToken` is present."
+            description: "Returns audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it the whole trail is read in timestamp order. `NextToken` is opaque: pass it back as `startingToken` with the same filters. Entries are filtered to those whose database the caller may read (an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId`), so a page may be empty while `NextToken` is present."
             parameters:
                 - name: eventType
                   in: query

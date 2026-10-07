@@ -3,7 +3,8 @@
 
 """complianceAuditService: dispatch of its two method+path pairs, both authorization tiers, input
 validation, and the two externally paged listings -- the per-asset history and the cross-asset
-listing that walks one EventTypeIndex partition per known event type behind one token."""
+listing, which is one newest-first query on AuditByDateGSI, or on one EventTypeIndex partition
+when filtered."""
 
 import base64
 import json
@@ -14,6 +15,7 @@ import pytest
 from backend.tests.handlers.compliance._harness import (
     ASSET, DB, USER, body_of, claims_for, enforcer, rest_event,
 )
+from backend.tests.pagingStub import Pager
 from handlers.compliance import complianceAuditService as svc
 
 MOD = "handlers.compliance.complianceAuditService"
@@ -22,10 +24,18 @@ LIST_PATH = "/compliance/audit"
 ASSET_PATH = f"/compliance/audit/{DB}/{ASSET}"
 ASSET_PARAMS = {"databaseId": DB, "assetId": ASSET}
 
+# What the AuditByDateGSI key condition is anchored on, as boto3 stores it.
+LIST_PARTITION = svc.AUDIT_LIST_PARTITION
+
 
 def _entry(event_type="compliance_check", database_id=DB):
     return {"entryId": f"{event_type}-{database_id}", "eventType": event_type,
             "databaseId": database_id, "assetId": ASSET}
+
+
+def _date_key(entry_id, timestamp):
+    """A LastEvaluatedKey as AuditByDateGSI returns one."""
+    return {"entryId": entry_id, "allListPartition": LIST_PARTITION, "timestamp": timestamp}
 
 
 def _token(value):
@@ -34,6 +44,20 @@ def _token(value):
 
 def _decode(token):
     return json.loads(base64.b64decode(token))
+
+
+def _partition_of(query_kwargs):
+    """The partition value the query's key condition is anchored on."""
+    condition = query_kwargs["KeyConditionExpression"]
+    # `_timestamp_condition` wraps the equality in an And when a date window is set.
+    while type(condition).__name__ == "And":
+        condition = condition._values[0]
+    return condition._values[1]
+
+
+def _enforced(instance):
+    """Every (object, action) a CasbinEnforcer stand-in was asked to enforce, in call order."""
+    return [call.args for call in instance.enforce.call_args_list]
 
 
 def _run(event, tokens=(USER,), api=True, obj=True, pages=None):
@@ -65,11 +89,12 @@ class TestRouteDispatch:
         assert 1 <= query["Limit"] <= svc.DEFAULT_AUDIT_PAGE_SIZE
 
     def test_get_listing_with_null_rest_params(self):
-        response, table = _run(rest_event("GET", LIST_PATH), pages=lambda **kw: {"Items": []})
+        response, table = _run(rest_event("GET", LIST_PATH), pages=[{"Items": []}])
         assert response["statusCode"] == 200
         assert body_of(response) == {"entries": []}
-        partitions = [c.kwargs["KeyConditionExpression"]._values[1] for c in table.query.call_args_list]
-        assert partitions == list(svc.AUDIT_EVENT_TYPES)
+        # One page is one read of the date index, not a read per event type.
+        assert table.query.call_count <= 1
+        assert table.query.call_args.kwargs["IndexName"] == "AuditByDateGSI"
 
     @pytest.mark.parametrize("method,path", [
         ("POST", LIST_PATH), ("PUT", ASSET_PATH), ("DELETE", LIST_PATH),
@@ -117,11 +142,11 @@ class TestAuthorization:
                 patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
                 patch(f"{MOD}.audit_table", table):
             svc.lambda_handler(rest_event("GET", ASSET_PATH, ASSET_PARAMS), MagicMock())
-        instance.enforce.assert_called_once_with(
-            {"object__type": "complianceEvaluation", "databaseId": DB, "complianceState": ""}, "GET")
+        assert ({"object__type": "complianceEvaluation", "databaseId": DB, "complianceState": ""},
+                "GET") in _enforced(instance)
 
     def _list_with(self, instance, rows, query=None):
-        """Run the global listing; `query` None narrows the walk to one partition, {} walks them all."""
+        """Run the global listing; `query` None filters to one event type, {} is the unfiltered list."""
         if query is None:
             query = {"eventType": "compliance_check"}
         table = MagicMock()
@@ -139,17 +164,31 @@ class TestAuthorization:
         entries = body_of(response)["entries"]
         assert [e["databaseId"] for e in entries] == [DB]
         assert "other" not in response["body"]
-        assert instance.enforce.call_args_list[1].args == (
-            {"object__type": "complianceEvaluation", "databaseId": "other", "complianceState": ""},
-            "GET")
+        assert ({"object__type": "complianceEvaluation", "databaseId": "other", "complianceState": ""},
+                "GET") in _enforced(instance)
 
-    def test_a_denied_enforcer_yields_an_empty_listing_across_the_whole_walk(self):
+    def test_a_denied_enforcer_yields_an_empty_unfiltered_listing(self):
         rows = [_entry(database_id=DB), _entry(database_id="other")]
         response, table = self._list_with(enforcer(obj=False), rows, query={})
         assert response["statusCode"] == 200
         assert body_of(response)["entries"] == []
-        # Every partition was read and every row was refused: nothing leaks and nothing is skipped.
-        assert table.query.call_count == len(svc.AUDIT_EVENT_TYPES)
+        # The page was read and every row was refused: nothing leaks and nothing is skipped.
+        assert table.query.call_count <= 1
+        assert table.query.call_args.kwargs["IndexName"] == "AuditByDateGSI"
+
+    def test_an_empty_token_list_yields_an_empty_page_but_keeps_the_token(self):
+        """The handler never reaches the listing with no tokens (Tier 1 denies), but the listing's
+        own contract holds regardless: with no enforcer nothing is appended, while the page's
+        continuation is still handed out."""
+        table = MagicMock()
+        table.query.return_value = {"Items": [_entry()], "LastEvaluatedKey": _date_key("e", "t")}
+        event = rest_event("GET", LIST_PATH)
+        with patch(f"{MOD}.claims_and_roles", {"tokens": [], "roles": []}), \
+                patch(f"{MOD}.audit_table", table):
+            response = svc.query_audit(event, {})
+        assert response["statusCode"] == 200
+        assert body_of(response)["entries"] == []
+        assert _decode(body_of(response)["NextToken"]) == _date_key("e", "t")
 
     def test_an_entry_without_a_database_is_listed_only_for_the_empty_database_object(self):
         orphan = {k: v for k, v in _entry().items() if k != "databaseId"}
@@ -157,27 +196,8 @@ class TestAuthorization:
         instance.enforce.side_effect = lambda obj, act: obj["databaseId"] == ""
         response, _ = self._list_with(instance, [orphan, _entry(database_id=DB)])
         assert [e["entryId"] for e in body_of(response)["entries"]] == [orphan["entryId"]]
-        assert instance.enforce.call_args_list[0].args == (
-            {"object__type": "complianceEvaluation", "databaseId": "", "complianceState": ""}, "GET")
-
-
-@pytest.mark.unit
-class TestAuditEventTypeRegistry:
-
-    def test_every_event_type_the_compliance_handlers_write_is_walked(self):
-        assert set(svc.AUDIT_EVENT_TYPES) >= {
-            "compliance_check", "quarantine_released", "exception_granted", "exception_revoked",
-            "exception_superseded", "schema_bound_to_database", "schema_unbound_from_database",
-            "schema_bound_to_asset", "schema_unbound_from_asset", "schema_deleted",
-            "cascade_triggered", "cascade_auto_triggered", "cascade_approved", "cascade_rejected",
-            "cascade_completed", "evaluation_error",
-        }
-        assert len(svc.AUDIT_EVENT_TYPES) == len(set(svc.AUDIT_EVENT_TYPES)) == 16
-
-    def test_the_stores_evaluation_error_type_is_the_registered_one(self):
-        from handlers.compliance import complianceEvaluationStore as store
-        assert store.AUDIT_EVALUATION_ERROR in svc.AUDIT_EVENT_TYPES
-        assert store.AUDIT_EXCEPTION_SUPERSEDED in svc.AUDIT_EVENT_TYPES
+        assert ({"object__type": "complianceEvaluation", "databaseId": "", "complianceState": ""},
+                "GET") in _enforced(instance)
 
 
 @pytest.mark.unit
@@ -235,32 +255,54 @@ class TestValidation:
         assert body_of(response)["message"] == "Invalid pagination token"
         table.query.assert_not_called()
 
-    @pytest.mark.parametrize("query,token", [
-        ({}, {"partition": "not-an-event-type", "key": None}),
-        ({}, {"partition": "not-an-event-type",
-              "key": {"entryId": "e", "eventType": "x", "timestamp": "t"}}),
-        ({}, {"key": {"entryId": "e", "eventType": "compliance_check", "timestamp": "t"}}),
-        ({}, {"partition": "compliance_check", "key": "not-an-object"}),
-        ({}, {"partition": "compliance_check", "key": [1]}),
-        ({}, {"partition": "compliance_check", "key": {"eventType": "compliance_check", "timestamp": "t"}}),
-        ({}, {"partition": "compliance_check",
-              "key": {"entryId": "e", "databaseId:assetId": "db:a", "timestamp": "t"}}),
-        ({"eventType": "compliance_check"}, {"partition": "exception_granted", "key": None}),
-        ({"eventType": "compliance_check"}, {"eventType": "compliance_check", "timestamp": "t"}),
-    ], ids=["unknown-partition", "unknown-partition-with-key", "no-partition", "string-key",
-            "list-key", "key-missing-the-table-key", "asset-listing-key",
-            "partition-outside-the-filter", "bare-key-under-filter"])
-    def test_a_listing_token_outside_the_walk_is_rejected_before_any_read(self, query, token):
-        """A token naming a partition the walk does not contain, lacking the partition shape, or
-        carrying a key that is not the EventTypeIndex's never reaches ExclusiveStartKey, where
-        DynamoDB would fail it as an internal error."""
-        bad_partition = token.get("partition")
-        response, table = _run(rest_event("GET", LIST_PATH, query_params=dict(
-            query, startingToken=_token(token))))
+    @pytest.mark.parametrize("token", [
+        {"partition": "compliance_check", "key": None},
+        {"partition": "compliance_check",
+         "key": {"entryId": "e", "eventType": "compliance_check", "timestamp": "t"}},
+        {"entryId": "e", "eventType": "compliance_check", "timestamp": "t"},
+        {"entryId": "e", "databaseId:assetId": f"{DB}:{ASSET}", "timestamp": "t"},
+        {"allListPartition": LIST_PARTITION, "timestamp": "t"},
+        {"entryId": 1, "allListPartition": LIST_PARTITION, "timestamp": "t"},
+        {"entryId": "e", "allListPartition": None, "timestamp": "t"},
+    ], ids=["walk-token-without-key", "walk-token-with-key", "event-type-key", "asset-index-key",
+            "key-missing-the-table-key", "non-string-table-key", "null-partition"])
+    def test_an_unfiltered_listing_token_that_is_not_the_date_index_key_is_rejected_before_any_read(
+            self, token):
+        """A token shaped for the per-asset or per-event-type listing, or one carrying a partition
+        plus key, never reaches ExclusiveStartKey, where DynamoDB would fail it as an internal
+        error."""
+        response, table = _run(rest_event("GET", LIST_PATH, query_params={"startingToken": _token(token)}))
         assert response["statusCode"] == 400
         assert body_of(response)["message"] == "Invalid pagination token"
-        if bad_partition:
-            assert bad_partition not in response["body"]
+        table.query.assert_not_called()
+
+    @pytest.mark.parametrize("token", [
+        {"partition": "exception_granted", "key": None},
+        {"partition": "exception_granted",
+         "key": {"entryId": "e", "eventType": "exception_granted", "timestamp": "t"}},
+        {"key": {"entryId": "e", "eventType": "compliance_check", "timestamp": "t"}},
+        {"partition": "compliance_check", "key": "not-an-object"},
+        {"partition": "compliance_check", "key": [1]},
+        {"partition": "compliance_check", "key": {"eventType": "compliance_check", "timestamp": "t"}},
+        {"partition": "compliance_check",
+         "key": {"entryId": "e", "databaseId:assetId": "db:a", "timestamp": "t"}},
+        {"partition": "compliance_check",
+         "key": {"entryId": "e", "allListPartition": LIST_PARTITION, "timestamp": "t"}},
+        {"eventType": "compliance_check", "timestamp": "t"},
+        {"entryId": "e", "allListPartition": LIST_PARTITION, "timestamp": "t"},
+    ], ids=["other-partition", "other-partition-with-key", "no-partition", "string-key", "list-key",
+            "key-missing-the-table-key", "asset-listing-key", "date-listing-key",
+            "bare-key-under-filter", "bare-date-key-under-filter"])
+    def test_a_filtered_listing_token_outside_its_partition_is_rejected_before_any_read(self, token):
+        """A token naming a partition other than the filter, lacking the partition shape, or
+        carrying a key that is not the EventTypeIndex's never reaches ExclusiveStartKey."""
+        other_partition = token.get("partition") if token.get("partition") != "compliance_check" else None
+        response, table = _run(rest_event("GET", LIST_PATH, query_params={
+            "eventType": "compliance_check", "startingToken": _token(token)}))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Invalid pagination token"
+        if other_partition:
+            assert other_partition not in response["body"]
         table.query.assert_not_called()
 
     def test_the_page_size_is_clamped(self):
@@ -308,88 +350,116 @@ class TestAssetHistoryPaging:
 @pytest.mark.unit
 class TestCrossAssetListing:
 
-    def test_the_token_round_trips_and_the_pages_partition_the_full_set(self):
-        """Page two resumes the partition page one stopped in, from its key; the two pages together
-        are exactly the entries of the walk."""
+    def test_the_unfiltered_listing_is_one_newest_first_query_on_the_date_index(self):
+        response, table = _run(rest_event("GET", LIST_PATH, query_params={"limit": "7"}),
+                               pages=[{"Items": [_entry(), _entry("quarantine_released")]}])
+        assert [e["eventType"] for e in body_of(response)["entries"]] == [
+            "compliance_check", "quarantine_released"]
+        assert "NextToken" not in body_of(response)
+        # One page is one read: the listing is a query on the date index, not a read per event type.
+        assert table.query.call_count <= 1
+        query = table.query.call_args.kwargs
+        assert query["IndexName"] == "AuditByDateGSI"
+        assert query["ScanIndexForward"] is False
+        assert query["Limit"] == 7
+        assert "ExclusiveStartKey" not in query
+        assert _partition_of(query) == LIST_PARTITION
+        assert type(query["KeyConditionExpression"]).__name__ == "Equals"
+
+    def test_a_full_page_without_a_last_key_has_no_token(self):
+        response, table = _run(rest_event("GET", LIST_PATH, query_params={"limit": "2"}),
+                               pages=[{"Items": [_entry(), _entry()]}])
+        assert len(body_of(response)["entries"]) == 2
+        assert "NextToken" not in body_of(response)
+        assert table.query.call_count <= 1
+        assert table.query.call_args.kwargs["IndexName"] == "AuditByDateGSI"
+
+    def test_the_token_round_trips_and_page_two_resumes_where_page_one_stopped(self):
+        """Page two is read from page one's LastEvaluatedKey, not from the start; the two pages
+        together are the full set in index order."""
         entries = [dict(_entry(), entryId=f"e{i}") for i in range(3)]
-        last_key = {"eventType": "compliance_check", "timestamp": "t2", "entryId": "e1"}
+        last_key = _date_key("e1", "t1")
+        pager = Pager({"Items": entries[:2], "LastEvaluatedKey": last_key},
+                      {"Items": entries[2:]}, name="AuditByDateGSI")
 
-        def pages(**kwargs):
-            if kwargs["KeyConditionExpression"]._values[1] != "compliance_check":
-                return {"Items": []}
-            if "ExclusiveStartKey" not in kwargs:
-                return {"Items": entries[:2], "LastEvaluatedKey": last_key}
-            assert kwargs["ExclusiveStartKey"] == last_key
-            return {"Items": entries[2:]}
-
-        response, _ = _run(rest_event("GET", LIST_PATH, query_params={"limit": "2"}), pages=pages)
+        response, _ = _run(rest_event("GET", LIST_PATH, query_params={"limit": "2"}), pages=pager)
         page_one = body_of(response)
         assert [e["entryId"] for e in page_one["entries"]] == ["e0", "e1"]
-        assert _decode(page_one["NextToken"]) == {"partition": "compliance_check", "key": last_key}
+        assert _decode(page_one["NextToken"]) == last_key
 
-        response, table = _run(
+        response, _ = _run(
             rest_event("GET", LIST_PATH,
                        query_params={"limit": "2", "startingToken": page_one["NextToken"]}),
-            pages=pages)
+            pages=pager)
         page_two = body_of(response)
         assert [e["entryId"] for e in page_two["entries"]] == ["e2"]
         assert "NextToken" not in page_two
-        assert table.query.call_args_list[0].kwargs["ExclusiveStartKey"] == last_key
+        pager.assert_paged_to_exhaustion()
+        assert last_key in pager.resumed_from
+        assert all(call["IndexName"] == "AuditByDateGSI" for call in pager.calls)
         assert [e["entryId"] for e in page_one["entries"] + page_two["entries"]] == ["e0", "e1", "e2"]
+
+    def test_a_token_carrying_extra_attributes_resumes_from_the_index_key_alone(self):
+        last_key = _date_key("e1", "t1")
+        pager = Pager({"Items": [_entry()], "LastEvaluatedKey": last_key}, {"Items": []})
+        token = _token(dict(last_key, eventType="compliance_check", databaseId=DB))
+        response, _ = _run(rest_event("GET", LIST_PATH, query_params={"startingToken": token}),
+                           pages=pager)
+        assert response["statusCode"] == 200
+        assert last_key in pager.resumed_from
+        assert all(resumed == last_key for resumed in pager.resumed_from)
+
+    @pytest.mark.parametrize("window,shape,bounds", [
+        ({"startDate": "2026-01-01", "endDate": "2026-02-01"}, "Between", ("2026-01-01", "2026-02-01")),
+        ({"startDate": "2026-01-01"}, "GreaterThanEquals", ("2026-01-01",)),
+        ({"endDate": "2026-02-01"}, "LessThanEquals", ("2026-02-01",)),
+    ], ids=["both", "start-only", "end-only"])
+    def test_a_date_window_narrows_the_date_index_key_condition(self, window, shape, bounds):
+        _, table = _run(rest_event("GET", LIST_PATH, query_params=window), pages=[{"Items": []}])
+        query = table.query.call_args.kwargs
+        assert query["IndexName"] == "AuditByDateGSI"
+        assert _partition_of(query) == LIST_PARTITION
+        condition = query["KeyConditionExpression"]
+        assert type(condition).__name__ == "And"
+        timestamp = condition._values[1]
+        assert type(timestamp).__name__ == shape
+        assert timestamp._values[0].name == "timestamp"
+        assert timestamp._values[1:] == bounds
 
     def test_a_filtered_listing_pages_one_partition_and_carries_it_in_the_token(self):
         last_key = {"eventType": "compliance_check", "timestamp": "t", "entryId": "e"}
         response, table = _run(
             rest_event("GET", LIST_PATH, query_params={"eventType": "compliance_check", "limit": "1"}),
             pages=[{"Items": [_entry()], "LastEvaluatedKey": last_key}])
-        assert table.query.call_count == 1
-        assert table.query.call_args.kwargs["IndexName"] == "EventTypeIndex"
+        assert table.query.call_count <= 1
+        query = table.query.call_args.kwargs
+        assert query["IndexName"] == "EventTypeIndex"
+        assert query["ScanIndexForward"] is False
+        assert query["Limit"] == 1
+        assert _partition_of(query) == "compliance_check"
         assert _decode(body_of(response)["NextToken"]) == {
             "partition": "compliance_check", "key": last_key}
 
-    def test_a_partition_token_resumes_that_partition_from_its_key(self):
+    def test_a_filtered_listing_token_resumes_its_partition_from_its_key(self):
         last_key = {"eventType": "exception_granted", "timestamp": "t", "entryId": "e"}
         token = _token({"partition": "exception_granted", "key": last_key})
-        seen = []
-
-        def pages(**kwargs):
-            seen.append(kwargs)
-            return {"Items": []}
-
-        response, _ = _run(rest_event("GET", LIST_PATH, query_params={"startingToken": token}),
-                           pages=pages)
-        assert response["statusCode"] == 200
-        partitions = [k["KeyConditionExpression"]._values[1] for k in seen]
-        index = list(svc.AUDIT_EVENT_TYPES).index("exception_granted")
-        assert partitions == list(svc.AUDIT_EVENT_TYPES)[index:]
-        assert seen[0]["ExclusiveStartKey"] == last_key
-        assert all("ExclusiveStartKey" not in k for k in seen[1:])
-
-    def test_a_full_page_from_one_partition_points_the_token_at_the_next(self):
         response, table = _run(
-            rest_event("GET", LIST_PATH, query_params={"limit": "2"}),
-            pages=[{"Items": [_entry(), _entry()]}])
-        assert table.query.call_count == 1
-        assert len(body_of(response)["entries"]) == 2
-        assert _decode(body_of(response)["NextToken"]) == {
-            "partition": svc.AUDIT_EVENT_TYPES[1], "key": None}
-
-    def test_the_walk_fills_a_page_across_partitions(self):
-        # One entry in the first partition (compliance_check), one in the third (exception_granted),
-        # none in any other: the counts are positional over the registry, whatever its length.
-        types = list(svc.AUDIT_EVENT_TYPES)
-        per_partition = [0] * len(types)
-        per_partition[types.index("compliance_check")] = 1
-        per_partition[types.index("exception_granted")] = 1
-        counts = iter(per_partition)
-
-        def pages(**kwargs):
-            return {"Items": [_entry(kwargs["KeyConditionExpression"]._values[1])]
-                    * next(counts)}
-
-        response, table = _run(rest_event("GET", LIST_PATH, query_params={"limit": "3"}), pages=pages)
-        entries = body_of(response)["entries"]
-        assert [e["eventType"] for e in entries] == ["compliance_check", "exception_granted"]
-        assert table.query.call_count == len(svc.AUDIT_EVENT_TYPES)
-        assert table.query.call_args_list[1].kwargs["Limit"] == 2
+            rest_event("GET", LIST_PATH,
+                       query_params={"eventType": "exception_granted", "startingToken": token}),
+            pages=[{"Items": [_entry("exception_granted")]}])
+        assert response["statusCode"] == 200
         assert "NextToken" not in body_of(response)
+        assert table.query.call_count <= 1
+        query = table.query.call_args.kwargs
+        assert query["IndexName"] == "EventTypeIndex"
+        assert _partition_of(query) == "exception_granted"
+        assert query["ExclusiveStartKey"] == last_key
+
+    def test_a_filtered_listing_token_without_a_key_starts_its_partition_from_the_top(self):
+        token = _token({"partition": "exception_granted", "key": None})
+        response, table = _run(
+            rest_event("GET", LIST_PATH,
+                       query_params={"eventType": "exception_granted", "startingToken": token}),
+            pages=[{"Items": []}])
+        assert response["statusCode"] == 200
+        assert "ExclusiveStartKey" not in table.query.call_args.kwargs

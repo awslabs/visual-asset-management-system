@@ -1716,10 +1716,10 @@ def query_compliance_audit(
     `event_type` narrows to one kind of entry (schema_bound_to_database, schema_bound_to_asset,
     schema_unbound_from_database, schema_unbound_from_asset, schema_deleted, compliance_check,
     evaluation_error, quarantine_released, exception_granted, exception_revoked,
-    exception_superseded, cascade_triggered, cascade_approved, ...); without it every event type is
-    read in turn and the token carries the position of that walk. An `evaluation_error` entry is
-    written whenever a rule errored in an evaluation (details name the `ruleNames`) or a schema
-    could not be loaded. `start_date` / `end_date` are ISO 8601 bounds on the
+    exception_superseded, cascade_triggered, cascade_approved, ...); without it the whole trail is
+    read in timestamp order, so entries of different types interleave by time. An `evaluation_error`
+    entry is written whenever a rule errored in an evaluation (details name the `ruleNames`) or a
+    schema could not be loaded. `start_date` / `end_date` are ISO 8601 bounds on the
     entry timestamp. The trail is filtered to the entries whose database the caller may read, so
     a short page is a permission boundary as much as a quiet trail. Use
     get_asset_compliance_audit() for one asset.

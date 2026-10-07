@@ -4,10 +4,11 @@
 """Compliance Audit Service handler.
 
 - GET /compliance/audit/{databaseId}/{assetId}  — audit history of an asset
-- GET /compliance/audit                          — audit entries filtered by event type
+- GET /compliance/audit                          — audit entries across assets, optionally by event type
 
 Audit table (PK entryId; GSI AssetIndex on databaseId:assetId/timestamp; GSI EventTypeIndex on
-eventType/timestamp). Both listings page externally with a Base64 NextToken.
+eventType/timestamp; GSI AuditByDateGSI on the constant allListPartition/timestamp). Every listing
+is one newest-first query on the index that serves it and pages externally with a Base64 NextToken.
 """
 
 import base64
@@ -20,6 +21,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
+from common.compliance.auditRecord import AUDIT_LIST_PARTITION
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -52,27 +54,7 @@ INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
 # keys); a token missing one belongs to another listing and never reaches DynamoDB.
 ASSET_INDEX_KEY_ATTRIBUTES = ("entryId", "databaseId:assetId", "timestamp")
 EVENT_TYPE_INDEX_KEY_ATTRIBUTES = ("entryId", "eventType", "timestamp")
-
-# Every event type the compliance handlers write; the unfiltered listing reads the
-# EventTypeIndex partition of each in turn.
-AUDIT_EVENT_TYPES = (
-    "compliance_check",
-    "quarantine_released",
-    "exception_granted",
-    "schema_bound_to_database",
-    "schema_unbound_from_database",
-    "schema_bound_to_asset",
-    "schema_unbound_from_asset",
-    "schema_deleted",
-    "cascade_triggered",
-    "cascade_auto_triggered",
-    "cascade_approved",
-    "cascade_rejected",
-    "cascade_completed",
-    "exception_revoked",
-    "exception_superseded",
-    "evaluation_error",
-)
+DATE_INDEX_KEY_ATTRIBUTES = ("entryId", "allListPartition", "timestamp")
 
 try:
     audit_table_name = get_table_name(ResourceKeys.COMPLIANCE_AUDIT_STORAGE_TABLE)
@@ -270,9 +252,11 @@ def get_asset_audit(event, database_id, asset_id, params):
 def query_audit(event, params):
     """Audit entries across assets, newest first, externally paged.
 
-    With `eventType`, one EventTypeIndex partition is paged. Without it, the partitions of
-    every known event type are read in turn (the token carries the partition being paged), each
-    filtered to entries the caller may GET by databaseId.
+    Without `eventType`, one query on AuditByDateGSI, whose partition is the constant every audit
+    row carries; the token is that index's LastEvaluatedKey. With `eventType`, one EventTypeIndex
+    partition; the token names it and carries its LastEvaluatedKey. Either page is filtered to the
+    entries the caller may GET by databaseId, so it can be short or empty while a NextToken is
+    present.
     """
     event_type = params.get("eventType")
     start_date = params.get("startDate")
@@ -286,60 +270,54 @@ def query_audit(event, params):
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
-    page_size, exclusive_start_key, error = _page_arguments(event, params)
-    if error:
-        return error
+    if event_type:
+        page_size, exclusive_start_key, error = _page_arguments(event, params)
+        if error:
+            return error
+        # A token for the filtered listing is {"partition": <eventType>, "key": <LastEvaluatedKey> |
+        # null}. One naming another partition, or carrying a key that is not this index's, never
+        # reaches DynamoDB.
+        if exclusive_start_key is not None:
+            start_key = exclusive_start_key.get("key")
+            if start_key is not None:
+                start_key = _index_key(start_key, EVENT_TYPE_INDEX_KEY_ATTRIBUTES)
+                if start_key is None:
+                    logger.info("Audit pagination token rejected: malformed key")
+                    return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+            if exclusive_start_key.get("partition") != event_type:
+                logger.info("Audit pagination token rejected: unknown partition")
+                return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+            exclusive_start_key = start_key
+        index_name = "EventTypeIndex"
+        key_condition = Key("eventType").eq(event_type)
+    else:
+        page_size, exclusive_start_key, error = _page_arguments(event, params, DATE_INDEX_KEY_ATTRIBUTES)
+        if error:
+            return error
+        index_name = "AuditByDateGSI"
+        key_condition = Key("allListPartition").eq(AUDIT_LIST_PARTITION)
+
+    query_kwargs = {
+        "IndexName": index_name,
+        "KeyConditionExpression": _timestamp_condition(key_condition, start_date, end_date),
+        "ScanIndexForward": False,
+        "Limit": page_size,
+    }
+    if exclusive_start_key:
+        query_kwargs["ExclusiveStartKey"] = exclusive_start_key
+    response = audit_table.query(**query_kwargs)
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-
-    if event_type:
-        partitions = [event_type]
-    else:
-        partitions = list(AUDIT_EVENT_TYPES)
-
-    # A token for this listing is {"partition": <eventType>, "key": <LastEvaluatedKey> | null}. A
-    # partition outside the walk, or a key that is not this index's, never reaches DynamoDB.
-    if exclusive_start_key is not None:
-        start_partition = exclusive_start_key.get("partition")
-        start_key = exclusive_start_key.get("key")
-        if start_key is not None:
-            start_key = _index_key(start_key, EVENT_TYPE_INDEX_KEY_ATTRIBUTES)
-            if start_key is None:
-                logger.info("Audit pagination token rejected: malformed key")
-                return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
-        if start_partition not in partitions:
-            logger.info("Audit pagination token rejected: unknown partition")
-            return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
-        partitions = partitions[partitions.index(start_partition):]
-        exclusive_start_key = start_key
-
     entries = []
-    next_token = None
-    for index, partition in enumerate(partitions):
-        query_kwargs = {
-            "IndexName": "EventTypeIndex",
-            "KeyConditionExpression": _timestamp_condition(
-                Key("eventType").eq(partition), start_date, end_date),
-            "ScanIndexForward": False,
-            "Limit": page_size - len(entries),
-        }
-        if exclusive_start_key and index == 0:
-            query_kwargs["ExclusiveStartKey"] = exclusive_start_key
-        response = audit_table.query(**query_kwargs)
-        for item in response.get("Items", []):
-            # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-            if casbin_enforcer and casbin_enforcer.enforce(
-                    _evaluation_object(item.get("databaseId")), "GET"):
-                entries.append(item)
-        if "LastEvaluatedKey" in response:
-            next_token = _encode_token({"partition": partition, "key": response["LastEvaluatedKey"]})
-            break
-        if len(entries) >= page_size:
-            if index + 1 < len(partitions):
-                next_token = _encode_token({"partition": partitions[index + 1], "key": None})
-            break
+    for item in response.get("Items", []):
+        # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
+        if casbin_enforcer and casbin_enforcer.enforce(
+                _evaluation_object(item.get("databaseId")), "GET"):
+            entries.append(item)
 
     result = {"entries": entries}
-    if next_token:
-        result["NextToken"] = next_token
+    if "LastEvaluatedKey" in response:
+        last_key = response["LastEvaluatedKey"]
+        result["NextToken"] = _encode_token(
+            {"partition": event_type, "key": last_key} if event_type else last_key)
     return success(body=result)

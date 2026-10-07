@@ -7108,8 +7108,8 @@ class APIClient:
         Args:
             event_type: Only entries of this type (schema_bound_to_database, compliance_check,
                 quarantine_released, exception_granted, exception_revoked, exception_superseded,
-                cascade_triggered, ...). Without it the handler reads every event type in turn.
-                Entries are filtered to the databases the caller may read.
+                cascade_triggered, ...). Without it the handler reads the whole trail in
+                timestamp order. Entries are filtered to the databases the caller may read.
             start_date / end_date: ISO 8601 bounds on the entry timestamp
             max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
                 omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. Sent as
