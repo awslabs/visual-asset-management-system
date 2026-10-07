@@ -2288,6 +2288,22 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Global newest-first listing GSI. Every audit row carries a constant partition attribute
+    // (allListPartition = "audit") with timestamp as the sort key, so the unfiltered audit listing
+    // is a single QUERY (ScanIndexForward=false) bounded by an optional timestamp key-condition.
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "AuditByDateGSI",
+        partitionKey: {
+            name: "allListPartition",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     ///DEPRECATED TABLES
 
     //Build storage resources object

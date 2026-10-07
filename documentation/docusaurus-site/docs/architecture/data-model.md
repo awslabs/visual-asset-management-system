@@ -475,6 +475,7 @@ audit table is the compliance event trail.
 | ComplianceCascadeStorageTable    | `StateIndex`           | `state`              | `createdAt`       | Pending / completed cascades by state                                                         |
 | ComplianceAuditStorageTable      | `AssetIndex`           | `databaseId:assetId` | `timestamp`       | An asset's audit trail                                                                        |
 | ComplianceAuditStorageTable      | `EventTypeIndex`       | `eventType`          | `timestamp`       | Audit entries by event type                                                                   |
+| ComplianceAuditStorageTable      | `AuditByDateGSI`       | `allListPartition`   | `timestamp`       | The unfiltered audit trail, newest first (every row carries the constant `allListPartition`)  |
 
 ### Authorization Tables
 
