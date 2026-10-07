@@ -1136,3 +1136,64 @@ class TestVideoSegmentRows:
         assert _keys(s3, METADATA_FILE_KEY) == ["genai_segment_count", "genai_segment_interval_seconds"]
         assert _rows(s3, METADATA_FILE_KEY)["genai_segment_interval_seconds"]["metadataValue"] == "100"
         assert s3.json_at("abkt", STATUS_KEY)["error"] == "BedrockAccessDenied"
+
+
+@pytest.mark.unit
+class TestAttributesOnlyMode:
+    """The GenAI layer off (the state's genAiAnalysisEnabled, from the deployment's useGenAiAnalysis): the
+    deterministic layer is the whole output, Bedrock is never called, and the step still succeeds so the
+    embedding step can run from the extracted text and attributes."""
+
+    def test_no_bedrock_call_attributes_and_ext_rows_land_and_the_step_succeeds(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        mod, state = _run(_state(genAiAnalysisEnabled=False), s3, bedrock, {"BEDROCK_ANALYSIS_MODEL_ID": ""})
+        assert bedrock.calls == []
+        rows = _rows(s3, ATTRIBUTE_KEY)
+        assert list(rows) == ["sys_file", "sys_geometry", "sys_statistics"] + MESH_EXT_KEYS
+        assert not any(key.startswith("genai_") for key in rows)
+        assert state["analysisStatus"] == "SUCCEEDED"
+        # A mesh carries no location and no video windows, so there is no metadata file to write.
+        assert ("abkt", METADATA_FILE_KEY) not in s3.puts and "metadataFileS3Location" not in state
+        assert ("abkt", STATUS_KEY) not in s3.puts
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["status"] == "SUCCEEDED" and summary["error"] is None
+        assert summary["analysisMode"] == mod.ANALYSIS_MODE_ATTRIBUTES_ONLY and summary["analysisModelId"] is None
+        assert summary["promotedFieldCount"] == len(MESH_EXT_KEYS)
+        assert summary["usage"] == {} and summary["imagesSent"] == 2
+
+    def test_the_deterministic_metadata_still_lands(self):
+        # An image with EXIF GPS: the location row is written on its own, no genai_* row beside it.
+        s3 = _seed(h.FakeS3(), manifest=_image_manifest())
+        bedrock = h.FakeBedrock([_reply()])
+        _mod, state = _run(_state(fileClass="image", renderBranch="MEDIA", genAiAnalysisEnabled=False), s3, bedrock)
+        assert bedrock.calls == []
+        assert _keys(s3, METADATA_FILE_KEY) == ["location"]
+        assert state["metadataFileS3Location"] == f"s3://abkt/{METADATA_FILE_KEY}"
+        assert [key for key in _keys(s3, ATTRIBUTE_KEY) if key.startswith("ext_")] == IMAGE_EXT_KEYS
+        assert s3.json_at("abkt", SUMMARY_KEY)["metadataFile"] == f"s3://abkt/{METADATA_FILE_KEY}"
+
+    def test_the_environment_default_applies_when_the_state_carries_no_flag(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        mod, state = _run(_state(), s3, bedrock, {"GENAI_ANALYSIS_ENABLED": "false", "BEDROCK_ANALYSIS_MODEL_ID": ""})
+        assert bedrock.calls == [] and state["analysisStatus"] == "SUCCEEDED"
+        assert mod.GENAI_ANALYSIS_ENABLED is False and mod.BEDROCK_ANALYSIS_MODEL_ID == ""
+        # The state flag wins over the environment in either direction.
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        _mod, state = _run(_state(genAiAnalysisEnabled=True), s3, bedrock, {"GENAI_ANALYSIS_ENABLED": "false"})
+        assert len(bedrock.calls) == 1 and "genai_model" in _rows(s3, ATTRIBUTE_KEY)
+
+    def test_genai_on_is_the_default_and_unchanged(self):
+        s3 = _seed(h.FakeS3())
+        bedrock = h.FakeBedrock([_reply()])
+        mod, _state_out = _run(_state(), s3, bedrock)
+        assert len(bedrock.calls) == 1
+        summary = s3.json_at("abkt", SUMMARY_KEY)
+        assert summary["analysisMode"] == mod.ANALYSIS_MODE_GENAI and summary["analysisModelId"] == mod.BEDROCK_ANALYSIS_MODEL_ID
+
+    def test_an_absent_analysis_model_does_not_fail_the_import(self):
+        # An attributes-only deployment sets no model; the module must still load and run.
+        mod = h.load_handler("generateMetadata", {"BEDROCK_ANALYSIS_MODEL_ID": ""})
+        assert mod.BEDROCK_ANALYSIS_MODEL_ID == ""

@@ -887,7 +887,7 @@ The vector index is created for one embedding model and dimension count (index n
 
 1. While vector search is still enabled, invoke the `vectorReindexer` Lambda directly with `{"operation": "clear"}` and wait for it to report the table empty. Clearing first avoids write rejections on old-model items during the swap.
 2. Set `app.vectorSearch.enabled: false` and deploy; wait until `aws dynamodb describe-table` shows no vector index on the table (CloudFormation returns while the index is still deleting, and a create during that window fails with `LimitExceededException`).
-3. Set the new `embeddingModelId`, set `enabled: true`, and deploy. The new index is created on the empty table.
+3. Set the new `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` (and `embeddingDimensions`), set `app.vectorSearch.enabled: true`, and deploy. The new index is created on the empty table.
 4. Run the `vectorBackfill` step with `--execute` and **without** `--clear-vectors`. `POST /search/nlp` answers `503` until the index is `ACTIVE`.
    :::
 

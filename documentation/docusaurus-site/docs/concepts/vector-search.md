@@ -14,7 +14,7 @@ The existing metadata contributes whether or not the pipeline's template tag `SE
 
 Each vector item records which parts contributed as `sourceModalities`, in composition order: `asset-metadata`, `file-identity`, `genai-metadata`, `file-attributes`, `existing-file-metadata`, `existing-asset-metadata`, `existing-database-metadata`, `existing-file-attributes`, and `file-text`. A `videoTime` segment item ([Segment vectors](#segment-vectors)) also lists `segment-frames`; a `textChunk` segment item lists `asset-metadata`, `file-identity`, `genai-metadata`, and `file-text` only. The web interface shows these labels in the relevance popover beside each natural-language result, and the `_vector` block of the API response carries them. A label records that at least one line of that scope reached the text, not that the scope was captured whole.
 
-That text is embedded with the configured Amazon Bedrock embeddings model — Amazon Titan Text Embeddings V2 at 1024 dimensions by default (`app.vectorSearch.embeddingModelId`, `app.vectorSearch.embeddingDimensions`) — and published as a `vector.embedding.ready` event that a single vector indexer in the search stack writes to the vector table.
+That text is embedded with the configured Amazon Bedrock embeddings model — Amazon Titan Text Embeddings V2 at 1024 dimensions by default (`app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` and `embeddingDimensions`, beside the pipeline's analysis model so every Amazon Bedrock model VAMS calls is configured in one block) — and published as a `vector.embedding.ready` event that a single vector indexer in the search stack writes to the vector table. The embedding does not depend on the pipeline's GenAI layer: with `useGenAiAnalysis` off, the source text is the file's identity, its extracted attributes, the existing metadata and the extracted text, so natural-language search still finds documents, text and data files by their content and every other file by its attributes.
 
 Because the text is derived from renders and extracted content, a 3D model is found by what it looks like and a video by what its keyframes show, not only by what someone typed into its metadata. Any pipeline with `events:PutEvents` on the VAMS orchestration bus can contribute embeddings through the same event; the contract is documented on the pipeline page.
 
@@ -124,7 +124,7 @@ The vector index is bound to one model and one dimension count. To move to a dif
 
 1. While vector search is still enabled, invoke the vector reindexer with `{"operation": "clear"}` and wait until it reports the table empty. Clearing first avoids write rejections on old-model items during the swap.
 2. Set `app.vectorSearch.enabled` to `false` and deploy. Wait until `DescribeTable` on the vector table shows no `VectorIndexes` entry — AWS CloudFormation returns while the index is still deleting, and creating the next index during that window fails with `LimitExceededException`.
-3. Set the new `app.vectorSearch.embeddingModelId` (and `embeddingDimensions` if the model's differ), set `enabled` back to `true`, and deploy. The new index has a new name.
+3. Set the new `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` (and `embeddingDimensions` if the model's differ), set `app.vectorSearch.enabled` back to `true`, and deploy. The new index has a new name.
 4. Run the migration's `vectorBackfill` step without `--clear-vectors` (`{"operation": "enqueue"}`). `POST /search/nlp` returns `503` until the index is active.
 
 ## Costs

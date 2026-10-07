@@ -31,6 +31,8 @@ events_client = boto3.client(
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
+# The allow-list member that admits every file, extension or not.
+ANY_FILE_EXTENSION = "*"
 # Orchestration bus + state-machine log group for sub-process registration
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
@@ -161,11 +163,13 @@ def lambda_handler(event, context):
 
     # Validate the extension against exact members of the comma-separated allow list. A containment
     # test against the joined string accepts any prefix of a listed extension ('.gl' against
-    # '.glb,.fbx'), which admits a file the classifier cannot place.
+    # '.glb,.fbx'), which admits a file the classifier cannot place. The one wildcard member, "*", is
+    # the deployed value: this pipeline takes every file, an extension it does not name as `other`.
     allowed_extensions = [ext.strip().lower() for ext in ALLOWED_INPUT_FILEEXTENSIONS.split(',')
                           if ext.strip()]
+    admits_any_file = ANY_FILE_EXTENSION in allowed_extensions
 
-    if not extension or extension.lower() not in allowed_extensions:
+    if not admits_any_file and (not extension or extension.lower() not in allowed_extensions):
         logger.info("Aborting pipeline: Pipeline cannot process file type provided")
         abort_external_workflow("Pipeline cannot process file type provided", external_sfn_task_token)
         return {

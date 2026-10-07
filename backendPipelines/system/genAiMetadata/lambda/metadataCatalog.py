@@ -151,6 +151,35 @@ def exif_datetime_to_iso(value, _attributes=None) -> Optional[str]:
         return iso_date(text)
 
 
+def captured_at(value, _attributes=None) -> Optional[str]:
+    """When the file was captured: an EXIF ``YYYY:MM:DD HH:MM:SS`` (image) or a container's recording
+    time (``creation_time``/``date`` of a video or audio file), as ISO-8601."""
+    text = str(value or "").strip()
+    try:
+        return datetime.datetime.strptime(text, "%Y:%m:%d %H:%M:%S").strftime("%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return media_recorded_at(text)
+
+
+def media_recorded_at(value, _attributes=None) -> Optional[str]:
+    """A container's recording time (``creation_time`` is ISO-8601 with microseconds, ``date`` is often a bare
+    ``YYYY`` or ``YYYY-MM-DD``) as an ISO-8601 date-time; a bare year becomes January 1st of that year."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit() and len(text) == 4:
+        return f"{text}-01-01T00:00:00"
+    normalised = text.replace(" ", "T", 1) if "T" not in text and " " in text else text
+    try:
+        parsed = datetime.datetime.fromisoformat(normalised.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return parsed.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def camera_name(exif, _attributes=None) -> Optional[str]:
     if not isinstance(exif, dict):
         return None
@@ -227,7 +256,9 @@ PROMOTED_FIELDS: List[PromotedField] = [
     _field("ext_height", TYPE_NUMBER, ("sys_image.height", "sys_media.height"), {fc.CLASS_IMAGE, fc.CLASS_VIDEO}),
     _field("ext_color_mode", TYPE_STRING, "sys_image.mode", {fc.CLASS_IMAGE}),
     _field("ext_camera", TYPE_STRING, "sys_image.exif", {fc.CLASS_IMAGE}, camera_name),
-    _field("ext_captured_at", TYPE_DATE, "sys_image.exif.dateTimeOriginal", {fc.CLASS_IMAGE}, exif_datetime_to_iso),
+    _field("ext_captured_at", TYPE_DATE,
+           ("sys_image.exif.dateTimeOriginal", "sys_media.tags.creation_time", "sys_media.tags.date"),
+           {fc.CLASS_IMAGE} | AV_CLASSES, captured_at),
     _field("ext_duration_seconds", TYPE_NUMBER, "sys_media.durationSeconds", AV_CLASSES),
     _field("ext_frame_rate", TYPE_NUMBER, "sys_media.frameRate", AV_CLASSES),
     _field("ext_bitrate_kbps", TYPE_NUMBER, "sys_media.bitrateKbps", AV_CLASSES),
@@ -253,6 +284,10 @@ PROMOTED_FIELDS: List[PromotedField] = [
     _field("ext_columns", TYPE_STRING, "sys_data.columns", {fc.CLASS_DATA}),
     _field("ext_feature_count", TYPE_NUMBER, "sys_geo.featureCount", {fc.CLASS_DATA}),
     _field("ext_geometry_types", TYPE_STRING, "sys_geo.geometryTypes", {fc.CLASS_DATA}),
+    # A file of no known class: what its bytes identify it as, and the container facts when it is one.
+    _field("ext_detected_format", TYPE_STRING, "sys_file.detectedFormat", {fc.CLASS_OTHER}),
+    _field("ext_container_format", TYPE_STRING, "sys_archive.containerFormat", {fc.CLASS_OTHER}),
+    _field("ext_archive_entry_count", TYPE_NUMBER, "sys_archive.entryCount", {fc.CLASS_OTHER}),
 ]
 
 

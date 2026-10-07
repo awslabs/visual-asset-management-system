@@ -67,8 +67,6 @@
         },
         "vectorSearch": {
             "enabled": false,
-            "embeddingModelId": "",
-            "embeddingDimensions": 1024,
             "indexingConcurrency": 5,
             "reindexOnCdkDeploy": false
         },
@@ -105,10 +103,15 @@
             },
             "useSystemGenAiMetadata": {
                 "enabled": false,
-                "bedrockAnalysisModelId": "",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true,
                 "useFargateRenderer": false,
+                "useGenAiAnalysis": false,
+                "bedrockModels": {
+                    "analysisModelId": "",
+                    "embeddingModelId": "",
+                    "embeddingDimensions": 1024
+                },
                 "lambdaLimits": {
                     "maxInputFileSizeMb": 2048,
                     "maxPointCloudPoints": 20000000

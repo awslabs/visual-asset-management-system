@@ -2,9 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Video (.mp4 .webm .mov .avi .mkv .flv .wmv .m4v): stream facts -> sys_media and four evenly spaced keyframes
-as PNG. The imageio-ffmpeg wheel bundles a static ffmpeg and no ffprobe, so the facts are parsed from the
-header ffmpeg prints while decoding one frame per stream to the null muxer, cross-filled from imageio-ffmpeg's
-own parsed metadata."""
+as PNG when the context asks for renders. The imageio-ffmpeg wheel bundles a static ffmpeg and no ffprobe, so
+the facts are parsed from the header ffmpeg prints while decoding one frame per stream to the null muxer,
+cross-filled from imageio-ffmpeg's own parsed metadata.
+
+Every tag the container stores is recorded: the format-level Metadata block (title, artist, creation_time,
+location, com.apple.quicktime.*, encoder, ...) under `sys_media.tags`, and each stream's Metadata block under
+`sys_media.streamTags["<index>"]`, so a recording time or a GPS tag travels with the file whether or not the
+promotion catalogue names it."""
 
 import os
 import re
@@ -43,9 +48,16 @@ _ROTATE_MATRIX = re.compile(r"rotation of\s*(-?\d+(?:\.\d+)?)\s*degrees")
 _TOKEN = re.compile(r"[A-Za-z0-9_]+")
 # Splits a stream description on commas that are not inside parentheses (`yuv420p(tv, bt709)` is one field).
 _STREAM_FIELD_SPLIT = re.compile(r",\s*(?![^()]*\))")
-# Format-level metadata lines are indented exactly four spaces; stream-level ones eight.
-_TAG_LINE = re.compile(r"^ {4}(title|artist|album|date|year)\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+# Format-level metadata lines are indented exactly four spaces; stream-level ones eight. A key is anything up
+# to the first colon that is not itself a stream header or a Duration line.
+# Horizontal whitespace only around the colon: `\s*` would run over the newline of a blank-valued line and
+# swallow the next tag line as that line's value.
+_TAG_LINE = re.compile(r"^ {4}(?! )([^:\n]+?)[ \t]*:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+_STREAM_TAG_LINE = re.compile(r"^ {6,8}(?! )([^:\n]+?)[ \t]*:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+_STREAM_HEADER_SPLIT = re.compile(r"^(?=\s*Stream #)", re.MULTILINE)
 _TAG_VALUE_MAX_CHARS = 500
+# Lines inside a Metadata block that are not tags (compared lower-cased).
+_NOT_TAG_KEYS = frozenset({"metadata", "duration", "stream", "side data", "input"})
 # ffmpeg channel-layout words -> channel counts; `5.1(side)` is looked up as `5.1`.
 _CHANNEL_LAYOUTS = {"mono": 1, "stereo": 2, "2.1": 3, "3.0": 3, "quad": 4, "4.0": 4, "5.0": 5, "5.1": 6,
                     "6.1": 7, "7.1": 8}
@@ -69,19 +81,52 @@ def parse_channel_count(layout: Optional[str]) -> Optional[int]:
 
 
 def parse_format_tags(head: str) -> Dict[str, object]:
-    """`{title, artist, album, year}` from the input's format-level Metadata block (the lines between
-    `Input #0` and `Duration:`); the first occurrence of each wins, `date`/`year` become an int year."""
+    """Every tag of the input's format-level Metadata block (the lines between `Input #0` and `Duration:`),
+    keyed as ffmpeg prints them (lower-cased), the first occurrence of each winning; `date`/`year` are also
+    folded into an int `year` for the promotion catalogue. Continuation lines (a value wrapped onto the next
+    line, printed with a blank key) are appended to the preceding tag."""
     block = head.split("Duration:", 1)[0]
     tags: Dict[str, object] = {}
+    last_key = None
     for match in _TAG_LINE.finditer(block):
-        key, value = match.group(1).lower(), match.group(2)
+        key, value = match.group(1).strip().lower(), match.group(2)
+        if key in _NOT_TAG_KEYS or not key:
+            continue
         if key in ("date", "year"):
             year = year_number(value)
             if year is not None:
                 tags.setdefault("year", year)
-        else:
-            tags.setdefault(key, value[:_TAG_VALUE_MAX_CHARS])
+        if key not in tags:
+            tags[key] = value[:_TAG_VALUE_MAX_CHARS]
+            last_key = key
+        elif key == last_key and value:
+            joined = f"{tags[key]} {value}"
+            tags[key] = joined[:_TAG_VALUE_MAX_CHARS]
     return tags
+
+
+def parse_stream_tags(head: str) -> Dict[str, Dict[str, object]]:
+    """Each stream's Metadata block (`handler_name`, `creation_time`, `language`, `rotate`, `encoder`,
+    ...) keyed by the stream's `#major:minor` id, lower-cased keys, first occurrence winning; `{}` for
+    a stream without tags."""
+    streams: Dict[str, Dict[str, object]] = {}
+    sections = _STREAM_HEADER_SPLIT.split(head)
+    for section in sections:
+        header = _STREAM.search(section)
+        if not header:
+            continue
+        stream_id = f"{header.group(1)}:{header.group(2)}"
+        body = section[header.end():]
+        body = body.split("Stream #", 1)[0]
+        tags: Dict[str, object] = {}
+        for match in _STREAM_TAG_LINE.finditer(body):
+            key, value = match.group(1).strip().lower(), match.group(2)
+            if key in _NOT_TAG_KEYS or not key or not value:
+                continue
+            tags.setdefault(key, value[:_TAG_VALUE_MAX_CHARS])
+        if tags:
+            streams[stream_id] = tags
+    return streams
 
 
 def parse_ffmpeg_header_text(text: str) -> Dict[str, object]:
@@ -143,6 +188,9 @@ def parse_ffmpeg_header_text(text: str) -> Dict[str, object]:
     tags = parse_format_tags(head)
     if tags:
         facts["tags"] = tags
+    stream_tags = parse_stream_tags(head)
+    if stream_tags:
+        facts["streamTags"] = stream_tags
     return facts
 
 
@@ -263,6 +311,11 @@ def extract_video(
         result.facts["videoCodec"] = str(facts["videoCodec"])
     if facts.get("audioCodec"):
         result.facts["audioCodec"] = str(facts["audioCodec"])
+    recorded = (facts.get("tags") or {}).get("creation_time") or (facts.get("tags") or {}).get("date")
+    if recorded:
+        result.facts["recorded"] = str(recorded)
+    if not ctx.render_images:
+        return result
     frames, frame_warnings = extract_keyframes(path, duration, ctx.work_dir, run=run)
     result.warnings.extend(frame_warnings)
     result.render_images = frames

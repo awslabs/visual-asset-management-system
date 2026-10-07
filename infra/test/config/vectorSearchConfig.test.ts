@@ -17,6 +17,7 @@ import * as fs from "fs";
 import * as Config from "../../config/config";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
+import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import { newTestApp } from "../support/testApp";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
@@ -59,6 +60,12 @@ const govcloud = (mutate: (c: any) => void = () => undefined) =>
         mutate(c);
     });
 
+const eusovereign = (mutate: (c: any) => void = () => undefined) =>
+    resolve(eusovereignTemplate, (c) => {
+        c.env.region = "eusc-de-east-1";
+        mutate(c);
+    });
+
 let warn: jest.SpyInstance;
 beforeEach(() => {
     warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -72,10 +79,15 @@ const warnings = () => warn.mock.calls.map((call) => String(call[0])).join("\n")
 
 const SPEC_PIPELINE_DEFAULTS = {
     enabled: false,
-    bedrockAnalysisModelId: "",
     autoRegisterWithVAMS: true,
     autoRegisterAutoTriggerOnFileUpload: true,
     useFargateRenderer: false,
+    useGenAiAnalysis: true,
+    bedrockModels: {
+        analysisModelId: "",
+        embeddingModelId: "amazon.titan-embed-text-v2:0",
+        embeddingDimensions: 1024,
+    },
     lambdaLimits: { maxInputFileSizeMb: 2048, maxPointCloudPoints: 20000000 },
     bedrockGuardrail: {
         guardrailIdentifier: "",
@@ -136,10 +148,13 @@ describe("app.vectorSearch backfill", () => {
         const config = commercial()();
         expect(config.app.vectorSearch).toEqual({
             enabled: true,
-            embeddingModelId: Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
-            embeddingDimensions: Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
             indexingConcurrency: Config.VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY,
             reindexOnCdkDeploy: false,
+        });
+        expect(config.app.pipelines.useSystemGenAiMetadata.bedrockModels).toEqual({
+            analysisModelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            embeddingModelId: Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
+            embeddingDimensions: Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
         });
     });
 
@@ -149,8 +164,6 @@ describe("app.vectorSearch backfill", () => {
         })();
         expect(config.app.vectorSearch).toEqual({
             enabled: true,
-            embeddingModelId: "amazon.titan-embed-text-v2:0",
-            embeddingDimensions: 1024,
             indexingConcurrency: 5,
             reindexOnCdkDeploy: false,
         });
@@ -165,7 +178,8 @@ describe("app.vectorSearch backfill", () => {
         expect(config.app.vectorSearch.enabled).toBe(false);
         expect(warnings()).toContain("Configuration Warning: app.vectorSearch is not set");
         expect(warnings()).toContain("app.pipelines.useSystemGenAiMetadata");
-        expect(warnings()).toContain('"embeddingModelId": "amazon.titan-embed-text-v2:0"');
+        expect(warnings()).toContain("bedrockModels");
+        expect(warnings()).toContain('embeddingModelId "amazon.titan-embed-text-v2:0"');
     });
 
     test("an absent block resolves to disabled under the restricted-partition flag, without the warning", () => {
@@ -186,16 +200,108 @@ describe("app.vectorSearch backfill", () => {
 
     test("a present block keeps its values and fills only the missing fields", () => {
         const config = commercial((c) => {
-            c.app.vectorSearch = { enabled: true, embeddingDimensions: 512 };
+            c.app.vectorSearch = { enabled: true };
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = 512;
         })();
         expect(config.app.vectorSearch).toEqual({
             enabled: true,
-            embeddingModelId: "amazon.titan-embed-text-v2:0",
-            embeddingDimensions: 512,
             indexingConcurrency: 5,
             reindexOnCdkDeploy: false,
         });
         expect(config.vectorIndexName).toBe("vec-amazon-titan-embed-text-v2-0-512");
+    });
+});
+
+describe("the superseded model-id locations", () => {
+    // A configuration written against the earlier keys keeps its models and its index name, with a
+    // warning naming the new location; the old keys are removed from the resolved config.
+    test("bedrockAnalysisModelId beside the block is read into bedrockModels.analysisModelId", () => {
+        const config = commercial((c) => {
+            delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+            c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+                "us.anthropic.claude-old-v1:0";
+        })();
+        expect(config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId).toBe(
+            "us.anthropic.claude-old-v1:0"
+        );
+        expect(
+            (config.app.pipelines.useSystemGenAiMetadata as any).bedrockAnalysisModelId
+        ).toBeUndefined();
+        expect(warnings()).toContain("bedrockAnalysisModelId is superseded");
+    });
+
+    test("app.vectorSearch.embeddingModelId/embeddingDimensions are read into bedrockModels", () => {
+        const config = commercial((c) => {
+            delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId;
+            delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions;
+            c.app.vectorSearch.embeddingModelId = "cohere.embed-multilingual-v3";
+            c.app.vectorSearch.embeddingDimensions = 512;
+        })();
+        const models = config.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+        expect([models.embeddingModelId, models.embeddingDimensions]).toEqual([
+            "cohere.embed-multilingual-v3",
+            512,
+        ]);
+        expect(config.vectorIndexName).toBe("vec-cohere-embed-multilingual-v3-512");
+        expect((config.app.vectorSearch as any).embeddingModelId).toBeUndefined();
+        expect(warnings()).toContain("app.vectorSearch.embeddingModelId is superseded");
+        expect(warnings()).toContain("app.vectorSearch.embeddingDimensions is superseded");
+    });
+
+    test("the block's own value wins over a superseded key, silently", () => {
+        const config = commercial((c) => {
+            c.app.vectorSearch.embeddingDimensions = 256;
+        })();
+        expect(config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions).toBe(
+            1024
+        );
+        expect(warnings()).not.toContain("superseded");
+    });
+
+    test("with neither location set the defaults apply", () => {
+        const config = commercial((c) => {
+            delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId;
+            delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions;
+        })();
+        const models = config.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+        expect([models.embeddingModelId, models.embeddingDimensions]).toEqual([
+            Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
+            Config.VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
+        ]);
+    });
+});
+
+describe("useGenAiAnalysis", () => {
+    test("defaults to on and is kept when set", () => {
+        expect(commercial()().app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis).toBe(true);
+        expect(
+            commercial((c) => {
+                delete c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis;
+            })().app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis
+        ).toBe(true);
+        expect(
+            commercial((c) => {
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+            })().app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis
+        ).toBe(false);
+    });
+
+    test("an enabled pipeline with the GenAI layer off needs no analysis model", () => {
+        const config = commercial((c) => {
+            c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
+        })();
+        expect(config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId).toBe("");
+        // Vector search stays on: the embeddings are built from the extracted text and attributes.
+        expect(config.app.vectorSearch.enabled).toBe(true);
+    });
+
+    test("the EU Sovereign template ships the layer off, so enabling the pipeline there is attributes-only", () => {
+        const config = eusovereign((c) => {
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+        })();
+        expect(config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis).toBe(false);
+        expect(config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId).toBe("");
     });
 });
 

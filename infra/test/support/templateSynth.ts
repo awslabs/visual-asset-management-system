@@ -201,7 +201,9 @@ export function buildConfig(name: TemplateName, mutate?: (c: any) => void): Conf
     // Derived after the mutator so an arm that enables or re-points vector search names the index
     // from the block it synthesizes with. getConfig() derives this field the same way and never
     // reads it from config.json, so the block is the only input here too.
-    internal.vectorIndexName = vectorIndexNameFor(internal.app?.vectorSearch);
+    internal.vectorIndexName = vectorIndexNameFor(
+        internal.app?.pipelines?.useSystemGenAiMetadata?.bedrockModels
+    );
     assertNoUntrackedDockerAsset(config);
     return config;
 }

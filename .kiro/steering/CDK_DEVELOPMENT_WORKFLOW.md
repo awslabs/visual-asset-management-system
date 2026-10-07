@@ -1191,10 +1191,15 @@ export interface ConfigPublic {
             };
             useSystemGenAiMetadata: {
                 enabled: boolean;
-                bedrockAnalysisModelId: string;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
                 useFargateRenderer: boolean;
+                useGenAiAnalysis: boolean;
+                bedrockModels: {
+                    analysisModelId: string;
+                    embeddingModelId: string;
+                    embeddingDimensions: number;
+                };
                 lambdaLimits: { maxInputFileSizeMb: number; maxPointCloudPoints: number };
                 bedrockGuardrail: {
                     guardrailIdentifier: string;

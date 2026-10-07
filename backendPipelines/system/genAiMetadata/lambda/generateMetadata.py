@@ -15,6 +15,12 @@ Bedrock failure is recorded through ``execution.status.json`` on the results pre
 returns normally, so the attributes and the deterministic metadata already written reach the asset and
 the process-output step records the execution FAILED. Only an unexpected fault raises.
 
+With the GenAI layer off (the state's ``genAiAnalysisEnabled``, from the deployment's
+``useGenAiAnalysis``), the step ends after the deterministic layer: the attributes, the typed ``ext_*``
+promotion and the location are written, no ``genai_*`` row is produced, no Converse call is made, and the
+analysis summary records ``analysisMode: attributes-only`` with a SUCCEEDED status so the embedding step
+(when vector search is on) still runs from the extracted text and attributes.
+
 When a Bedrock guardrail is configured (``BEDROCK_GUARDRAIL_IDENTIFIER`` and ``BEDROCK_GUARDRAIL_VERSION``,
 always together), every Converse call carries it and the parts of the prompt that come from the file and
 its metadata — the asset's name, description and tags, the file identity and attributes, the existing
@@ -51,7 +57,11 @@ logger = safeLogger(service="SystemGenAiMetadataGenerateMetadata")
 s3_client = boto3.client('s3', config=retry_config)
 bedrock_runtime = boto3.client('bedrock-runtime', config=retry_config)
 
-BEDROCK_ANALYSIS_MODEL_ID = os.environ["BEDROCK_ANALYSIS_MODEL_ID"]
+# Empty in an attributes-only deployment, which sets no analysis model and never reaches ``analyze``.
+BEDROCK_ANALYSIS_MODEL_ID = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID", "")
+GENAI_ANALYSIS_ENABLED = os.environ.get("GENAI_ANALYSIS_ENABLED", "true").strip().lower() == "true"
+ANALYSIS_MODE_GENAI = "genai"
+ANALYSIS_MODE_ATTRIBUTES_ONLY = "attributes-only"
 
 # The guardrail applied to every Converse call (bedrockGuardrail: both variables or neither). Without one the
 # calls run without prompt-attack filters; the one warning at cold start is the operator's signal.
@@ -620,10 +630,13 @@ def lambda_handler(event, context):
         modalities.append(image_modality(file_class))
 
     generated_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    genai_on = common.as_bool(event.get("genAiAnalysisEnabled"), GENAI_ANALYSIS_ENABLED)
 
-    # The deterministic attributes land before the model runs, so they are durable whatever it does.
+    # The deterministic attributes land before the model runs, so they are durable whatever it does. The
+    # genai_* provenance rows describe a model run, so an attributes-only run writes none.
+    provenance_rows = genai_attribute_rows(modalities, generated_at) if genai_on else ()
     attribute_uri = write_attribute_file(manifest, event["outputS3AssetMetadataPath"], event["relativePath"],
-                                         promoted, genai_attribute_rows(modalities, generated_at))
+                                         promoted, provenance_rows)
     event["attributeFileS3Location"] = attribute_uri
     logger.info(f"Attributes written: {attribute_uri} ({len(promoted)} promoted)")
 
@@ -631,7 +644,8 @@ def lambda_handler(event, context):
         "schemaVersion": common.ANALYSIS_SUMMARY_SCHEMA_VERSION,
         "status": None,
         "error": None,
-        "analysisModelId": BEDROCK_ANALYSIS_MODEL_ID,
+        "analysisMode": ANALYSIS_MODE_GENAI if genai_on else ANALYSIS_MODE_ATTRIBUTES_ONLY,
+        "analysisModelId": BEDROCK_ANALYSIS_MODEL_ID if genai_on else None,
         "fileClass": file_class,
         "renderBranch": render_branch,
         "renderSkipped": manifest.get("renderSkipped"),
@@ -650,6 +664,21 @@ def lambda_handler(event, context):
         "attributeFile": attribute_uri,
         "metadataFile": None,
     }
+
+    if not genai_on:
+        # Attributes-only: the deterministic metadata is the whole metadata layer, and the step succeeds
+        # without touching Bedrock.
+        if location_row or segments:
+            common.write_json(s3_client, metadata_uri, metadata_file_body(location_row, segments))
+            event["metadataFileS3Location"] = metadata_uri
+            summary["metadataFile"] = metadata_uri
+        summary["status"] = common.STATUS_SUCCEEDED
+        event["analysisStatus"] = common.STATUS_SUCCEEDED
+        event["analysisSummaryS3Location"] = common.write_json(
+            s3_client, common.uri_join(event["outputS3AssetResultsPath"], common.ANALYSIS_SUMMARY_RESULTS_FILENAME),
+            summary)
+        logger.info(f"Attributes-only analysis complete ({promoted_count} promoted, no model call)")
+        return event
 
     user_blocks = build_user_content(asset_data, event.get("databaseId", ""), event.get("relativePath", ""),
                                      file_class, event.get("fileExt", ""), manifest,

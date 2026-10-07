@@ -44,6 +44,8 @@ RENDERS_PREFIX = "renders/"
 RENDER_FILE_PREFIX = "render_"
 SCENE_FACTS_FILENAME = "scene_facts.json"
 VIEW_ORDER = ("perspective_front", "front", "right", "top", "back", "left", "bottom", "perspective_back")
+# renderScene's facts-only request: the scene is imported and measured, no view is rendered.
+NO_VIEWS = "none"
 
 DEFAULT_RENDER_VIEWS = 8
 RENDER_RESOLUTION_PX = 768
@@ -235,11 +237,12 @@ def blender_environment(work_dir):
 
 
 def blender_command(input_path, output_dir, views):
+    """The Blender invocation; an empty view list asks renderScene for the scene facts alone (`--views none`)."""
     return [
         BLENDER_EXECUTABLE, "--background", "-noaudio", "--python", BLENDER_SCRIPT, "--",
         "--input", input_path,
         "--output-dir", output_dir,
-        "--views", ",".join(views),
+        "--views", ",".join(views) or NO_VIEWS,
         "--resolution", str(RENDER_RESOLUTION_PX),
         "--samples", str(RENDER_SAMPLES),
     ]
@@ -411,7 +414,10 @@ def lambda_handler(event, context):
             _siblings, sibling_warnings = download_siblings(input_bucket, input_key, input_root)
             warnings.extend(sibling_warnings)
 
-        views = VIEW_ORDER[:options["renderViews"]]
+        # Renders exist only as analysis-model input; with the GenAI layer off Blender imports and measures
+        # the scene without rendering a view.
+        render_images = _as_bool(event.get("renderImages"), _as_bool(event.get("genAiAnalysisEnabled"), True))
+        views = VIEW_ORDER[:options["renderViews"]] if render_images else []
         outcome = run_blender(local_path, output_dir, views, render_budget_seconds(context),
                               blender_environment(work_dir))
         rendered = collect_renders(output_dir)
@@ -427,8 +433,8 @@ def lambda_handler(event, context):
         if facts and facts.get("failedViews"):
             warnings.append(f"views failed to render: {sorted(facts['failedViews'])}")
 
-        render_images = upload_renders(aux_bucket, aux_prefix, output_dir, rendered)
-        render_skipped = None if render_images else "error"
+        render_image_keys = upload_renders(aux_bucket, aux_prefix, output_dir, rendered)
+        render_skipped = None if (render_image_keys or not render_images) else "error"
 
         computed = {}
         if remaining_millis(context) >= TRIMESH_MIN_REMAINING_MS:
@@ -449,7 +455,7 @@ def lambda_handler(event, context):
             "fileClass": file_class,
             "renderBranch": RENDER_BRANCH,
             "attributes": attributes,
-            "renderImages": render_images,
+            "renderImages": render_image_keys,
             "textExcerpt": existing.get("textExcerpt"),
             "facts": build_facts(attributes),
             "warnings": warnings,
@@ -463,7 +469,7 @@ def lambda_handler(event, context):
             },
         }
         write_analysis_manifest(manifest_bucket, manifest_key, manifest)
-        logger.info({"message": "BLENDER render branch finished", "renderImages": len(render_images),
+        logger.info({"message": "BLENDER render branch finished", "renderImages": len(render_image_keys),
                      "renderSkipped": render_skipped, "warnings": len(warnings)})
         # The whole state goes back, extended with the branch-task contract keys (analysisManifestS3Location,
         # renderBranch, fileClass, renderSkipped, renderImageCount, warningCount) and the informational extras:
@@ -475,10 +481,10 @@ def lambda_handler(event, context):
             "renderBranch": RENDER_BRANCH,
             "fileClass": file_class,
             "renderSkipped": render_skipped,
-            "renderImageCount": len(render_images),
+            "renderImageCount": len(render_image_keys),
             "warningCount": len(warnings),
             "renderStatus": "SUCCEEDED" if render_skipped is None else "DEGRADED",
-            "renderImages": render_images,
+            "renderImages": render_image_keys,
             "warnings": warnings,
         })
         return result

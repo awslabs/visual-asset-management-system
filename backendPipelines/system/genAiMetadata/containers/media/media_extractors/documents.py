@@ -158,14 +158,14 @@ def extract_pdf(path: str, ctx: ExtractContext) -> BranchResult:
             result.page_offsets = page_offsets
             result.full_text_truncated = full_truncated
         rendered = 0
-        for index in range(min(PDF_RASTER_PAGES, page_count)):
+        for index in range(min(PDF_RASTER_PAGES, page_count) if ctx.render_images else 0):
             try:
                 png, _ = normalise_for_vision(_page_image(pdf, index))
                 result.render_images.append(write_png(png, ctx.work_dir, f"media-{index + 1:02d}.png"))
                 rendered += 1
             except Exception as exc:  # noqa: BLE001 - one page that will not rasterise keeps the text excerpt
                 result.warnings.append(f"PDF page {index + 1} could not be rasterised: {exc}")
-        if page_count and not rendered:
+        if page_count and not rendered and ctx.render_images:
             result.render_skipped = RENDER_SKIPPED_ERROR
     finally:
         pdf.close()

@@ -67,8 +67,6 @@
         },
         "vectorSearch": {
             "enabled": false,
-            "embeddingModelId": "amazon.titan-embed-text-v2:0",
-            "embeddingDimensions": 1024,
             "indexingConcurrency": 5,
             "reindexOnCdkDeploy": false
         },
@@ -105,10 +103,15 @@
             },
             "useSystemGenAiMetadata": {
                 "enabled": false,
-                "bedrockAnalysisModelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true,
                 "useFargateRenderer": false,
+                "useGenAiAnalysis": true,
+                "bedrockModels": {
+                    "analysisModelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "embeddingModelId": "amazon.titan-embed-text-v2:0",
+                    "embeddingDimensions": 1024
+                },
                 "lambdaLimits": {
                     "maxInputFileSizeMb": 2048,
                     "maxPointCloudPoints": 20000000

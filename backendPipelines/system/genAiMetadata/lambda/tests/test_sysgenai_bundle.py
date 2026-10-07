@@ -1,13 +1,15 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""The vamsSchema bundle declares exactly what the classifier processes, on every surface that matches
-files (the pipeline filter, the workflow filter, the file-upload trigger filter), and carries the
-system-record fields the importer, the workflow lock and the template renderer read.
+"""The vamsSchema bundle declares what the pipeline processes, on every surface that matches files (the
+pipeline filter, the workflow filter, the file-upload trigger filter), and carries the system-record fields
+the importer, the workflow lock and the template renderer read.
 
-The three allow lists are hand-authored copies of one list, so identity is asserted rather than
-assumed; a wildcard or an empty list on any of them is "any file" to executionValidation and would
-put the pipeline in front of every upload."""
+The pipeline takes every file: the allow list on all three surfaces is the one wildcard, the exclude list
+keeps the preview thumbnails other pipelines write out of it (chaining is on, so without that exclusion
+every `.previewFile.*` a thumbnail pipeline produces would start a run), and the CDK runtime gate is the
+same wildcard. The classifier's ALLOW_LIST is the set of extensions with dedicated handling, which these
+tests still tie to the viewer catalog."""
 
 import importlib.util
 import json
@@ -26,10 +28,13 @@ WORKFLOW_JSON = os.path.join(h.VAMS_SCHEMA_DIR, "workflow.json")
 TEMPLATES_DIR = os.path.join(h.VAMS_SCHEMA_DIR, "templates")
 TEMPLATE_JSON = os.path.join(TEMPLATES_DIR, "system-genai-metadata-default.json")
 
-# The importer rejects a match-everything pattern only in exclude lists; on an allow list it means
-# "any file", which is why the finite form is asserted here (executionValidation.MATCH_EVERYTHING_PATTERNS).
+# The importer rejects a match-everything pattern in an exclude list (executionValidation.MATCH_EVERYTHING_PATTERNS);
+# on an allow list "*" means "any file", which is this pipeline's contract.
 MATCH_EVERYTHING_PATTERNS = ("*", "**", "*.*", "/*", "/**")
-PATTERN_RE = re.compile(r"^\*\.[a-z0-9_]+$")
+ANY_FILE_ALLOW = ["*"]
+# The one exclusion: the preview thumbnails the preview pipelines write beside a file.
+PREVIEW_EXCLUDE = ["*.previewFile.*"]
+EXTENSION_RE = re.compile(r"^\.[a-z0-9_]+$")
 ID_RE = re.compile(r"^[-_a-zA-Z0-9]{3,63}$")
 TAG_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -86,7 +91,6 @@ def catalog_extensions():
 pipeline = h.read_json_file(PIPELINE_JSON)
 workflow = h.read_json_file(WORKFLOW_JSON)
 template = h.read_json_file(TEMPLATE_JSON)
-EXPECTED_ALLOW = [f"*{extension}" for extension in fc.ALLOW_LIST]
 
 
 def _allow_lists():
@@ -101,46 +105,57 @@ def _allow_lists():
 
 @pytest.mark.unit
 class TestAllowLists:
-    def test_the_three_surfaces_declare_one_identical_list(self):
+    def test_every_surface_admits_any_file_and_excludes_only_previews(self):
         for name, filters in _allow_lists().items():
-            assert filters["allow"] == EXPECTED_ALLOW, name
-            assert filters["exclude"] == [], name
+            assert filters["allow"] == ANY_FILE_ALLOW, name
+            assert filters["exclude"] == PREVIEW_EXCLUDE, name
 
-    def test_the_list_is_finite_and_never_open(self):
+    def test_the_exclusion_is_not_a_match_everything_pattern(self):
+        # The importer rejects these in an exclude list; the bundle would fail to register.
         for name, filters in _allow_lists().items():
-            assert filters["allow"], f"{name}: an empty allow list means any file"
-            for pattern in filters["allow"]:
+            for pattern in filters["exclude"]:
                 assert pattern not in MATCH_EVERYTHING_PATTERNS, (name, pattern)
-                assert PATTERN_RE.match(pattern), (name, pattern)
-            assert len(filters["allow"]) == len(set(filters["allow"])), name
 
-    def test_the_list_covers_the_viewer_catalog(self):
-        expected = {f"*{extension}" for extension in catalog_extensions() - fc.EXCLUDED_EXTENSIONS}
-        assert set(pipeline["systemConfig"]["inputFileFilters"]["allow"]) >= expected
+    def test_the_exclusion_matches_a_preview_thumbnail_and_not_its_source(self):
+        import fnmatch
+        for pattern in PREVIEW_EXCLUDE:
+            assert fnmatch.fnmatch("scan/pump.e57.previewFile.gif", pattern)
+            assert fnmatch.fnmatch("model.glb.previewFile.png", pattern)
+            assert not fnmatch.fnmatch("scan/pump.e57", pattern)
+            assert not fnmatch.fnmatch("notes.previewfile", pattern)
+
+    def test_the_classifier_allow_list_covers_the_viewer_catalog(self):
+        # ALLOW_LIST is the set of extensions with dedicated handling: the viewer catalog plus the office formats.
+        expected = catalog_extensions() - fc.EXCLUDED_EXTENSIONS
+        assert set(fc.ALLOW_LIST) >= expected
         assert len(expected) >= 80
+        assert {".docx", ".xlsx", ".pptx"} <= set(fc.ADDITIONAL_EXTENSIONS) <= set(fc.ALLOW_LIST)
+        for extension in fc.ALLOW_LIST:
+            assert EXTENSION_RE.match(extension), extension
+        assert len(fc.ALLOW_LIST) == len(set(fc.ALLOW_LIST))
 
-    def test_the_office_formats_are_admitted_on_every_surface(self):
-        # The classifier's ADDITIONAL_EXTENSIONS reach the pipeline, workflow and trigger lists.
-        office = {f"*{extension}" for extension in fc.ADDITIONAL_EXTENSIONS}
-        assert office == {"*.docx", "*.xlsx", "*.pptx"}
-        for name, filters in _allow_lists().items():
-            assert office <= set(filters["allow"]), name
+    def test_every_extension_of_the_allow_list_classifies_to_a_named_class(self):
+        # An extension with dedicated handling never falls to `other`; the two sniffed ones are decided from the bytes.
+        for extension in fc.ALLOW_LIST:
+            if extension in fc.SNIFFED_EXTENSIONS:
+                continue
+            file_class, branch = fc.classify(extension, lambda n: b"")
+            assert file_class != fc.CLASS_OTHER, extension
+            assert branch in fc.RENDER_BRANCHES, extension
 
-    def test_the_cdk_runtime_gate_is_the_classifier_allow_list(self):
-        """The construct's `allowedInputFileExtensions` literal is what openPipeline gates uploads on at
-        run time, so it is the comma-joined ALLOW_LIST verbatim: an extension the classifier admits but
-        the literal lacks is rejected before the state machine starts, and no unit test of the handlers
-        would notice."""
-        literal = _cdk_allow_list_literal()
-        assert literal == ",".join(fc.ALLOW_LIST)
-        assert len(literal.split(",")) == len(fc.ALLOW_LIST) == 89
+    def test_an_unlisted_extension_takes_the_media_branch_as_other(self):
+        for extension in (".zzz", ".bak", ".dat", "", None):
+            assert fc.classify(extension, lambda n: b"") == (fc.CLASS_OTHER, fc.BRANCH_MEDIA)
+
+    def test_the_cdk_runtime_gate_admits_any_file(self):
+        """The construct's `allowedInputFileExtensions` literal is what openPipeline gates uploads on at run
+        time; a finite list there would reject, before the state machine starts, every file the bundle's
+        wildcard admits, and no unit test of the handlers would notice."""
+        assert _cdk_allow_list_literal() == "*"
 
     @pytest.mark.temporary  # pins the drop of .fls/.fws relative to the thumbnail allow list
-    def test_the_faro_formats_are_not_admitted(self):
-        # test_the_three_surfaces_declare_one_identical_list already forbids them (the classifier's
-        # ALLOW_LIST is the viewer catalog); this pin exists only until the thumbnail list is retired.
-        for filters in _allow_lists().values():
-            assert "*.fls" not in filters["allow"] and "*.fws" not in filters["allow"]
+    def test_the_faro_formats_have_no_dedicated_handling(self):
+        assert ".fls" not in fc.ALLOW_LIST and ".fws" not in fc.ALLOW_LIST
 
 
 @pytest.mark.unit

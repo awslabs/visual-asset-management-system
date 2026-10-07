@@ -370,7 +370,7 @@ Natural-language search reads embeddings produced by the SYSTEM GenAI metadata p
 
 1. **No execution** — the pipeline's file-upload trigger is off or the extension is not allow-listed. Confirm `app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload` is `true` and that the file type has a viewer.
 2. **Execution FAILED with `BedrockAccessDenied` or `BedrockModelError`** — the analysis model is not enabled for the account (see [Prerequisites](../deployment/prerequisites.md#amazon-bedrock-model-access)). Attributes were still written; no embedding was produced. Enable the model and re-run the execution, or run the vector reindexer.
-3. **Execution SUCCEEDED** — allow up to a minute for the vector indexer to consume the `vector.embedding.ready` event, then retry. If the vector indexer's dead-letter queue holds messages, the document was rejected — most often because `app.vectorSearch.embeddingModelId` or `embeddingDimensions` changed after the pipeline produced the embedding; follow the model-change procedure in [Vector search](../concepts/vector-search.md#changing-the-embedding-model).
+3. **Execution SUCCEEDED** — allow up to a minute for the vector indexer to consume the `vector.embedding.ready` event, then retry. If the vector indexer's dead-letter queue holds messages, the document was rejected — most often because `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` or `embeddingDimensions` changed after the pipeline produced the embedding; follow the model-change procedure in [Vector search](../concepts/vector-search.md#changing-the-embedding-model).
 
 A `503` from `POST /search/nlp` means the vector index is still being built after it was created or re-created; wait until `DescribeTable` shows it `ACTIVE`.
 

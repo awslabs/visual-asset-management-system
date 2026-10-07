@@ -6,7 +6,7 @@
 ``ALLOW_LIST`` is every ``supportedExtensions`` entry of every viewer with ``enabled: true`` in
 ``web/src/visualizerPlugin/config/viewerConfig.json`` — viewers gated by ``featuresEnabledRestriction``
 included, the preview viewer's ``"*"`` wildcard excluded — minus ``EXCLUDED_EXTENSIONS``, plus
-``ADDITIONAL_EXTENSIONS`` (office formats no viewer renders, admitted for their text). It is stored
+``ADDITIONAL_EXTENSIONS`` (formats no viewer renders, admitted for their extracted content). It is stored
 here as an explicit sorted list because a Lambda cannot read the web catalog at run time; the test
 suite re-derives it from the catalog and fails when the two drift.
 
@@ -18,7 +18,11 @@ ambiguous by extension alone and are decided from the object's leading bytes: a 
 ``geometry`` or ``features`` — classified ``data``; the media branch writes ``sys_geo`` for it; a
 bare ``"type": "Point"`` is text), text, or ``other`` when it is not UTF-8. The media branch applies the same four ``.json``
 outcomes when it reads the file in full, so the state and the manifest agree. ``other`` is the
-fallback for a sniff that fits no class and is never an allow-list entry.
+fallback for an extension the table does not name and for a sniff that fits no class; it takes the
+MEDIA branch, whose generic extractor probes the bytes (image, audio/video container, zip container,
+text) and records whatever the file carries, so any file gets at least its stored attributes.
+``ALLOW_LIST`` is therefore the set of extensions with dedicated handling, not the pipeline's input
+filter, which admits every file.
 
 ``FILE_CLASS_PHRASES`` names each class the way a user asks for it (``3D model (mesh)``,
 ``video (footage)``); the embedding step puts the phrase in every file's source text, and the
@@ -76,13 +80,18 @@ RENDER_BRANCHES = (BRANCH_BLENDER, BRANCH_RENDER3D, BRANCH_MEDIA, BRANCH_FARGATE
 # Viewer extensions deliberately withheld from the pipeline. Empty at release.
 EXCLUDED_EXTENSIONS: Set[str] = set()
 
-# Office formats no viewer renders, admitted to the allow list for their text: document, data and document
-# on the MEDIA branch, never rasterised.
-ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx")
+# Formats no viewer renders, admitted for their extracted content: the office formats for their text
+# (document, data and document on the MEDIA branch, never rasterised) and the video containers ffmpeg
+# decodes but no browser plays (keyframes and stream facts on the MEDIA branch).
+ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv")
 
 # Leading bytes the two sniffed formats are decided from. A PLY header and a tileset root fit in
 # this window; a .json whose root does not fit is text as far as this pipeline is concerned.
 SNIFF_BYTES = 65536
+
+# The branch an `other` file takes: the MEDIA image's generic extractor, which probes the bytes for a
+# format the pipeline can read and otherwise records the file's own facts.
+OTHER_BRANCH = BRANCH_MEDIA
 
 # Proprietary CAD formats no open library reads: attributes are sys_file only and no branch runs.
 PROPRIETARY_CAD_EXTENSIONS = (".asm", ".catpart", ".catproduct", ".iam", ".ipt", ".jt", ".par",
@@ -174,7 +183,7 @@ def parse_ply_header(header_bytes: bytes) -> dict:
 def classify_ply(header_bytes: bytes) -> Tuple[str, str]:
     header = parse_ply_header(header_bytes)
     if not header:
-        return CLASS_OTHER, BRANCH_NONE
+        return CLASS_OTHER, OTHER_BRANCH
     if header["elements"].get("face", 0) > 0:
         return CLASS_MESH, BRANCH_BLENDER
     if "f_dc_0" in header["properties"]:
@@ -186,7 +195,7 @@ def classify_json(head_bytes: bytes) -> Tuple[str, str]:
     try:
         text = (head_bytes or b"").decode("utf-8")
     except UnicodeDecodeError:
-        return CLASS_OTHER, BRANCH_NONE
+        return CLASS_OTHER, OTHER_BRANCH
     try:
         root = json.loads(text)
     except ValueError:
@@ -215,7 +224,7 @@ def classify(extension: str, sniff: Callable[[int], bytes]) -> Tuple[str, str]:
         return classify_ply(sniff(SNIFF_BYTES))
     if ext == ".json":
         return classify_json(sniff(SNIFF_BYTES))
-    return CLASS_OTHER, BRANCH_NONE
+    return CLASS_OTHER, OTHER_BRANCH
 
 
 def las_point_count(header_bytes: bytes) -> Optional[int]:
@@ -244,3 +253,95 @@ def point_count_from_header(extension: str, header_bytes: bytes) -> Optional[int
         if header and "vertex" in header["elements"]:
             return int(header["elements"]["vertex"])
     return None
+
+
+# (offset, signature bytes, format label) — the formats whose leading bytes identify them. Checked in
+# order; the first match wins, so the more specific RIFF and ISO-BMFF cases precede the generic ones.
+MAGIC_SIGNATURES: Tuple[Tuple[int, bytes, str], ...] = (
+    (0, b"\x89PNG\r\n\x1a\n", "png"),
+    (0, b"\xff\xd8\xff", "jpeg"),
+    (0, b"GIF87a", "gif"),
+    (0, b"GIF89a", "gif"),
+    (0, b"BM", "bmp"),
+    (0, b"II*\x00", "tiff"),
+    (0, b"MM\x00*", "tiff"),
+    (0, b"%PDF-", "pdf"),
+    (0, b"PK\x03\x04", "zip"),
+    (0, b"PK\x05\x06", "zip"),
+    (0, b"Rar!\x1a\x07", "rar"),
+    (0, b"7z\xbc\xaf\x27\x1c", "7z"),
+    (0, b"\x1f\x8b", "gzip"),
+    (0, b"BZh", "bzip2"),
+    (0, b"\xfd7zXZ\x00", "xz"),
+    (0, b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "ole2"),
+    (0, b"SQLite format 3\x00", "sqlite"),
+    (0, b"\x7fELF", "elf"),
+    (0, b"MZ", "pe"),
+    (0, b"OggS", "ogg"),
+    (0, b"fLaC", "flac"),
+    (0, b"ID3", "mp3"),
+    (0, b"\x1aE\xdf\xa3", "matroska"),
+    (0, b"FLV\x01", "flv"),
+    (0, b"glTF", "glb"),
+    (0, b"Kaydara FBX Binary", "fbx"),
+    (0, b"PXR-USDC", "usdc"),
+    (0, b"ply\n", "ply"),
+    (0, b"ply\r\n", "ply"),
+    (0, b"LASF", "las"),
+    (0, b"#!", "script"),
+    (0, b"<?xml", "xml"),
+    (0, b"{\\rtf", "rtf"),
+    (0, b"\xef\xbb\xbf", "utf8-text"),
+)
+_RIFF_FORMATS = {b"WAVE": "wav", b"AVI ": "avi", b"WEBP": "webp"}
+_ISO_BMFF_AUDIO_BRANDS = (b"M4A ", b"M4B ")
+_TAR_MAGIC = b"ustar"
+# Labels whose signature is itself text, so a text file carrying one is that format rather than plain text.
+_TEXT_FORMAT_LABELS = frozenset({"script", "xml", "rtf", "ply", "utf8-text"})
+_TEXT_SAMPLE_BYTES = 4096
+_TEXT_CONTROL_BYTES = bytes(range(0x00, 0x09)) + bytes(range(0x0E, 0x20)) + b"\x7f"
+
+
+def detect_format(head_bytes: bytes) -> Optional[str]:
+    """The format label the object's leading bytes identify, or ``None`` for bytes no table entry
+    fits. ``riff`` containers resolve to their chunk type (wav/avi/webp), ISO base-media files to
+    ``mp4``/``m4a``/``heif``/``3gp`` by brand, a ``ustar`` block to ``tar``, and bytes that decode as UTF-8
+    without control characters to ``utf8-text``. Nothing is downloaded: the caller passes the header it
+    already read."""
+    data = head_bytes or b""
+    if not data:
+        return None
+    if data[:4] == b"RIFF" and len(data) >= 12:
+        return _RIFF_FORMATS.get(data[8:12], "riff")
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in _ISO_BMFF_AUDIO_BRANDS:
+            return "m4a"
+        if brand.startswith(b"heic") or brand.startswith(b"heix") or brand.startswith(b"mif1"):
+            return "heif"
+        if brand.startswith(b"3gp"):
+            return "3gp"
+        return "mp4"
+    if len(data) >= 262 and data[257:262] == _TAR_MAGIC:
+        return "tar"
+    looks_text = _decodes_as_text(data[:_TEXT_SAMPLE_BYTES])
+    for offset, signature, label in MAGIC_SIGNATURES:
+        if data[offset:offset + len(signature)] != signature:
+            continue
+        # A two-byte binary signature ("BM", "MZ", gzip) is too short to outrank a text file that happens
+        # to start with those letters; the longer ones, and the text-format markers, are decisive.
+        if len(signature) < 3 and looks_text and label not in _TEXT_FORMAT_LABELS:
+            continue
+        return label
+    return "utf8-text" if looks_text else None
+
+
+def _decodes_as_text(sample: bytes) -> bool:
+    """Whether the sample is UTF-8 without control characters; a multi-byte sequence the sample cuts
+    at its end does not count against it."""
+    try:
+        sample.decode("utf-8")
+    except UnicodeDecodeError as error:
+        if error.start < len(sample) - 3:
+            return False
+    return not any(byte in _TEXT_CONTROL_BYTES for byte in sample)

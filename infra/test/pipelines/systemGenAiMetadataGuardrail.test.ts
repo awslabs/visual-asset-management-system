@@ -69,7 +69,7 @@ const createMockConfig = (): Config.Config => {
     config.app.useGlobalVpc.useForAllLambdas = false;
     config.app.pipelines.useSystemGenAiMetadata.enabled = true;
     config.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = true;
-    config.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+    config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
         "global.anthropic.claude-haiku-4-5-20251001-v1:0";
     config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = createdGuardrail();
     config.app.vectorSearch.enabled = true;

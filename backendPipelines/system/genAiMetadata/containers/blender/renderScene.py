@@ -110,6 +110,11 @@ def imported_units(extension):
     return "m" if (extension or "").lower() in METRE_CONVERTED_EXTENSIONS else None
 
 
+# The `--views` value that asks for the scene facts alone: the model is imported and measured, no view is
+# rendered. The analysis layer being off is the case; the facts are the attributes either way.
+NO_VIEWS = "none"
+
+
 def select_views(count):
     """The first `count` views of VIEW_ORDER, clamped to 1..len(VIEW_ORDER)."""
     count = max(1, min(int(count), len(VIEW_ORDER)))
@@ -440,9 +445,10 @@ def main():
     except SystemExit:
         return EXIT_BAD_ARGUMENTS
     os.makedirs(args.output_dir, exist_ok=True)
-    views = [view for view in args.views.split(",") if view]
+    facts_only = args.views.strip().lower() == NO_VIEWS
+    views = [] if facts_only else [view for view in args.views.split(",") if view]
     unknown = [view for view in views if view not in VIEW_DIRECTIONS]
-    if unknown or not views:
+    if unknown or (not views and not facts_only):
         write_facts(args.output_dir, {"schemaVersion": 1, "error": f"unknown views: {unknown or 'none requested'}"})
         return EXIT_BAD_ARGUMENTS
 
@@ -469,6 +475,13 @@ def main():
 
     facts = collect_scene_facts(objects, center, size, args.input)
     facts["importSeconds"] = round(time.monotonic() - started, 3)
+    if facts_only:
+        facts["renderedViews"] = []
+        facts["failedViews"] = {}
+        facts["renderSeconds"] = round(time.monotonic() - started, 3)
+        facts["factsOnly"] = True
+        write_facts(args.output_dir, facts)
+        return EXIT_OK
     ensure_materials(objects)
     configure_render(args.resolution, args.samples)
     setup_lighting(center, 0.5 * math.sqrt(sum(extent * extent for extent in size)))

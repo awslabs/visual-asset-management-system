@@ -97,10 +97,13 @@ function mockConfig(vectorSearchEnabled: boolean): Config.Config {
     config.app.baseStackName = "vams-test";
     config.app.vectorSearch = {
         enabled: vectorSearchEnabled,
-        embeddingModelId: "amazon.titan-embed-text-v2:0",
-        embeddingDimensions: EMBEDDING_DIMENSIONS,
         indexingConcurrency: 5,
         reindexOnCdkDeploy: false,
+    };
+    config.app.pipelines.useSystemGenAiMetadata.bedrockModels = {
+        analysisModelId: config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId,
+        embeddingModelId: "amazon.titan-embed-text-v2:0",
+        embeddingDimensions: EMBEDDING_DIMENSIONS,
     };
     config.enableCdkNag = false;
     config.resourceNamesSSMParamPrefix = "/vams-test-us-east-1/resourceNames";

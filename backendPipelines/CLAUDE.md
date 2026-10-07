@@ -149,7 +149,7 @@ write, including the latest/archived lifecycle of the item.
     vector with the defaults above; an over-long key or an unknown kind is logged and dropped. Reference
     producers: `containers/media/segment_handler.py` (windows) and the chunk loop of `generateEmbedding.py`.
 -   **Model discipline** — `embeddingModelId` / `embeddingDimensions` must equal the deployment's
-    configured `app.vectorSearch.embeddingModelId` / `embeddingDimensions`; the indexer logs and drops a
+    configured `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` / `embeddingDimensions`; the indexer logs and drops a
     document produced with any other model. Embed through the canonical adapter
     `backend/backend/common/vectorsearch/embeddings.py`, vendored byte-identical into the pipeline the
     way `manifestHelper.py` is, rather than calling Amazon Bedrock directly.
@@ -158,7 +158,7 @@ write, including the latest/archived lifecycle of the item.
     (`execution.status.json` above). The user-facing statement of this contract is
     `documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`.
 -   **Environment variables** (pipeline handlers read `os.environ` directly; none of these resolves
-    through SSM). `EMBEDDING_MODEL_ID` and `EMBEDDING_DIMENSIONS` (`app.vectorSearch.embeddingModelId` /
+    through SSM). `EMBEDDING_MODEL_ID` and `EMBEDDING_DIMENSIONS` (`bedrockModels.embeddingModelId` /
     `embeddingDimensions`, the same values the search stack's `vectorIndexEnvironment()` gives the
     indexer) are set by `systemGenAiMetadataFunctions.ts` on `generateEmbedding` and `segmentAnalyze` and
     read at import by `containers/media/segment_handler.py` — the model-discipline rule above is what

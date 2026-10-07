@@ -759,10 +759,15 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useSystemGenAiMetadata == undefined) {
         config.app.pipelines.useSystemGenAiMetadata = {
             enabled: false,
-            bedrockAnalysisModelId: "",
             autoRegisterWithVAMS: true,
             autoRegisterAutoTriggerOnFileUpload: true,
             useFargateRenderer: false,
+            useGenAiAnalysis: true,
+            bedrockModels: {
+                analysisModelId: "",
+                embeddingModelId: VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
+                embeddingDimensions: VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
+            },
             lambdaLimits: {
                 maxInputFileSizeMb: SYSTEM_GENAI_DEFAULT_MAX_INPUT_FILE_SIZE_MB,
                 maxPointCloudPoints: SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS,
@@ -777,11 +782,63 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useSystemGenAiMetadata.enabled == undefined) {
         config.app.pipelines.useSystemGenAiMetadata.enabled = false;
     }
-    if (config.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId == undefined) {
-        config.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId = "";
-    }
     if (config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer == undefined) {
         config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = false;
+    }
+    //The Bedrock analysis is a layer on top of the extraction, so the pipeline runs without it: with
+    //useGenAiAnalysis false every file still gets its extracted attributes, the typed ext_* promotion
+    //and the location, and no Converse call is made.
+    if (config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = true;
+    }
+    //Every Bedrock model the pipeline and the vector index use is named in one block, so a model is
+    //upgraded or swapped in one place. The two superseded locations (bedrockAnalysisModelId beside the
+    //block, embeddingModelId/embeddingDimensions under app.vectorSearch) are read when the block omits a
+    //value, with a warning, so a configuration written against them keeps its models and its index name.
+    {
+        const pipeline = config.app.pipelines.useSystemGenAiMetadata as Record<string, any>;
+        const vectorSearchBlock = (config.app.vectorSearch ?? {}) as Record<string, any>;
+        if (pipeline.bedrockModels == undefined) {
+            pipeline.bedrockModels = {};
+        }
+        const models = pipeline.bedrockModels as Record<string, any>;
+        if (models.analysisModelId == undefined) {
+            if (pipeline.bedrockAnalysisModelId != undefined) {
+                console.warn(
+                    "Configuration Warning: pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId is " +
+                        "superseded by pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId; " +
+                        "move the value there."
+                );
+                models.analysisModelId = pipeline.bedrockAnalysisModelId;
+            } else {
+                models.analysisModelId = "";
+            }
+        }
+        if (models.embeddingModelId == undefined) {
+            if (vectorSearchBlock.embeddingModelId != undefined) {
+                console.warn(
+                    "Configuration Warning: app.vectorSearch.embeddingModelId is superseded by " +
+                        "pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId; move the value there."
+                );
+                models.embeddingModelId = vectorSearchBlock.embeddingModelId;
+            } else {
+                models.embeddingModelId = VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID;
+            }
+        }
+        if (models.embeddingDimensions == undefined) {
+            if (vectorSearchBlock.embeddingDimensions != undefined) {
+                console.warn(
+                    "Configuration Warning: app.vectorSearch.embeddingDimensions is superseded by " +
+                        "pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions; move the value there."
+                );
+                models.embeddingDimensions = vectorSearchBlock.embeddingDimensions;
+            } else {
+                models.embeddingDimensions = VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS;
+            }
+        }
+        delete pipeline.bedrockAnalysisModelId;
+        delete vectorSearchBlock.embeddingModelId;
+        delete vectorSearchBlock.embeddingDimensions;
     }
     if (config.app.pipelines.useSystemGenAiMetadata.lambdaLimits == undefined) {
         config.app.pipelines.useSystemGenAiMetadata.lambdaLimits = {
@@ -925,20 +982,12 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.vectorSearch == undefined) {
         config.app.vectorSearch = {
             enabled: vectorSearchDefaultEnabled,
-            embeddingModelId: VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
-            embeddingDimensions: VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
             indexingConcurrency: VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY,
             reindexOnCdkDeploy: false,
         };
     }
     if (config.app.vectorSearch.enabled == undefined) {
         config.app.vectorSearch.enabled = vectorSearchDefaultEnabled;
-    }
-    if (config.app.vectorSearch.embeddingModelId == undefined) {
-        config.app.vectorSearch.embeddingModelId = VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID;
-    }
-    if (config.app.vectorSearch.embeddingDimensions == undefined) {
-        config.app.vectorSearch.embeddingDimensions = VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS;
     }
     if (config.app.vectorSearch.indexingConcurrency == undefined) {
         config.app.vectorSearch.indexingConcurrency = VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY;
@@ -958,15 +1007,16 @@ export function getConfig(app: cdk.App): Config {
         console.warn(
             "Configuration Warning: app.vectorSearch is not set and resolves to disabled. " +
                 "Natural-language file search is available in this partition; to enable it add " +
-                '"vectorSearch": { "enabled": true, "embeddingModelId": "amazon.titan-embed-text-v2:0", ' +
-                '"embeddingDimensions": 1024, "indexingConcurrency": 5 } under "app", and set ' +
+                '"vectorSearch": { "enabled": true, "indexingConcurrency": 5 } under "app", name the ' +
+                "embedding model in app.pipelines.useSystemGenAiMetadata.bedrockModels " +
+                '(embeddingModelId "amazon.titan-embed-text-v2:0", embeddingDimensions 1024), and set ' +
                 "app.pipelines.useSystemGenAiMetadata.enabled, autoRegisterWithVAMS and " +
                 "autoRegisterAutoTriggerOnFileUpload to true (the pipeline produces the embeddings)."
         );
     }
     config.vectorIndexName = deriveVectorIndexName(
-        config.app.vectorSearch.embeddingModelId,
-        config.app.vectorSearch.embeddingDimensions
+        config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId,
+        config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions
     );
 
     // Cosmos Predict defaults
@@ -2060,7 +2110,10 @@ export function getConfig(app: cdk.App): Config {
     //is derived by stripping the prefix, so a prefix from another partition yields both a model that
     //does not exist and a grant that does not match it. A bare in-Region id is valid everywhere.
     const analysisModelId =
-        config.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId ?? "";
+        config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId ?? "";
+    const genAiAnalysisOn =
+        config.app.pipelines.useSystemGenAiMetadata.enabled &&
+        config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis;
     if (config.app.pipelines.useSystemGenAiMetadata.enabled) {
         const limits = config.app.pipelines.useSystemGenAiMetadata.lambdaLimits;
         const limitChecks: Array<[string, unknown]> = [
@@ -2075,18 +2128,22 @@ export function getConfig(app: cdk.App): Config {
                 );
             }
         }
-
+    }
+    //The analysis model is required only by the GenAI layer: an attributes-only pipeline
+    //(useGenAiAnalysis false) names no analysis model and makes no Converse call.
+    if (genAiAnalysisOn) {
         if (typeof analysisModelId !== "string" || analysisModelId.trim() === "") {
             throw new Error(
-                "Configuration Error: pipelines.useSystemGenAiMetadata is enabled but " +
-                    "bedrockAnalysisModelId is empty. Set a vision-capable model id or inference profile " +
-                    "available in this partition and Region (the EU Sovereign Cloud template ships it " +
-                    "empty because no model is verified there)."
+                "Configuration Error: pipelines.useSystemGenAiMetadata is enabled with useGenAiAnalysis " +
+                    "but bedrockModels.analysisModelId is empty. Set a vision-capable model id or inference " +
+                    "profile available in this partition and Region, or set useGenAiAnalysis to false for an " +
+                    "attributes-only pipeline (the EU Sovereign Cloud template ships that way because no " +
+                    "model is verified there)."
             );
         }
         if (analysisModelId.startsWith("global.") && config.env.partition !== "aws") {
             throw new Error(
-                `Configuration Error: pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId is ` +
+                `Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId is ` +
                     `"${analysisModelId}", whose "global." cross-Region inference-profile prefix exists ` +
                     `only in the commercial partition. This deployment targets ${config.env.partition}. ` +
                     `Use a model id or inference profile offered there.`
@@ -2094,7 +2151,7 @@ export function getConfig(app: cdk.App): Config {
         }
         if (analysisModelId.startsWith("us-gov.") && config.env.partition !== "aws-us-gov") {
             throw new Error(
-                `Configuration Error: pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId is ` +
+                `Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId is ` +
                     `"${analysisModelId}", whose "us-gov." cross-Region inference-profile prefix exists ` +
                     `only in the AWS GovCloud (US) partition. This deployment targets ${config.env.partition}.`
             );
@@ -2102,14 +2159,14 @@ export function getConfig(app: cdk.App): Config {
         if (analysisModelId.startsWith("us.") && config.env.partition !== "aws") {
             if (config.env.partition === "aws-us-gov") {
                 console.warn(
-                    `Configuration Warning: pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId is ` +
+                    `Configuration Warning: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId is ` +
                         `"${analysisModelId}", whose "us." cross-Region inference-profile prefix is the ` +
                         `commercial one; verify that this inference profile exists in your GovCloud account ` +
                         `before deploying (the govcloud template names the "us-gov." form instead).`
                 );
             } else {
                 throw new Error(
-                    `Configuration Error: pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId is ` +
+                    `Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId is ` +
                         `"${analysisModelId}", whose "us." cross-Region inference-profile prefix exists ` +
                         `only in the commercial partition. This deployment targets ${config.env.partition}. ` +
                         `Use a model id or inference profile offered there.`
@@ -2121,7 +2178,7 @@ export function getConfig(app: cdk.App): Config {
     //printed for a disabled pipeline too (the shipped GovCloud template is that case).
     if (typeof analysisModelId === "string" && analysisModelId.includes("anthropic.")) {
         console.warn(
-            "Configuration Warning: pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId names an " +
+            "Configuration Warning: pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId names an " +
                 "Anthropic model. Anthropic requires a one-time use-case form per AWS organization " +
                 "before the first invocation; until it is submitted, executions end FAILED with " +
                 "BedrockAccessDenied while file attributes are still written."
@@ -2849,7 +2906,8 @@ export function getConfig(app: cdk.App): Config {
         console.warn(
             "Configuration Warning: app.vectorSearch.enabled is true in a GovCloud deployment. Amazon " +
                 "Bedrock model access there is a manual step in both the GovCloud account and its linked " +
-                `commercial account; confirm the embedding model (${config.app.vectorSearch.embeddingModelId}) ` +
+                `commercial account; confirm the embedding model ` +
+                `(${config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId}) ` +
                 "and the analysis model are enabled before the first execution."
         );
     }
@@ -2880,14 +2938,16 @@ export function getConfig(app: cdk.App): Config {
         );
     }
     if (config.app.vectorSearch.enabled) {
-        const embeddingModelId = config.app.vectorSearch.embeddingModelId ?? "";
+        const models = config.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+        const embeddingModelId = models.embeddingModelId ?? "";
         if (typeof embeddingModelId !== "string" || embeddingModelId.trim() === "") {
             throw new Error(
-                "Configuration Error: app.vectorSearch.embeddingModelId is empty. Set an embedding model " +
-                    "id available in this partition and Region (for example amazon.titan-embed-text-v2:0)."
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId is " +
+                    "empty while app.vectorSearch.enabled is true. Set an embedding model id available in " +
+                    "this partition and Region (for example amazon.titan-embed-text-v2:0)."
             );
         }
-        const dimensions = config.app.vectorSearch.embeddingDimensions;
+        const dimensions = models.embeddingDimensions;
         if (
             typeof dimensions !== "number" ||
             !Number.isInteger(dimensions) ||
@@ -2895,9 +2955,9 @@ export function getConfig(app: cdk.App): Config {
             dimensions > VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS
         ) {
             throw new Error(
-                "Configuration Error: app.vectorSearch.embeddingDimensions must be an integer between 1 " +
-                    `and ${VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS} (the vector index dimension). ` +
-                    `Received: ${JSON.stringify(dimensions)}`
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions " +
+                    `must be an integer between 1 and ${VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS} (the vector ` +
+                    `index dimension). Received: ${JSON.stringify(dimensions)}`
             );
         }
         //CDK validates the event-source MaximumConcurrency at synth too, but misses 0 and non-integers
@@ -3630,8 +3690,6 @@ export interface ConfigPublic {
         };
         vectorSearch: {
             enabled: boolean;
-            embeddingModelId: string;
-            embeddingDimensions: number;
             indexingConcurrency: number;
             reindexOnCdkDeploy: boolean;
         };
@@ -3722,10 +3780,15 @@ export interface ConfigPublic {
             };
             useSystemGenAiMetadata: {
                 enabled: boolean;
-                bedrockAnalysisModelId: string;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
                 useFargateRenderer: boolean;
+                useGenAiAnalysis: boolean;
+                bedrockModels: {
+                    analysisModelId: string;
+                    embeddingModelId: string;
+                    embeddingDimensions: number;
+                };
                 lambdaLimits: {
                     maxInputFileSizeMb: number;
                     maxPointCloudPoints: number;

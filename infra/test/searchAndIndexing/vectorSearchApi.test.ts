@@ -110,7 +110,7 @@ describe.each(ENABLED_TEMPLATES)("vector search API enabled on %s", (name) => {
         const synth = synthTemplate(name, {
             mutate: (c: any) => {
                 enable(c);
-                c.app.vectorSearch.embeddingModelId = `${prefix}amazon.nova-2-multimodal-embeddings-v1:0`;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = `${prefix}amazon.nova-2-multimodal-embeddings-v1:0`;
             },
             mutateKey: "vectorSearchOnProfile",
         });

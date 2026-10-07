@@ -50,10 +50,13 @@ const mockConfig = (mutate?: (c: any) => void): Config.Config => {
     config.app.baseStackName = "vams-test";
     config.app.vectorSearch = {
         enabled: true,
-        embeddingModelId: "amazon.titan-embed-text-v2:0",
-        embeddingDimensions: 1024,
         indexingConcurrency: 5,
         reindexOnCdkDeploy: false,
+    };
+    config.app.pipelines.useSystemGenAiMetadata.bedrockModels = {
+        analysisModelId: config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId,
+        embeddingModelId: "amazon.titan-embed-text-v2:0",
+        embeddingDimensions: 1024,
     };
     (config as any).vectorIndexName = "vec-amazon-titan-embed-text-v2-0-1024";
     config.enableCdkNag = false;

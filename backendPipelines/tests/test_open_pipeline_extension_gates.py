@@ -52,6 +52,10 @@ PIPELINES = (
 
 PIPELINE_IDS = [name for name, _, _ in PIPELINES]
 
+# Pipelines whose deployed allow list is the "*" wildcard: every file is taken, the classifier names the
+# class. Everything else deploys a finite list.
+ANY_FILE_PIPELINES = frozenset({"systemGenAiMetadata"})
+
 # The allow list every case runs against. Three members, so the joined string carries substrings that
 # name no format: prefixes of a member and spans crossing a comma.
 _ALLOWED = ".stl,.obj,.glb"
@@ -232,12 +236,35 @@ class TestExtensionGate:
 
         This is what makes the substring hazard live rather than theoretical: a single-member list
         has no cross-comma substring, so the cases above would be exercising a shape the deployment
-        never has.
+        never has. The one exception is the system GenAI metadata pipeline, whose deployed value is
+        the "*" wildcard (it takes every file); the exact-membership cases above still run against the
+        finite list this suite supplies, and the wildcard's own behaviour is pinned below.
         """
         allowed = _cdk_allow_list(construct)
+        if name in ANY_FILE_PIPELINES:
+            assert allowed == "*", allowed
+            return
 
         assert "," in allowed, allowed
         members = [member.strip() for member in allowed.split(",")]
         assert len(members) >= 2
         for member in members:
             assert member.startswith("."), members
+
+    def test_the_wildcard_admits_every_file_only_where_deployed(self, name, lambda_dir, construct):
+        """A "*" member admits any extension and a file with none; a pipeline that is not deployed with
+        the wildcard must not grow it by accident, so the handler's acceptance is only asserted for the
+        pipeline whose construct declares it."""
+        if name not in ANY_FILE_PIPELINES:
+            return
+        mod = _load(name, lambda_dir, allowed="*")
+        for uri in ("s3://abkt/xidM/file.zzz", "s3://abkt/xidM/noext", "s3://abkt/xidM/model.glb"):
+            resp, start, send_failure = _invoke(mod, uri)
+            assert resp["statusCode"] == 200, uri
+            start.assert_called_once()
+            send_failure.assert_not_called()
+        # With a finite list the same handler still rejects an extension it does not name.
+        mod = _load(name, lambda_dir)
+        resp, start, _ = _invoke(mod, "s3://abkt/xidM/file.zzz")
+        assert resp["statusCode"] == 400
+        start.assert_not_called()

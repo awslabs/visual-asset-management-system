@@ -19,12 +19,13 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
 
-from media_extractors import audio, data, documents, images, office, svg, text, video
+from media_extractors import audio, data, documents, generic, images, office, svg, text, video
 from media_extractors.common import (
     CLASS_AUDIO,
     CLASS_DATA,
     CLASS_DOCUMENT,
     CLASS_IMAGE,
+    CLASS_OTHER,
     CLASS_TEXT,
     CLASS_TILES3D,
     CLASS_VIDEO,
@@ -75,6 +76,7 @@ _EXTRACTORS: Dict[str, Callable[[str, ExtractContext], BranchResult]] = {
     CLASS_TEXT: text.extract_text,
     CLASS_TILES3D: text.extract_text,
     CLASS_DATA: data.extract_data,
+    CLASS_OTHER: generic.extract_generic,
 }
 
 # Office formats: the extension routes them whatever class the state carries — document, document, data.
@@ -167,12 +169,13 @@ def select_extractor(file_class: Optional[str], extension: str) -> Tuple[Callabl
     """The extractor for the class constructPipeline chose; the extension decides when the class is absent. An
     office extension routes to its own extractor whatever the class says. A `.json` always takes the text path,
     which re-sniffs the parsed root and reclassifies to `tiles3d` or `data` (GeoJSON) itself, so a GeoJSON file
-    the classifier already called `data` is never read as CSV."""
+    the classifier already called `data` is never read as CSV. A class the table does not name, or no class at
+    all for an extension no table names, is `other`: the generic extractor probes the bytes."""
     ext = (extension or "").lower()
     if ext in _OFFICE_EXTRACTORS:
         extractor, office_class = _OFFICE_EXTRACTORS[ext]
         return extractor, (file_class or office_class)
-    resolved = file_class or class_for_extension(ext)
+    resolved = file_class or class_for_extension(ext) or CLASS_OTHER
     if resolved == CLASS_IMAGE:
         return (svg.extract_svg if ext == ".svg" else images.extract_image), resolved
     if ext == ".json" and resolved in _JSON_SNIFFED_CLASSES:
@@ -306,6 +309,10 @@ def lambda_handler(event, context):
     extractor, file_class = select_extractor(payload.get("fileClass"), extension)
     extract_geo_location = state_flag(payload.get("extractGeoLocation"), EXTRACT_GEO_LOCATION_DEFAULT)
     vector_search_enabled = state_flag(payload.get("vectorSearchEnabled"), False)
+    # The GenAI layer: off, no analysis image is produced (nothing consumes it) and no video window plan is
+    # written (a window is described by the analysis model before it is embedded).
+    genai_analysis_enabled = state_flag(payload.get("genAiAnalysisEnabled"), True)
+    render_images = state_flag(payload.get("renderImages"), genai_analysis_enabled)
     content_chunking = state_flag(payload.get("contentChunking"), CONTENT_CHUNKING_DEFAULT)
     segment_seconds = _positive_int(payload.get("videoSegmentSeconds"), VIDEO_SEGMENT_SECONDS_DEFAULT)
     file_size = _positive_int(payload.get("fileSize"), 0)
@@ -315,7 +322,8 @@ def lambda_handler(event, context):
     logger.info({"message": "MEDIA extract task", "fileClass": file_class, "fileName": file_name,
                  "assetId": payload.get("assetId"), "analysisManifestS3Location": manifest_location,
                  "extractGeoLocation": extract_geo_location, "captureFullText": capture_full_text,
-                 "fileSize": file_size, "videoSegmentSeconds": segment_seconds})
+                 "fileSize": file_size, "videoSegmentSeconds": segment_seconds,
+                 "genAiAnalysisEnabled": genai_analysis_enabled, "renderImages": render_images})
     existing = fetch_manifest(manifest_location)
     max_text_chars, config_warnings = load_max_text_chars(payload.get("inputConfigurationS3Location"))
     work_dir = tempfile.mkdtemp(prefix="media-")
@@ -330,6 +338,7 @@ def lambda_handler(event, context):
             work_dir=work_dir,
             extract_geo_location=extract_geo_location,
             capture_full_text=capture_full_text,
+            render_images=render_images,
         )
         result = extractor(local_path, ctx)
         result.warnings = config_warnings + list(result.warnings)
@@ -339,7 +348,7 @@ def lambda_handler(event, context):
             manifest.update(upload_full_text(result, aux_bucket, aux_prefix))
         elif over_size_bound and result.file_class in FULL_TEXT_CLASSES:
             skip_full_text_for_size(manifest, file_size)
-        if (result.file_class == CLASS_VIDEO and vector_search_enabled
+        if (result.file_class == CLASS_VIDEO and vector_search_enabled and genai_analysis_enabled
                 and segment_seconds >= videoSegments.VIDEO_SEGMENT_MIN_SECONDS):
             duration = (result.attributes.get("sys_media") or {}).get("durationSeconds")
             plan = videoSegments.plan_segments(duration, segment_seconds)

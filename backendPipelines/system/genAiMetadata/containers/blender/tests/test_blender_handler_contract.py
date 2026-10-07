@@ -112,6 +112,10 @@ class FakeBlender:
             raise subprocess.TimeoutExpired(command, kwargs["timeout"], output="partial log", stderr="")
         if self.import_error is not None:
             facts = {"schemaVersion": 1, "blenderVersion": "4.5.13", "error": self.import_error}
+        elif views == ["none"]:
+            # renderScene's facts-only request: the scene is measured, no view rendered.
+            facts = dict(self.facts)
+            facts.update({"renderedViews": [], "failedViews": {}, "factsOnly": True})
         else:
             rendered = [view for view in views if view not in self.fail_views]
             for view in rendered:
@@ -231,6 +235,26 @@ def test_render_views_limits_the_views_in_order(monkeypatch):
     assert _argument(blender.calls[0]["command"], "--views") == "perspective_front,front,right"
     assert len(result["renderImages"]) == 3 and result["renderImageCount"] == 3 and len(fake_s3.uploads) == 3
     assert _manifest(fake_s3)["renderDiagnostics"]["requestedViews"] == ["perspective_front", "front", "right"]
+
+
+@pytest.mark.unit
+def test_render_images_off_asks_blender_for_the_facts_alone(monkeypatch):
+    """The GenAI layer off: the state's renderImages is false, so Blender is invoked with `--views none`,
+    imports and measures the scene, renders nothing, and the manifest records no skip."""
+    handler, fake_s3, blender, trimesh_calls = _setup(monkeypatch, config=_config())
+    result = handler.lambda_handler(dict(_event(), renderImages=False), FakeContext([600_000]))
+    assert _argument(blender.calls[0]["command"], "--views") == handler.NO_VIEWS == "none"
+    assert result["renderImages"] == [] and result["renderImageCount"] == 0 and fake_s3.uploads == []
+    assert result["renderSkipped"] is None and result["renderStatus"] == "SUCCEEDED"
+    manifest = _manifest(fake_s3)
+    assert manifest["renderSkipped"] is None and manifest["renderImages"] == []
+    assert manifest["renderDiagnostics"]["requestedViews"] == [] and manifest["renderDiagnostics"]["blender"]["factsOnly"]
+    # The attributes are the point of the run: Blender's scene facts and trimesh's measurements both land.
+    assert "sys_geometry" in manifest["attributes"] and trimesh_calls
+    # genAiAnalysisEnabled stands in when the renderImages copy is absent.
+    handler2, _s3, blender2, _ = _setup(monkeypatch, config=_config())
+    handler2.lambda_handler(dict(_event(), genAiAnalysisEnabled=False), FakeContext([600_000]))
+    assert _argument(blender2.calls[0]["command"], "--views") == "none"
 
 
 @pytest.mark.unit

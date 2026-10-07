@@ -36,11 +36,12 @@ const hasFieldRow = (fieldPath: string): boolean =>
 
 const LEAVES = [
     "app.vectorSearch.enabled",
-    "app.vectorSearch.embeddingModelId",
-    "app.vectorSearch.embeddingDimensions",
     "app.vectorSearch.indexingConcurrency",
     "app.pipelines.useSystemGenAiMetadata.enabled",
-    "app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId",
+    "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis",
+    "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
+    "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId",
+    "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions",
     "app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS",
     "app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload",
     "app.pipelines.useSystemGenAiMetadata.useFargateRenderer",

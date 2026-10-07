@@ -538,8 +538,10 @@ class TestHelpers:
         assert module.select_extractor("data", ".json") == (module.text.extract_text, "data")
         assert module.select_extractor("data", ".csv") == (module.data.extract_data, "data")
         assert module.select_extractor(None, ".SVG") == (module.svg.extract_svg, "image")
-        with pytest.raises(module.MediaTaskError):
-            module.select_extractor(None, ".glb")
+        # A class or extension no table names is `other`: the generic probe, never an error.
+        assert module.select_extractor("other", ".zzz") == (module.generic.extract_generic, "other")
+        assert module.select_extractor(None, ".glb") == (module.generic.extract_generic, "other")
+        assert module.select_extractor(None, "") == (module.generic.extract_generic, "other")
 
     def test_parse_s3_uri(self):
         module = _load(FakeS3())

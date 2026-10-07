@@ -73,9 +73,12 @@ def test_sys_media_video(tmp_path):
     for key in ("durationSeconds", "width", "height", "frameRate", "bitrateKbps", "channels", "sampleRate"):
         assert _is_number(sys_media[key]), key
     assert isinstance(sys_media["videoCodec"], str) and isinstance(sys_media["audioCodec"], str)
-    assert set(sys_media["tags"]) == set(PROMOTION_SOURCE_KEYS["sys_media.tags"])
+    # Every format-level tag is recorded; the contract keys the catalogue reads are among them.
+    assert {"title", "artist", "album", "year", "date"} <= set(sys_media["tags"]) <= set(PROMOTION_SOURCE_KEYS["sys_media.tags"]) | {
+        "major_brand", "minor_version", "compatible_brands", "encoder"}
     assert _is_number(sys_media["tags"]["year"])
     assert all(isinstance(sys_media["tags"][key], str) for key in ("title", "artist", "album"))
+    assert sys_media["streamTags"]["0:0"]["handler_name"] == "VideoHandler"
 
 
 @pytest.mark.unit
@@ -94,7 +97,8 @@ def test_sys_media_audio(tmp_path, monkeypatch):
     assert sys_media["kind"] == "audio"
     for key in ("durationSeconds", "bitrateKbps", "channels", "sampleRate"):
         assert _is_number(sys_media[key]), key
-    assert set(sys_media["tags"]) == set(PROMOTION_SOURCE_KEYS["sys_media.tags"]) and sys_media["tags"]["year"] == 2026
+    assert set(sys_media["tags"]) == {"title", "artist", "album", "year"} and sys_media["tags"]["year"] == 2026
+    assert set(sys_media["tags"]) <= set(PROMOTION_SOURCE_KEYS["sys_media.tags"])
 
 
 @pytest.mark.unit

@@ -2189,7 +2189,8 @@ export function storageResourcesBuilder(
             {
                 IndexName: config.vectorIndexName,
                 VectorAttribute: { AttributeName: VECTOR_ATTRIBUTE_NAME },
-                Dimensions: config.app.vectorSearch.embeddingDimensions,
+                Dimensions:
+                    config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions,
                 DistanceFunction: "COSINE",
                 Projection: {
                     ProjectionType: "INCLUDE",

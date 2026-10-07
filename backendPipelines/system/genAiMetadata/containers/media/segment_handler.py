@@ -55,7 +55,8 @@ s3_client = boto3.client('s3', config=retry_config)
 bedrock_runtime = boto3.client('bedrock-runtime', config=retry_config)
 events_client = boto3.client('events', region_name=os.environ["AWS_REGION"], config=retry_config)
 
-BEDROCK_ANALYSIS_MODEL_ID = os.environ["BEDROCK_ANALYSIS_MODEL_ID"]
+# Empty in an attributes-only deployment, whose state machine never reaches the segment Map.
+BEDROCK_ANALYSIS_MODEL_ID = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID", "")
 EMBEDDING_MODEL_ID = os.environ["EMBEDDING_MODEL_ID"]
 EMBEDDING_DIMENSIONS = int(os.environ["EMBEDDING_DIMENSIONS"])
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")

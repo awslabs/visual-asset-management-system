@@ -40,7 +40,7 @@ import { newTestApp } from "../support/testApp";
 const ACCOUNT = "123456789012";
 const REGION = "us-east-1";
 
-/** The pipeline bundle's filter, which the Python suite pins to the classifier's ALLOW_LIST. */
+/** The pipeline bundle's filter, which the Python suite pins to the workflow and trigger filters. */
 const PIPELINE_BUNDLE = path.resolve(
     __dirname,
     "../../../backendPipelines/system/genAiMetadata/vamsSchema/pipeline.json"
@@ -82,7 +82,7 @@ const createMockConfig = (): Config.Config => {
     config.app.useGlobalVpc.useForAllLambdas = false;
     config.app.pipelines.useSystemGenAiMetadata.enabled = true;
     config.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = true;
-    config.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+    config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
         "global.anthropic.claude-haiku-4-5-20251001-v1:0";
     // The baseline runs without a guardrail; the created guardrail has its own suite
     // (systemGenAiMetadataGuardrail.test.ts).
@@ -566,8 +566,13 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         // helper adds the resource-name and role variables every VAMS Lambda has.
         expect(props.Environment.Variables).toMatchObject({
             BEDROCK_ANALYSIS_MODEL_ID: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-            EMBEDDING_MODEL_ID: createMockConfig().app.vectorSearch.embeddingModelId,
-            EMBEDDING_DIMENSIONS: String(createMockConfig().app.vectorSearch.embeddingDimensions),
+            EMBEDDING_MODEL_ID:
+                createMockConfig().app.pipelines.useSystemGenAiMetadata.bedrockModels
+                    .embeddingModelId,
+            EMBEDDING_DIMENSIONS: String(
+                createMockConfig().app.pipelines.useSystemGenAiMetadata.bedrockModels
+                    .embeddingDimensions
+            ),
             ORCHESTRATION_BUS_NAME: expect.anything(),
             BEDROCK_GUARDRAIL_IDENTIFIER: "",
             BEDROCK_GUARDRAIL_VERSION: "",
@@ -594,7 +599,8 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
             "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
         ]);
         // The embedding model is a plain id: the deployment Region's and the Region-less model ARN.
-        const embeddingModelId = createMockConfig().app.vectorSearch.embeddingModelId;
+        const embeddingModelId =
+            createMockConfig().app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId;
         expect(embedding.Resource).toEqual([
             `arn:aws:bedrock:${REGION}::foundation-model/${embeddingModelId}`,
             `arn:aws:bedrock:::foundation-model/${embeddingModelId}`,
@@ -638,6 +644,52 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         ).toHaveLength(1);
     });
 
+    test("with the GenAI layer off no function holds the analysis model, the embedding grants stay, and the env says so", () => {
+        const off = synth("GenAiOff", (c) => {
+            c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
+        });
+        // generateMetadata makes no Converse call: no InvokeModel and no ApplyGuardrail grant.
+        const metadataStatements = statementsOf(off, "GenerateMetadata");
+        expect(withActions(metadataStatements, "bedrock:InvokeModel")).toHaveLength(0);
+        expect(withActions(metadataStatements, "bedrock:ApplyGuardrail")).toHaveLength(0);
+        // The segment function keeps the embedding grant only (the Map never runs, but its role is least-privilege either way).
+        const segment = withActions(statementsOf(off, "SegmentAnalyze"), "bedrock:InvokeModel");
+        expect(segment).toHaveLength(1);
+        expect(JSON.stringify(segment[0].Resource)).not.toContain("inference-profile");
+        expect(JSON.stringify(segment[0].Resource)).toContain(
+            "foundation-model/amazon.titan-embed-text-v2:0"
+        );
+        // The whole-file embedding function is unchanged: vector search is still on.
+        expect(
+            withActions(statementsOf(off, "GenerateEmbedding"), "bedrock:InvokeModel")
+        ).toHaveLength(1);
+        // No inference-profile ARN anywhere in the template.
+        const all = Object.values(off.findResources("AWS::IAM::Policy")).flatMap(
+            (p: any) => p.Properties.PolicyDocument.Statement
+        );
+        expect(JSON.stringify(all)).not.toContain("inference-profile");
+        // The switch reaches the runtime through constructPipeline and generateMetadata; the model id is empty.
+        const env: Record<string, any> = {};
+        for (const f of Object.values(off.findResources("AWS::Lambda::Function")) as any[]) {
+            if (String(f.Properties.Handler ?? "").endsWith(".lambda_handler"))
+                env[f.Properties.Handler] = f.Properties.Environment.Variables;
+        }
+        expect(env["constructPipeline.lambda_handler"].GENAI_ANALYSIS_ENABLED).toBe("false");
+        expect(env["generateMetadata.lambda_handler"]).toMatchObject({
+            GENAI_ANALYSIS_ENABLED: "false",
+            BEDROCK_ANALYSIS_MODEL_ID: "",
+        });
+        // Control: the baseline carries the switch on.
+        const on: Record<string, any> = {};
+        for (const f of Object.values(lambdaOnly.findResources("AWS::Lambda::Function")) as any[]) {
+            if (String(f.Properties.Handler ?? "").endsWith(".lambda_handler"))
+                on[f.Properties.Handler] = f.Properties.Environment.Variables;
+        }
+        expect(on["constructPipeline.lambda_handler"].GENAI_ANALYSIS_ENABLED).toBe("true");
+        expect(on["generateMetadata.lambda_handler"].GENAI_ANALYSIS_ENABLED).toBe("true");
+    });
+
     test("no Bedrock grant of the pipeline carries a wildcard resource other than the profile's Region", () => {
         for (const template of [lambdaOnly, fargate, guarded]) {
             const all = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
@@ -674,30 +726,26 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         ).toBe(true);
     });
 
-    test("openPipeline receives the extension allow list, a multi-member dotted list", () => {
-        expect(allowedInputFileExtensions.split(",").length).toBeGreaterThan(2);
-        for (const ext of allowedInputFileExtensions.split(",")) {
-            expect(ext).toMatch(/^\.[a-z0-9_]+$/);
-        }
+    test("openPipeline receives the any-file wildcard as its allow list", () => {
+        // The pipeline takes every file: the classifier gives an extension it does not name the `other`
+        // class, whose MEDIA-branch probe records what the bytes carry. The handler treats the one "*"
+        // member as "any file" (pinned in backendPipelines/tests/test_open_pipeline_extension_gates.py).
+        expect(allowedInputFileExtensions).toBe("*");
         const open = Object.values(lambdaOnly.findResources("AWS::Lambda::Function")).find(
             (f: any) => f.Properties.Handler === "openPipeline.lambda_handler"
         ) as any;
-        expect(open.Properties.Environment.Variables.ALLOWED_INPUT_FILEEXTENSIONS).toBe(
-            allowedInputFileExtensions
-        );
+        expect(open.Properties.Environment.Variables.ALLOWED_INPUT_FILEEXTENSIONS).toBe("*");
     });
 
-    test("openPipeline's allow list is the pipeline bundle's filter: 89 entries, the office formats included", () => {
-        const allowed = allowedInputFileExtensions.split(",");
-        expect(allowed).toHaveLength(89);
-        expect(new Set(allowed).size).toBe(89);
-        expect(allowed).toEqual(expect.arrayContaining([".docx", ".pptx", ".xlsx"]));
-        // The bundle's allow patterns are `*<extension>` for every classifier ALLOW_LIST entry (pinned
-        // in backendPipelines/system/genAiMetadata/lambda/tests/test_sysgenai_bundle.py), so the
-        // construct literal, the bundle and the classifier cannot drift from one another.
+    test("openPipeline's allow list is the pipeline bundle's filter: any file, preview thumbnails excluded", () => {
+        // The bundle's allow list is the same wildcard (pinned against the workflow and trigger lists in
+        // backendPipelines/system/genAiMetadata/lambda/tests/test_sysgenai_bundle.py); its exclude list
+        // keeps the thumbnails the preview pipelines write beside a file from starting a run.
         const bundle = JSON.parse(fs.readFileSync(PIPELINE_BUNDLE, "utf-8"));
-        const bundleAllow: string[] = bundle.systemConfig.inputFileFilters.allow;
-        expect(bundleAllow.map((pattern) => pattern.replace(/^\*/, ""))).toEqual(allowed);
+        expect(bundle.systemConfig.inputFileFilters).toEqual({
+            allow: [allowedInputFileExtensions],
+            exclude: ["*.previewFile.*"],
+        });
     });
 
     test("the handlers are the shipped module names with their environment", () => {
@@ -729,8 +777,13 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
             BEDROCK_GUARDRAIL_VERSION: "",
         });
         expect(byHandler["generateEmbedding.lambda_handler"]).toMatchObject({
-            EMBEDDING_MODEL_ID: createMockConfig().app.vectorSearch.embeddingModelId,
-            EMBEDDING_DIMENSIONS: String(createMockConfig().app.vectorSearch.embeddingDimensions),
+            EMBEDDING_MODEL_ID:
+                createMockConfig().app.pipelines.useSystemGenAiMetadata.bedrockModels
+                    .embeddingModelId,
+            EMBEDDING_DIMENSIONS: String(
+                createMockConfig().app.pipelines.useSystemGenAiMetadata.bedrockModels
+                    .embeddingDimensions
+            ),
         });
         expect(byHandler["generateEmbedding.lambda_handler"].ORCHESTRATION_BUS_NAME).toBeDefined();
         expect(byHandler["openPipeline.lambda_handler"].STATE_MACHINE_ARN).toBeDefined();
@@ -753,7 +806,8 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
             "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
         ]);
 
-        const embeddingModelId = createMockConfig().app.vectorSearch.embeddingModelId;
+        const embeddingModelId =
+            createMockConfig().app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId;
         const embedding = withActions(
             statementsOf(lambdaOnly, "GenerateEmbedding"),
             "bedrock:InvokeModel"
@@ -770,7 +824,7 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
 
     test("a plain analysis model id is granted in the deployment Region and Region-less, with no profile", () => {
         const plain = synth("PlainModel", (c) => {
-            c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
                 "anthropic.claude-haiku-4-5-20251001-v1:0";
         });
         for (const fragment of ["GenerateMetadata", "SegmentAnalyze"]) {

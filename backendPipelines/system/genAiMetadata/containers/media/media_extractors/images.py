@@ -1,14 +1,19 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Raster images (.png .jpg .jpeg .gif .webp): dimensions, mode and an EXIF subset -> sys_image; one PNG
-normalised for the vision model. EXIF GPS becomes `exif.gps` in decimal degrees only when the context's
-extract_geo_location flag (the state's extractGeoLocation) is true."""
+"""Raster images (.png .jpg .jpeg .gif .webp, and any format Pillow opens): dimensions, mode and the
+embedded metadata -> sys_image; one PNG normalised for the vision model when the context asks for renders.
+
+`sys_image.exif` carries the curated keys the promotion catalogue reads (make, model, dateTimeOriginal, gps,
+...) and, under `exif.tags`, every EXIF tag of the IFD0 and Exif IFDs by its TIFF name, so what the camera
+stored travels with the file whether or not a catalogue row names it. XMP packets land under `sys_image.xmp`
+and PNG text chunks under `sys_image.textChunks`, both bounded. EXIF GPS becomes `exif.gps` in decimal
+degrees only when the context's extract_geo_location flag (the state's extractGeoLocation) is true."""
 
 import math
 from typing import Dict, Optional
 
-from PIL import Image, UnidentifiedImageError
+from PIL import ExifTags, Image, UnidentifiedImageError
 
 from .common import (
     CLASS_IMAGE,
@@ -17,6 +22,7 @@ from .common import (
     RENDER_SKIPPED_SIZE,
     BranchResult,
     ExtractContext,
+    bounded_tags,
     human_count,
 )
 from .imaging import normalise_for_vision, write_png
@@ -38,6 +44,18 @@ _GPS_LATITUDE_REF, _GPS_LATITUDE, _GPS_LONGITUDE_REF, _GPS_LONGITUDE = 1, 2, 3, 
 _GPS_ALTITUDE_REF, _GPS_ALTITUDE = 5, 6
 _GPS_DECIMALS = 6
 _EXIF_VALUE_MAX_CHARS = 200
+# Binary EXIF payloads that carry no readable fact and would only bloat the record.
+_EXIF_SKIPPED_TAGS = frozenset({"MakerNote", "UserComment", "PrintImageMatching", "ImageResources",
+                                "InterColorProfile", "XMLPacket", "JPEGInterchangeFormat",
+                                "JPEGInterchangeFormatLength", "StripOffsets", "StripByteCounts",
+                                "TileOffsets", "TileByteCounts"})
+# PNG text chunk keys that duplicate what Pillow already exposes as image facts.
+_PNG_INFO_SKIPPED = frozenset({"dpi", "gamma", "icc_profile", "exif", "transparency", "interlace",
+                               "chromaticity", "srgb", "duration", "loop", "background", "aspect",
+                               "jfif", "jfif_version", "jfif_unit", "jfif_density", "adobe",
+                               "adobe_transform", "progressive", "progression", "photoshop", "xmp",
+                               "mpinfo", "mp", "comment", "parsed_exif"})
+_XMP_MAX_CHARS = 8000
 
 
 def _plain(value):
@@ -135,6 +153,64 @@ def exif_subset(img: Image.Image, extract_geo_location: bool = False) -> Dict[st
     return subset
 
 
+def _tag_name(tag: int) -> str:
+    name = ExifTags.TAGS.get(tag) or ExifTags.GPSTAGS.get(tag)
+    return name or f"Tag{tag}"
+
+
+def exif_all_tags(img: Image.Image) -> Dict[str, object]:
+    """Every EXIF tag of the IFD0 and Exif IFDs by its TIFF name (the Exif IFD pointer itself and the binary
+    payload tags skipped), values rendered as text, bounded by `bounded_tags`. `{}` without EXIF."""
+    try:
+        exif = img.getexif()
+    except Exception:  # noqa: BLE001 - a corrupt EXIF block does not fail the image
+        return {}
+    items = []
+    for tag, value in list(exif.items()):
+        if tag in (_EXIF_IFD_POINTER, _GPS_IFD_POINTER):
+            continue
+        name = _tag_name(tag)
+        if name in _EXIF_SKIPPED_TAGS:
+            continue
+        items.append((name, _plain(value)))
+    try:
+        exif_ifd = exif.get_ifd(_EXIF_IFD_POINTER)
+    except Exception:  # noqa: BLE001
+        exif_ifd = {}
+    for tag, value in list(exif_ifd.items()):
+        name = _tag_name(tag)
+        if name in _EXIF_SKIPPED_TAGS:
+            continue
+        items.append((name, _plain(value)))
+    return bounded_tags(items)
+
+
+def xmp_text(img: Image.Image) -> Optional[str]:
+    """The raw XMP packet as bounded text, when the image carries one."""
+    packet = img.info.get("xmp") or img.info.get("XML:com.adobe.xmp")
+    if not packet:
+        return None
+    if isinstance(packet, bytes):
+        packet = packet.decode("utf-8", "replace")
+    text = str(packet).strip()
+    return text[:_XMP_MAX_CHARS] if text else None
+
+
+def png_text_chunks(img: Image.Image) -> Dict[str, object]:
+    """The image's text chunks (PNG tEXt/iTXt, GIF/WebP comments) and other string-valued info entries
+    Pillow exposes, minus the entries that duplicate image facts, bounded."""
+    text_items = getattr(img, "text", None)
+    items = []
+    if isinstance(text_items, dict):
+        items.extend(text_items.items())
+    for key, value in (img.info or {}).items():
+        if key in _PNG_INFO_SKIPPED or (isinstance(text_items, dict) and key in text_items):
+            continue
+        if isinstance(value, (str, bytes)) and not isinstance(key, int):
+            items.append((key, value))
+    return bounded_tags(items)
+
+
 def _header_only(ctx: ExtractContext) -> dict:
     return {"format": ctx.extension.lstrip(".").upper() or "UNKNOWN", "decodable": False}
 
@@ -170,8 +246,17 @@ def extract_image(path: str, ctx: ExtractContext) -> BranchResult:
         if dpi:
             sys_image["dpi"] = [int(round(float(dpi[0]))), int(round(float(dpi[1])))]
         exif = exif_subset(img, ctx.extract_geo_location)
+        all_tags = exif_all_tags(img)
+        if all_tags:
+            exif["tags"] = all_tags
         if exif:
             sys_image["exif"] = exif
+        xmp = xmp_text(img)
+        if xmp:
+            sys_image["xmp"] = xmp
+        text_chunks = png_text_chunks(img)
+        if text_chunks:
+            sys_image["textChunks"] = text_chunks
         result.attributes["sys_image"] = sys_image
         result.facts["dimensions"] = f"{width} x {height} px"
         result.facts["imageFormat"] = str(sys_image["format"])
@@ -187,6 +272,8 @@ def extract_image(path: str, ctx: ExtractContext) -> BranchResult:
             result.facts["location"] = f"{gps['latitude']}, {gps['longitude']}"
         elif ctx.extract_geo_location and exif.get("hasGps"):
             result.warnings.append("EXIF GPS block present but its coordinates did not decode; no gps recorded")
+        if not ctx.render_images:
+            return result
         if width * height > MAX_RASTER_PIXELS:
             result.render_skipped = RENDER_SKIPPED_SIZE
             result.warnings.append(

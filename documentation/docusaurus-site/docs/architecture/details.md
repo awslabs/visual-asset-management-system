@@ -243,21 +243,21 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 
 ### Available Pipelines
 
-| Pipeline                                  | Compute                                                     | Description                                                                                    |
-| ----------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| 3D Basic Conversion                       | AWS Lambda                                                  | Convert 3D file formats                                                                        |
-| SYSTEM - GenAI Metadata Generation        | AWS Lambda (container images); optional AWS Batch (Fargate) | Amazon Bedrock analysis of every viewer-supported file: attributes, GenAI metadata, embeddings |
-| 3D Preview Thumbnail (SYSTEM - Preview)   | AWS Batch (Fargate)                                         | Generate GIF/JPG/PNG preview thumbnails for 3D files                                           |
-| Coordinate Transform                      | AWS Batch (Fargate)                                         | Reproject point clouds between coordinate reference systems                                    |
-| Point Cloud Potree Viewer                 | AWS Batch (Fargate)                                         | Generate Potree octree data for point cloud visualization                                      |
-| Gaussian Splatting (Splat Toolbox)        | AWS Batch (GPU)                                             | Generate Gaussian splat reconstructions                                                        |
-| NVIDIA Cosmos Predict / Reason / Transfer | AWS Batch (GPU)                                             | World-model video generation, video reasoning, and control-signal video transfer               |
-| NVIDIA Cosmos 3                           | AWS Batch (GPU)                                             | Omnimodal world-model generation                                                               |
-| NVIDIA Gr00t Fine-Tuning                  | AWS Batch (GPU)                                             | Fine-tune the GR00T embodied AI model                                                          |
-| Isaac Lab Training                        | AWS Batch (GPU)                                             | NVIDIA Isaac Lab simulation training                                                           |
-| RapidPipeline (ECS)                       | Amazon ECS (Fargate)                                        | RapidPipeline integration via Amazon ECS                                                       |
-| RapidPipeline (EKS)                       | Amazon EKS                                                  | RapidPipeline integration via Amazon EKS                                                       |
-| Model Optimization (ModelOps)             | Amazon ECS (Fargate)                                        | Optimize 3D models for web delivery                                                            |
+| Pipeline                                  | Compute                                                     | Description                                                                                              |
+| ----------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 3D Basic Conversion                       | AWS Lambda                                                  | Convert 3D file formats                                                                                  |
+| SYSTEM - GenAI Metadata Generation        | AWS Lambda (container images); optional AWS Batch (Fargate) | Stored attributes of every uploaded file; Amazon Bedrock GenAI metadata when the layer is on; embeddings |
+| 3D Preview Thumbnail (SYSTEM - Preview)   | AWS Batch (Fargate)                                         | Generate GIF/JPG/PNG preview thumbnails for 3D files                                                     |
+| Coordinate Transform                      | AWS Batch (Fargate)                                         | Reproject point clouds between coordinate reference systems                                              |
+| Point Cloud Potree Viewer                 | AWS Batch (Fargate)                                         | Generate Potree octree data for point cloud visualization                                                |
+| Gaussian Splatting (Splat Toolbox)        | AWS Batch (GPU)                                             | Generate Gaussian splat reconstructions                                                                  |
+| NVIDIA Cosmos Predict / Reason / Transfer | AWS Batch (GPU)                                             | World-model video generation, video reasoning, and control-signal video transfer                         |
+| NVIDIA Cosmos 3                           | AWS Batch (GPU)                                             | Omnimodal world-model generation                                                                         |
+| NVIDIA Gr00t Fine-Tuning                  | AWS Batch (GPU)                                             | Fine-tune the GR00T embodied AI model                                                                    |
+| Isaac Lab Training                        | AWS Batch (GPU)                                             | NVIDIA Isaac Lab simulation training                                                                     |
+| RapidPipeline (ECS)                       | Amazon ECS (Fargate)                                        | RapidPipeline integration via Amazon ECS                                                                 |
+| RapidPipeline (EKS)                       | Amazon EKS                                                  | RapidPipeline integration via Amazon EKS                                                                 |
+| Model Optimization (ModelOps)             | Amazon ECS (Fargate)                                        | Optimize 3D models for web delivery                                                                      |
 
 ## Configuration Flow
 

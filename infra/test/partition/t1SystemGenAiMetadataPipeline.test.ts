@@ -9,7 +9,7 @@
  * endpoint; the Bedrock Runtime endpoint follows the one placement rule; the guardrail grant and the
  * Fargate job definition follow their flags; every bedrock:InvokeModel grant is one of the two exact
  * shapes (the shipped profile's ARN with its model in every Region, or a plain model in this Region);
- * the video-segment Distributed Map, its self-grant, the segment function and the 89-entry openPipeline
+ * the video-segment Distributed Map, its self-grant, the segment function and the any-file openPipeline
  * allow list are present in every partition. Every negative arm pairs with a positive control.
  *
  * Vector search requires the pipeline (config.ts rejects the other way round), so the "search
@@ -34,8 +34,8 @@ const enable = (c: any) => {
     c.app.pipelines.useSystemGenAiMetadata.enabled = true;
     c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = false;
     c.app.vectorSearch.enabled = false;
-    if (c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId === "") {
-        c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId = ANALYSIS_MODEL;
+    if (c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId === "") {
+        c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = ANALYSIS_MODEL;
     }
 };
 /** Neither the pipeline nor the vector search that depends on it. */
@@ -49,8 +49,8 @@ const enableWithSearch = (c: any) => {
     c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = true;
     c.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload = true;
     c.app.vectorSearch.enabled = true;
-    if (c.app.vectorSearch.embeddingModelId === "") {
-        c.app.vectorSearch.embeddingModelId = EMBEDDING_MODEL;
+    if (c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId === "") {
+        c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = EMBEDDING_MODEL;
     }
 };
 const inVpc = (c: any) => {
@@ -179,9 +179,11 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             mutateKey: "sysgenai-guardrail",
         });
         // The whole-file analysis Lambda, the per-segment analysis Lambda and the embedding Lambda (which
-        // screens the text it embeds), each on the exact ARN.
+        // screens the text it embeds), each on the exact ARN. The EU Sovereign template ships the GenAI
+        // layer off and cannot enable vector search, so neither analysis function calls Bedrock there and
+        // only the embedding function (built regardless) keeps the grant.
         const grants = statementsWith(withGuardrail, "bedrock:ApplyGuardrail");
-        expect(grants).toHaveLength(3);
+        expect(grants).toHaveLength(name === "eusovereign" ? 1 : 3);
         for (const grant of grants) {
             expect(SynthResult.flatten(grant.Resource)).toContain(":guardrail/kb4v3hkqvi6f");
             expect(SynthResult.flatten(grant.Resource)).not.toContain("*");
@@ -230,8 +232,9 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             mutate: (c) => {
                 if (name === "eusovereign") enable(c);
                 else enableWithSearch(c);
-                if (c.app.vectorSearch.embeddingModelId === "") {
-                    c.app.vectorSearch.embeddingModelId = EMBEDDING_MODEL;
+                if (c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId === "") {
+                    c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId =
+                        EMBEDDING_MODEL;
                 }
                 cfg = c;
             },
@@ -240,13 +243,14 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         const partition = on.partition;
         const region = on.region;
         const analysisModel: string =
-            cfg.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId;
-        const embeddingModel: string = cfg.app.vectorSearch.embeddingModelId;
+            cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId;
+        const embeddingModel: string =
+            cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId;
         const profilePrefix = /^(global|us-gov|us|eu|apac)\./;
         // The commercial template ships a `global.` profile and the GovCloud template a `us-gov.` one;
         // the EU Sovereign template ships no model, so its arm runs on a plain id.
         expect(analysisModel).toBe(
-            TEMPLATES[name].app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId ||
+            TEMPLATES[name].app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId ||
                 ANALYSIS_MODEL
         );
         expect(profilePrefix.test(analysisModel)).toBe(name !== "eusovereign");
@@ -289,8 +293,9 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         );
         expect(analysisOnly.length + embeddingOnly.length + both.length).toBe(resources.length);
         if (name === "eusovereign") {
-            // generateMetadata and segmentAnalyze on the analysis model; generateEmbedding on the other.
-            expect([analysisOnly.length, embeddingOnly.length, both.length]).toEqual([2, 1, 0]);
+            // The template ships useGenAiAnalysis false and vector search is unavailable in aws-eusc: no
+            // function holds the analysis model, and only generateEmbedding holds the embedding model.
+            expect([analysisOnly.length, embeddingOnly.length, both.length]).toEqual([0, 1, 0]);
         } else {
             // generateMetadata; generateEmbedding and the search API; segmentAnalyze on both.
             expect([analysisOnly.length, embeddingOnly.length, both.length]).toEqual([1, 2, 1]);
@@ -299,7 +304,7 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         expect(on.grep("InvokeModelWithResponseStream")).toEqual([]);
     });
 
-    it("deploys the video-segment Distributed Map, grants the machine StartExecution on itself outside its default policy, and admits the classifier's 89 extensions", () => {
+    it("deploys the video-segment Distributed Map, grants the machine StartExecution on itself outside its default policy, and admits any file", () => {
         const on = synthTemplate(name, { mutate: enable, mutateKey: "sysgenai-on" });
         const machines = stateMachines(on).filter((m) =>
             SynthResult.flatten((m.properties as any).DefinitionString).includes("VideoSegmentMap")
@@ -379,18 +384,16 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         });
         expect((segment[0].properties as any).Timeout).toBe(300);
 
-        // The openPipeline gate admits the classifier's whole allow list, office formats included.
+        // The openPipeline gate admits any file: the one "*" wildcard, never a finite extension list,
+        // so a file the classifier does not name still receives its stored attributes.
         const openPipeline = on.where(
             "AWS::Lambda::Function",
             (r) => (r.properties as any).Handler === "openPipeline.lambda_handler"
         );
         expect(openPipeline).toHaveLength(1);
-        const allowed = String(
+        expect(
             (openPipeline[0].properties as any).Environment.Variables.ALLOWED_INPUT_FILEEXTENSIONS
-        ).split(",");
-        expect(allowed).toHaveLength(89);
-        expect(new Set(allowed).size).toBe(89);
-        expect(allowed).toEqual(expect.arrayContaining([".docx", ".pptx", ".xlsx"]));
+        ).toBe("*");
     });
 
     it("emits the Fargate render job definition iff useFargateRenderer", () => {

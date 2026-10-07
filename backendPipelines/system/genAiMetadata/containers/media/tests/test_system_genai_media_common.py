@@ -30,8 +30,11 @@ SUPPORTED_MEDIA_EXTENSIONS = {
 # The one supported extension no viewer serves; the allow-list rule (only viewer-served extensions enter the
 # pipeline) keeps it out of the pipeline's allow list, and the image still handles it should a viewer gain it.
 _NOT_A_VIEWER_EXTENSION = {".webp"}
-# Office formats no viewer renders, admitted by the pipeline's ADDITIONAL_EXTENSIONS for their text.
+# Formats no viewer renders, admitted by the pipeline's ADDITIONAL_EXTENSIONS for their extracted content: the
+# office formats for their text, the ffmpeg-decodable video containers no browser plays for their stream facts.
 _OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
+_UNPLAYABLE_VIDEO_EXTENSIONS = {".avi", ".flv", ".wmv"}
+_ADDITIONAL_EXTENSIONS = _OFFICE_EXTENSIONS | _UNPLAYABLE_VIDEO_EXTENSIONS
 _FILE_CLASSIFIER = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda", "fileClassifier.py")
 
 
@@ -52,14 +55,16 @@ REGISTRY_PROMOTION_SOURCES = {
     "sys_image.exif.gps": ("latitude", "longitude", "altitude"),
     "sys_media": ("kind", "durationSeconds", "width", "height", "frameRate", "videoCodec", "audioCodec",
                   "bitrateKbps", "channels", "sampleRate", "tags"),
-    "sys_media.tags": ("title", "artist", "album", "year"),
+    "sys_media.tags": ("title", "artist", "album", "year", "creation_time", "date"),
+    "sys_archive": ("entryCount", "uncompressedBytes", "containerFormat"),
     "sys_document": ("pageCount", "title", "author", "createdAt", "hasText"),
     "sys_text": ("encoding", "lineCount", "wordCount", "language"),
     "sys_data": ("columnCount", "rowCount", "columns"),
     "sys_tiles3d": ("geometricError", "tileCount", "region"),
     "sys_geo": ("featureCount", "geometryTypes", "footprint"),
 }
-_MEDIA_ATTRIBUTE_GROUPS = {"sys_image", "sys_media", "sys_document", "sys_text", "sys_data", "sys_tiles3d", "sys_geo"}
+_MEDIA_ATTRIBUTE_GROUPS = {"sys_image", "sys_media", "sys_document", "sys_text", "sys_data", "sys_tiles3d", "sys_geo",
+                           "sys_archive"}
 
 
 @pytest.mark.unit
@@ -82,7 +87,9 @@ class TestExtensionTable:
     def test_table_values_are_media_classes(self):
         assert set(common.MEDIA_EXTENSION_CLASSES.values()) <= set(common.MEDIA_CLASSES)
         assert common.CLASS_TILES3D in common.MEDIA_CLASSES
-        assert common.CLASS_OTHER not in common.MEDIA_CLASSES
+        # `other` is served (the generic probe) but reached by routing, never from the extension table.
+        assert common.CLASS_OTHER in common.MEDIA_CLASSES
+        assert common.CLASS_OTHER not in common.MEDIA_EXTENSION_CLASSES.values()
 
     def test_media_extensions_are_viewer_extensions(self):
         with open(_VIEWER_CONFIG, encoding="utf-8") as handle:
@@ -96,7 +103,7 @@ class TestExtensionTable:
             for extension in viewer.get("supportedExtensions", [])
             if extension != "*"
         }
-        assert set(common.MEDIA_EXTENSION_CLASSES) - viewer_extensions == _NOT_A_VIEWER_EXTENSION | _OFFICE_EXTENSIONS
+        assert set(common.MEDIA_EXTENSION_CLASSES) - viewer_extensions == _NOT_A_VIEWER_EXTENSION | _ADDITIONAL_EXTENSIONS
 
     def test_classifier_overrides_are_table_entries_with_a_reason(self):
         # The pipeline's `lambda/fileClassifier.py` suite diffs its MEDIA rows against this table minus these
@@ -107,12 +114,12 @@ class TestExtensionTable:
         assert all(reason.strip() for reason in common.CLASSIFIER_OVERRIDE_EXTENSIONS.values())
 
     def test_office_rows_match_the_classifier_additional_extensions(self):
-        """The office formats join the pipeline through the classifier's ADDITIONAL_EXTENSIONS; this table lists
-        exactly those, under the classes the classifier gives them, and they are not classifier overrides
-        (both sides agree on them)."""
+        """The formats no viewer renders join the pipeline through the classifier's ADDITIONAL_EXTENSIONS; this
+        table lists exactly those, under the classes the classifier gives them, and they are not classifier
+        overrides (both sides agree on them)."""
         fc = _file_classifier()
-        assert set(fc.ADDITIONAL_EXTENSIONS) == _OFFICE_EXTENSIONS
-        for extension in _OFFICE_EXTENSIONS:
+        assert set(fc.ADDITIONAL_EXTENSIONS) == _ADDITIONAL_EXTENSIONS
+        for extension in _ADDITIONAL_EXTENSIONS:
             file_class, branch = fc.EXTENSION_CLASSES[extension]
             assert branch == common.RENDER_BRANCH
             assert common.MEDIA_EXTENSION_CLASSES[extension] == file_class, extension
@@ -219,3 +226,20 @@ def test_budgets_match_the_spec():
     assert common.VIDEO_KEYFRAME_COUNT == 4
     assert common.PDF_RASTER_PAGES == 2
     assert common.RENDER_BRANCH == "MEDIA"
+
+
+@pytest.mark.unit
+class TestBoundedTags:
+    def test_values_are_rendered_bounded_and_blank_dropped(self):
+        tags = common.bounded_tags([("a", "x" * 1000), ("b", b"bytes\x00"), ("c", 3), ("d", True), ("e", None),
+                                    ("f", "  "), ("g", ["one", "two"]), ("", "no key"), ("a", "second a")],
+                                   max_keys=10, max_chars=20)
+        assert tags == {"a": "x" * 20, "b": "bytes", "c": 3, "d": True, "g": '["one", "two"]'}
+
+    def test_the_key_cap_holds(self):
+        tags = common.bounded_tags([(f"k{index}", index) for index in range(500)])
+        assert len(tags) == common.EMBEDDED_TAGS_MAX_KEYS
+
+    def test_render_images_defaults_on(self):
+        ctx = common.ExtractContext("shot.jpg", ".jpg", "image/jpeg", 100, "/tmp")
+        assert ctx.render_images is True

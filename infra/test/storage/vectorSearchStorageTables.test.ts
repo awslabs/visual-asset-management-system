@@ -52,8 +52,9 @@ const ON_ARM_MODEL_ID = "amazon.titan-embed-text-v2:0";
 
 const turnOn = (c: any) => {
     c.app.vectorSearch.enabled = true;
-    if (!c.app.vectorSearch.embeddingModelId) {
-        c.app.vectorSearch.embeddingModelId = ON_ARM_MODEL_ID;
+    const models = c.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+    if (!models.embeddingModelId) {
+        models.embeddingModelId = ON_ARM_MODEL_ID;
     }
 };
 const turnOff = (c: any) => {
@@ -74,14 +75,14 @@ const synthOff = (name: TemplateName): SynthResult =>
         ? synthTemplate(name, { mutate: turnOff, mutateKey: "vector-search-off" })
         : synthTemplate(name);
 
-/** The ON arm's vectorSearch block, so the expected index name is derived the way the harness derives it. */
+/** The ON arm's bedrockModels block, so the expected index name is derived the way the harness derives it. */
 function onArmVectorSearch(name: TemplateName): {
     embeddingModelId: string;
     embeddingDimensions: number;
 } {
     const c = JSON.parse(JSON.stringify(TEMPLATES[name]));
     turnOn(c);
-    return c.app.vectorSearch;
+    return c.app.pipelines.useSystemGenAiMetadata.bedrockModels;
 }
 
 const at = (r: Resource) => `${r.stack}/${r.logicalId}`;

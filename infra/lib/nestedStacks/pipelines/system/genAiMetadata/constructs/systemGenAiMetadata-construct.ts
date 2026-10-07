@@ -61,11 +61,12 @@ export interface SystemGenAiMetadataConstructProps extends cdk.StackProps {
 const defaultProps: Partial<SystemGenAiMetadataConstructProps> = {};
 
 /**
- * The input extensions the openPipeline handler admits: every file class the pipeline analyses,
- * generated from the classifier's allow list (backendPipelines/system/genAiMetadata/lambda/fileClassifier.py).
+ * The input extensions the openPipeline handler admits. The pipeline takes every file: the classifier
+ * (backendPipelines/system/genAiMetadata/lambda/fileClassifier.py) gives an extension it does not name the
+ * `other` class, whose MEDIA-branch probe records whatever the bytes carry. The wildcard is the one allow-list
+ * member the handler treats as "any file".
  */
-export const allowedInputFileExtensions =
-    ".3dm,.3ds,.3mf,.aac,.amf,.asm,.avi,.bim,.brep,.catpart,.catproduct,.cfg,.csv,.dae,.docx,.e57,.fbx,.fcs,.flac,.flv,.gif,.glb,.gltf,.htm,.html,.iam,.ifc,.ifczip,.iges,.igs,.inf,.ini,.ipt,.ipynb,.jpeg,.jpg,.js,.json,.jt,.las,.laz,.lcc,.log,.m4a,.m4v,.md,.mkv,.mov,.mp3,.mp4,.obj,.off,.ogg,.par,.pdf,.ply,.png,.pptx,.prt,.ps1,.py,.sh,.sldasm,.sldprt,.sog,.splat,.spz,.sql,.step,.stl,.stp,.svg,.toml,.ts,.txt,.usd,.usda,.usdc,.usdz,.wav,.webm,.wmv,.wrl,.x_b,.x_t,.xlsx,.xml,.yaml,.yml";
+export const allowedInputFileExtensions = "*";
 
 /** The Fargate render branch's attempt budget; the entry module reports it as the remaining time. */
 const FARGATE_RENDER_ATTEMPT_DURATION = cdk.Duration.hours(4);

@@ -55,6 +55,21 @@ class Render3dRequest:
     input_configuration_s3_location: str
     file_class: str
     file_extension: str
+    # The state's ``renderImages``: false when the pipeline's GenAI layer is off, so the file is loaded and
+    # measured but no frame is rendered (frames exist only as analysis-model input).
+    render_images: bool = True
+
+
+def _state_flag(value, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "1", "yes"):
+            return True
+        if lowered in ("false", "0", "no"):
+            return False
+    return default
 
 
 def parse_request(body) -> Render3dRequest:
@@ -78,6 +93,7 @@ def parse_request(body) -> Render3dRequest:
         input_configuration_s3_location=str(body.get("inputConfigurationS3Location") or ""),
         file_class=str(body.get("fileClass") or ""),
         file_extension=extension,
+        render_images=_state_flag(body.get("renderImages"), _state_flag(body.get("genAiAnalysisEnabled"), True)),
     )
 
 
@@ -160,7 +176,7 @@ def lambda_handler(event, context):
     options, option_warnings = load_render_options(request.input_configuration_s3_location)
     n_views = options[RENDER_VIEWS_KEY]
     logger.info(f"render3d: {request.input_s3_asset_file_path} -> {request.analysis_manifest_s3_location} "
-                f"(views={n_views})")
+                f"(views={n_views}, render={request.render_images})")
 
     workdirs.ensure_runtime_dirs()
     work_dir = workdirs.make_invocation_dir("render3d_")
@@ -178,8 +194,8 @@ def lambda_handler(event, context):
             except Exception as exc:
                 logger.warning(f"Failed to download some GLTF dependencies: {exc}")
 
-        result = analysis.analyze_local_file(local_path, request.file_extension, n_views=n_views,
-                                             work_dir=work_dir)
+        result = analysis.analyze_local_file(local_path, request.file_extension, render=request.render_images,
+                                             n_views=n_views, work_dir=work_dir)
 
         manifest_bucket, manifest_key = s3.parse_s3_uri(request.analysis_manifest_s3_location)
         render_keys = _upload_frames(result.frames, manifest_bucket, render_prefix_for(manifest_key),

@@ -87,22 +87,26 @@ class TestAllowList:
         assert ".glb" in catalog and ".pdf" in catalog and ".las" in catalog
 
     def test_allow_list_equals_the_catalog_minus_the_exclusions(self):
-        # The viewer catalog, minus the exclusions, plus the office formats admitted for their text.
+        # The viewer catalog, minus the exclusions, plus the formats admitted for their extracted content
+        # (the office formats for their text; the ffmpeg-decodable video containers no viewer plays).
         assert set(fc.ALLOW_LIST) == (catalog_extensions() - fc.EXCLUDED_EXTENSIONS) | set(fc.ADDITIONAL_EXTENSIONS)
+        assert {".avi", ".flv", ".wmv"} <= set(fc.ADDITIONAL_EXTENSIONS)
 
     def test_exclusions_are_empty_at_release(self):
         assert fc.EXCLUDED_EXTENSIONS == set()
 
-    def test_additional_extensions_are_the_office_formats_no_viewer_serves(self):
-        """The office formats join the allow list for their text although no viewer renders them. The tuple
-        is the registry literal, none of its members is a viewer extension, every member is allow-listed, and
-        their classes are document, data, document on the MEDIA branch."""
-        assert fc.ADDITIONAL_EXTENSIONS == (".docx", ".xlsx", ".pptx")
+    def test_additional_extensions_are_the_formats_no_viewer_serves(self):
+        """The office formats join the allow list for their text and the ffmpeg-decodable video containers for
+        their stream facts, although no viewer renders them. The tuple is the registry literal, none of its
+        members is a viewer extension, every member is allow-listed, and their classes are document, data,
+        document, then video, all on the MEDIA branch."""
+        assert fc.ADDITIONAL_EXTENSIONS == (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv")
         assert not set(fc.ADDITIONAL_EXTENSIONS) & catalog_extensions()
         assert set(fc.ADDITIONAL_EXTENSIONS) <= set(fc.ALLOW_LIST)
         assert [fc.EXTENSION_CLASSES[extension] for extension in fc.ADDITIONAL_EXTENSIONS] == [
             (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA),
-            (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)]
+            (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA),
+            (fc.CLASS_VIDEO, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA)]
 
     def test_allow_list_is_sorted_finite_and_dotted(self):
         assert fc.ALLOW_LIST == sorted(fc.ALLOW_LIST)
@@ -133,7 +137,7 @@ class TestAllowList:
 
     def test_only_proprietary_cad_routes_to_none_by_extension(self):
         """Every class whose attributes need a format library routes to a branch image; NONE is
-        reserved for formats no open library reads (A7) and for the ``other`` fallback."""
+        reserved for formats no open library reads (A7). The ``other`` fallback takes MEDIA."""
         none_extensions = {ext for ext, (_cls, branch) in fc.EXTENSION_CLASSES.items()
                            if branch == fc.BRANCH_NONE}
         assert none_extensions == set(fc.PROPRIETARY_CAD_EXTENSIONS)
@@ -174,10 +178,12 @@ class TestClassifyMatrix:
     def test_classification_is_case_insensitive(self):
         assert fc.classify(".GLB", _no_sniff) == (fc.CLASS_MESH, fc.BRANCH_BLENDER)
 
-    def test_unknown_or_missing_extension_is_other_none(self):
-        assert fc.classify(".zzz", _no_sniff) == (fc.CLASS_OTHER, fc.BRANCH_NONE)
-        assert fc.classify("", _no_sniff) == (fc.CLASS_OTHER, fc.BRANCH_NONE)
-        assert fc.classify(None, _no_sniff) == (fc.CLASS_OTHER, fc.BRANCH_NONE)
+    def test_unknown_or_missing_extension_is_other_on_the_media_branch(self):
+        # Any file gets its stored attributes: `other` takes the MEDIA image's generic probe, never NONE.
+        assert fc.OTHER_BRANCH == fc.BRANCH_MEDIA
+        assert fc.classify(".zzz", _no_sniff) == (fc.CLASS_OTHER, fc.BRANCH_MEDIA)
+        assert fc.classify("", _no_sniff) == (fc.CLASS_OTHER, fc.BRANCH_MEDIA)
+        assert fc.classify(None, _no_sniff) == (fc.CLASS_OTHER, fc.BRANCH_MEDIA)
 
 
 @pytest.mark.unit
@@ -201,8 +207,8 @@ class TestPlySniff:
         assert fc.classify(".ply", lambda n: header) == (fc.CLASS_POINTCLOUD, fc.BRANCH_RENDER3D)
 
     def test_an_unparsable_header_is_other(self):
-        assert fc.classify(".ply", lambda n: b"\x00\x01not a ply") == (fc.CLASS_OTHER, fc.BRANCH_NONE)
-        assert fc.classify(".ply", lambda n: b"") == (fc.CLASS_OTHER, fc.BRANCH_NONE)
+        assert fc.classify(".ply", lambda n: b"\x00\x01not a ply") == (fc.CLASS_OTHER, fc.BRANCH_MEDIA)
+        assert fc.classify(".ply", lambda n: b"") == (fc.CLASS_OTHER, fc.BRANCH_MEDIA)
 
     def test_the_sniff_is_asked_for_the_window_size(self):
         seen = []
@@ -235,7 +241,7 @@ class TestJsonSniff:
         assert fc.classify(".json", lambda n: head) == (fc.CLASS_TEXT, fc.BRANCH_MEDIA)
 
     def test_undecodable_bytes_are_other(self):
-        assert fc.classify(".json", lambda n: b"\xff\xfe\x00\x00\x80") == (fc.CLASS_OTHER, fc.BRANCH_NONE)
+        assert fc.classify(".json", lambda n: b"\xff\xfe\x00\x00\x80") == (fc.CLASS_OTHER, fc.BRANCH_MEDIA)
 
     def test_an_array_root_is_text(self):
         assert fc.classify(".json", lambda n: b"[1, 2, 3]") == (fc.CLASS_TEXT, fc.BRANCH_MEDIA)
@@ -280,7 +286,7 @@ class TestJsonSniff:
         ]
         outcomes = {fc.classify(".json", lambda n, h=head: h) for head in heads}
         assert outcomes == {(fc.CLASS_TILES3D, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA),
-                            (fc.CLASS_TEXT, fc.BRANCH_MEDIA), (fc.CLASS_OTHER, fc.BRANCH_NONE)}
+                            (fc.CLASS_TEXT, fc.BRANCH_MEDIA), (fc.CLASS_OTHER, fc.BRANCH_MEDIA)}
 
 
 @pytest.mark.unit
@@ -323,3 +329,53 @@ class TestFileClassPhrases:
         backend = _backend_file_class_intent()
         assert hasattr(backend, "FILE_CLASS_PHRASES"), "fileClassIntent.py has no FILE_CLASS_PHRASES"
         assert fc.FILE_CLASS_PHRASES == backend.FILE_CLASS_PHRASES
+
+
+@pytest.mark.unit
+class TestDetectFormat:
+    """The magic-byte sniff every file's sys_file.detectedFormat comes from: no dependency, header only."""
+
+    @pytest.mark.parametrize("head,expected", [
+        (b"\x89PNG\r\n\x1a\n" + b"\x00" * 20, "png"),
+        (b"\xff\xd8\xff\xe1" + b"\x00" * 20, "jpeg"),
+        (b"%PDF-1.7\n%\xe2\xe3\xcf\xd3", "pdf"),
+        (b"PK\x03\x04" + b"\x00" * 26, "zip"),
+        (b"RIFF\x24\x00\x00\x00WAVEfmt ", "wav"),
+        (b"RIFF\x24\x00\x00\x00WEBPVP8 ", "webp"),
+        (b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00", "mp4"),
+        (b"\x00\x00\x00\x18ftypM4A \x00\x00\x02\x00", "m4a"),
+        (b"\x00\x00\x00\x18ftypheic\x00\x00\x02\x00", "heif"),
+        (b"\x1aE\xdf\xa3" + b"\x00" * 8, "matroska"),
+        (b"glTF\x02\x00\x00\x00", "glb"),
+        (b"Kaydara FBX Binary  \x00", "fbx"),
+        (b"PXR-USDC" + b"\x00" * 8, "usdc"),
+        (b"ply\nformat binary_little_endian 1.0\n", "ply"),
+        (b"LASF" + b"\x00" * 200, "las"),
+        (b"\x1f\x8b\x08\x00" + b"\x00" * 8, "gzip"),
+        (b"#!/bin/sh\necho hi\n", "script"),
+        (b"<?xml version=\"1.0\"?><a/>", "xml"),
+        (b"\xef\xbb\xbfhello", "utf8-text"),
+        (b"plain words and\nlines\n", "utf8-text"),
+        (b"MZ\x90\x00\x03\x00\x00\x00\x04\x00", "pe"),
+    ])
+    def test_signatures(self, head, expected):
+        assert fc.detect_format(head) == expected
+
+    def test_a_tar_block_is_recognised_at_its_magic_offset(self):
+        head = bytearray(b"\x00" * 512)
+        head[0:4] = b"file"
+        head[257:262] = b"ustar"
+        assert fc.detect_format(bytes(head)) == "tar"
+
+    def test_text_starting_with_a_two_byte_signature_stays_text(self):
+        # "BM" and "MZ" are two bytes; a text file beginning with those letters is text.
+        assert fc.detect_format(b"MZ is a text label\nline two\n") == "utf8-text"
+        assert fc.detect_format(b"BMW manual\n") == "utf8-text"
+
+    def test_bytes_no_entry_fits_are_none(self):
+        assert fc.detect_format(b"") is None
+        assert fc.detect_format(b"\x00\x01\x02\x03\xfe\xfd") is None
+
+    def test_a_multibyte_character_cut_at_the_sample_end_is_still_text(self):
+        sample = ("é" * 2047).encode("utf-8") + b"\xc3"  # a lone lead byte at the very end
+        assert fc.detect_format(sample) == "utf8-text"

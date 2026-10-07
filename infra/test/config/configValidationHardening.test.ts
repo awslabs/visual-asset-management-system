@@ -19,7 +19,7 @@
  *    profile, which is commercial-only, and nothing validated it. The IAM grant is derived by stripping
  *    the prefix and understood only the commercial ones, so a GovCloud deployment got both a model that
  *    does not exist and a grant that would not have matched it. The rule now guards
- *    `pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId` (see "system GenAI metadata pipeline
+ *    `pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId` (see "system GenAI metadata pipeline
  *    validation" below); the two configuration keys that carried the original field are rejected
  *    outright.
  *
@@ -293,11 +293,16 @@ describe("retired pipeline configuration keys", () => {
                 "utf-8"
             )
         );
-        expect(govcloud.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId).toMatch(
+        expect(govcloud.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId).toMatch(
             /^us-gov\./
         );
-        expect(eusovereign.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId).toBe("");
-        expect(eusovereign.app.vectorSearch.embeddingModelId).toBe("");
+        expect(eusovereign.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId).toBe(
+            ""
+        );
+        expect(
+            eusovereign.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId
+        ).toBe("");
+        expect(eusovereign.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis).toBe(false);
     });
 });
 
@@ -378,7 +383,7 @@ function vectorSearchOn(c: any) {
     c.app.pipelines.useSystemGenAiMetadata.enabled = true;
     c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = true;
     c.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload = true;
-    c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+    c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
         "anthropic.claude-sonnet-4-5-20250929-v1:0";
 }
 
@@ -452,9 +457,11 @@ describe("vector search validation", () => {
     test("an empty embedding model id is rejected", () => {
         expect(
             resolve((c) => {
-                c.app.vectorSearch.embeddingModelId = "   ";
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "   ";
             })
-        ).toThrow(/app\.vectorSearch\.embeddingModelId is empty/);
+        ).toThrow(
+            /bedrockModels\.embeddingModelId is empty while app\.vectorSearch\.enabled is true/
+        );
     });
 
     test.each([[0], [4097], [1.5], ["1024"], [-1]])(
@@ -462,7 +469,8 @@ describe("vector search validation", () => {
         (value) => {
             expect(
                 resolve((c) => {
-                    c.app.vectorSearch.embeddingDimensions = value;
+                    c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions =
+                        value;
                 })
             ).toThrow(/embeddingDimensions must be an integer between 1 and 4096/);
         }
@@ -471,7 +479,7 @@ describe("vector search validation", () => {
     test.each([[1], [256], [4096]])("embeddingDimensions %p is accepted", (value) => {
         expect(
             resolve((c) => {
-                c.app.vectorSearch.embeddingDimensions = value;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = value;
             })
         ).not.toThrow(/embeddingDimensions/);
     });
@@ -502,8 +510,8 @@ describe("vector search validation", () => {
         expect(
             resolve((c) => {
                 c.app.vectorSearch.enabled = false;
-                c.app.vectorSearch.embeddingModelId = "";
-                c.app.vectorSearch.embeddingDimensions = 0;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "";
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = 0;
                 c.app.vectorSearch.indexingConcurrency = 0;
             })
         ).not.toThrow();
@@ -557,18 +565,56 @@ describe("system GenAI metadata pipeline validation", () => {
     });
 
     test("the shipped commercial analysis model is accepted (control)", () => {
-        expect(resolve(() => undefined)).not.toThrow(/bedrockAnalysisModelId/);
+        expect(resolve(() => undefined)).not.toThrow(/analysisModelId/);
     });
 
     test("an empty analysis model id is rejected when the pipeline is enabled", () => {
         expect(
             resolve((c) => {
                 vectorSearchOff(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId = "";
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
             })
         ).toThrow(
-            /pipelines\.useSystemGenAiMetadata is enabled but bedrockAnalysisModelId is empty/
+            /pipelines\.useSystemGenAiMetadata is enabled with useGenAiAnalysis but bedrockModels\.analysisModelId is empty/
         );
+    });
+
+    test("an empty analysis model id is accepted when the GenAI layer is off (attributes-only)", () => {
+        expect(
+            resolve((c) => {
+                vectorSearchOff(c);
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
+            })
+        ).not.toThrow();
+        // The partition-prefix checks are the GenAI layer's too: a wrong-partition id is not rejected
+        // when no Converse call will carry it.
+        expect(
+            resolve((c) => {
+                vectorSearchOff(c);
+                c.env.region = "us-gov-west-1";
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+                    "global.anthropic.claude-x:0";
+            })
+        ).not.toThrow(/analysisModelId/);
+    });
+
+    test("vector search on with the GenAI layer off still requires the embedding model", () => {
+        expect(
+            resolve((c) => {
+                vectorSearchOn(c);
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
+            })
+        ).not.toThrow();
+        expect(
+            resolve((c) => {
+                vectorSearchOn(c);
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "";
+            })
+        ).toThrow(/bedrockModels\.embeddingModelId is empty/);
     });
 
     test('a "global." profile is rejected in GovCloud, naming the prefix', () => {
@@ -576,7 +622,7 @@ describe("system GenAI metadata pipeline validation", () => {
             resolve((c) => {
                 restrictedPartition(c);
                 vectorSearchOff(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
                     "global.anthropic.claude-haiku-4-5-20251001-v1:0";
             })
         ).toThrow(
@@ -592,7 +638,7 @@ describe("system GenAI metadata pipeline validation", () => {
             resolve((c) => {
                 euSovereignPartition(c);
                 vectorSearchOff(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId = id;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = id;
             })
         ).toThrow(
             new RegExp(
@@ -612,7 +658,7 @@ describe("system GenAI metadata pipeline validation", () => {
             resolve((c) => {
                 restrictedPartition(c);
                 vectorSearchOff(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
                     "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
             })
         ).not.toThrow();
@@ -624,7 +670,7 @@ describe("system GenAI metadata pipeline validation", () => {
     test('a "us." profile in the commercial partition gets no GovCloud warning (control)', () => {
         resolve((c) => {
             vectorSearchOff(c);
-            c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
                 "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
         })();
         expect(warnings()).not.toContain(
@@ -637,17 +683,17 @@ describe("system GenAI metadata pipeline validation", () => {
             resolve((c) => {
                 restrictedPartition(c);
                 vectorSearchOff(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
                     "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0";
             })
-        ).not.toThrow(/bedrockAnalysisModelId/);
+        ).not.toThrow(/analysisModelId/);
     });
 
     test('a "us-gov." profile is rejected in the commercial partition', () => {
         expect(
             resolve((c) => {
                 vectorSearchOff(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
                     "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0";
             })
         ).toThrow(
@@ -664,7 +710,7 @@ describe("system GenAI metadata pipeline validation", () => {
             resolve((c) => {
                 partition(c);
                 vectorSearchOff(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+                c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
                     "amazon.nova-2-lite-v1:0";
             })
         ).not.toThrow();
@@ -679,7 +725,7 @@ describe("system GenAI metadata pipeline validation", () => {
 
     test("a non-Anthropic model id does not get that warning", () => {
         resolve((c) => {
-            c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
                 "amazon.nova-2-lite-v1:0";
         })();
         expect(warnings()).not.toContain("Anthropic requires a one-time use-case form");

@@ -49,8 +49,9 @@ const TEMPLATES: Record<TemplateName, any> = {
 /** The mutation the T1 ON arms apply to a template that ships with vector search off. */
 const enableVectorSearch = (c: any) => {
     c.app.vectorSearch.enabled = true;
-    if (!c.app.vectorSearch.embeddingModelId) {
-        c.app.vectorSearch.embeddingModelId = "amazon.titan-embed-text-v2:0";
+    const models = c.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+    if (!models.embeddingModelId) {
+        models.embeddingModelId = "amazon.titan-embed-text-v2:0";
     }
 };
 
@@ -81,18 +82,23 @@ describe("the T1 harness derives the vector index name getConfig() derives", () 
         // Control: the commercial template ships with vector search on, so a name must exist.
         expect(config.app.vectorSearch.enabled).toBe(true);
         expect(config.vectorIndexName).toMatch(/^vec-/);
-        expect(vectorIndexNameFor(config.app.vectorSearch)).toBe(config.vectorIndexName);
+        expect(vectorIndexNameFor(config.app.pipelines.useSystemGenAiMetadata.bedrockModels)).toBe(
+            config.vectorIndexName
+        );
     });
 
     test("a different model id and dimension count", () => {
         const shipped = resolve(() => undefined).vectorIndexName;
         const config = resolve((c) => {
-            c.app.vectorSearch.embeddingModelId = "cohere.embed-multilingual-v3";
-            c.app.vectorSearch.embeddingDimensions = 512;
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId =
+                "cohere.embed-multilingual-v3";
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = 512;
         });
         // Control: the mutation changed the name, so agreement below is not agreement on a constant.
         expect(config.vectorIndexName).not.toBe(shipped);
-        expect(vectorIndexNameFor(config.app.vectorSearch)).toBe(config.vectorIndexName);
+        expect(vectorIndexNameFor(config.app.pipelines.useSystemGenAiMetadata.bedrockModels)).toBe(
+            config.vectorIndexName
+        );
     });
 });
 
@@ -122,15 +128,18 @@ describe("templateSynth.buildConfig() fills vectorIndexName after the mutator ha
             const built = buildConfig(name, enableVectorSearch);
             expect(built.app.vectorSearch.enabled).toBe(true);
             expect(built.vectorIndexName).toMatch(/^vec-/);
-            expect(built.vectorIndexName).toBe(vectorIndexNameFor(built.app.vectorSearch));
+            expect(built.vectorIndexName).toBe(
+                vectorIndexNameFor(built.app.pipelines.useSystemGenAiMetadata.bedrockModels)
+            );
         }
     );
 
     test("the name follows the mutated model and width, not the shipped ones", () => {
         const shipped = buildConfig("commercial").vectorIndexName;
         const built = buildConfig("commercial", (c) => {
-            c.app.vectorSearch.embeddingModelId = "cohere.embed-multilingual-v3";
-            c.app.vectorSearch.embeddingDimensions = 512;
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId =
+                "cohere.embed-multilingual-v3";
+            c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = 512;
         });
         // A fill that ran before the mutator would still carry the shipped name here.
         expect(shipped).toMatch(/^vec-/);

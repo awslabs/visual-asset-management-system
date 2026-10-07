@@ -109,7 +109,8 @@ class TestMeshFile:
         assert (state["auxBucket"], state["auxTempPrefix"]) == ("aux", "pipelines/system-genai-metadata/E1/")
         assert (state["renderViews"], state["maxTextChars"], state["includeSiblingFiles"]) == (8, 12000, True)
         assert state["extractGeoLocation"] is True
-        assert state["maxPointCloudPoints"] == 20_000_000 and state["render"] is True
+        assert state["maxPointCloudPoints"] == 20_000_000 and state["renderImages"] is True
+        assert state["genAiAnalysisEnabled"] is True
         # Every input field survives.
         for key, value in _state().items():
             assert state[key] == value, key
@@ -125,7 +126,7 @@ class TestMeshFile:
         assert manifest["attributes"]["sys_file"] == {
             "name": "pump.glb", "ext": ".glb", "sizeBytes": len(content),
             "contentType": "model/gltf-binary", "etag": "abc123", "versionId": "v1",
-            "sha256": hashlib.sha256(content).hexdigest(),
+            "detectedFormat": "glb", "sha256": hashlib.sha256(content).hexdigest(),
         }
 
     def test_head_object_pins_the_manifest_version(self):
@@ -144,10 +145,14 @@ class TestMeshFile:
         assert state["versionId"] == "current-9"
         assert s3.json_at("aux", MANIFEST_KEY)["attributes"]["sys_file"]["versionId"] == "current-9"
 
-    def test_table_decided_extensions_are_not_sniffed(self):
+    def test_table_decided_extensions_are_read_once_by_range_for_the_format_sniff(self):
+        # The classifier does not sniff a table-decided extension; the one ranged read is the header every
+        # file's sys_file.detectedFormat comes from, and it is the sniff window, memoised.
         s3 = _s3_with("xidM/models/pump.glb", b"glTF....")
-        _run(_state(), s3)
-        assert not any(kwargs.get("Range") for _b, _k, kwargs in s3.gets)
+        mod, _state_out = _run(_state(), s3)
+        ranges = [kwargs.get("Range") for _b, _k, kwargs in _input_gets(s3, "xidM/models/pump.glb") if kwargs.get("Range")]
+        assert ranges == [f"bytes=0-{mod.fileClassifier.SNIFF_BYTES - 1}"]
+        assert s3.json_at("aux", MANIFEST_KEY)["attributes"]["sys_file"]["detectedFormat"] == "glb"
 
 
 @pytest.mark.unit
@@ -161,7 +166,7 @@ class TestInputConfiguration:
         _mod, state = _run(_state(), s3, {"MAX_POINT_CLOUD_POINTS": "5000000"})
         assert (state["renderViews"], state["maxTextChars"], state["includeSiblingFiles"]) == (4, 500, False)
         assert state["maxPointCloudPoints"] == 5_000_000
-        assert state["render"] is True
+        assert state["renderImages"] is True
 
     def test_a_missing_configuration_yields_the_template_defaults(self):
         s3 = _s3_with("xidM/models/pump.glb", b"glTF....", config=False)
@@ -213,11 +218,21 @@ class TestNoneBranch:
         assert manifest["renderSkipped"] == "unsupported"
         assert list(manifest["attributes"]) == ["sys_file"]
 
-    def test_an_unknown_extension_is_other(self):
+    def test_an_unknown_extension_is_other_on_the_media_branch(self):
+        # Any file: the generic probe of the MEDIA image runs, so the branch is MEDIA and nothing is skipped yet.
         s3 = _s3_with("xidM/models/thing.zzz", b"\x00" * 64)
         _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/xidM/models/thing.zzz"), s3)
-        assert (state["fileClass"], state["renderBranch"], state["renderSkipped"]) == ("other", "NONE", "unsupported")
+        assert (state["fileClass"], state["renderBranch"], state["renderSkipped"]) == ("other", "MEDIA", None)
         assert state["fileExt"] == ".zzz"
+        manifest = s3.json_at("aux", MANIFEST_KEY)
+        assert manifest["renderSkipped"] is None
+        assert "detectedFormat" not in manifest["attributes"]["sys_file"]  # 64 zero bytes name no format
+
+    def test_an_unknown_extension_over_the_size_limit_is_never_sent_to_fargate(self):
+        s3 = _s3_with("xidM/models/thing.zzz", b"\x00" * 64, ContentLength=5 * 1024 * 1024)
+        _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/xidM/models/thing.zzz"), s3,
+                           {"MAX_INPUT_FILE_SIZE_MB": "2", "USE_FARGATE_RENDERER": "true"})
+        assert (state["fileClass"], state["renderBranch"], state["renderSkipped"]) == ("other", "NONE", "size")
 
     def test_a_file_without_extension_reports_none(self):
         s3 = _s3_with("xidM/models/README", b"hello")
@@ -253,7 +268,7 @@ class TestSniffedExtensions:
         s3.heads[("abkt", "xidM/models/scan.ply")] = {"ContentLength": 10, "ETag": '"e"',
                                                        "ContentType": "application/octet-stream", "VersionId": "v1"}
         _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/xidM/models/scan.ply"), s3)
-        assert (state["fileClass"], state["renderBranch"], state["renderSkipped"]) == ("other", "NONE", "unsupported")
+        assert (state["fileClass"], state["renderBranch"], state["renderSkipped"]) == ("other", "MEDIA", None)
 
 
 @pytest.mark.unit
@@ -316,9 +331,10 @@ class TestSysFile:
         sys_file = s3.json_at("aux", MANIFEST_KEY)["attributes"]["sys_file"]
         assert "sha256" not in sys_file
         assert sys_file["sizeBytes"] == 600 * 1024 * 1024
-        # A table-decided extension is never sniffed and the digest was skipped, so the input object is
-        # not read at all. (``all([])`` would be True whatever the handler did; the list is asserted.)
-        assert _input_gets(s3, "xidM/models/pump.glb") == []
+        # The digest was skipped, so the only read of the input object is the ranged header the format
+        # sniff takes; no whole-object read. (The list is asserted, not ``all([])``.)
+        assert [kwargs.get("Range") for _b, _k, kwargs in _input_gets(s3, "xidM/models/pump.glb")] == [
+            f"bytes=0-{_mod.fileClassifier.SNIFF_BYTES - 1}"]
 
     def test_a_sniffed_file_above_the_limit_is_read_once_by_range(self):
         content = _ply("element vertex 8", "property float x", "element face 12")
@@ -340,3 +356,50 @@ class TestSysFile:
         s3 = _s3_with("xidM/models/pump.glb", b"glTF....")
         _mod, state = _run(_state(), s3, {"VECTOR_SEARCH_ENABLED": "false"})
         assert state["vectorSearchEnabled"] is False
+
+
+@pytest.mark.unit
+class TestSysFileStoredFacts:
+    """Every file, whatever its class, records the facts the object itself carries."""
+
+    def test_last_modified_s3_metadata_and_detected_format_are_recorded(self):
+        import datetime
+        s3 = _s3_with("xidM/models/pump.glb", b"glTF....",
+                      LastModified=datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc),
+                      Metadata={"recorded-by": "scanner-7", "site": "plant A", "blank": "  "})
+        _run(_state(), s3)
+        sys_file = s3.json_at("aux", MANIFEST_KEY)["attributes"]["sys_file"]
+        assert sys_file["lastModified"] == "2026-03-04T05:06:07Z"
+        assert sys_file["s3Metadata"] == {"recorded-by": "scanner-7", "site": "plant A"}
+        assert sys_file["detectedFormat"] == "glb"
+
+    def test_absent_facts_produce_no_keys(self):
+        s3 = _s3_with("xidM/models/thing.zzz", b"\x00\x01\x02\x03" * 16)
+        _run(_state(inputS3AssetFilePath="s3://abkt/xidM/models/thing.zzz"), s3)
+        sys_file = s3.json_at("aux", MANIFEST_KEY)["attributes"]["sys_file"]
+        assert "lastModified" not in sys_file and "s3Metadata" not in sys_file and "detectedFormat" not in sys_file
+
+    def test_s3_metadata_is_bounded(self):
+        mod = h.load_handler("constructPipeline")
+        head = {"Metadata": {f"k{index:03d}": "v" * 1000 for index in range(80)}}
+        recorded = mod.s3_user_metadata(head)
+        assert len(recorded) == mod.S3_METADATA_MAX_KEYS
+        assert all(len(value) == mod.S3_METADATA_VALUE_MAX_CHARS for value in recorded.values())
+        assert sorted(recorded) == sorted(head["Metadata"])[:mod.S3_METADATA_MAX_KEYS]
+
+
+@pytest.mark.unit
+class TestGenAiAnalysisFlag:
+    """The GenAI layer switch reaches the state as genAiAnalysisEnabled, and the branches' render switch follows it."""
+
+    def test_on_by_default(self):
+        s3 = _s3_with("xidM/models/pump.glb", b"glTF....")
+        _mod, state = _run(_state(), s3)
+        assert (state["genAiAnalysisEnabled"], state["renderImages"]) == (True, True)
+
+    def test_off_turns_the_renders_off(self):
+        s3 = _s3_with("xidM/models/pump.glb", b"glTF....")
+        _mod, state = _run(_state(), s3, {"GENAI_ANALYSIS_ENABLED": "false"})
+        assert (state["genAiAnalysisEnabled"], state["renderImages"]) == (False, False)
+        # The classification and the branch are unchanged: attributes are extracted either way.
+        assert (state["fileClass"], state["renderBranch"]) == ("mesh", "BLENDER")

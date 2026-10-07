@@ -413,11 +413,22 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
             expect(matrix).toContain("`" + cls + "`");
         }
         expect(matrix).toContain("`sys_geo`");
-        // The office formats the classifier admits for their text are marked on the matrix.
+        // The formats the classifier admits for their extracted content (office text, the non-browser
+        // video containers) are marked on the matrix, and the matrix says the input filter is any file.
         expect(classifier).toMatch(
-            /ADDITIONAL_EXTENSIONS\s*=\s*\(\s*"\.docx",\s*"\.xlsx",\s*"\.pptx"\s*\)/
+            /ADDITIONAL_EXTENSIONS\s*=\s*\(\s*"\.docx",\s*"\.xlsx",\s*"\.pptx",\s*"\.avi",\s*"\.flv",\s*"\.wmv"\s*\)/
         );
-        for (const s of ["‡", "`.docx`", "`.pptx`", "`.xlsx`", "`ADDITIONAL_EXTENSIONS`"])
+        for (const s of [
+            "‡",
+            "`.docx`",
+            "`.pptx`",
+            "`.xlsx`",
+            "`.avi .flv .wmv` ‡",
+            "`ADDITIONAL_EXTENSIONS`",
+            "`*.previewFile.*`",
+            "generic probe",
+            "`sys_archive`",
+        ])
             expect(matrix).toContain(s);
     });
 
@@ -783,7 +794,10 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
         const cfg = section(readDoc("pipelines/system-genai-metadata.md"), "## Configuration");
         for (const key of [
             "enabled",
-            "bedrockAnalysisModelId",
+            "useGenAiAnalysis",
+            "bedrockModels.analysisModelId",
+            "bedrockModels.embeddingModelId",
+            "bedrockModels.embeddingDimensions",
             "autoRegisterWithVAMS",
             "autoRegisterAutoTriggerOnFileUpload",
             "useFargateRenderer",

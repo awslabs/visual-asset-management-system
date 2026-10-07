@@ -4,6 +4,7 @@
 """Shared vocabulary of the MEDIA branch: the file classes it serves, the extension table behind them, the
 size and text budgets, and the result shape every extractor hands back to the handler."""
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -19,9 +20,12 @@ CLASS_DATA = "data"
 CLASS_TILES3D = "tiles3d"
 CLASS_OTHER = "other"
 
-# The classes constructPipeline may route here. `tiles3d` is also reached by promotion from `text`, and
-# `other` only by demotion when a `text`/`data` file turns out not to be text at all.
-MEDIA_CLASSES = (CLASS_IMAGE, CLASS_VIDEO, CLASS_AUDIO, CLASS_DOCUMENT, CLASS_TEXT, CLASS_DATA, CLASS_TILES3D)
+# The classes constructPipeline may route here. `tiles3d` is also reached by promotion from `text`;
+# `other` arrives for every extension the classifier does not name (and by demotion when a `text`/`data`
+# file turns out not to be text at all) and takes the generic extractor, which probes the bytes for a
+# format this image reads and otherwise records the file's own facts.
+MEDIA_CLASSES = (CLASS_IMAGE, CLASS_VIDEO, CLASS_AUDIO, CLASS_DOCUMENT, CLASS_TEXT, CLASS_DATA, CLASS_TILES3D,
+                 CLASS_OTHER)
 
 # Extension -> fileClass, lower-case with the leading dot. `.svg` is `image` but takes the vector path;
 # `.json` enters as `text` and is reclassified from its parsed root: `asset` + `geometricError` -> `tiles3d`,
@@ -61,7 +65,8 @@ PROMOTION_SOURCE_KEYS: Dict[str, Tuple[str, ...]] = {
     "sys_image.exif.gps": ("latitude", "longitude", "altitude"),
     "sys_media": ("kind", "durationSeconds", "width", "height", "frameRate", "videoCodec", "audioCodec",
                   "bitrateKbps", "channels", "sampleRate", "tags"),
-    "sys_media.tags": ("title", "artist", "album", "year"),
+    "sys_media.tags": ("title", "artist", "album", "year", "creation_time", "date"),
+    "sys_archive": ("entryCount", "uncompressedBytes", "containerFormat"),
     "sys_document": ("pageCount", "title", "author", "createdAt", "hasText"),
     "sys_text": ("encoding", "lineCount", "wordCount", "language"),
     "sys_data": ("columnCount", "rowCount", "columns"),
@@ -87,6 +92,11 @@ PDF_RASTER_PAGES = 2
 # Audio.
 AUDIO_MAX_TAGS = 50
 AUDIO_TAG_VALUE_MAX_CHARS = 500
+# Embedded metadata recorded verbatim from a container (EXIF/XMP/PNG text, ffmpeg format and stream tags,
+# archive entries): per-block caps so a file cannot grow its attribute record without bound.
+EMBEDDED_TAGS_MAX_KEYS = 200
+EMBEDDED_TAG_VALUE_MAX_CHARS = 500
+ARCHIVE_MAX_LISTED_ENTRIES = 50
 # Tabular data.
 DATA_SAMPLE_ROWS = 5
 DATA_MAX_COLUMNS = 200
@@ -116,6 +126,9 @@ class ExtractContext:
     work_dir: str
     extract_geo_location: bool = False
     capture_full_text: bool = False
+    # The state's `renderImages`: false when the GenAI layer is off, so no extractor produces the PNGs
+    # (normalised image, keyframes, page rasters) that exist only as analysis-model input.
+    render_images: bool = True
 
 
 @dataclass
@@ -191,3 +204,35 @@ def other_fallback(ctx: ExtractContext, reason: str) -> BranchResult:
         render_skipped=RENDER_SKIPPED_UNSUPPORTED,
         warnings=[f"{ctx.file_name}: {reason}; sys_file attributes only"],
     )
+
+
+def bounded_tags(items, max_keys: int = EMBEDDED_TAGS_MAX_KEYS,
+                 max_chars: int = EMBEDDED_TAG_VALUE_MAX_CHARS) -> Dict[str, object]:
+    """Embedded tags as a bounded dict: at most `max_keys` entries in the order given, each scalar value
+    rendered as text of at most `max_chars`, bytes decoded leniently, numbers and booleans kept, blank
+    values dropped. Lists and dicts are kept when small (their JSON text within the value cap)."""
+    recorded: Dict[str, object] = {}
+    for key, value in items:
+        if len(recorded) >= max_keys:
+            break
+        name = str(key).strip()
+        if not name or name in recorded:
+            continue
+        if value is None or isinstance(value, bool) or isinstance(value, (int, float)):
+            if value is None:
+                continue
+            recorded[name] = value
+            continue
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", "replace").strip("\x00")
+        if isinstance(value, (list, tuple, dict)):
+            text = json.dumps(value, default=str, sort_keys=True)
+            if len(text) > max_chars:
+                text = text[:max_chars]
+            recorded[name] = text
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        recorded[name] = text[:max_chars]
+    return recorded

@@ -30,8 +30,11 @@ import { grantBedrockInvokeModel } from "../nestedStacks/pipelines/system/genAiM
 export function vectorIndexEnvironment(config: Config.Config): Record<string, string> {
     return {
         VECTOR_INDEX_NAME: config.vectorIndexName,
-        EMBEDDING_MODEL_ID: config.app.vectorSearch.embeddingModelId,
-        EMBEDDING_DIMENSIONS: String(config.app.vectorSearch.embeddingDimensions),
+        EMBEDDING_MODEL_ID:
+            config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId,
+        EMBEDDING_DIMENSIONS: String(
+            config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions
+        ),
     };
 }
 
@@ -244,7 +247,9 @@ export function buildVectorSearchFunction(
     );
     // Query embeddings come from the configured embedding model and no other; the shared statement
     // names the exact model (and, for an inference profile, the exact profile) — see its builder.
-    grantBedrockInvokeModel(fun, config, [config.app.vectorSearch.embeddingModelId]);
+    grantBedrockInvokeModel(fun, config, [
+        config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId,
+    ]);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     if (openSearchEnabled) {

@@ -428,6 +428,26 @@ class TestSourceText:
         # The model id is read from the attribute file, which the analysis step writes first.
         assert document["analysisModelId"] == ANALYSIS_MODEL
 
+    def test_an_attributes_only_run_embeds_without_genai_rows_or_a_model_id(self):
+        """The GenAI layer off: the analysis step wrote no genai_* rows and no provenance, so neither file is
+        read for them; the vector is built from the asset context, the file identity, the attribute facts, the
+        existing metadata and the text, and the document names no analysis model."""
+        s3 = _seed(h.FakeS3(), metadata_file=False, attribute_file={"type": "attribute", "updateType": "update",
+                                                                     "metadata": [{"metadataKey": "sys_file",
+                                                                                   "metadataValue": "{}",
+                                                                                   "metadataValueType": "string"}]})
+        reads_before = len(s3.gets)
+        mod, state = _run(_state(genAiAnalysisEnabled=False), s3)
+        assert state["embeddingStatus"] == "SUCCEEDED"
+        text = _embedded_text(mod)
+        assert "Gear Pump" in text and "pump.glb" in text
+        _key, document = _document(s3)
+        assert "genai-metadata" not in document["sourceModalities"] and "asset-metadata" in document["sourceModalities"]
+        assert document["analysisModelId"] == ""
+        # Neither the .metadata.json nor the .attribute.json was fetched for genai values.
+        read_keys = [key for _bucket, key, *_rest in s3.gets[reads_before:]]
+        assert METADATA_FILE_KEY not in read_keys and ATTRIBUTE_FILE_KEY not in read_keys
+
 
 @pytest.mark.unit
 class TestEmbedding:

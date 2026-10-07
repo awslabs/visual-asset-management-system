@@ -348,6 +348,7 @@ export function buildConstructPipelineFunction(
         ...vpcPlacement(config, vpc, subnets, pipelineSecurityGroups),
         environment: {
             VECTOR_SEARCH_ENABLED: config.app.vectorSearch.enabled ? "true" : "false",
+            GENAI_ANALYSIS_ENABLED: pipeline.useGenAiAnalysis ? "true" : "false",
             USE_FARGATE_RENDERER: pipeline.useFargateRenderer ? "true" : "false",
             MAX_INPUT_FILE_SIZE_MB: String(pipeline.lambdaLimits.maxInputFileSizeMb),
             MAX_POINT_CLOUD_POINTS: String(pipeline.lambdaLimits.maxPointCloudPoints),
@@ -377,7 +378,7 @@ export function buildGenerateMetadataFunction(
 ): lambda.Function {
     const name = "generateMetadata";
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
-    const analysisModelId = pipeline.bedrockAnalysisModelId;
+    const analysisModelId = pipeline.useGenAiAnalysis ? pipeline.bedrockModels.analysisModelId : "";
 
     const fun = new lambda.Function(scope, "SystemGenAiMetadataGenerateMetadata", {
         code: lambda.Code.fromAsset(LAMBDA_DIR),
@@ -389,6 +390,7 @@ export function buildGenerateMetadataFunction(
         ...vpcPlacement(config, vpc, subnets, pipelineSecurityGroups),
         environment: {
             BEDROCK_ANALYSIS_MODEL_ID: analysisModelId,
+            GENAI_ANALYSIS_ENABLED: pipeline.useGenAiAnalysis ? "true" : "false",
             ...guardrailEnvironment(guardrail),
         },
     });
@@ -399,10 +401,13 @@ export function buildGenerateMetadataFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
-    // The analysis model, whether a plain id or a cross-Region inference profile.
-    grantBedrockInvokeModel(fun, config, [analysisModelId]);
-    // The one guardrail the analysis prompts are sent with.
-    grantApplyGuardrail(fun, guardrail);
+    // The analysis model, whether a plain id or a cross-Region inference profile, and the one guardrail
+    // its prompts are sent with. An attributes-only pipeline (useGenAiAnalysis false) makes no Converse
+    // call, so it holds neither grant.
+    if (pipeline.useGenAiAnalysis) {
+        grantBedrockInvokeModel(fun, config, [analysisModelId]);
+        grantApplyGuardrail(fun, guardrail);
+    }
 
     suppressCdkNagLambda(fun);
     return fun;
@@ -421,7 +426,8 @@ export function buildGenerateEmbeddingFunction(
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "generateEmbedding";
-    const embeddingModelId = config.app.vectorSearch.embeddingModelId;
+    const models = config.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+    const embeddingModelId = models.embeddingModelId;
 
     const fun = new lambda.Function(scope, "SystemGenAiMetadataGenerateEmbedding", {
         code: lambda.Code.fromAsset(LAMBDA_DIR),
@@ -433,7 +439,7 @@ export function buildGenerateEmbeddingFunction(
         ...vpcPlacement(config, vpc, subnets, pipelineSecurityGroups),
         environment: {
             EMBEDDING_MODEL_ID: embeddingModelId,
-            EMBEDDING_DIMENSIONS: String(config.app.vectorSearch.embeddingDimensions),
+            EMBEDDING_DIMENSIONS: String(models.embeddingDimensions),
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             ...guardrailEnvironment(guardrail),
         },
@@ -604,8 +610,8 @@ export function buildSegmentAnalyzeFunction(
     kmsKey?: kms.IKey
 ): lambda.DockerImageFunction {
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
-    const analysisModelId = pipeline.bedrockAnalysisModelId;
-    const embeddingModelId = config.app.vectorSearch.embeddingModelId;
+    const analysisModelId = pipeline.useGenAiAnalysis ? pipeline.bedrockModels.analysisModelId : "";
+    const embeddingModelId = pipeline.bedrockModels.embeddingModelId;
 
     const fun = new lambda.DockerImageFunction(scope, "SystemGenAiMetadataSegmentAnalyze", {
         code: lambda.DockerImageCode.fromImageAsset(path.join(CONTAINERS_DIR, "media"), {
@@ -621,7 +627,7 @@ export function buildSegmentAnalyzeFunction(
         environment: {
             BEDROCK_ANALYSIS_MODEL_ID: analysisModelId,
             EMBEDDING_MODEL_ID: embeddingModelId,
-            EMBEDDING_DIMENSIONS: String(config.app.vectorSearch.embeddingDimensions),
+            EMBEDDING_DIMENSIONS: String(pipeline.bedrockModels.embeddingDimensions),
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             ...guardrailEnvironment(guardrail),
         },
@@ -632,14 +638,20 @@ export function buildSegmentAnalyzeFunction(
     grantImageFunction(scope, fun, assetAuxiliaryBucket, config, kmsKey);
     orchestrationBus.grantPutEventsTo(fun);
 
-    // The analysis model always; the embedding model only on the vector-search path, which is the
-    // only path the Map runs on.
-    grantBedrockInvokeModel(
-        fun,
-        config,
-        config.app.vectorSearch.enabled ? [analysisModelId, embeddingModelId] : [analysisModelId]
-    );
-    // The one guardrail the per-segment analysis prompts are sent with.
-    grantApplyGuardrail(fun, guardrail);
+    // The Map runs only when vector search is on AND the GenAI layer is on (a window is described by
+    // the analysis model before it is embedded), so both models are granted on that path alone.
+    const segmentModels: string[] = [];
+    if (pipeline.useGenAiAnalysis) {
+        segmentModels.push(analysisModelId);
+    }
+    if (config.app.vectorSearch.enabled) {
+        segmentModels.push(embeddingModelId);
+    }
+    grantBedrockInvokeModel(fun, config, segmentModels);
+    // The one guardrail the per-segment analysis prompts and embedding texts are screened with; a
+    // function that calls no model screens nothing.
+    if (segmentModels.length > 0) {
+        grantApplyGuardrail(fun, guardrail);
+    }
     return fun;
 }

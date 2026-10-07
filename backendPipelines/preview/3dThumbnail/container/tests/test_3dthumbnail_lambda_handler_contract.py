@@ -147,12 +147,19 @@ class TestParseRequest:
         assert handler.parse_request(_body(fileExt=".glb")).file_extension == ".glb", "the registry form passes through"
         assert request.input_configuration_s3_location == "s3://abkt/E1/pipeline1/config.json"
 
-    def test_the_state_carries_no_render_knobs(self, handler):
+    def test_the_state_carries_one_render_switch_and_no_render_knobs(self, handler):
         """renderViews comes from the template configuration (constructPipeline sets no render knob on the
-        state) and the size gate is constructPipeline's, so the request has no field to hold them."""
+        state) and the size gate is constructPipeline's, so the request has no field to hold them. The one
+        render field is the state's renderImages switch: off when the pipeline's GenAI layer is off."""
         assert {field.name for field in dataclasses.fields(handler.Render3dRequest)} == {
             "analysis_manifest_s3_location", "input_s3_asset_file_path", "input_configuration_s3_location",
-            "file_class", "file_extension"}
+            "file_class", "file_extension", "render_images"}
+        assert handler.parse_request(_body()).render_images is True
+        assert handler.parse_request(_body(renderImages=False)).render_images is False
+        assert handler.parse_request(_body(renderImages="false")).render_images is False
+        # genAiAnalysisEnabled stands in when the renderImages copy is absent; an explicit renderImages wins.
+        assert handler.parse_request(_body(genAiAnalysisEnabled=False)).render_images is False
+        assert handler.parse_request(_body(genAiAnalysisEnabled=False, renderImages=True)).render_images is True
 
     @pytest.mark.parametrize("body,message", [
         ({"inputS3AssetFilePath": INPUT_URI}, "analysisManifestS3Location"),
@@ -218,7 +225,7 @@ class TestLambdaHandler:
         assert response == {**_body(), "analysisManifestS3Location": MANIFEST_URI, "renderBranch": "RENDER3D",
                             "fileClass": "cad", "renderSkipped": None, "renderImageCount": 2, "warningCount": 1}
         assert analyze.call_args.args == (os.path.join(work_dir, "input", "pump.stp"), ".stp")
-        assert analyze.call_args.kwargs == {"n_views": 4, "work_dir": work_dir}, \
+        assert analyze.call_args.kwargs == {"render": True, "n_views": 4, "work_dir": work_dir}, \
             "no configuration in the event: the spec's 4 stills; the point cap stays the renderer's own"
         assert not os.path.exists(work_dir), "the invocation directory is removed (warm /tmp persists)"
 
@@ -234,6 +241,18 @@ class TestLambdaHandler:
         assert manifest["attributes"]["sys_cad"] == {"source": "dxf"} and "sys_file" in manifest["attributes"]
         assert response["renderImageCount"] == 0 and response["renderSkipped"] == "unsupported"
         assert response["warningCount"] == 2, "pre-existing + from analysis"
+
+    def test_render_images_off_measures_the_file_without_rendering(self, handler, tmp_path):
+        """The GenAI layer off: analyze_local_file is asked for attributes only (render=False), so the loader
+        runs, the frames list is empty, and the manifest records no skip (nothing was asked for)."""
+        fake = _fake()
+        result = _result(frames=0, render_skipped=None)
+        response, analyze, _g, work_dir = _invoke(handler, tmp_path, fake, result, _body(renderImages=False))
+        assert analyze.call_args.kwargs == {"render": False, "n_views": 4, "work_dir": work_dir}
+        manifest = fake.json[("aux-bucket", MANIFEST_KEY)]
+        assert manifest["renderImages"] == [] and manifest["renderSkipped"] is None and fake.puts == []
+        assert manifest["attributes"]["sys_statistics"] == {"vertices": 8}
+        assert response["renderImageCount"] == 0
 
     def test_a_render_fault_is_recorded_as_error(self, handler, tmp_path):
         fake = _fake()

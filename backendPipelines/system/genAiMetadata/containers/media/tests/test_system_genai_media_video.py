@@ -42,7 +42,15 @@ class TestParseHeader:
         assert facts["channelLayout"] == "stereo" and facts["channels"] == 2
         assert facts["audioBitrateKbps"] == 128
         assert facts["rotation"] == 270
-        assert "tags" not in facts
+        # Every format-level tag is recorded, container brands and encoder included.
+        assert facts["tags"] == {"major_brand": "isom", "minor_version": "512", "compatible_brands": "isomiso2avc1mp41",
+                                 "encoder": "Lavf60.3.100"}
+        # Every stream's own Metadata block too, by stream id; side data lines count as stream tags.
+        assert facts["streamTags"] == {
+            "0:0": {"handler_name": "VideoHandler", "vendor_id": "[0][0][0][0]",
+                    "displaymatrix": "rotation of -90.00 degrees"},
+            "0:1": {"handler_name": "SoundHandler", "vendor_id": "[0][0][0][0]"},
+        }
         # The pre-rename spellings are gone: the promotion catalogue reads the registry names only.
         assert not {"codec", "fps", "audioSampleRateHz", "audioChannels"} & set(facts)
 
@@ -53,10 +61,37 @@ class TestParseHeader:
 
     def test_format_tags_become_sys_media_tags(self):
         facts = video.parse_ffmpeg_header_text(FFMPEG_HEADER_WITH_TAGS)
-        assert facts["tags"] == {"title": "Proto Clip", "artist": "Proto Artist", "album": "Proto Album", "year": 2026}
-        # Stream-level metadata (handler_name, vendor_id) is not a tag.
+        assert facts["tags"] == {"major_brand": "isom", "minor_version": "512", "compatible_brands": "isomiso2avc1mp41",
+                                 "encoder": "Lavf60.3.100", "title": "Proto Clip", "artist": "Proto Artist",
+                                 "album": "Proto Album", "date": "2026-03-01", "year": 2026}
+        # Stream-level metadata (handler_name, vendor_id) is a stream tag, not a format tag.
         assert video.parse_format_tags(FFMPEG_HEADER_WITH_TAGS) == facts["tags"]
         assert "handler_name" not in facts["tags"]
+
+    def test_a_recording_time_is_kept_verbatim_and_summarised_as_a_fact(self, tmp_path):
+        header = FFMPEG_HEADER_SAMPLE.replace(
+            "    encoder         : Lavf60.3.100\n",
+            "    encoder         : Lavf60.3.100\n"
+            "    creation_time   : 2024-05-01T10:20:30.000000Z\n"
+            "    com.apple.quicktime.location.ISO6709: +37.7749-122.4194+010.000/\n")
+        facts = video.parse_ffmpeg_header_text(header)
+        assert facts["tags"]["creation_time"] == "2024-05-01T10:20:30.000000Z"
+        assert facts["tags"]["com.apple.quicktime.location.iso6709"] == "+37.7749-122.4194+010.000/"
+        path = write(tmp_path, "clip.mp4", b"\x00")
+        result = video.extract_video(path, make_ctx(tmp_path, "clip.mp4"), run=FakeFfmpeg(header=header),
+                                     read_frames=fake_read_frames)
+        assert result.facts["recorded"] == "2024-05-01T10:20:30.000000Z"
+
+    def test_no_keyframes_when_the_context_asks_for_no_renders(self, tmp_path):
+        path = write(tmp_path, "clip.mp4", b"\x00")
+        ffmpeg = FakeFfmpeg()
+        ctx = make_ctx(tmp_path, "clip.mp4")
+        ctx.render_images = False
+        result = video.extract_video(path, ctx, run=ffmpeg, read_frames=fake_read_frames)
+        assert result.render_images == [] and result.render_skipped is None
+        assert result.attributes["sys_media"]["width"] == 1920
+        # Only the header probe ran: no `-ss` keyframe command was issued.
+        assert not any("-ss" in argv for argv in ffmpeg.calls)
 
     def test_channel_layouts_map_to_counts(self):
         assert video.parse_channel_count("mono") == 1

@@ -413,18 +413,22 @@ def lambda_handler(event, context):
         event["outputS3AssetMetadataPath"], relative_path.lstrip("/") + METADATA_FILE_SUFFIX)
     attribute_file_uri = event.get("attributeFileS3Location") or common.uri_join(
         event["outputS3AssetMetadataPath"], relative_path.lstrip("/") + ATTRIBUTE_FILE_SUFFIX)
+    # An attributes-only run (the GenAI layer off) wrote no genai_* rows and no provenance, so the source
+    # text is the file's identity, attributes, existing metadata and text; nothing is read for them.
+    genai_on = common.as_bool(event.get("genAiAnalysisEnabled"), True)
     genai = {}
-    try:
-        genai = genai_values(common.read_json(s3_client, metadata_file_uri))
-    except Exception as e:
-        logger.warning(f"No genai metadata to embed ({metadata_file_uri}): {e}")
-    # The run's provenance (which analysis model) is an attribute row, not a metadata row.
     analysis_model_id = ""
-    try:
-        analysis_model_id = genai_values(common.read_json(s3_client, attribute_file_uri)).get(
-            ANALYSIS_MODEL_ATTRIBUTE_KEY, "") or ""
-    except Exception as e:
-        logger.warning(f"No genai attributes to read the analysis model from ({attribute_file_uri}): {e}")
+    if genai_on:
+        try:
+            genai = genai_values(common.read_json(s3_client, metadata_file_uri))
+        except Exception as e:
+            logger.warning(f"No genai metadata to embed ({metadata_file_uri}): {e}")
+        # The run's provenance (which analysis model) is an attribute row, not a metadata row.
+        try:
+            analysis_model_id = genai_values(common.read_json(s3_client, attribute_file_uri)).get(
+                ANALYSIS_MODEL_ATTRIBUTE_KEY, "") or ""
+        except Exception as e:
+            logger.warning(f"No genai attributes to read the analysis model from ({attribute_file_uri}): {e}")
 
     include_excerpt = common.as_bool(config.get("embeddingIncludeTextExcerpt"), True)
     text_excerpt = (manifest.get("textExcerpt") or "") if include_excerpt else ""

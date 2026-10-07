@@ -208,8 +208,6 @@ const COMMERCIAL: ConfigShape = {
         },
         vectorSearch: {
             enabled: true,
-            embeddingModelId: "amazon.titan-embed-text-v2:0",
-            embeddingDimensions: 1024,
             indexingConcurrency: 5,
             reindexOnCdkDeploy: false,
         },
@@ -244,10 +242,15 @@ const COMMERCIAL: ConfigShape = {
             },
             useSystemGenAiMetadata: {
                 enabled: true,
-                bedrockAnalysisModelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
                 useFargateRenderer: false,
+                useGenAiAnalysis: true,
+                bedrockModels: {
+                    analysisModelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    embeddingModelId: "amazon.titan-embed-text-v2:0",
+                    embeddingDimensions: 1024,
+                },
                 lambdaLimits: {
                     maxInputFileSizeMb: 2048,
                     maxPointCloudPoints: 20000000,
@@ -425,7 +428,7 @@ function buildGovCloud(): ConfigShape {
     cfg.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = false;
     // The GovCloud preset names the "us-gov." inference profile; getConfig() also accepts a "us."
     // profile there, with a warning.
-    cfg.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
         "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0";
     return cfg;
 }
@@ -448,9 +451,11 @@ function buildEuSovereign(): ConfigShape {
     cfg.app.pipelines.useRapidPipeline.useEcs.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useModelOps.ecrContainerImageURI = euEcr;
-    // No embedding or analysis model is verified in the partition, so neither is preset.
-    cfg.app.vectorSearch.embeddingModelId = "";
-    cfg.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId = "";
+    // No embedding or analysis model is verified in the partition, so neither is preset, and the
+    // pipeline's GenAI layer is off: enabling the pipeline there yields an attributes-only run.
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "";
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
+    cfg.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
     return cfg;
 }
 

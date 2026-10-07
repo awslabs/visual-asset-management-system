@@ -46,10 +46,13 @@ const mockConfig = (govCloud: boolean): Config.Config => {
     config.app.govCloud.enabled = govCloud;
     config.app.vectorSearch = {
         enabled: true,
-        embeddingModelId: "amazon.titan-embed-text-v2:0",
-        embeddingDimensions: 1024,
         indexingConcurrency: 7,
         reindexOnCdkDeploy: false,
+    };
+    config.app.pipelines.useSystemGenAiMetadata.bedrockModels = {
+        analysisModelId: config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId,
+        embeddingModelId: "amazon.titan-embed-text-v2:0",
+        embeddingDimensions: 1024,
     };
     (config as any).vectorIndexName = "vec-amazon-titan-embed-text-v2-0-1024";
     config.enableCdkNag = false;

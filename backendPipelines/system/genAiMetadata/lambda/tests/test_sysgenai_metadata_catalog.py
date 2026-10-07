@@ -83,14 +83,15 @@ REGISTRY_EXT_KEYS = {
     "xyz": {"ext_dimensions", "ext_bounds_min", "ext_bounds_max"},
     "string": {"ext_units", "ext_size_category", "ext_crs", "ext_ifc_schema", "ext_project_name", "ext_color_mode",
                "ext_camera", "ext_resolution", "ext_video_codec", "ext_audio_codec", "ext_title", "ext_artist",
-               "ext_album", "ext_author", "ext_language", "ext_encoding", "ext_columns", "ext_geometry_types"},
+               "ext_album", "ext_author", "ext_language", "ext_encoding", "ext_columns", "ext_geometry_types",
+               "ext_detected_format", "ext_container_format"},
     "number": {"ext_extent_max", "ext_volume", "ext_surface_area", "ext_vertex_count", "ext_face_count",
                "ext_triangle_count", "ext_mesh_count", "ext_material_count", "ext_texture_count", "ext_object_count",
                "ext_solid_count", "ext_edge_count", "ext_assembly_count", "ext_point_count", "ext_storey_count",
                "ext_element_count", "ext_geometric_error", "ext_tile_count", "ext_width", "ext_height",
                "ext_duration_seconds", "ext_frame_rate", "ext_bitrate_kbps", "ext_channels", "ext_sample_rate",
                "ext_year", "ext_page_count", "ext_line_count", "ext_word_count", "ext_row_count", "ext_column_count",
-               "ext_feature_count"},
+               "ext_feature_count", "ext_archive_entry_count"},
     "boolean": {"ext_watertight", "ext_has_textures", "ext_has_uv", "ext_has_vertex_colors", "ext_has_animation",
                 "ext_has_armature", "ext_has_color", "ext_has_text"},
     "date": {"ext_captured_at", "ext_created_at"},
@@ -130,7 +131,7 @@ class TestCatalogueShape:
         for field in mc.PROMOTED_FIELDS:
             by_type.setdefault(field.value_type, set()).add(field.key)
         assert by_type == REGISTRY_EXT_KEYS
-        assert len(mc.PROMOTED_FIELDS) == 63 == sum(len(keys) for keys in REGISTRY_EXT_KEYS.values())
+        assert len(mc.PROMOTED_FIELDS) == 66 == sum(len(keys) for keys in REGISTRY_EXT_KEYS.values())
 
     def test_every_key_is_prefixed_and_unique(self):
         keys = [field.key for field in mc.PROMOTED_FIELDS]
@@ -149,7 +150,8 @@ class TestCatalogueShape:
 
     def test_every_source_path_names_a_registry_group(self):
         groups = {"sys_geometry", "sys_statistics", "sys_visual", "sys_scene", "sys_cad", "sys_pointcloud", "sys_ifc",
-                  "sys_image", "sys_media", "sys_document", "sys_text", "sys_data", "sys_tiles3d", "sys_geo"}
+                  "sys_image", "sys_media", "sys_document", "sys_text", "sys_data", "sys_tiles3d", "sys_geo",
+                  "sys_file", "sys_archive"}
         for field in mc.PROMOTED_FIELDS:
             assert field.source and all(path.split(".")[0] in groups for path in field.source), field.key
             assert field.classes and field.classes <= set(fc.FILE_CLASSES), field.key
@@ -304,6 +306,55 @@ class TestImage:
         assert rows["ext_camera"]["metadataValue"] == "Canon"
         assert rows["ext_captured_at"]["metadataValue"] == "2026-01-02T03:04:05Z"
         assert "ext_captured_at" not in _items({"sys_image": {"exif": {"dateTimeOriginal": "yesterday"}}}, "image")
+
+
+@pytest.mark.unit
+class TestRecordingTime:
+    """A video's or audio file's container tags carry when it was recorded (`creation_time`, or a bare
+    `date`), promoted under the same `ext_captured_at` key an image's EXIF capture time uses."""
+
+    def test_video_creation_time_is_the_capture_date(self):
+        attributes = {"sys_media": {"kind": "video", "durationSeconds": 3.0,
+                                    "tags": {"creation_time": "2024-05-01T10:20:30.000000Z", "title": "Walk"}}}
+        rows = _items(attributes, "video")
+        assert rows["ext_captured_at"] == {"metadataKey": "ext_captured_at", "metadataValue": "2024-05-01T10:20:30Z",
+                                           "metadataValueType": "date"}
+        assert mc.media_recorded_at("2024-05-01T10:20:30.000000Z") == "2024-05-01T10:20:30Z"
+
+    def test_a_date_tag_stands_in_when_there_is_no_creation_time(self):
+        assert _value({"sys_media": {"kind": "audio", "tags": {"date": "2019-07-04"}}}, "audio", "ext_captured_at") \
+            == "2019-07-04T00:00:00"
+        assert _value({"sys_media": {"kind": "audio", "tags": {"date": "2019"}}}, "audio", "ext_captured_at") \
+            == "2019-01-01T00:00:00"
+
+    def test_creation_time_wins_over_date_and_an_unparsable_value_yields_no_row(self):
+        both = {"sys_media": {"kind": "video", "tags": {"creation_time": "2024-05-01T10:20:30Z", "date": "2019"}}}
+        assert _value(both, "video", "ext_captured_at") == "2024-05-01T10:20:30Z"
+        assert "ext_captured_at" not in _items({"sys_media": {"kind": "video", "tags": {"creation_time": "soon"}}}, "video")
+        assert "ext_captured_at" not in _items(VIDEO, "video")  # the fixture carries no recording time
+
+    def test_the_promoted_value_passes_the_backend_date_validator(self):
+        for text in ("2024-05-01T10:20:30Z", "2019-07-04T00:00:00", "2019-01-01T00:00:00"):
+            assert backend.validate_metadata_value_common(text, "date") == text
+
+
+@pytest.mark.unit
+class TestOther:
+    """A file of no known class promotes what its bytes identified it as and, for a container, its facts."""
+
+    def test_detected_format_and_archive_facts_promote_for_other_only(self):
+        attributes = {"sys_file": {"name": "bundle.bak", "detectedFormat": "zip"},
+                      "sys_archive": {"containerFormat": "zip", "entryCount": 12, "uncompressedBytes": 4096}}
+        rows = _items(attributes, "other")
+        assert rows["ext_detected_format"]["metadataValue"] == "zip"
+        assert rows["ext_container_format"]["metadataValue"] == "zip"
+        assert rows["ext_archive_entry_count"] == {"metadataKey": "ext_archive_entry_count", "metadataValue": "12",
+                                                   "metadataValueType": "number"}
+        # A classified file carries detectedFormat too, but its class names the format already.
+        assert "ext_detected_format" not in _items({**IMAGE, "sys_file": {**SYS_FILE, "detectedFormat": "jpeg"}}, "image")
+
+    def test_other_without_a_detected_format_promotes_nothing(self):
+        assert mc.promote({"sys_file": {"name": "blob.bin", "sizeBytes": 10}}, "other") == []
 
 
 @pytest.mark.unit

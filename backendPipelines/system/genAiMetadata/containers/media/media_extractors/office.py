@@ -93,19 +93,30 @@ def _iso(value) -> Optional[str]:
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Every text property an OPC core-properties part carries (python-docx/pptx/openpyxl expose the same set).
+_CORE_TEXT_PROPERTIES = ("title", "author", "subject", "keywords", "category", "comments", "content_status",
+                         "identifier", "language", "last_modified_by", "revision", "version")
+_CORE_DATE_PROPERTIES = (("created", "createdAt"), ("modified", "modifiedAt"), ("last_printed", "lastPrintedAt"))
+
+
+def _camel_property(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part.title() for part in rest)
+
+
 def _core_properties(core) -> Dict[str, object]:
-    """title, author, subject, keywords, createdAt and modifiedAt from an OPC core-properties part."""
+    """Every stored core property of an OPC core-properties part: the text properties (title, author,
+    subject, keywords, category, comments, contentStatus, identifier, language, lastModifiedBy, revision,
+    version) and the dates as createdAt, modifiedAt and lastPrintedAt."""
     properties: Dict[str, object] = {}
-    for key in ("title", "author", "subject", "keywords"):
+    for key in _CORE_TEXT_PROPERTIES:
         value = getattr(core, key, None)
-        if value:
-            properties[key] = str(value)[:_PROPERTY_MAX_CHARS]
-    created = _iso(getattr(core, "created", None))
-    if created:
-        properties["createdAt"] = created
-    modified = _iso(getattr(core, "modified", None))
-    if modified:
-        properties["modifiedAt"] = modified
+        if value not in (None, "", 0):
+            properties[_camel_property(key)] = str(value)[:_PROPERTY_MAX_CHARS]
+    for key, name in _CORE_DATE_PROPERTIES:
+        rendered = _iso(getattr(core, key, None))
+        if rendered:
+            properties[name] = rendered
     return properties
 
 
