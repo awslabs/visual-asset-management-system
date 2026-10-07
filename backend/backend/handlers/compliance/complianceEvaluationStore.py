@@ -58,6 +58,7 @@ from botocore.config import Config
 
 from common.apiRoutes import API_EXECUTE_WORKFLOW
 from common.compliance import evaluationEngine as engine
+from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, to_update_expr
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import list_all_objects
@@ -595,29 +596,14 @@ def write_audit(
     evaluation_id: Optional[str] = None,
     cascade_id: Optional[str] = None,
 ) -> None:
-    """One compliance audit entry (AssetIndex on `databaseId:assetId`, EventTypeIndex on
-    `eventType`). Best-effort: a failed write is logged and never raised, so the mutation it
+    """One compliance audit entry, built by `auditRecord.build_audit_item` so it is keyed for every
+    audit index. Best-effort: a failed write is logged and never raised, so the mutation it
     describes — already applied — is not reported as failed."""
-    item = {
-        "entryId": str(uuid.uuid4()),
-        "databaseId:assetId": f"{database_id}:{asset_id}",
-        "timestamp": now_iso(),
-        "eventType": event_type,
-        "databaseId": database_id,
-        "assetId": asset_id,
-        "actor": actor,
-        "details": json.dumps(details or {}),
-    }
-    if previous_state is not None:
-        item["previousState"] = previous_state
-    if new_state is not None:
-        item["newState"] = new_state
-    if schema_name is not None:
-        item["schemaName"] = schema_name
-    if evaluation_id is not None:
-        item["evaluationId"] = evaluation_id
-    if cascade_id is not None:
-        item["cascadeId"] = cascade_id
+    item = build_audit_item(
+        database_id, asset_id, event_type, actor, details,
+        previous_state=previous_state, new_state=new_state, schema_name=schema_name,
+        evaluation_id=evaluation_id, cascade_id=cascade_id, timestamp=now_iso(),
+    )
     try:
         audit_table.put_item(Item=item)
     except Exception as e:

@@ -15,7 +15,6 @@ Every schema record the GET routes return carries a top-level `schemaFormat` (`v
 """
 
 import json
-import uuid
 from datetime import datetime, timezone
 
 import boto3
@@ -26,6 +25,7 @@ from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_SCHEMA_BY_NAME, API_COMPLIANCE_SCHEMAS
 from common.compliance import evaluationEngine as engine
+from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, query_has_match
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -488,17 +488,10 @@ def delete_schema(event, schema_name):
                 "schemaName": row["schemaName"], "internalVersion": row["internalVersion"],
             })
 
-    audit_table.put_item(Item={
-        "entryId": str(uuid.uuid4()),
-        "databaseId:assetId": "*:*",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "eventType": "schema_deleted",
-        "databaseId": "*",
-        "assetId": "*",
-        "actor": claims_and_roles["tokens"][0],
-        "schemaName": schema_name,
-        "details": json.dumps({"versionsDeleted": len(rows)}),
-    })
+    audit_table.put_item(Item=build_audit_item(
+        "*", "*", "schema_deleted", claims_and_roles["tokens"][0],
+        {"versionsDeleted": len(rows)}, schema_name=schema_name,
+    ))
 
     logger.info(f"Deleted schema '{schema_name}' ({len(rows)} versions)")
     return success(body={

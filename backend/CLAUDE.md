@@ -35,6 +35,9 @@ backend/
 │   │   ├── apiRoutes.py                            # MASTER API route registry: ApiRoute constants,
 │   │   │                                           #   category group arrays, ALL_API_ROUTES.
 │   │   │                                           #   Handlers dispatch via ApiRoute.matches().
+│   │   ├── compliance/auditRecord.py               # build_audit_item(): the ONE builder of audit rows;
+│   │   │                                           #   sets allListPartition for AuditByDateGSI (guard test
+│   │   │                                           #   fails any audit put_item that bypasses it)
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, metadata/relationship/
 │   │   │                                           #   pipeline checks, tolerances, verdict → state
