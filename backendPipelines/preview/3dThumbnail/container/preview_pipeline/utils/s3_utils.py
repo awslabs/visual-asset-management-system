@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import json
 import threading
 
 import boto3
@@ -100,6 +101,42 @@ def list_objects_with_prefix(bucket_name, prefix):
     except ClientError as e:
         logger.exception(f"Failed to list objects: {e}")
         return []
+
+
+def parse_s3_uri(uri):
+    """Split ``s3://bucket/key`` into ``(bucket, key)``; ``("", "")`` for an empty or non-s3 value."""
+    if not uri or not uri.startswith("s3://"):
+        return "", ""
+    without_scheme = uri[len("s3://"):]
+    if "/" in without_scheme:
+        bucket, key = without_scheme.split("/", 1)
+        return bucket, key
+    return without_scheme, ""
+
+
+def get_json(bucket_name, object_key):
+    """The parsed JSON object at the key, or None when the key does not exist. Any other failure
+    raises, so a transport error is not mistaken for an absent object."""
+    try:
+        response = client.get_object(Bucket=bucket_name, Key=object_key)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404", "NotFound"):
+            return None
+        raise
+    body = response["Body"].read().decode("utf-8")
+    return json.loads(body) if body.strip() else None
+
+
+def put_json(bucket_name, object_key, payload):
+    body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    client.put_object(Bucket=bucket_name, Key=object_key, Body=body, ContentType="application/json")
+    return object_key
+
+
+def put_file(bucket_name, object_key, file_path, content_type):
+    with open(file_path, "rb") as handle:
+        client.put_object(Bucket=bucket_name, Key=object_key, Body=handle, ContentType=content_type)
+    return object_key
 
 
 class ProgressPercentage(object):

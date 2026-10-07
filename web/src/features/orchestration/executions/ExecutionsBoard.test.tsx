@@ -652,6 +652,28 @@ describe("ExecutionsBoard", () => {
         });
     });
 
+    it("offers the System-Reindex stored value and sends it unchanged", async () => {
+        const { useExecutions } = require("../api/queries");
+        renderBoard([]);
+
+        const select = screen.getByLabelText("Filter by trigger") as HTMLSelectElement;
+        expect(Array.from(select.options).map((option) => option.value)).toEqual([
+            "",
+            "Manual",
+            "File-Upload",
+            "System-Reindex",
+        ]);
+
+        await userEvent.selectOptions(
+            select,
+            screen.getByRole("option", { name: "System reindex" })
+        );
+        await waitFor(() => {
+            const lastFilters = useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+            expect(lastFilters.triggerType).toBe("System-Reindex");
+        });
+    });
+
     /**
      * A custom range's lower bound is not optional in the request, only in the form.
      *

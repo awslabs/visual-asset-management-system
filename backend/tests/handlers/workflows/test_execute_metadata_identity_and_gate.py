@@ -217,7 +217,6 @@ class TestMetadataReadIdentity:
         event["body"] = json.dumps(body)
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._metadata_service_lambda", side_effect=_capture), \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
@@ -260,7 +259,6 @@ class TestNamedSourceDatabaseAgainstTheGate:
              patch(f"{MOD}._get_asset",
                    side_effect=lambda d, a: {"databaseId": d, "assetId": a, "assetName": a,
                                              "bucketId": "bkt-1", "assetLocation": {"Key": f"{a}/"}}), \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_file_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_database_metadata", return_value=[]) as m_db, \
@@ -358,7 +356,6 @@ class TestOversizedRecordAnswer:
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb"), \
              patch(f"{MOD}._persist_execution_records", side_effect=self._item_size_error()):
@@ -384,7 +381,6 @@ class TestOversizedRecordAnswer:
             "PutItem")
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb"), \
              patch(f"{MOD}._persist_execution_records", side_effect=err):
@@ -450,7 +446,6 @@ class TestPerStepInputNarrowingInTheSfnInput:
              p["exists"], p["enforcer"], p["claims"], \
              patch(f"{MOD}._get_pipeline", side_effect=lambda db, pid: dict(pipelines[pid])), \
              patch(f"{MOD}._resolve_pipeline_configs", side_effect=_resolve_with_overrides), \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}

@@ -240,14 +240,18 @@ def pipeline_input_manifest_key(execution_id: str, pipeline_index: int) -> str:
 
 def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: str = "",
                          database_id: str = "", asset_id: str = "",
-                         asset_root_s3_key: str = "", aux_preview_prefix: str = "") -> dict:
+                         asset_root_s3_key: str = "", aux_preview_prefix: str = "",
+                         bucket_id: str = "") -> dict:
     """One self-locating input-manifest entry: an asset-relative path mapped to the S3
     location (bucket/key/versionId) and asset identity a pipeline reads for that path.
 
     Locations are carried as relative keys plus the file's own bucket (never a pre-built
     s3:// URI): `assetRootS3Key` is this file's asset-root prefix within `bucket`, and
     `auxPreviewPrefix` is this file's unique auxiliary-bucket preview prefix. Downstream
-    consumers reconstruct s3:// as needed from `bucket` + the relevant relative key."""
+    consumers reconstruct s3:// as needed from `bucket` + the relevant relative key.
+    `bucketId` is the asset bucket's registration id (the asset-buckets table key), carried
+    beside the bucket NAME for a consumer that resolves the registration row -- its name and
+    baseAssetsPrefix -- from the manifest alone; empty when the writer has no asset row."""
     return {
         "relativePath": normalize_file_key(relative_path),
         "databaseId": database_id or "",
@@ -255,6 +259,7 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
         "assetRootS3Key": asset_root_s3_key or "",
         "auxPreviewPrefix": aux_preview_prefix or "",
         "bucket": bucket,
+        "bucketId": bucket_id or "",
         "key": key,
         "versionId": version_id or "",
     }

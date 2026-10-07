@@ -52,11 +52,10 @@ VAMS includes 20 built-in viewer plugins that allow users to visualize a wide ra
 VAMS provides a configurable pipeline and workflow system that automates common asset processing tasks. AWS Step Functions orchestrates the steps of a workflow, and each step reaches its processing backend through one of four execution types -- AWS Lambda, Amazon SQS, Amazon EventBridge, or AWS Deadline Cloud. Container-based processing runs on AWS Batch Fargate, with licensed pipelines also available on Amazon ECS and Amazon EKS.
 
 -   **3D Conversion** -- Convert between 3D file formats using Trimesh and Blender
--   **CAD/Mesh Metadata Extraction** -- Automatically extract geometric metadata from CAD and mesh files using CADQuery
 -   **Point Cloud Processing** -- Generate Potree octree representations for browser-based point cloud streaming
 -   **Gaussian Splat Generation** -- Create 3D Gaussian splats from media files using the 3D Reconstruction Toolkit
 -   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D, point cloud, CAD, and USD files via headless rendering
--   **GenAI Metadata Labeling** -- Automatically generate metadata labels using Amazon Bedrock foundation models
+-   **GenAI Metadata Generation** -- Analyze every viewer-supported file with Amazon Bedrock: extract geometric and media attributes, write typed and descriptive file metadata, and embed each file version for natural-language search
 -   **NVIDIA Isaac Lab Training** -- Run reinforcement learning training and evaluation workloads
 -   **RapidPipeline and VNTANA ModelOps** -- Licensed pipeline integrations for advanced spatial data optimization
 
@@ -68,17 +67,18 @@ Most pipelines support automatic triggering on file upload. Enable `autoRegister
 
 ## Intelligent Search
 
-VAMS integrates with Amazon OpenSearch Service to provide full-text and attribute-based search across assets and files. The search system indexes asset metadata, file attributes, tags, and custom metadata fields for rapid discovery.
+VAMS provides two complementary ways to find content. Amazon OpenSearch Service powers full-text and attribute-based search across assets and files, indexing asset metadata, file attributes, tags, and custom metadata fields. Natural-language search ranks files by what they show or contain, using Amazon Bedrock embeddings of the metadata, extracted text, and renders that the SYSTEM GenAI metadata pipeline produces, stored in a DynamoDB vector index.
 
 -   Full-text search across asset names, descriptions, metadata, and file attributes
+-   Natural-language queries such as "a rusted pump housing" or "drone footage of a bridge deck", ranked by semantic similarity and limited to the caller's accessible assets
 -   Dual-index architecture with separate indexes for assets and files, enabling targeted search scopes
--   Automatic index synchronization through Amazon SNS and Amazon SQS event-driven indexing
+-   Automatic index synchronization through Amazon SNS and Amazon SQS event-driven indexing, and a single vector indexer that tracks file versions, archives, and deletes
 -   Preview thumbnail display in search results for visual asset identification
 -   Support for both Amazon OpenSearch Serverless (zero operational overhead) and Amazon OpenSearch Provisioned (fine-grained configuration control)
--   Optional search re-indexing on deployment for full index refresh
+-   Optional search re-indexing on deployment for full index refresh, and an on-demand vector reindex
 
 :::note[OpenSearch Is Optional]
-VAMS can operate without Amazon OpenSearch. When disabled, the `NOOPENSEARCH` feature flag activates, and the web interface adjusts to hide search-dependent features. Basic asset browsing and management remain fully functional.
+VAMS can operate without Amazon OpenSearch. When disabled, the `NOOPENSEARCH` feature flag activates and the web interface hides keyword search, metadata filtering, and map view. Natural-language search does not depend on OpenSearch and remains available whenever vector search is enabled. Basic asset browsing and management remain fully functional in every configuration.
 :::
 
 ---

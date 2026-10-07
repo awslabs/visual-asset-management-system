@@ -34,6 +34,7 @@ USAGE_ERROR_CASES = [
     ["execution", "details-metadata"],
     ["assets", "get"],
     ["database", "get"],
+    ["search", "nlp"],
 ]
 
 

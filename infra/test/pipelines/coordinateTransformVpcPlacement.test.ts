@@ -21,7 +21,7 @@
  * subnets and appear in NEITHER block, so the pipeline was the sole inconsistency.
  *
  * Two of those peers are live proof the arrangement works: `preview-3d-thumbnail` and
- * `metadata-extraction-cad-mesh` executions completed successfully on a deployment with no public subnet,
+ * `conversion-3d-basic` executions completed successfully on a deployment with no public subnet,
  * no NAT gateway and no private ECS endpoint. That is why removing the flag is safe rather than merely
  * plausible — Fargate tasks need ECR, Amazon S3 and CloudWatch Logs, which the isolated-subnet endpoint
  * block supplies, not the ECS control-plane endpoint.

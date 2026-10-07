@@ -1,0 +1,325 @@
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as path from "path";
+import { Construct } from "constructs";
+import { Duration } from "aws-cdk-lib";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
+import * as cdk from "aws-cdk-lib";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
+import * as Service from "../helper/service-helper";
+import * as Config from "../../config/config";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import {
+    suppressCdkNagErrorsByGrantReadWrite,
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../helper/security";
+import * as iam from "aws-cdk-lib/aws-iam";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
+    suppressCdkNagDynamoStreamListWildcard,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
+} from "../helper/security";
+import { searchLambdasInVpc } from "../helper/searchPlacement";
+
+// The single orchestration-bus event sqsBucketSync publishes (publish_to_orchestration_bus in
+// backend/backend/handlers/indexing/sqsBucketSync.py): Source is the deployment's event-source prefix
+// followed by this suffix, and DetailType is fixed. The handler builds the same two literals from its
+// ORCHESTRATION_EVENT_SOURCE_PREFIX env var, and nothing else couples the two languages.
+const FILE_UPLOAD_EVENT_SOURCE_SUFFIX = ".trigger.fileUpload";
+const FILE_UPLOAD_EVENT_DETAIL_TYPE = "asset.file.uploaded";
+export function buildSqsBucketSyncFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    bucketName: string,
+    bucketPrefix: string,
+    defaultDatabaseId: string,
+    handlerType: "created" | "deleted",
+    index: number,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
+    // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
+    // made this a publish grant against any account's topics of that name.
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
+    const fun = new lambda.Function(scope, "sqsBucketSync-" + handlerType + "-" + index, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.sqsBucketSync.lambda_handler_` + handlerType,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+
+        environment: {
+            FILE_INDEXER_SNS_TOPIC_ARN: storageResources.sns.fileIndexerSnsTopic.topicArn,
+            ASSET_BUCKET_NAME: bucketName,
+            ASSET_BUCKET_PREFIX: bucketPrefix,
+            DEFAULT_DATABASE_ID: defaultDatabaseId,
+            ORCHESTRATION_BUS_NAME: storageResources.eventBridge.orchestrationBus.eventBusName,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
+        },
+    });
+
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetHistoryStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
+    storageResources.dynamo.tagStorageTable.grantReadData(fun);
+
+    // Grant SNS publish permissions
+    storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
+
+    // Grant EventBridge publish to the orchestration bus (fileUpload trigger delivery), scoped to the
+    // one event the handler emits. A PutEvents request carries a set of entries, so its source and
+    // detail-type condition keys are multi-valued and take the ForAllValues operator: a batch is
+    // allowed only when every entry carries this source and detail type.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["events:PutEvents"],
+            resources: [storageResources.eventBridge.orchestrationBus.eventBusArn],
+            conditions: {
+                "ForAllValues:StringEquals": {
+                    "events:source": `${storageResources.eventBridge.eventSourcePrefix}${FILE_UPLOAD_EVENT_SOURCE_SUFFIX}`,
+                    "events:detail-type": FILE_UPLOAD_EVENT_DETAIL_TYPE,
+                },
+            },
+        })
+    );
+
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["sns:CreateTopic", "sns:DeleteTopic"],
+            resources: [assetTopicWildcardArn],
+        })
+    );
+
+    grantReadWritePermissionsToAllAssetBuckets(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+    return fun;
+}
+
+export function buildReindexerFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "crOsReindexer";
+    const inVpc = searchLambdasInVpc(config);
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.crReindexer.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc: inVpc ? vpc : undefined, //Provisioned OpenSearch, a private Serverless collection, or useForAllLambdas
+        vpcSubnets: inVpc ? { subnets: subnets } : undefined,
+
+        environment: {
+            OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
+            OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
+            OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
+            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
+                ? "provisioned"
+                : "serverless",
+        },
+    });
+
+    // Add access to read SSM parameters
+    fun.role?.addToPrincipalPolicy(
+        new cdk.aws_iam.PolicyStatement({
+            actions: ["ssm:GetParameter"],
+            resources: [Service.IAMArn("*" + config.name + "*").ssm],
+        })
+    );
+
+    // Grant DynamoDB permissions
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+
+    // Grant S3 read permissions
+    grantReadPermissionsToAllAssetBuckets(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+
+    return fun;
+}
+
+export function buildFileIndexerSnsQueuingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "fileIndexerSnsQueuing";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.snsQueuing.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            SNS_TOPIC_ARN: storageResources.sns.fileIndexerSnsTopic.topicArn,
+        },
+    });
+
+    // Grant SNS publish permissions
+    storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.assetFileMetadataStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.fileAttributeStorageTable.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
+    suppressCdkNagLambda(fun);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+
+    return fun;
+}
+
+export function buildAssetIndexerSnsQueuingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "assetIndexerSnsQueuing";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.snsQueuing.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            SNS_TOPIC_ARN: storageResources.sns.assetIndexerSnsTopic.topicArn,
+        },
+    });
+
+    // Grant SNS publish permissions
+    storageResources.sns.assetIndexerSnsTopic.grantPublish(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.assetLinksStorageTableV2.grantStreamRead(fun);
+    storageResources.dynamo.assetLinksMetadataStorageTable.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
+    suppressCdkNagLambda(fun);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+
+    return fun;
+}
+
+export function buildDatabaseIndexerSnsQueuingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "databaseIndexerSnsQueuing";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.snsQueuing.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            SNS_TOPIC_ARN: storageResources.sns.databaseIndexerSnsTopic.topicArn,
+        },
+    });
+
+    // Grant SNS publish permissions
+    storageResources.sns.databaseIndexerSnsTopic.grantPublish(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.databaseStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.databaseMetadataStorageTable.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
+    suppressCdkNagLambda(fun);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+
+    return fun;
+}

@@ -21,6 +21,13 @@ set_log_level(logging.INFO)
 
 
 def main():
+    # The SYSTEM GenAI metadata pipeline's Fargate render branch runs this image with the state in
+    # ANALYSIS_STATE_JSON and no thumbnail definition; the branch entry module owns that run.
+    if len(sys.argv) > 1 and sys.argv[1] == "analysisBatch":
+        from .analysis import batch_job
+
+        sys.exit(batch_job.main())
+
     hello()
 
     # The uid the work actually runs under. The image declares a non-root USER and the Batch job

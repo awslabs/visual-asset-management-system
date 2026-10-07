@@ -4,18 +4,16 @@
  */
 
 import React, { useState } from "react";
-import {
-    FormField,
-    Input,
-    Select,
-    Button,
-    SpaceBetween,
-    Box,
-    Header,
-    Container,
-    Grid,
-    Icon,
-} from "@cloudscape-design/components";
+import FormField from "@cloudscape-design/components/form-field";
+import Input from "@cloudscape-design/components/input";
+import Select from "@cloudscape-design/components/select";
+import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Box from "@cloudscape-design/components/box";
+import Header from "@cloudscape-design/components/header";
+import Container from "@cloudscape-design/components/container";
+import Grid from "@cloudscape-design/components/grid";
+import Icon from "@cloudscape-design/components/icon";
 import { MetadataFilter } from "../types";
 import Synonyms from "../../../synonyms";
 

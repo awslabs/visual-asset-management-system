@@ -457,11 +457,12 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 
 ### Search route
 
-| Route            | Methods | Tier 2 Object Type  | Tier 2 Fields                                                                                                                                                                               |
-| ---------------- | ------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/search`        | GET     | API-level only      | -- (returns the index field mappings only)                                                                                                                                                  |
-| `/search`        | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset` (POST is non-mutating) |
-| `/search/simple` | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset` (POST is non-mutating) |
+| Route            | Methods | Tier 2 Object Type  | Tier 2 Fields                                                                                                                                                                                                                                    |
+| ---------------- | ------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/search`        | GET     | API-level only      | -- (returns the index field mappings only)                                                                                                                                                                                                       |
+| `/search`        | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset` (POST is non-mutating)                                                      |
+| `/search/simple` | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset` (POST is non-mutating)                                                      |
+| `/search/nlp`    | POST    | `database`, `asset` | `databaseId`, `assetName`, `assetType`, `tags`; the query covers only the databases the caller can `GET` as a `database`, and each hit is then checked as an `asset` (POST is non-mutating; the route exists only when vector search is enabled) |
 
 ### Subscription routes
 

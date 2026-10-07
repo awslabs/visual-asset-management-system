@@ -1,0 +1,74 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# AWS Lambda image for the 3D render branch of the SYSTEM GenAI metadata pipeline. It ships the same
+# preview_pipeline package as the Fargate thumbnail image (Dockerfile) with the format libraries pinned to
+# exact versions; the handler starts Xvfb itself and keeps every working directory under /tmp, the only
+# writable path in Lambda.
+#
+# Pinned by digest, not by tag. The digest is the multi-arch manifest list, which is what keeps
+# --platform=linux/amd64 resolving. To move it: resolve the new digest and confirm it is a manifest list
+# carrying linux/amd64 BEFORE editing -- a wrong digest fails the build rather than falling back.
+#   TOK=$(curl -s "https://public.ecr.aws/token/?scope=repository:lambda/python:pull&service=public.ecr.aws" | jq -r .token)
+#   curl -sI -H "Authorization: Bearer $TOK" \
+#        -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+#        https://public.ecr.aws/v2/lambda/python/manifests/3.12 | grep -i docker-content-digest
+FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.12@sha256:a89893d9c93a9ffbf9e35ca32d7cadc635cbf3a9aec94480c75ed07150a05daa
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Headless rendering: VTK renders through GLX on the Xvfb display the handler starts, with Mesa's
+# software rasteriser.
+ENV DISPLAY=:99 \
+    PYVISTA_OFF_SCREEN=true \
+    PYVISTA_TRAME_SERVER_PROXY_PREFIX="" \
+    VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN=1 \
+    MESA_GL_VERSION_OVERRIDE=4.5 \
+    LIBGL_ALWAYS_SOFTWARE=1 \
+    GALLIUM_DRIVER=llvmpipe
+
+# Every cache PyVista, VTK, matplotlib and fontconfig write lives under /tmp; the handler creates these
+# directories at cold start (preview_pipeline.analysis.workdirs.ensure_runtime_dirs).
+ENV HOME=/tmp/home \
+    MPLCONFIGDIR=/tmp/home/matplotlib \
+    XDG_CACHE_HOME=/tmp/home/.cache \
+    XDG_RUNTIME_DIR=/tmp/runtime
+
+# The X server, Mesa software GL, the X client libraries the vtk and cadquery-ocp wheels link against,
+# and shadow-utils for useradd.
+RUN dnf install -y --setopt=install_weak_deps=0 \
+        xorg-x11-server-Xvfb \
+        mesa-libGL \
+        mesa-libGLU \
+        mesa-dri-drivers \
+        libglvnd-glx \
+        libX11 \
+        libXext \
+        libXrender \
+        libXcursor \
+        libXt \
+        libXi \
+        libXinerama \
+        libSM \
+        libICE \
+        libxkbcommon \
+        fontconfig \
+        glib2 \
+        libgomp \
+        shadow-utils \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+COPY requirements.lambda.txt ${LAMBDA_TASK_ROOT}/requirements.lambda.txt
+RUN pip install --no-cache-dir --only-binary=:all: -r ${LAMBDA_TASK_ROOT}/requirements.lambda.txt
+
+COPY preview_pipeline ${LAMBDA_TASK_ROOT}/preview_pipeline
+COPY lambda_handler.py ${LAMBDA_TASK_ROOT}/lambda_handler.py
+
+# The base image's PATH omits /usr/sbin, where shadow-utils installs useradd.
+RUN /usr/sbin/useradd --uid 10001 --user-group --no-create-home appuser
+USER appuser
+
+ENTRYPOINT ["/lambda-entrypoint.sh"]
+CMD ["lambda_handler.lambda_handler"]

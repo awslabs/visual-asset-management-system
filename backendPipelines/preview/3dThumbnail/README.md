@@ -18,12 +18,12 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 
 ## Supported Formats
 
-| Category    | Extensions                                | Handler              |
-| :---------- | :---------------------------------------- | :------------------- |
-| Mesh        | .ply, .stl, .obj, .glb, .gltf, .fbx, .drc | trimesh              |
-| Point Cloud | .las, .laz, .e57, .ptx, .pcd, .fls, .fws  | laspy, pye57, open3d |
-| CAD         | .stp, .step                               | cadquery             |
-| USD         | .usd, .usda, .usdc, .usdz                 | usd-core (pxr)       |
+| Category    | Extensions                                | Handler                                         |
+| :---------- | :---------------------------------------- | :---------------------------------------------- |
+| Mesh        | .ply, .stl, .obj, .glb, .gltf, .fbx, .drc | trimesh, DracoPy (.drc), open3d (.fbx fallback) |
+| Point Cloud | .las, .laz, .e57, .ptx, .pcd, .fls, .fws  | laspy, pye57, built-in PTX and PCD readers      |
+| CAD         | .stp, .step                               | cadquery                                        |
+| USD         | .usd, .usda, .usdc, .usdz                 | usd-core (pxr)                                  |
 
 ## Architecture
 

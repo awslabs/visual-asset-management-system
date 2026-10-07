@@ -296,7 +296,7 @@ export interface AssetFilePage {
  *
  * Mirrors `searchAssetsPaged`: the search index resolves the term server-side when available, so an
  * asset holding thousands of files does not have to be pulled into the browser to be filtered. The
- * `file` entity type is indexed separately from `asset` (handlers/indexing/fileIndexer.py), keyed by
+ * `file` entity type is indexed separately from `asset` (handlers/osSemanticSearch/osFileIndexer.py), keyed by
  * `str_key` (the asset-relative path) with `str_assetid` / `str_databaseid` scoping it.
  *
  * Falls back to the direct listing when OpenSearch is off, when the call fails, or when the response

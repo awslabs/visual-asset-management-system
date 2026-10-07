@@ -12,12 +12,12 @@ Manufacturing organizations generate large volumes of CAD models, 3D scans, and 
 
 ### How VAMS Solves It
 
-VAMS centralizes manufacturing visual assets in Amazon S3 with metadata-rich organization across databases. Engineers can view CAD files (STEP, IGES, BREP) and 3D meshes (GLTF, GLB, OBJ, FBX, STL) directly in the browser through the Three.js viewer without installing desktop CAD software. The CAD/Mesh Metadata Extraction pipeline automatically extracts geometric properties on upload.
+VAMS centralizes manufacturing visual assets in Amazon S3 with metadata-rich organization across databases. Engineers can view CAD files (STEP, IGES, BREP) and 3D meshes (GLTF, GLB, OBJ, FBX, STL) directly in the browser through the Three.js viewer without installing desktop CAD software. The SYSTEM GenAI metadata pipeline extracts geometric attributes and generates descriptive metadata for every CAD and mesh file on upload.
 
 **Key features used:**
 
 -   Three.js viewer with CAD format support (STEP, IGES, BREP via WebAssembly)
--   CAD/Mesh Metadata Extraction pipeline for automated property extraction
+-   SYSTEM GenAI metadata pipeline for automated attribute extraction and metadata generation
 -   Asset versioning with alias naming for engineering revision tracking
 -   Metadata schemas for standardized part number and BOM (Bill of Materials) tracking
 -   Fine-grained access control to separate product lines and restrict access by team
@@ -203,14 +203,14 @@ AI and ML teams working with spatial data need to manage, curate, and label larg
 
 ### How VAMS Solves It
 
-VAMS provides structured dataset management with metadata schemas, versioning, and automated labeling pipelines. The GenAI Metadata Labeling pipeline uses Amazon Bedrock and Amazon Rekognition to automatically generate descriptive metadata for 3D assets. The search system enables ML engineers to discover and curate training datasets by querying across metadata fields.
+VAMS provides structured dataset management with metadata schemas, versioning, and automated labeling pipelines. The SYSTEM GenAI metadata pipeline uses Amazon Bedrock to generate descriptive metadata for every file type VAMS can display, and — with vector search enabled — embeds each file version so datasets can be searched by content. The search system enables ML engineers to discover and curate training datasets by querying across metadata fields.
 
 **Key features used:**
 
--   GenAI Metadata Labeling pipeline for automated asset tagging via Amazon Bedrock
+-   SYSTEM GenAI metadata pipeline for automated file tagging and description via Amazon Bedrock
 -   Metadata schemas with typed fields for structured dataset annotation
 -   Asset versioning for tracking dataset iterations
--   Amazon OpenSearch Service search for dataset discovery and curation
+-   Amazon OpenSearch Service keyword search and natural-language (vector) search for dataset discovery and curation
 -   VamsCLI for bulk dataset ingestion and metadata export
 -   REST API for integration with training pipelines
 

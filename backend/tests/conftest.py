@@ -426,6 +426,10 @@ os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"] = "assetFileMetadataTable"
 os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"] = "fileAttributeTable"
 os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"] = "metadataSchemaTableV2"
 
+# Vector search + workflow coordination tables
+os.environ["VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME"] = "vectorEmbeddingsStorageTable"
+os.environ["WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME"] = "workflowExecutionLocksStorageTable"
+
 
 @pytest.fixture(scope="function")
 def lambda_context():

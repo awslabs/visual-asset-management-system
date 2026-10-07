@@ -4,7 +4,7 @@
 """A malformed STORED metadata row must not make an entity's metadata permanently unwritable.
 
 The four metadata DELETE paths read their existing rows with `.get` precisely because a row written
-by an earlier deployment can carry no `metadataValueType` -- handlers/indexing/fileIndexer.py
+by an earlier deployment can carry no `metadataValueType` -- handlers/osSemanticSearch/osFileIndexer.py
 tolerates exactly that shape. The eight WRITE-path copies of the same read kept a direct subscript
 inside the now fail-closed schema-validation arm, so a `KeyError` on one such row was answered with
 SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE: a 400 on every metadata create AND update for that entity,

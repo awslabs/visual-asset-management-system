@@ -354,6 +354,8 @@ def resolve_inputs(data, manifest=None):
     payload fields (fallback). ``data`` is the Step Functions payload body; ``manifest`` is the
     fetched envelope (or ``None``). Returns a flat dict using the legacy field names every
     pipeline already forwards, plus the resolved input-file list and orchestration config.
+    ``outputS3AssetResultsPath`` is the execution's results prefix (``outputs.results``): where a
+    pipeline writes structured result documents and the reserved ``execution.status.json``.
 
     Manifest values override legacy values only when present, so a partial manifest still
     degrades gracefully to the legacy payload."""
@@ -365,6 +367,7 @@ def resolve_inputs(data, manifest=None):
         "outputS3AssetFilesPath": data.get("outputS3AssetFilesPath", ""),
         "outputS3AssetPreviewPath": data.get("outputS3AssetPreviewPath", ""),
         "outputS3AssetMetadataPath": data.get("outputS3AssetMetadataPath", ""),
+        "outputS3AssetResultsPath": data.get("outputS3AssetResultsPath", ""),
         "inputOutputS3AssetAuxiliaryFilesPath": data.get("inputOutputS3AssetAuxiliaryFilesPath", ""),
         "inputMetadataS3Location": data.get("inputMetadataS3Location", ""),
         # The per-pipeline input configuration (the user-defined inputParameters) is delivered
@@ -432,6 +435,8 @@ def resolve_inputs(data, manifest=None):
         resolved["outputS3AssetPreviewPath"] = _join_s3(output_bucket, outputs["previews"])
     if outputs.get("metadata"):
         resolved["outputS3AssetMetadataPath"] = _join_s3(output_bucket, outputs["metadata"])
+    if outputs.get("results"):
+        resolved["outputS3AssetResultsPath"] = _join_s3(output_bucket, outputs["results"])
 
     # The aux temporary working path is reconstructed from the aux bucket + bucket-relative
     # aux temp prefix.

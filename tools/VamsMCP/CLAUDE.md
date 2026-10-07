@@ -114,6 +114,9 @@ asymmetry other callers rely on):
    fans out across a group), so keep all three out of `autoApprove`. The tier is
    about stored data; that list is about compute. Three places state this and must
    agree: this rule, the README's caution paragraph, and the tool's own docstring.
+   The same three-place rule covers a read that BILLS on every call: `search_nlp`
+   embeds the query with Bedrock, so it stays out of `autoApprove` and its docstring
+   says so.
    The same three-place rule holds for the tools that RETURN a credential:
    `create_api_key` and `create_user_api_key` (write tier) hand back the one-time
    API key value, a bearer token with the acting user's permissions, so both stay out

@@ -367,7 +367,6 @@ class TestMetadataSourceGapsThroughTheHandler:
              patch(f"{MOD}._get_asset",
                    side_effect=lambda d, a: {"databaseId": d, "assetId": a, "assetName": a,
                                              "bucketId": "bkt-1", "assetLocation": {"Key": f"{a}/"}}), \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_file_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_database_metadata", return_value=[]), \

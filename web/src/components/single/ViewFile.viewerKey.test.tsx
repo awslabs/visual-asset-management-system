@@ -40,6 +40,15 @@ jest.mock("../metadata/FileMetadata", () => ({ __esModule: true, default: () => 
 jest.mock("../filemanager/components/FileVersionsTable", () => ({
     FileVersionsTable: () => null,
 }));
+// The registry pulls in Vite's import.meta.glob; ViewFile uses only the ViewerMode type from it, and
+// the compare-mode lookups are stubbed to "visualize only" so the toggle stays out of this test.
+jest.mock("../../visualizerPlugin/core/PluginRegistry", () => ({}));
+jest.mock("../../visualizerPlugin/core/useViewerRegistryReady", () => ({
+    useViewerRegistryReady: () => true,
+}));
+jest.mock("../../visualizerPlugin/core/viewableExtensions", () => ({
+    availableModesForFiles: () => ({ visualize: true, compare: false }),
+}));
 
 const mockMounts: string[] = [];
 jest.mock("../../visualizerPlugin/components/DynamicViewer", () => {

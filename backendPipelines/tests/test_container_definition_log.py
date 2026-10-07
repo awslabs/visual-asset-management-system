@@ -3,9 +3,10 @@
 
 """No Fargate `.sync` container writes the Step Functions task token into its log output.
 
-The four Fargate pipeline containers -- coordinate transform, 3D thumbnail, Blender/GenAI metadata
-labeling, and the Potree point cloud viewer (PDAL + Potree images share one entry point) -- receive
-their `PipelineDefinition` on argv, and that dataclass carries `externalSfnTaskToken`: the bearer
+The three Fargate pipeline containers -- coordinate transform, 3D thumbnail (whose image the system
+GenAI metadata pipeline's Fargate render branch reuses), and the Potree point cloud viewer (PDAL +
+Potree images share one entry point) -- receive their `PipelineDefinition` on argv, and that dataclass
+carries `externalSfnTaskToken`: the bearer
 credential the parent workflow's task waits on. Rendering the whole definition into a log line
 (`f"Pipeline Definition: {definition}"`) therefore writes the raw token to stdout, which lands in the
 container's CloudWatch group -- since the Fargate log-group change that group is VAMS-owned, KMS
@@ -25,7 +26,7 @@ Two checks per container:
 
 Each container is imported as a submodule of a synthetic package rooted at its container directory
 (the `pcPotreeViewer` conftest technique), so its relative imports resolve to its own `utils` and the
-four never collide in one interpreter. Heavy render libraries are stubbed where `core.py` reaches them
+three never collide in one interpreter. Heavy render libraries are stubbed where `core.py` reaches them
 at import time; nothing here needs them.
 """
 
@@ -68,12 +69,6 @@ CONTAINERS = (
         "preview_pipeline.core",
         ("numpy", "pyvista", "vtk", "trimesh", "imageio", "PIL", "PIL.Image", "laspy", "pye57",
          "cadquery", "DracoPy", "open3d", "pxr", "scipy"),
-    ),
-    (
-        "metadata3dLabeling",
-        "genAi/metadata3dLabeling/container",
-        "main.pipelines.core",
-        (),
     ),
     (
         "pcPotreeViewer",
@@ -119,7 +114,7 @@ def _params(core):
     """The definition as constructPipeline hands it to the container, with a live-shaped token.
 
     Built from the container's OWN dataclass fields: the coordinate transform definition still carries
-    the manifest inline (`inputMetadata` / `inputParameters`) where the other three carry S3
+    the manifest inline (`inputMetadata` / `inputParameters`) where the other two carry S3
     locations, and a keyword the dataclass lacks would fail construction before the log line.
     """
     fields = dataclasses.fields(core.PipelineDefinition)
@@ -139,8 +134,8 @@ def _params(core):
 
 
 def _stub_manifest_reads(core, monkeypatch):
-    """The 3D thumbnail and Blender containers read the manifest from S3 before their first stage
-    step; the read is not under test and must not reach the network."""
+    """The 3D thumbnail container reads the manifest from S3 before its first stage step; the read is
+    not under test and must not reach the network."""
     manifest_io = getattr(core, "manifest_io", None)
     if manifest_io is None:
         return

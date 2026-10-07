@@ -1,0 +1,44 @@
+{
+    "workflowName": "SYSTEM - GenAI Metadata Generation",
+    "category": "SYSTEM - GenAI",
+    "description": "Runs the SYSTEM GenAI metadata pipeline on one uploaded file of any type: sys_* attributes, typed ext_* metadata/location for every file, genai_* metadata when the deployment's GenAI analysis is on, plus a per-file-version embedding when vector search is enabled. Locked per file version, so the same version never runs twice concurrently.",
+    "isSystem": true,
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": false,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": true,
+            "fileAttributes": true,
+            "databaseMetadata": true
+        },
+        "inputFileFilters": {
+            "allow": ["*"],
+            "exclude": ["*.previewFile.*"]
+        },
+        "concurrencyRestriction": "perInputFileVersion",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": true
+    },
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*"],
+                "exclude": ["*.previewFile.*"]
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:system-genai-metadata": "system-genai-metadata-default"
+            },
+            "enabled": false
+        }
+    ]
+}

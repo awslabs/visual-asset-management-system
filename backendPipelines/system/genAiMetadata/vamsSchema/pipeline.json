@@ -1,0 +1,31 @@
+{
+    "pipelineName": "SYSTEM - GenAI Metadata Generation",
+    "category": "SYSTEM - GenAI",
+    "description": "Extracts the attributes stored on every uploaded file (any type: EXIF and container tags, document properties, archive contents, the facts of 3D files) into sys_* file attributes, typed ext_* file metadata and a GeoJSON location; with the deployment's GenAI analysis on, also describes and classifies the file with the configured Amazon Bedrock analysis model into genai_* file metadata, and, when vector search is enabled, publishes a per-file-version embedding for natural-language search. A system pipeline: read-only through the API except its enabled switch.",
+    "isSystem": true,
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "18000",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": true,
+            "fileAttributes": true,
+            "databaseMetadata": true
+        },
+        "requireTemplate": false,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*"],
+            "exclude": ["*.previewFile.*"]
+        }
+    }
+}

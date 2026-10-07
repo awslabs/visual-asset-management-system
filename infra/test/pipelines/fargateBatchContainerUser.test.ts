@@ -14,6 +14,15 @@
  * green. Removing the override is what makes every one of those Dockerfiles take effect, and the
  * assertion below is what stops it coming back.
  *
+ * The construct is shared by five job definitions — conversion/coordinateTransform, the system GenAI
+ * metadata render job (preview/3dThumbnail/container/Dockerfile, the image the thumbnail pipeline also
+ * runs), preview/3dThumbnail, and both preview/pcPotreeViewer images — so the assertion is written over
+ * all of them rather than over a named subset.
+ *
+ * Asserted on the emitted `AWS::Batch::JobDefinition`, because the user AWS Batch applies is the one it
+ * receives. `ContainerProperties.User` is absent (rather than `"root"`) when no override is set, which is
+ * what makes the absence assertion below meaningful.
+ *
  * **EC2 GPU jobs (issue #327):** GPU pipeline containers now run as uid/gid 10000:10000, enforced
  * via the image's `USER` directive (ContainerProperties.User stays absent, or it would replace the
  * image's USER). Two things are guarded below, both as real assertions: the seven GPU Dockerfiles
@@ -55,7 +64,7 @@ function fargatePipelines(c: any) {
     c.app.useGlobalVpc.addVpcEndpoints = true;
     for (const flag of [
         "useConversionCoordinateTransform",
-        "useGenAiMetadata3dLabeling",
+        "useSystemGenAiMetadata",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
     ]) {
@@ -66,6 +75,10 @@ function fargatePipelines(c: any) {
             }
         }
     }
+    // The system GenAI metadata pipeline builds its Fargate render job on the sub-flag only, and its
+    // vector search dependant requires the registration the loop just disarmed.
+    c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
+    c.app.vectorSearch.enabled = false;
 }
 
 /** Fargate job definitions, identified by the platform capability Batch receives. */
@@ -87,9 +100,9 @@ describe("Fargate Batch container user", () => {
     });
 
     test("[control] Fargate job definitions ARE emitted in this synth", () => {
-        // All four pipelines ship disabled, so the absence assertion below is otherwise satisfied by a
-        // template that emitted nothing to inspect. Five are expected: coordinate transform, metadata
-        // labeling, the 3D thumbnail, and PDAL plus Potree from the point-cloud viewer.
+        // Every Fargate arm ships disabled, so the absence assertion below is otherwise satisfied by a
+        // template that emitted nothing to inspect. Five are expected: coordinate transform, the system
+        // GenAI metadata render job, the 3D thumbnail, and PDAL plus Potree from the point-cloud viewer.
         expect(fargateJobDefinitions(synth).length).toBeGreaterThanOrEqual(5);
     });
 

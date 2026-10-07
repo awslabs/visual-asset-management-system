@@ -4,7 +4,9 @@
  */
 
 import React from "react";
-import { ExpandableSection, FormField, Select } from "@cloudscape-design/components";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import FormField from "@cloudscape-design/components/form-field";
+import Select from "@cloudscape-design/components/select";
 
 interface DisplayOptionsPanelProps {
     cardSize: "small" | "medium" | "large";

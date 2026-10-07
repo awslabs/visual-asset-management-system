@@ -3,8 +3,8 @@
 
 """
 Rendering logic for generating preview images from PyVista data.
-Uses PyVista with Xvfb for CPU-based headless offscreen rendering.
-Xvfb is started by the container entrypoint (see Dockerfile).
+Uses PyVista with Xvfb for CPU-based headless offscreen rendering. The X server is started by the
+Fargate container's entrypoint (see Dockerfile) or by ``analysis.display`` in the Lambda image.
 
 Camera framing uses percentile-based bounds (2nd-98th) instead of the full
 bounding box so that sparse scenes (e.g. single-position scans with distant
@@ -21,6 +21,12 @@ logger = get_logger()
 DEFAULT_N_FRAMES = 36
 DEFAULT_RESOLUTION = (800, 600)
 POINT_SIZE = 2.0
+
+# Still frames for image analysis: a few views at fixed angles, square, bounded by the number of
+# images one analysis request may carry.
+DEFAULT_STILL_VIEWS = 4
+MAX_STILL_VIEWS = 8
+DEFAULT_STILL_RESOLUTION = (768, 768)
 
 # Background color for rendering. Mid-gray minimizes visible halos on
 # anti-aliased edges when composited over both light and dark backgrounds,
@@ -50,43 +56,16 @@ def generate_rotating_frames(
 
     plotter = pv.Plotter(off_screen=True, window_size=resolution)
     plotter.set_background(_BG_COLOR)
-
-    is_point_cloud = pv_data.n_cells == 0 or pv_data.n_cells == pv_data.n_points
-
-    if is_point_cloud:
-        _add_point_cloud(plotter, pv_data)
-    else:
-        _add_mesh(plotter, pv_data)
+    _add_geometry(plotter, pv_data)
 
     focal_point, radius, elevation = _compute_camera_framing(
         pv_data, use_full_bounds=use_full_bounds, resolution=resolution
     )
-
-    # Compute stable clipping range from the actual max vertex distance
-    # to the focal point. This is more accurate than the bounding box diagonal
-    # because it accounts for corner vertices that are farther from center.
-    # Using per-vertex distance ensures no geometry gets near-plane clipped
-    # at any orbit angle (critical for USD models with tighter framing).
-    max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
+    max_extent = _max_extent(pv_data, focal_point)
 
     frames = []
     for i in range(n_frames):
-        angle_rad = np.radians(i * (360.0 / n_frames))
-
-        cam_x = focal_point[0] + radius * np.cos(angle_rad)
-        cam_z = focal_point[2] + radius * np.sin(angle_rad)
-        cam_y = focal_point[1] + elevation
-
-        cam_pos = np.array([cam_x, cam_y, cam_z])
-        cam_distance = float(np.linalg.norm(cam_pos - focal_point))
-        near_clip = max(cam_distance - max_extent * 1.1, cam_distance * 0.001)
-        far_clip = cam_distance + max_extent * 1.5
-
-        plotter.camera.position = (cam_x, cam_y, cam_z)
-        plotter.camera.focal_point = tuple(focal_point)
-        plotter.camera.up = (0.0, 1.0, 0.0)
-        plotter.camera.clipping_range = (near_clip, far_clip)
-
+        _position_camera(plotter, focal_point, radius, elevation, max_extent, i * (360.0 / n_frames))
         plotter.render()
         img = plotter.screenshot(return_img=True)
         img = _add_alpha_from_depth(plotter, img)
@@ -103,28 +82,87 @@ def generate_static_frame(
     use_full_bounds: bool = False,
 ) -> np.ndarray:
     """
-    Render a single static frame of the given PyVista data.
+    Render a single static frame of the given PyVista data at a 45 degree orbit angle.
     Returns RGBA image with transparent background.
     """
     logger.info(f"Generating static frame at {resolution}")
 
     plotter = pv.Plotter(off_screen=True, window_size=resolution)
     plotter.set_background(_BG_COLOR)
+    _add_geometry(plotter, pv_data)
 
+    focal_point, radius, elevation = _compute_camera_framing(
+        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
+    )
+    max_extent = _max_extent(pv_data, focal_point)
+
+    _position_camera(plotter, focal_point, radius, elevation, max_extent, 45.0)
+    plotter.render()
+    img = plotter.screenshot(return_img=True)
+    img = _add_alpha_from_depth(plotter, img)
+    plotter.close()
+
+    return img
+
+
+def generate_still_frames(
+    pv_data: pv.PolyData,
+    n_views: int = DEFAULT_STILL_VIEWS,
+    resolution: tuple = DEFAULT_STILL_RESOLUTION,
+    use_full_bounds: bool = False,
+    start_angle_deg: float = 45.0,
+) -> list:
+    """
+    Render ``n_views`` still frames at evenly spaced orbit angles starting at ``start_angle_deg``.
+    Returns RGB frames (no alpha) on the renderer's neutral background: these are analysis inputs
+    rather than thumbnails, so the depth-mask transparency step is not applied. ``n_views`` is
+    clamped to [1, MAX_STILL_VIEWS].
+    """
+    n_views = max(1, min(int(n_views), MAX_STILL_VIEWS))
+    logger.info(f"Generating {n_views} still frames at {resolution}")
+
+    plotter = pv.Plotter(off_screen=True, window_size=resolution)
+    plotter.set_background(_BG_COLOR)
+    _add_geometry(plotter, pv_data)
+
+    focal_point, radius, elevation = _compute_camera_framing(
+        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
+    )
+    max_extent = _max_extent(pv_data, focal_point)
+
+    frames = []
+    for i in range(n_views):
+        angle_deg = start_angle_deg + i * (360.0 / n_views)
+        _position_camera(plotter, focal_point, radius, elevation, max_extent, angle_deg)
+        plotter.render()
+        img = plotter.screenshot(return_img=True)
+        frames.append(np.ascontiguousarray(np.asarray(img)[:, :, :3], dtype=np.uint8))
+
+    plotter.close()
+    logger.info(f"Generated {len(frames)} still frames")
+    return frames
+
+
+def _add_geometry(plotter: pv.Plotter, pv_data: pv.PolyData):
+    """Add the data as a point cloud or a mesh, by whether it carries cells beyond its vertices."""
     is_point_cloud = pv_data.n_cells == 0 or pv_data.n_cells == pv_data.n_points
-
     if is_point_cloud:
         _add_point_cloud(plotter, pv_data)
     else:
         _add_mesh(plotter, pv_data)
 
-    focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
-    )
 
-    max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
+def _max_extent(pv_data, focal_point) -> float:
+    """The farthest vertex distance from the focal point; the clipping range is derived from it so no
+    geometry is near-plane clipped at any orbit angle."""
+    return float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
 
-    angle_rad = np.radians(45)
+
+def _position_camera(plotter, focal_point, radius, elevation, max_extent, angle_deg):
+    """Place the camera on the orbit at ``angle_deg`` (around Y), looking at the focal point, with a
+    clipping range that covers the whole model from that position."""
+    angle_rad = np.radians(angle_deg)
+
     cam_x = focal_point[0] + radius * np.cos(angle_rad)
     cam_z = focal_point[2] + radius * np.sin(angle_rad)
     cam_y = focal_point[1] + elevation
@@ -138,13 +176,6 @@ def generate_static_frame(
     plotter.camera.focal_point = tuple(focal_point)
     plotter.camera.up = (0.0, 1.0, 0.0)
     plotter.camera.clipping_range = (near_clip, far_clip)
-
-    plotter.render()
-    img = plotter.screenshot(return_img=True)
-    img = _add_alpha_from_depth(plotter, img)
-    plotter.close()
-
-    return img
 
 
 def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):

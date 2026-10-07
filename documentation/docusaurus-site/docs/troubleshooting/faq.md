@@ -87,9 +87,10 @@ For full environment migration, use the data migration scripts provided in `infr
 Yes. Amazon OpenSearch is optional. When neither OpenSearch Serverless nor OpenSearch Provisioned is enabled:
 
 -   The `NOOPENSEARCH` feature flag is set automatically.
--   The web application hides search-specific UI elements.
+-   The web application hides keyword search, metadata filtering, and map view.
 -   Asset and file listing uses Amazon DynamoDB queries with pagination instead of full-text search.
--   Advanced search features (full-text search, metadata field filtering, relevance ranking) are not available.
+-   Advanced keyword features (full-text search, metadata field filtering, relevance ranking) are not available.
+-   Natural-language search remains available when `app.vectorSearch.enabled` is `true`: the search page shows the Basic Asset List tab and a Primary Search tab in natural-language mode, with database, file-type, and archived filters. See [Vector search](../concepts/vector-search.md).
 
 ---
 
@@ -108,7 +109,7 @@ Yes. VAMS supports AWS GovCloud (US) regions with specific configuration require
 7. Set `app.openSearch.useServerless.nextGen: false` (next-generation Serverless collections are not available).
 8. Use the ALB deployment mode for the web interface.
 
-Configuration validation rejects a deployment that violates any of these, naming the field. A GovCloud-specific configuration template is provided at `infra/config/config.template.govcloud.json`, and the full per-field list is in [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints). Amazon Rekognition is not offered in AWS GovCloud (US-East) (`us-gov-east-1`), so keep the GenAI metadata labeling pipeline (`app.pipelines.useGenAiMetadata3dLabeling`) disabled in that Region.
+Configuration validation rejects a deployment that violates any of these, naming the field. A GovCloud-specific configuration template is provided at `infra/config/config.template.govcloud.json`, and the full per-field list is in [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints).
 
 ### Can I deploy to the AWS European Sovereign Cloud?
 

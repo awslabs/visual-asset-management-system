@@ -1,6 +1,6 @@
 aws-lambda-powertools==2.36.0 ; python_version >= "3.12" and python_version < "4.0"
-boto3==1.43.45 ; python_version >= "3.12" and python_version < "4.0"
-botocore==1.43.45 ; python_version >= "3.12" and python_version < "4.0"
+boto3==1.43.89 ; python_version >= "3.12" and python_version < "4.0"
+botocore==1.43.89 ; python_version >= "3.12" and python_version < "4.0"
 casbin==1.36.0 ; python_version >= "3.12" and python_version < "4.0"
 certifi==2026.4.22 ; python_version >= "3.12" and python_version < "4.0"
 charset-normalizer==3.3.2 ; python_version >= "3.12" and python_version < "4.0"

@@ -22,9 +22,10 @@
  *      shared libraries the open3d wheel links against. Those libraries are absent from the slim base
  *      image, and their absence surfaces as `ImportError: libGL.so.1` at task start — after the pipeline
  *      has been dispatched, so the execution fails rather than the build.
- *   3. The other three Fargate images (both pcPotreeViewer images and 3dThumbnail) must likewise declare
- *      a non-root `USER`, in the stage that actually runs, along with the writable HOME and scratch
- *      directory that user needs. The Dockerfile half of this is inert on its own: the shared Batch
+ *   3. The other three Fargate images (both pcPotreeViewer images and 3dThumbnail) and the three Lambda
+ *      images of the system GenAI metadata pipeline (the 3dThumbnail Dockerfile.lambda, Blender, media)
+ *      must likewise declare a non-root `USER`, in the stage that actually runs, along with the writable
+ *      HOME and, where the image creates one, the scratch directory that user needs. The Dockerfile half of this is inert on its own: the shared Batch
  *      construct used to set `user: "root"` on every Fargate container definition, which REPLACES the
  *      image's USER, so `fargateBatchContainerUser.test.ts` pins the absence of that override.
  *
@@ -271,6 +272,34 @@ const NON_ROOT_IMAGES: { label: string; file: string; scratchDir?: string }[] = 
         file: path.join(PIPELINES_DIR, "preview", "3dThumbnail", "container", "Dockerfile"),
         scratchDir: "/app/tmp",
     },
+    // The three Lambda images of the system GenAI metadata pipeline. Each writes only under /tmp, which
+    // the Lambda runtime provides, so none names a scratch directory here.
+    {
+        label: "3dThumbnail Lambda image",
+        file: path.join(PIPELINES_DIR, "preview", "3dThumbnail", "container", "Dockerfile.lambda"),
+    },
+    {
+        label: "system genAiMetadata blender",
+        file: path.join(
+            PIPELINES_DIR,
+            "system",
+            "genAiMetadata",
+            "containers",
+            "blender",
+            "Dockerfile"
+        ),
+    },
+    {
+        label: "system genAiMetadata media",
+        file: path.join(
+            PIPELINES_DIR,
+            "system",
+            "genAiMetadata",
+            "containers",
+            "media",
+            "Dockerfile"
+        ),
+    },
 ];
 
 /**
@@ -297,7 +326,7 @@ describe("base images are not pulled from a floating tag", () => {
 
     it("examines every Dockerfile it names", () => {
         // Control: a typo'd path would otherwise make the rule below pass over an empty set.
-        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(4);
+        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(7);
         for (const f of ALL_DOCKERFILES) expect(fs.existsSync(f)).toBe(true);
     });
 
@@ -342,6 +371,10 @@ describe.each(NON_ROOT_IMAGES)(
         const text = fs.readFileSync(file, "utf-8");
         const stage = runtimeStage(text);
         const userAt = stage.findIndex((l) => /^USER\s+\S/.test(l));
+        // The line that fixes the running process: an explicit ENTRYPOINT, or -- for a Lambda image that
+        // inherits /lambda-entrypoint.sh from its pinned base and restates nothing -- the CMD naming the
+        // handler. Either way a USER after it never applies to the process.
+        const processAt = stage.findIndex((l) => /^(ENTRYPOINT|CMD)\s/.test(l));
 
         it("the runtime stage is isolated from the build stage", () => {
             // Non-vacuity of the slice itself, and the whole point of slicing. `conda-pack` appears only in
@@ -350,7 +383,7 @@ describe.each(NON_ROOT_IMAGES)(
             // make every assertion below reproduce the stage-blind bug it exists to avoid.
             expect(stage.length).toBeGreaterThan(0);
             expect(stage.join("\n")).not.toContain("conda-pack");
-            expect(stage.some((l) => /^ENTRYPOINT\s/.test(l))).toBe(true);
+            expect(processAt).toBeGreaterThan(-1);
         });
 
         it("declares a USER in the stage that runs", () => {
@@ -363,13 +396,12 @@ describe.each(NON_ROOT_IMAGES)(
             expect(name).not.toMatch(/^(root|0)(:|$)/);
         });
 
-        it("switches user after the last COPY and before the ENTRYPOINT", () => {
+        it("switches user after the last COPY and before the ENTRYPOINT or CMD", () => {
             // A USER ahead of the last COPY leaves the copied application root-owned; a USER after
-            // ENTRYPOINT never applies to the running process.
+            // the ENTRYPOINT/CMD never applies to the running process.
             const lastCopyAt = stage.reduce((acc, l, i) => (/^COPY\s/.test(l) ? i : acc), -1);
-            const entrypointAt = stage.findIndex((l) => /^ENTRYPOINT\s/.test(l));
             expect(userAt).toBeGreaterThan(lastCopyAt);
-            expect(userAt).toBeLessThan(entrypointAt);
+            expect(userAt).toBeLessThan(processAt);
         });
 
         it("creates the account it switches to, in the same stage", () => {

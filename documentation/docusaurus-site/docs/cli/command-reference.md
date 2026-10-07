@@ -79,6 +79,7 @@ vamscli sync file pull ./models -d my-db -a my-asset --allow-modify
 
 ```bash
 vamscli search simple -q "training" --entity-types asset
+vamscli search nlp -q "rusty pipe near the north tank"
 vamscli metadata asset list -d my-db -a my-asset
 vamscli metadata-schema list -d my-database -e assetMetadata
 ```

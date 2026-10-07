@@ -65,6 +65,11 @@
             },
             "reindexOnCdkDeploy": false
         },
+        "vectorSearch": {
+            "enabled": false,
+            "indexingConcurrency": 5,
+            "reindexOnCdkDeploy": false
+        },
         "useLocationService": {
             "enabled": false
         },
@@ -96,10 +101,30 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
-            "useConversionCadMeshMetadataExtraction": {
+            "useSystemGenAiMetadata": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "useFargateRenderer": false,
+                "useGenAiAnalysis": false,
+                "bedrockModels": {
+                    "analysisModelId": "",
+                    "embeddingModelId": "",
+                    "embeddingDimensions": 1024
+                },
+                "lambdaLimits": {
+                    "maxInputFileSizeMb": 2048,
+                    "maxPointCloudPoints": 20000000
+                },
+                "bedrockGuardrail": {
+                    "guardrailIdentifier": "",
+                    "guardrailVersion": "",
+                    "create": {
+                        "enabled": false,
+                        "promptAttackInputStrength": "LOW",
+                        "piiFilter": "anonymize"
+                    }
+                }
             },
             "useConversionCoordinateTransform": {
                 "enabled": false,
@@ -109,12 +134,6 @@
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
-            },
-            "useGenAiMetadata3dLabeling": {
-                "enabled": false,
-                "bedrockModelId": "",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },

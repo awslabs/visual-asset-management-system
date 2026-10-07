@@ -208,17 +208,17 @@ The editor is a step-by-step wizard: **Basic information**, **Execution settings
 
 The workflow's own gate. Every execution is checked against these before any pipeline is considered:
 
-| Setting                                | Description                                                                                                                                                            |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Input file count**                   | `None`, `One file`, or `Multiple files`.                                                                                                                               |
-| **Asset selection rules**              | The asset span, and whether a whole asset or a folder may be selected.                                                                                                 |
-| **Input file filters — allow/exclude** | The file patterns the workflow admits. Hidden when the workflow takes no input files.                                                                                  |
-| **Metadata provided to pipelines**     | Database metadata, asset metadata, file metadata, and file attributes.                                                                                                 |
-| **Output destination**                 | **Write to an asset**, or **Results only** for a workflow that records results text and logs and writes no asset output.                                               |
-| **Allow choosing the output asset**    | Whether whoever runs the workflow may send output to a different asset and set an output path prefix. Offered for an asset destination.                                |
-| **Default output path prefix**         | The prefix an execution is pre-filled with. It supports tags resolved per run, so `/{{executionId}}/` gives every run its own folder. Leave it blank to add no prefix. |
-| **Allow workflow trigger chaining**    | Whether a file written by another workflow may fire this workflow's triggers. A file recorded as written by this workflow does not re-fire it — see the warning below. |
-| **Concurrency restriction**            | `None`, `One per asset`, or `One per input file` — whether a new execution waits while a conflicting one is still running.                                             |
+| Setting                                | Description                                                                                                                                                                                                                                                                                                     |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Input file count**                   | `None`, `One file`, or `Multiple files`.                                                                                                                                                                                                                                                                        |
+| **Asset selection rules**              | The asset span, and whether a whole asset or a folder may be selected.                                                                                                                                                                                                                                          |
+| **Input file filters — allow/exclude** | The file patterns the workflow admits. Hidden when the workflow takes no input files.                                                                                                                                                                                                                           |
+| **Metadata provided to pipelines**     | Database metadata, asset metadata, file metadata, and file attributes.                                                                                                                                                                                                                                          |
+| **Output destination**                 | **Write to an asset**, or **Results only** for a workflow that records results text and logs and writes no asset output.                                                                                                                                                                                        |
+| **Allow choosing the output asset**    | Whether whoever runs the workflow may send output to a different asset and set an output path prefix. Offered for an asset destination.                                                                                                                                                                         |
+| **Default output path prefix**         | The prefix an execution is pre-filled with. It supports tags resolved per run, so `/{{executionId}}/` gives every run its own folder. Leave it blank to add no prefix.                                                                                                                                          |
+| **Allow workflow trigger chaining**    | Whether a file written by another workflow may fire this workflow's triggers. A file recorded as written by this workflow does not re-fire it — see the warning below.                                                                                                                                          |
+| **Concurrency restriction**            | `None`, `One per asset`, `One per input file`, or `One per input file version` — whether a new execution is rejected while a conflicting one is still running. The per-version option locks the exact file version an execution reads, so a second launch on that version is rejected until the first finishes. |
 
 These are **authored, not inherited** from the workflow's pipelines. Set the input file count to the **highest** value any pipeline and template combination in the workflow can require — a lower value rejects a selection a template would have accepted. The input file filters are applied **before** the pipelines' own, so a filter here that excludes a type one of its pipelines needs makes that pipeline unsatisfiable; the [Validation](#saving-the-workflow) panel warns when that happens.
 
@@ -567,19 +567,21 @@ been edited since, the two can legitimately differ — the tab labels which is w
 | **Database-specific** | Available only within the database they belong to | Can use pipelines from their database and GLOBAL pipelines |
 | **GLOBAL**            | Available to workflows in any database            | Can only use GLOBAL pipelines                              |
 
-GLOBAL pipelines are typically built-in processing pipelines deployed with VAMS (such as 3D conversion, preview generation, and metadata extraction). Database-specific pipelines are user-created for domain-specific processing needs.
+GLOBAL pipelines are typically built-in processing pipelines deployed with VAMS (such as 3D conversion, preview generation, and GenAI metadata generation). Database-specific pipelines are user-created for domain-specific processing needs.
 
 ## Built-in pipelines
 
 VAMS may include built-in pipelines depending on your deployment configuration. These are created during deployment and registered as GLOBAL pipelines. Common built-in pipelines include:
 
 -   **3D Conversion** -- Converts 3D mesh file formats (for example, OBJ to glTF).
--   **Preview Generation** -- Creates thumbnail preview images for assets and files.
+-   **GenAI Metadata Generation** (`SYSTEM - GenAI`) -- Analyzes every viewable file with Amazon Bedrock, writes file attributes and descriptive metadata, and produces the embeddings behind natural-language search.
+-   **Preview Generation** (`SYSTEM - Preview`) -- Creates thumbnail preview images for 3D files.
 -   **Point Cloud Processing** -- Processes point cloud data (for example, E57, LAS) for web visualization.
--   **Metadata Extraction** -- Extracts metadata from file headers and content.
--   **GenAI Labeling** -- Uses generative AI to automatically generate labels and descriptions.
+-   **Coordinate Transform** -- Reprojects point clouds between coordinate reference systems.
 -   **Gaussian Splatting** -- Generates 3D Gaussian splats from image and video media files.
 -   **Physical AI Inference and Fine-Tuning** -- GPU-accelerated pipelines for NVIDIA world foundation models, vision language models (VLMs), and vision-language-action models (VLAs) including inference, simulation training, and model fine-tuning.
+
+Pipelines and workflows marked **System** are owned by the deployment. They open read-only in the web interface: you can pause or resume them with their `enabled` switches and edit a system template's configuration body and tag schema, but you cannot edit, archive, or delete them or add and remove their templates and triggers. A deployment re-asserts their shipped settings, so a paused system trigger resumes after the next deployment that revises its bundle. See [System pipelines](../pipelines/system-pipelines.md).
 
 For detailed pipeline documentation, see the [Pipelines overview](../pipelines/overview.md), [deployment configuration reference](../deployment/configuration-reference.md), and [custom pipelines guide](../pipelines/custom-pipelines.md).
 

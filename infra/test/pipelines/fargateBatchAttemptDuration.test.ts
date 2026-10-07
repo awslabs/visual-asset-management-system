@@ -37,7 +37,7 @@ function fargatePipelines(c: any) {
     c.app.useGlobalVpc.addVpcEndpoints = true;
     for (const flag of [
         "useConversionCoordinateTransform",
-        "useGenAiMetadata3dLabeling",
+        "useSystemGenAiMetadata",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
     ]) {
@@ -48,6 +48,10 @@ function fargatePipelines(c: any) {
             }
         }
     }
+    // The system GenAI metadata pipeline builds its Fargate render job on the sub-flag only, and its
+    // vector search dependant requires the registration the loop just disarmed.
+    c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
+    c.app.vectorSearch.enabled = false;
 }
 
 /** Fargate job definitions, identified by the platform capability Batch receives. */

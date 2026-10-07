@@ -67,11 +67,12 @@ The following tables provide approximate monthly cost estimates based on three d
 
 ### Search Services (Choose One or None)
 
-| AWS Service                       | Monthly Cost (Commercial) | Monthly Cost (GovCloud) | Notes                                                                                                                                                                                             |
-| --------------------------------- | ------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Amazon OpenSearch Serverless**  | $0 -- ~$703.20            | N/A                     | Next-generation Serverless scales to zero OCUs when idle (cost approaches $0 between uses); a minimum of 2 index + 2 search OCUs applies when minimums are held above zero. 100 GB data included. |
-| **Amazon OpenSearch Provisioned** | ~$743.66                  | ~$915.52                | Data nodes (r7g.large.search, one per Availability Zone) + 2 master nodes (r7g.large.search), 120 GB EBS per node. Cost varies with instance type and node count.                                 |
-| **No Amazon OpenSearch**          | $0.00                     | $0.00                   | Search features disabled. Asset browsing and management remain functional.                                                                                                                        |
+| AWS Service                          | Monthly Cost (Commercial) | Monthly Cost (GovCloud) | Notes                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------ | ------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Amazon OpenSearch Serverless**     | $0 -- ~$703.20            | N/A                     | Next-generation Serverless scales to zero OCUs when idle (cost approaches $0 between uses); a minimum of 2 index + 2 search OCUs applies when minimums are held above zero. 100 GB data included.                                                                                                              |
+| **Amazon OpenSearch Provisioned**    | ~$743.66                  | ~$915.52                | Data nodes (r7g.large.search, one per Availability Zone) + 2 master nodes (r7g.large.search), 120 GB EBS per node. Cost varies with instance type and node count.                                                                                                                                              |
+| **No Amazon OpenSearch**             | $0.00                     | $0.00                   | Search features disabled. Asset browsing and management remain functional.                                                                                                                                                                                                                                     |
+| **Natural-language (vector) search** | ~$1 -- ~$25               | ~$1 -- ~$30             | Amazon DynamoDB vector table (on-demand storage and `SearchVectors` reads) plus Amazon Bedrock embeddings — Amazon Titan Text Embeddings V2 is priced per input token, one call per analyzed file version and one per query. Scales with upload volume and query volume; independent of the OpenSearch choice. |
 
 :::info[Amazon OpenSearch Serverless Minimum]
 Classic Serverless and any deployment that holds minimum OCUs above zero carry a continuous charge of at least 2 index OCUs and 2 search OCUs, which is the largest fixed cost in most VAMS deployments. Next-generation Serverless can set `minIndexingOcu` and `minSearchOcu` to `0` so the collection scales to zero when idle, reducing the standing cost to near zero between uses. The trade-off is a cold start of about 10–20 seconds on the first request after roughly 10 minutes of inactivity. Consider disabling Amazon OpenSearch entirely if full-text search is not required for your use case.
@@ -98,13 +99,14 @@ Classic Serverless and any deployment that holds minimum OCUs above zero carry a
 
 Processing pipeline costs are variable and depend on the number of assets processed, file sizes, and processing duration. The following estimates are based on moderate usage patterns.
 
-| Pipeline Service                      | Quantity                           | Cost (Commercial) | Cost (GovCloud) |
-| ------------------------------------- | ---------------------------------- | ----------------- | --------------- |
-| **AWS Batch (Fargate)**               | 10 hours of processing             | $3.56             | $4.88           |
-| **Amazon S3 (Pipeline Output)**       | 300 GB storage, 30 GB transfer out | $9.60             | $16.34          |
-| **Amazon CloudWatch (Pipeline Logs)** | 1 GB logs                          | $3.28             | $4.12           |
-| **Amazon Bedrock (GenAI Labeling)**   | 1M tokens (Claude Sonnet)          | $18.00            | N/A             |
-| **Amazon ECR**                        | 40 GB container images (in-region) | $4.00             | $4.00           |
+| Pipeline Service                               | Quantity                                         | Cost (Commercial) | Cost (GovCloud)            |
+| ---------------------------------------------- | ------------------------------------------------ | ----------------- | -------------------------- |
+| **AWS Batch (Fargate)**                        | 10 hours of processing                           | $3.56             | $4.88                      |
+| **Amazon S3 (Pipeline Output)**                | 300 GB storage, 30 GB transfer out               | $9.60             | $16.34                     |
+| **Amazon CloudWatch (Pipeline Logs)**          | 1 GB logs                                        | $3.28             | $4.12                      |
+| **Amazon Bedrock (SYSTEM GenAI metadata)**     | 1M input + 200K output tokens (Claude Haiku 4.5) | ~$2.00            | ~$9.00 (Claude Sonnet 4.5) |
+| **AWS Lambda (SYSTEM GenAI metadata renders)** | 1,000 files at 10 GB memory, 60 s average        | ~$10.00           | ~$12.00                    |
+| **Amazon ECR**                                 | 40 GB container images (in-region)               | $4.00             | $4.00                      |
 
 :::tip[Pipeline Cost Optimization]
 Pipelines are only deployed when their configuration flag is enabled. Disable unused pipelines to avoid container image storage costs and unnecessary VPC endpoint charges. Use `autoRegisterAutoTriggerOnFileUpload` selectively to prevent unintended pipeline executions on every upload.

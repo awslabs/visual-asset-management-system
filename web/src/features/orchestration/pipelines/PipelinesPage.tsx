@@ -173,28 +173,34 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
 
         const isDeadlineCloudDisabled =
             pipeline.executionConfig.executionType === "DeadlineCloud" && !showDeadlineCloud;
+        // A system pipeline is read-only except `enabled`: its mutating actions are withheld and the
+        // builder opens in read-only mode (PipelineForm), which View reaches.
+        const isSystem = !!pipeline.isSystem;
+        const builderRoute = `/databases/${pipeline.databaseId}/pipelines/${pipeline.pipelineId}`;
 
         const contextMenuItems: ContextMenuItem[] = [
             {
                 label: "Edit",
-                onSelect: () =>
-                    navigate(`/databases/${pipeline.databaseId}/pipelines/${pipeline.pipelineId}`),
+                onSelect: () => navigate(builderRoute),
                 hidden:
                     !can("PUT", "/database/{databaseId}/pipelines/{pipelineId}") ||
-                    isDeadlineCloudDisabled,
+                    isDeadlineCloudDisabled ||
+                    isSystem,
+            },
+            {
+                label: "View",
+                onSelect: () => navigate(builderRoute),
+                hidden: !isSystem,
             },
             {
                 label: "Templates",
-                onSelect: () =>
-                    navigate(
-                        `/databases/${pipeline.databaseId}/pipelines/${pipeline.pipelineId}/templates`
-                    ),
+                onSelect: () => navigate(`${builderRoute}/templates`),
             },
             {
                 label: "Archive",
                 onSelect: () => setArchiveConfirmPipeline(pipeline),
                 danger: true,
-                hidden: !can("DELETE", "/database/{databaseId}/pipelines/{pipelineId}"),
+                hidden: !can("DELETE", "/database/{databaseId}/pipelines/{pipelineId}") || isSystem,
             },
         ];
 
@@ -214,6 +220,14 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                         {pipeline.archived && (
                             <span className="px-2 py-1 text-xs bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 rounded">
                                 Archived
+                            </span>
+                        )}
+                        {pipeline.isSystem && (
+                            <span
+                                className="px-2 py-1 text-xs bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 rounded"
+                                title="Shipped with the deployment; read-only except Enabled"
+                            >
+                                System
                             </span>
                         )}
                     </div>

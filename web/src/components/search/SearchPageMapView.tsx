@@ -16,15 +16,13 @@ import Map, {
 import "maplibre-gl/dist/maplibre-gl.css";
 import "../../common/utils/maplibreWorker";
 import { SearchPageViewProps } from "./SearchPageTypes";
-import {
-    Box,
-    Button,
-    Link,
-    Pagination,
-    SpaceBetween,
-    Popover,
-    Icon,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Link from "@cloudscape-design/components/link";
+import Pagination from "@cloudscape-design/components/pagination";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Popover from "@cloudscape-design/components/popover";
+import Icon from "@cloudscape-design/components/icon";
 import { appCache } from "../../services/appCache";
 import type { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";

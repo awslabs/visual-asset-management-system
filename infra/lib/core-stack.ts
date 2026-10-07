@@ -271,10 +271,13 @@ export class CoreVAMSStack extends cdk.Stack {
                 storageResourcesNestedStack.storageResources,
                 lambdaLayers.lambdaCommonBaseLayer,
                 this.vpc,
-                this.subnetsIsolated
+                this.subnetsIsolated,
+                apiBuilder2NestedStack.executeWorkflowV2FunctionName
             );
             searchBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             searchBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+            // The system-workflow launcher invokes the execute-workflow lambda built in ApiBuilder2.
+            searchBuilderNestedStack.addStackDependency(apiBuilder2NestedStack);
 
             //Set feature for no opensearch in neither provisioned or serverless selected
             if (
@@ -282,6 +285,12 @@ export class CoreVAMSStack extends cdk.Stack {
                 !props.config.app.openSearch.useServerless.enabled
             ) {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.NOOPENSEARCH);
+            }
+
+            //Natural-language file search. The web and CLI gate the NLP search surfaces on this switch,
+            //independently of NOOPENSEARCH: a deployment may publish both, either, or neither.
+            if (props.config.app.vectorSearch.enabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.VECTORSEARCH);
             }
 
             ///Optional Pipelines (Nested Stack)
@@ -304,6 +313,13 @@ export class CoreVAMSStack extends cdk.Stack {
             pipelineBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             // The V2 vamsSchema registration CRs invoke the import lambda built in ApiBuilder2.
             pipelineBuilderNestedStack.addStackDependency(apiBuilder2NestedStack);
+            // The vector reindexer enqueues launches of the system GenAI metadata workflow, which the
+            // pipeline stack's vamsSchema registration writes; with reindexOnCdkDeploy the search stack's
+            // custom resource reads that row during the deploy, so the pipeline stack must land first.
+            // Neither stack consumes the other's outputs, so the ordering introduces no cycle.
+            if (props.config.app.vectorSearch.enabled) {
+                searchBuilderNestedStack.addStackDependency(pipelineBuilderNestedStack);
+            }
 
             ///Optional Addons (Nested Stack)
             const addonBuilderNestedStack = new AddonBuilderNestedStack(this, "AddonBuilder", {

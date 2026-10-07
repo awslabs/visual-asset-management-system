@@ -52,6 +52,11 @@ interface TriggerFormProps {
     pipelineRefs: SpecifiedPipelineRef[];
     /** Keys already in use, so adding under a taken key is refused rather than replacing a sibling. */
     existingKeys: string[];
+    /**
+     * True for a system workflow's trigger: only `enabled` may change, so the name, filters and
+     * templates are shown read-only (the backend answers 400 to any other change).
+     */
+    locked?: boolean;
 }
 
 /**
@@ -67,6 +72,7 @@ const TriggerForm: React.FC<TriggerFormProps> = ({
     saveError,
     pipelineRefs,
     existingKeys,
+    locked = false,
 }) => {
     const editing = !!draft.editingKey;
     const { triggerIdInvalid, keyCollides } = validateDraft(draft, existingKeys);
@@ -82,11 +88,18 @@ const TriggerForm: React.FC<TriggerFormProps> = ({
                         {saveError}
                     </div>
                 )}
+                {locked && (
+                    <div className="p-3 bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 rounded">
+                        <strong>System workflow:</strong> this trigger's filters and templates are
+                        shipped with the deployment; only <em>Enabled</em> can be changed.
+                    </div>
+                )}
 
                 <div>
                     <label className="flex items-center gap-2">
                         <input
                             type="checkbox"
+                            aria-label="Enabled"
                             checked={draft.enabled}
                             onChange={(e) => onChange({ ...draft, enabled: e.target.checked })}
                         />
@@ -96,101 +109,107 @@ const TriggerForm: React.FC<TriggerFormProps> = ({
                     </label>
                 </div>
 
-                {/* The id is what allows a SECOND trigger of this type. Editing an existing trigger
+                <fieldset disabled={locked} className="m-0 p-0 border-0 min-w-0 space-y-4">
+                    {/* The id is what allows a SECOND trigger of this type. Editing an existing trigger
                     cannot change it, because the id is part of the key that addresses the row. */}
-                <div>
-                    <div className="flex items-center gap-1.5 text-sm font-medium mb-1 text-text-primary">
-                        Trigger name
-                        <InfoTooltip text="Leave empty for this workflow's first trigger of the type. Give a name to add another trigger of the same type with its own filters and templates — an upload runs the workflow once per matching trigger. Letters, numbers, hyphens and underscores (3-63)." />
+                    <div>
+                        <div className="flex items-center gap-1.5 text-sm font-medium mb-1 text-text-primary">
+                            Trigger name
+                            <InfoTooltip text="Leave empty for this workflow's first trigger of the type. Give a name to add another trigger of the same type with its own filters and templates — an upload runs the workflow once per matching trigger. Letters, numbers, hyphens and underscores (3-63)." />
+                        </div>
+                        <input
+                            type="text"
+                            aria-label="Trigger name"
+                            value={draft.triggerId}
+                            disabled={editing}
+                            onChange={(e) => onChange({ ...draft, triggerId: e.target.value })}
+                            placeholder="e.g. nightly (optional)"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-60"
+                        />
+                        {triggerIdInvalid && (
+                            <p className="mt-1 text-sm text-vams-error">
+                                Letters, numbers, hyphens and underscores only (3-63).
+                            </p>
+                        )}
+                        {keyCollides && (
+                            <p className="mt-1 text-sm text-vams-error">
+                                This workflow already has a trigger with that name. Choose another —
+                                saving would replace it.
+                            </p>
+                        )}
                     </div>
-                    <input
-                        type="text"
-                        aria-label="Trigger name"
-                        value={draft.triggerId}
-                        disabled={editing}
-                        onChange={(e) => onChange({ ...draft, triggerId: e.target.value })}
-                        placeholder="e.g. nightly (optional)"
-                        className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-60"
-                    />
-                    {triggerIdInvalid && (
-                        <p className="mt-1 text-sm text-vams-error">
-                            Letters, numbers, hyphens and underscores only (3-63).
-                        </p>
-                    )}
-                    {keyCollides && (
-                        <p className="mt-1 text-sm text-vams-error">
-                            This workflow already has a trigger with that name. Choose another —
-                            saving would replace it.
-                        </p>
-                    )}
-                </div>
 
-                <div>
-                    <div className="flex items-center gap-1.5 text-sm font-medium mb-1 text-text-primary">
-                        Fire on uploads matching — allow
-                        <InfoTooltip text="The trigger fires only when an uploaded file matches an allow entry. Each entry may be an extension (*.glb), a file name, a path, or a wildcard." />
+                    <div>
+                        <div className="flex items-center gap-1.5 text-sm font-medium mb-1 text-text-primary">
+                            Fire on uploads matching — allow
+                            <InfoTooltip text="The trigger fires only when an uploaded file matches an allow entry. Each entry may be an extension (*.glb), a file name, a path, or a wildcard." />
+                        </div>
+                        <StringListInput
+                            ariaLabel="Add trigger allow filter"
+                            value={draft.allow}
+                            onChange={(allow) => onChange({ ...draft, allow })}
+                            placeholder="e.g. *.glb  or  /models/"
+                        />
                     </div>
-                    <StringListInput
-                        ariaLabel="Add trigger allow filter"
-                        value={draft.allow}
-                        onChange={(allow) => onChange({ ...draft, allow })}
-                        placeholder="e.g. *.glb  or  /models/"
-                    />
-                </div>
 
-                <div>
-                    <div className="flex items-center gap-1.5 text-sm font-medium mb-1 text-text-primary">
-                        Fire on uploads matching — exclude
-                        <InfoTooltip text="Uploaded files matching an exclude entry never fire the trigger. Exclude takes precedence over allow." />
+                    <div>
+                        <div className="flex items-center gap-1.5 text-sm font-medium mb-1 text-text-primary">
+                            Fire on uploads matching — exclude
+                            <InfoTooltip text="Uploaded files matching an exclude entry never fire the trigger. Exclude takes precedence over allow." />
+                        </div>
+                        <StringListInput
+                            ariaLabel="Add trigger exclude filter"
+                            value={draft.exclude}
+                            onChange={(exclude) => onChange({ ...draft, exclude })}
+                            placeholder="e.g. *.tmp"
+                        />
                     </div>
-                    <StringListInput
-                        ariaLabel="Add trigger exclude filter"
-                        value={draft.exclude}
-                        onChange={(exclude) => onChange({ ...draft, exclude })}
-                        placeholder="e.g. *.tmp"
-                    />
-                </div>
 
-                <div>
-                    <label className="block text-sm font-medium mb-1 text-text-primary">
-                        Default Template IDs (per pipeline)
-                    </label>
-                    <table className="orch-outline min-w-full border-collapse border border-border-default">
-                        <thead className="bg-surface-secondary">
-                            <tr>
-                                <th className={`${triggerCell} text-left`}>Pipeline</th>
-                                <th className={`${triggerCell} text-left`}>Default template</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {pipelineRefs.map((item, idx) => {
-                                const compositeKey = `${item.pipelineDatabaseId}:${item.pipelineId}`;
-                                return (
-                                    <tr key={idx} className="hover:bg-surface-hover">
-                                        <td className={triggerCell}>{compositeKey}</td>
-                                        <td className={triggerCell}>
-                                            {/* Pick by template name — the trigger stores the id. */}
-                                            <PipelineTemplateSelect
-                                                pipelineDatabaseId={item.pipelineDatabaseId || ""}
-                                                pipelineId={item.pipelineId}
-                                                value={draft.defaultTemplateIds[compositeKey] || ""}
-                                                onChange={(templateId) =>
-                                                    onChange({
-                                                        ...draft,
-                                                        defaultTemplateIds: {
-                                                            ...draft.defaultTemplateIds,
-                                                            [compositeKey]: templateId,
-                                                        },
-                                                    })
-                                                }
-                                            />
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-text-primary">
+                            Default Template IDs (per pipeline)
+                        </label>
+                        <table className="orch-outline min-w-full border-collapse border border-border-default">
+                            <thead className="bg-surface-secondary">
+                                <tr>
+                                    <th className={`${triggerCell} text-left`}>Pipeline</th>
+                                    <th className={`${triggerCell} text-left`}>Default template</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {pipelineRefs.map((item, idx) => {
+                                    const compositeKey = `${item.pipelineDatabaseId}:${item.pipelineId}`;
+                                    return (
+                                        <tr key={idx} className="hover:bg-surface-hover">
+                                            <td className={triggerCell}>{compositeKey}</td>
+                                            <td className={triggerCell}>
+                                                {/* Pick by template name — the trigger stores the id. */}
+                                                <PipelineTemplateSelect
+                                                    pipelineDatabaseId={
+                                                        item.pipelineDatabaseId || ""
+                                                    }
+                                                    pipelineId={item.pipelineId}
+                                                    value={
+                                                        draft.defaultTemplateIds[compositeKey] || ""
+                                                    }
+                                                    onChange={(templateId) =>
+                                                        onChange({
+                                                            ...draft,
+                                                            defaultTemplateIds: {
+                                                                ...draft.defaultTemplateIds,
+                                                                [compositeKey]: templateId,
+                                                            },
+                                                        })
+                                                    }
+                                                />
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </fieldset>
 
                 <div className="flex justify-end gap-2">
                     <button type="button" onClick={onCancel} className={triggerBtnSecondary}>

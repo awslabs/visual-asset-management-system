@@ -1,6 +1,6 @@
 # OpenSearch
 
-VAMS uses Amazon OpenSearch to power asset and file search. Search is optional: enable at most one of Amazon OpenSearch Serverless (`app.openSearch.useServerless`) or a provisioned Amazon OpenSearch Service domain (`app.openSearch.useProvisioned`), or disable both to deploy without search. This page describes what developers and operators need to know for each mode: setup, how indexes and reindexing work, network access, and limits.
+VAMS uses Amazon OpenSearch to power asset and file search. Search is optional: enable at most one of Amazon OpenSearch Serverless (`app.openSearch.useServerless`) or a provisioned Amazon OpenSearch Service domain (`app.openSearch.useProvisioned`), or disable both to deploy without search. Natural-language (vector) search is a separate capability that does not use OpenSearch; see [Relationship to vector search](#relationship-to-vector-search). This page describes what developers and operators need to know for each mode: setup, how indexes and reindexing work, network access, and limits.
 
 For the full list of configuration options, see the [Configuration reference](../deployment/configuration-reference.md#amazon-opensearch-service-appopensearch). For network topology, see [Network architecture](../architecture/networking.md#opensearch-serverless-interface-endpoint).
 
@@ -206,6 +206,10 @@ The shard count and the replica count are **fixed at index creation**. Changing 
 -   **Fragile in-place updates:** domain configuration changes (instance type, EBS size, engine version) trigger blue/green updates that can take 30+ minutes and occasionally exceed the CloudFormation custom-resource timeout. A major engine-version upgrade may require deploying with OpenSearch disabled, then re-enabling.
 -   **Service-linked role:** a provisioned domain in a VPC requires the `AWSServiceRoleForAmazonOpenSearchService` service-linked role. VAMS creates it idempotently during deployment (created if missing, left unchanged if present), so the _"you must enable a service-linked role"_ error needs no manual retry. The role is account-wide and is not removed on stack teardown.
 
+## Relationship to vector search
+
+Keyword search and natural-language search are independent engines behind one search page and one `/search` route family. Keyword search (`POST /search`, `POST /search/simple`) queries the OpenSearch asset and file indexes. Natural-language search (`POST /search/nlp`) embeds the query with Amazon Bedrock and queries a DynamoDB vector index; it does not need OpenSearch and is gated by the `VECTORSEARCH` feature switch rather than by `NOOPENSEARCH`. When both are enabled, the natural-language route runs one OpenSearch query over the vector hits' document ids to apply the keyword search's `filters`, `metadataQuery`, `geoSearch`, and `tags`, and merges each hit's `_source` (`MD_`, `AB_`, preview key) into the response; an OpenSearch error during that step degrades to a warning. The vector index has its own indexer and reindexer in the search stack and is not touched by the OpenSearch reindex utility. See [Vector search](../concepts/vector-search.md).
+
 ## Disabling OpenSearch
 
-Set both `useServerless.enabled` and `useProvisioned.enabled` to `false` to deploy without search. The `NOOPENSEARCH` feature flag is set, and search features are unavailable in the UI; asset and file browsing and management remain functional.
+Set both `useServerless.enabled` and `useProvisioned.enabled` to `false` to deploy without keyword search. The `NOOPENSEARCH` feature flag is set, and keyword search, metadata filtering, and map view are unavailable in the UI; asset and file browsing and management remain functional, and natural-language search remains available when `app.vectorSearch.enabled` is `true`.

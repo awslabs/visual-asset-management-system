@@ -258,7 +258,7 @@ def batch_write_with_retry(table_name: str, batch: list) -> None:
 
 # Stored-row attributes that a metadata read tolerates as absent, and the placeholder each is
 # validated with before being reported as null. A row written by an earlier release can carry
-# neither (handlers/indexing/fileIndexer.py tolerates exactly that shape), which is why the
+# neither (handlers/osSemanticSearch/osFileIndexer.py tolerates exactly that shape), which is why the
 # DELETE paths and the REPLACE_ALL rollbacks already read them with .get. The GET paths read
 # them by subscript, so ONE such row raised KeyError inside the schema-enrichment arm, the
 # unenriched fallback raised the same KeyError again, and the entity's whole metadata list

@@ -88,6 +88,7 @@ This software includes third party software subject to the following copyrights:
 | prop-types                          | ^15.8.1       | MIT                     |
 | react                               | ^18.3.1       | MIT                     |
 | react-data-grid                     | 7.0.0-beta.16 | MIT                     |
+| react-diff-viewer-continued         | 4.4.0         | MIT                     |
 | react-dom                           | ^18.3.1       | MIT                     |
 | react-error-boundary                | ^4.0.9        | MIT                     |
 | react-hook-form                     | ^7.53.0       | MIT                     |
@@ -189,12 +190,6 @@ This software includes third party software subject to the following copyrights:
 
 This software includes third party software subject to the following copyrights:
 
-**GenAI Metadata 3D Labeling Pipeline**
-
-| Name   | Version | License |
-| :----- | :------ | :------ |
-| pillow | ^10.3.0 | HPND    |
-
 **3D Basic Conversion Pipeline**
 
 | Name                  | Version | License |
@@ -202,24 +197,12 @@ This software includes third party software subject to the following copyrights:
 | trimesh               | ^4.5.2  | MIT     |
 | aws-lambda-powertools | ^3.2.0  | MIT-0   |
 
-**Mesh/CAD Metadata Extraction Pipeline**
-
-| Name                  | Version | License             |
-| :-------------------- | :------ | :------------------ |
-| aws-lambda-powertools | 3.2.0   | MIT-0               |
-| jmespath              | 1.0.1   | MIT                 |
-| numpy                 | 2.0.1   | BSD-3-Clause        |
-| trimesh               | 4.8.3   | MIT                 |
-| cadquery              | 2.6.0   | Apache-2.0/LGPL-2.1 |
-| typing-extensions     | 4.12.2  | Python-2.0          |
-
 **Other Pipeline Components**
 
 | Name            | Version                                                                                                                                                   | Related Pipeline                                                                   | License          |
 | :-------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- | :--------------- |
 | PDAL            | [master-latest](https://github.com/PDAL/PDAL)                                                                                                             | POTREE VIEWER                                                                      | BSD              |
 | PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                                                                      | BSD-2-Clause     |
-| Blender         | [master-latest](https://github.com/blender)                                                                                                               | GENAI 3D METADATA GENERATION                                                       | GNU GPLv3        |
 | SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                                                                      | MIT              |
 | FFmpeg          | Ubuntu `ffmpeg` package (installed at image build time, not version-pinned)                                                                               | NVIDIA COSMOS PREDICT, COSMOS REASON, COSMOS TRANSFER, COSMOS 3, GR00T FINE-TUNING | GPL-2.0-or-later |
 
@@ -238,11 +221,80 @@ This software includes third party software subject to the following copyrights:
 | pye57    | >=0.4.17 | MIT                 | E57 point cloud format support                    |
 | cadquery | >=2.4.0  | Apache-2.0/LGPL-2.1 | STEP/STP CAD file tessellation                    |
 | imageio  | >=2.36.0 | BSD-2-Clause        | GIF/image I/O                                     |
-| Pillow   | >=11.0.0 | HPND                | Image optimization and processing                 |
+| Pillow   | >=11.0.0 | MIT-CMU             | Image optimization and processing                 |
 | DracoPy  | >=1.4.0  | Apache-2.0          | Draco compressed mesh (.drc) support              |
 | open3d   | >=0.19.0 | MIT                 | PCD and FARO point cloud format support           |
 | usd-core | >=24.8   | Modified Apache-2.0 | OpenUSD Python bindings for USD/USDA/USDC/USDZ    |
 | boto3    | >=1.35.0 | Apache-2.0          | AWS SDK for Python                                |
+
+### System GenAI Metadata Generation Pipeline
+
+Three container images and the packages pinned in their requirements files. Licenses are taken from each
+release's PyPI metadata.
+
+**Blender render image**
+
+| Name                  | Version | License          | Notes                                                                                                                            |
+| :-------------------- | :------ | :--------------- | :------------------------------------------------------------------------------------------------------------------------------- |
+| Blender               | 4.5.13  | GPL-3.0-or-later | Invoked as a subprocess inside an image built in the deploying account; not linked. https://projects.blender.org/blender/blender |
+| boto3                 | 1.43.89 | Apache-2.0       | AWS SDK for Python                                                                                                               |
+| botocore              | 1.43.89 | Apache-2.0       | AWS SDK for Python (core)                                                                                                        |
+| numpy                 | 2.4.3   | BSD-3-Clause     | Mesh attribute computation                                                                                                       |
+| trimesh               | 4.11.4  | MIT              | Mesh loading and attribute extraction                                                                                            |
+| aws-lambda-powertools | 3.2.0   | MIT-0            | Lambda utilities                                                                                                                 |
+
+**3D render Lambda image (Dockerfile.lambda)**
+
+| Name         | Version   | License                                   | Notes                                                                  |
+| :----------- | :-------- | :---------------------------------------- | :--------------------------------------------------------------------- |
+| boto3        | 1.43.89   | Apache-2.0                                | AWS SDK for Python                                                     |
+| botocore     | 1.43.89   | Apache-2.0                                | AWS SDK for Python (core)                                              |
+| pyvista      | 0.49.0    | MIT                                       | 3D rendering and visualization                                         |
+| vtk          | 9.6.2     | BSD-3-Clause                              | Visualization Toolkit (rendering backend)                              |
+| trimesh      | 4.12.2    | MIT                                       | Mesh loading (GLB, GLTF, OBJ, FBX, PLY, STL, DRC)                      |
+| numpy        | 2.4.6     | BSD-3-Clause                              | Numerical computing                                                    |
+| scipy        | 1.18.1    | BSD-3-Clause                              | Scientific computing (used by trimesh)                                 |
+| laspy        | 2.7.0     | BSD-2-Clause                              | LAS/LAZ point cloud format support                                     |
+| lazrs        | 0.8.2     | MIT                                       | LAZ decompression backend for laspy                                    |
+| pye57        | 0.4.19    | MIT                                       | E57 point cloud format support                                         |
+| cadquery     | 2.8.0     | Apache-2.0                                | STEP/STP/IGES/BREP CAD file tessellation                               |
+| cadquery-ocp | 7.9.3.1.1 | Apache-2.0 (OCCT LGPL-2.1 with exception) | Open CASCADE Technology bindings; imported unmodified                  |
+| Pillow       | 12.3.0    | MIT-CMU                                   | Image processing                                                       |
+| DracoPy      | 1.7.0     | Apache-2.0                                | Draco compressed mesh (.drc) support                                   |
+| usd-core     | 25.11     | Modified Apache-2.0 (TOST-1.0)            | OpenUSD Python bindings for USD/USDA/USDC/USDZ                         |
+| ezdxf        | 1.4.4     | MIT                                       | DXF drawing support                                                    |
+| ifcopenshell | 0.8.5     | LGPL-3.0-or-later                         | IFC/BIM geometry; imported unmodified as a separately installed module |
+| lxml         | 6.1.3     | BSD-3-Clause                              | XML parsing (used by ifcopenshell)                                     |
+| networkx     | 3.6.1     | BSD-3-Clause                              | Graph utilities (used by trimesh)                                      |
+
+**Media extraction image**
+
+| Name                               | Version     | License                                        | Notes                                                                           |
+| :--------------------------------- | :---------- | :--------------------------------------------- | :------------------------------------------------------------------------------ |
+| FFmpeg (bundled by imageio-ffmpeg) | 7.0.2       | LGPL-2.1-or-later / GPL-2.0-or-later per build | Static binary shipped inside the imageio-ffmpeg wheel; invoked as a subprocess. |
+| aws-lambda-powertools              | 3.2.0       | MIT-0                                          | Lambda utilities                                                                |
+| boto3                              | 1.43.89     | Apache-2.0                                     | AWS SDK for Python                                                              |
+| botocore                           | 1.43.89     | Apache-2.0                                     | AWS SDK for Python (core)                                                       |
+| charset-normalizer                 | 3.5.1       | MIT                                            | Text encoding detection                                                         |
+| defusedxml                         | 0.7.1       | PSF-2.0                                        | Safe XML parsing                                                                |
+| et_xmlfile                         | 2.0.0       | MIT                                            | Streaming XML writer (openpyxl dependency)                                      |
+| imageio-ffmpeg                     | 0.6.0       | BSD-2-Clause                                   | FFmpeg wrapper for video frame extraction                                       |
+| jmespath                           | 1.1.0       | MIT                                            | JSON querying (boto3 dependency)                                                |
+| lxml                               | 6.1.3       | BSD-3-Clause                                   | XML processing (python-docx / python-pptx dependency)                           |
+| openpyxl                           | 3.1.5       | MIT                                            | Excel workbook text extraction                                                  |
+| Pillow                             | 12.3.0      | MIT-CMU                                        | Image processing                                                                |
+| pypdfium2                          | 5.13.0      | BSD-3-Clause / Apache-2.0 (PDFium)             | PDF page rendering                                                              |
+| python-dateutil                    | 2.9.0.post0 | Apache-2.0 / BSD-3-Clause (dual)               | Date parsing (boto3 dependency)                                                 |
+| python-docx                        | 1.2.0       | MIT                                            | Word document text extraction                                                   |
+| python-pptx                        | 1.0.2       | MIT                                            | PowerPoint document text extraction                                             |
+| s3transfer                         | 0.19.2      | Apache-2.0                                     | S3 transfer manager (boto3 dependency)                                          |
+| six                                | 1.17.0      | MIT                                            | Python 2/3 compatibility (dependency)                                           |
+| tinytag                            | 2.3.2       | MIT                                            | Audio and video metadata tags                                                   |
+| typing-extensions                  | 4.16.0      | PSF-2.0                                        | Typing backports                                                                |
+| urllib3                            | 2.7.0       | MIT                                            | HTTP client (boto3 dependency)                                                  |
+| XlsxWriter                         | 3.2.9       | BSD-2-Clause                                   | Excel writer (python-pptx dependency)                                           |
+
+\* **Blender License Note**: Blender is the GPL-3.0 renderer of the pipeline's BLENDER branch. The image installs the official Blender release and runs it as a separate process (`blender --background`), writing rendered views to disk; no VAMS code is linked against Blender and no Blender code is modified or redistributed by this repository. The GPL-3.0 terms apply to Blender's own files, whose license text ships beside it in the image (`GPL3-license.txt`).
 
 ### Coordinate Transform Pipeline
 

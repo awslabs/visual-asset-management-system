@@ -22,6 +22,7 @@ When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the followin
 -   Amazon Cognito SAML and OIDC federation are not supported — both use the Amazon Cognito hosted UI. Disable `useCognito.useSaml` and `useCognito.useOidc`, and use the external OAuth identity provider option for federated sign-in.
 -   Next-generation Amazon OpenSearch Serverless collections are not supported. Set `app.openSearch.useServerless.nextGen` to `false`.
 -   Amazon OpenSearch Serverless is not offered at all in the AWS European Sovereign Cloud. Set `app.openSearch.useServerless.enabled` to `false` and use `app.openSearch.useProvisioned` there.
+-   DynamoDB vector search is not available in the AWS European Sovereign Cloud. Set `app.vectorSearch.enabled` to `false` there. In AWS GovCloud (US) it defaults to `false` and is supported once the Amazon Bedrock models are enabled in both linked accounts.
 -   Amazon Cognito advanced security (`AdvancedSecurityMode`) is not available. VAMS does not configure it and suppresses the corresponding check automatically, so no configuration change is needed.
 
 For the authoritative per-field list, see [Restricted-partition constraints](configuration-reference.md#restricted-partition-constraints).
@@ -59,13 +60,14 @@ You cannot enable both Amazon CloudFront and ALB simultaneously. The deployment 
 
 ### Search capability
 
-Amazon OpenSearch Service provides full-text search, filtering, and map-view functionality in the VAMS web interface.
+Amazon OpenSearch Service provides keyword search, metadata filtering, and map-view functionality in the VAMS web interface. Natural-language (vector) search is a separate capability that stores Amazon Bedrock embeddings in a DynamoDB vector index and works with or without OpenSearch.
 
-| Option                     | Configuration                             | Notes                                                                                                                                                    |
-| -------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **OpenSearch Serverless**  | `openSearch.useServerless.enabled: true`  | Fully managed, pay-per-use. No VPC required. Default for commercial deployments.                                                                         |
-| **OpenSearch Provisioned** | `openSearch.useProvisioned.enabled: true` | Dedicated cluster with configurable instance types. Requires a VPC spanning `availabilityZoneCount` Availability Zones (`2` by default, optionally `3`). |
-| **No OpenSearch**          | Both set to `false`                       | Search is disabled. The assets page returns all authorized assets without filtering.                                                                     |
+| Option                               | Configuration                             | Notes                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OpenSearch Serverless**            | `openSearch.useServerless.enabled: true`  | Fully managed, pay-per-use. No VPC required. Default for commercial deployments.                                                                                                                                                                                                                                                                                          |
+| **OpenSearch Provisioned**           | `openSearch.useProvisioned.enabled: true` | Dedicated cluster with configurable instance types. Requires a VPC spanning `availabilityZoneCount` Availability Zones (`2` by default, optionally `3`).                                                                                                                                                                                                                  |
+| **No OpenSearch**                    | Both set to `false`                       | Keyword search, metadata filtering, and map view are disabled. The assets page lists all authorized assets without filtering; natural-language search remains available when vector search is enabled.                                                                                                                                                                    |
+| **Natural-language (vector) search** | `vectorSearch.enabled: true`              | Requires `pipelines.useSystemGenAiMetadata` enabled with its file-upload trigger armed, and Amazon Bedrock model access (see [Prerequisites](prerequisites.md#amazon-bedrock-model-access)). No VPC required. Default `true` in the commercial template, `false` in GovCloud, not available in the EU Sovereign Cloud. See [Vector search](../concepts/vector-search.md). |
 
 :::note[Choose only one]
 You cannot enable both OpenSearch Serverless and OpenSearch Provisioned at the same time.
@@ -84,7 +86,7 @@ Amazon OpenSearch Serverless is the recommended option for most deployments. Pro
 | **Import existing VPC** | `useGlobalVpc.enabled: true` with `optionalExternalVpcId` | Import an existing VPC by ID. Requires providing isolated subnet IDs and optionally private and public subnet IDs. See [Deploy the solution](deploy-the-solution.md) for the two-phase deployment process. |
 
 :::warning[VPC is required for some features]
-Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they are enabled. If any of the following are turned on while `useGlobalVpc.enabled` is `false`, deployment fails with a configuration error that lists the offending features — set `useGlobalVpc.enabled` to `true` (or disable those features): ALB deployment, OpenSearch Provisioned, or any container-based pipeline (Potree viewer, Gaussian splatting, GenAI labeling, RapidPipeline, ModelOps, Isaac Lab, 3D preview thumbnail, NVIDIA Cosmos, NVIDIA Gr00t).
+Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they are enabled. If any of the following are turned on while `useGlobalVpc.enabled` is `false`, deployment fails with a configuration error that lists the offending features — set `useGlobalVpc.enabled` to `true` (or disable those features): ALB deployment, OpenSearch Provisioned, a private OpenSearch Serverless collection, or any container-based pipeline (Potree viewer, 3D preview thumbnail, Coordinate Transform, Gaussian splatting, RapidPipeline, ModelOps, Isaac Lab, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA Gr00t, and the SYSTEM GenAI metadata pipeline's Fargate renderer, `useSystemGenAiMetadata.useFargateRenderer`). The SYSTEM GenAI metadata pipeline itself and natural-language search run on AWS Lambda and need no VPC.
 :::
 
 **Subnet sizing guidance:**

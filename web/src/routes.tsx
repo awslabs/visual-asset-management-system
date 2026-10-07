@@ -51,8 +51,8 @@ interface RouteOption {
 
 export const routeTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "/" },
-    { path: "/search", Page: SearchPage, active: "/" },
-    { path: "/search/:databaseId/assets", Page: SearchPage, active: "/" },
+    { path: "/search", Page: SearchPage, active: "#/assets/" },
+    { path: "/search/:databaseId/assets", Page: SearchPage, active: "#/assets/" },
     { path: "/assets", Page: SearchPage, active: "#/assets/" },
     { path: "/databases", Page: Databases, active: "#/databases/" },
     {

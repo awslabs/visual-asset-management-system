@@ -57,6 +57,13 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import workflowRecords as wr
 from common.workflows.triggerTemplateValidation import pipeline_trigger_template_warnings
 from common.workflows.executionValidation import arity_none_metadata_warnings
+from common.workflows.systemRecords import (
+    is_schema_import_call,
+    system_update_allowed_fields,
+    SYSTEM_UPDATE_ALLOWED_FIELDS,
+    SYSTEM_PIPELINE_READONLY_MESSAGE,
+    SYSTEM_PIPELINE_ARCHIVE_MESSAGE,
+)
 
 logger = safeLogger(service_name="PipelineService")
 
@@ -274,6 +281,7 @@ def _item_to_response(item, templates=None, template_count=None):
         systemConfig=item.get("systemConfig", {}),
         enabled=item.get("enabled", True),
         archived=item.get("archived", False),
+        isSystem=bool(item.get("isSystem", False)),
         dateCreated=item.get("dateCreated", ""),
         dateModified=item.get("dateModified", ""),
         createdBy=item.get("createdBy", ""),
@@ -606,7 +614,8 @@ def get_pipeline_templates(database_id, pipeline_id, limit=MAX_DETAIL_TEMPLATES)
     return templates
 
 
-def create_pipeline(database_id, request, username, claims_and_roles, event=None):
+def create_pipeline(database_id, request, username, claims_and_roles, event=None,
+                    is_system=False, import_call=False):
     table = _pipeline_table()
     pipeline_id = request.pipelineId or pr.new_guid()
 
@@ -621,6 +630,7 @@ def create_pipeline(database_id, request, username, claims_and_roles, event=None
         enabled=request.enabled if request.enabled is not None else True,
         created_by=username,
         modified_by=username,
+        is_system=is_system,
     )
 
     # Tier-2 FIRST: authorize creating this pipeline object before any existence probe, so the
@@ -654,7 +664,11 @@ def create_pipeline(database_id, request, username, claims_and_roles, event=None
                 "message": "Pipeline ID is already in use by another database. Choose a different ID."})
     if existing:
         # The id belongs to an archived (soft-deleted) row: the create restores it in place, which is
-        # the path a re-registration of an archived built-in takes. Create provenance is preserved.
+        # the path a re-registration of an archived built-in takes. A system row is restored only by
+        # the importer; the API caller's restore is refused. Create provenance is preserved.
+        if existing.get("isSystem") and not import_call:
+            logger.info(f"Restore of system pipeline {database_id}:{pipeline_id} refused")
+            return validation_error(body={"message": SYSTEM_PIPELINE_ARCHIVE_MESSAGE}, event=event)
         logger.info(f"Restoring archived pipeline {database_id}:{pipeline_id}")
         record["dateCreated"] = existing.get("dateCreated") or record["dateCreated"]
         record["createdBy"] = existing.get("createdBy") or record["createdBy"]
@@ -684,7 +698,8 @@ def create_pipeline(database_id, request, username, claims_and_roles, event=None
     return success(body=body)
 
 
-def update_pipeline(database_id, pipeline_id, request, username, claims_and_roles, event=None):
+def update_pipeline(database_id, pipeline_id, request, username, claims_and_roles, event=None,
+                    is_system=None, import_call=False):
     item = get_pipeline_item(database_id, pipeline_id)
     if not item:
         # Authorize against a provisional record first so the 404 is not an existence oracle.
@@ -693,6 +708,17 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
         return validation_error(status_code=404, body={"message": "Pipeline not found"})
     if not _enforce(claims_and_roles, item, "PUT"):
         return authorization_error()
+
+    # A system pipeline is owned by the deployment: only its enabled switch may change through the
+    # API. The importer's own update — the deploy-wins path that re-asserts every bundle field,
+    # `archived` included — is exempt.
+    if item.get("isSystem") and not import_call:
+        disallowed = system_update_allowed_fields(
+            request.dict(exclude_none=True), SYSTEM_UPDATE_ALLOWED_FIELDS)
+        if disallowed is not None:
+            logger.info(f"Update of system pipeline {database_id}:{pipeline_id} refused: "
+                        f"'{disallowed}' is read-only")
+            return validation_error(body={"message": SYSTEM_PIPELINE_READONLY_MESSAGE}, event=event)
 
     # Reject switching a pipeline to DeadlineCloud when the deployment has that type disabled.
     if request.executionConfig is not None and _deadline_cloud_blocked(request.executionConfig):
@@ -720,6 +746,8 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
         item["enabled"] = request.enabled
     if request.archived is not None:
         item["archived"] = request.archived
+    if is_system is not None:
+        item["isSystem"] = bool(is_system)
     item["dateModified"] = pr.iso_now()
     item["modifiedBy"] = username
 
@@ -759,7 +787,8 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
     return success(body=body)
 
 
-def archive_pipeline(database_id, pipeline_id, username, claims_and_roles, event=None):
+def archive_pipeline(database_id, pipeline_id, username, claims_and_roles, event=None,
+                     import_call=False):
     item = get_pipeline_item(database_id, pipeline_id)
     if not item:
         # Authorize against a provisional record first so the 404 is not an existence oracle.
@@ -768,6 +797,11 @@ def archive_pipeline(database_id, pipeline_id, username, claims_and_roles, event
         return validation_error(status_code=404, body={"message": "Pipeline not found"})
     if not _enforce(claims_and_roles, item, "DELETE"):
         return authorization_error()
+    # The deployment archives its own system pipelines (stack teardown, a retired bundle); the API
+    # caller's archive is refused.
+    if item.get("isSystem") and not import_call:
+        logger.info(f"Archive of system pipeline {database_id}:{pipeline_id} refused")
+        return validation_error(body={"message": SYSTEM_PIPELINE_ARCHIVE_MESSAGE}, event=event)
 
     item["archived"] = True
     item["enabled"] = False
@@ -871,11 +905,16 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         username = (claims_and_roles["tokens"][0]
                     if claims_and_roles.get("tokens") else "")
+        # The importer's marked cross-call is the one caller that may set isSystem and that is exempt
+        # from the system-record guards. The request models ignore the key, so it is read from the
+        # raw body here and only for that caller.
+        import_call = is_schema_import_call(event)
 
         if method == "POST":
             if not database_id:
                 return validation_error(body={"message": "databaseId required to create a pipeline"}, event=event)
-            request = CreatePipelineRequestModel(**_request_body(event))
+            body = _request_body(event)
+            request = CreatePipelineRequestModel(**body)
             # The pipeline is created under the path-scoped database; a body databaseId naming a
             # different one is rejected rather than silently ignored.
             if request.databaseId != database_id:
@@ -886,18 +925,25 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(body={
                     "message": "databaseId in the request body must match the request path."},
                     event=event)
-            return create_pipeline(database_id, request, username, claims_and_roles, event)
+            is_system = bool(body.get("isSystem", False)) if import_call else False
+            return create_pipeline(database_id, request, username, claims_and_roles, event,
+                                   is_system=is_system, import_call=import_call)
 
         if method == "PUT":
             if not pipeline_id:
                 return validation_error(body={"message": "pipelineId required to update a pipeline"}, event=event)
-            request = UpdatePipelineRequestModel(**_request_body(event))
-            return update_pipeline(database_id, pipeline_id, request, username, claims_and_roles, event)
+            body = _request_body(event)
+            request = UpdatePipelineRequestModel(**body)
+            is_system = (bool(body["isSystem"])
+                         if import_call and body.get("isSystem") is not None else None)
+            return update_pipeline(database_id, pipeline_id, request, username, claims_and_roles, event,
+                                   is_system=is_system, import_call=import_call)
 
         if method == "DELETE":
             if not pipeline_id:
                 return validation_error(body={"message": "pipelineId required to archive a pipeline"}, event=event)
-            return archive_pipeline(database_id, pipeline_id, username, claims_and_roles, event)
+            return archive_pipeline(database_id, pipeline_id, username, claims_and_roles, event,
+                                    import_call=import_call)
 
         return validation_error(body={"message": "Method not allowed"}, event=event)
 
