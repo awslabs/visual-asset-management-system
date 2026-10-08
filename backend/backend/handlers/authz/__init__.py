@@ -4,6 +4,7 @@
 import boto3
 from botocore.config import Config
 import os
+import threading
 import time
 import json
 from boto3.dynamodb.types import TypeDeserializer
@@ -71,6 +72,74 @@ logger = safeLogger()
 deserializer = TypeDeserializer()
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 _dynamodb_client = boto3.client("dynamodb", config=retry_config)
+
+
+class ExpressionCachingEnforcer(FastEnforcer):
+    """A ``FastEnforcer`` that compiles each distinct matcher expression once per instance.
+
+    The policy model's matcher is ``g(r.sub, p.sub) && eval(p.obj_rule) && r.act == p.act``.
+    Because it contains ``eval()``, pycasbin cannot compile the matcher once per ``enforce()``:
+    ``CoreEnforcer.enforce_ex`` (casbin 1.36.0, ``core_enforcer.py`` L453-L456) inlines each
+    policy line's ``obj_rule`` into the matcher text (``util.replace_eval``) and calls
+    ``self._get_expression(exp_with_rule, functions)`` for EVERY line on EVERY request.
+    ``_get_expression`` (L538-L544) builds a new ``casbin.util.expression.SimpleEval``, whose
+    constructor (``util/expression.py`` L34) runs ``ast.parse`` on the text. Parsing dominates the
+    per-line cost, so a decision over N policy lines costs N parses, and a list endpoint that
+    authorizes each item pays that again per item.
+
+    This subclass overrides ``_get_expression`` and keys a per-INSTANCE dict on the full inlined
+    expression text it receives -- the matcher with that line's ``obj_rule`` already substituted,
+    so a policy line whose rule text changes is a different key and compiles afresh. Only the
+    COMPILED EXPRESSION is cached, never a decision: every ``enforce()`` still evaluates every
+    policy line against the request. The cache is bounded by the number of distinct policy lines
+    the instance holds.
+
+    The cache MUST stay on the instance. ``enforce_ex`` rebinds ``functions["g"]`` on every call
+    to a closure over THIS enforcer's role manager (L402-L409), and the compiled expression keeps
+    a reference to that ``functions`` dict. A cache shared across enforcers would evaluate one
+    user's role links for another. One ``CasbinEnforcerService`` owns one enforcer, so this cache
+    is per user and is discarded with the service on the 60 s TTL / MFA-change invalidation in
+    ``CasbinEnforcer.__init__``. On a hit the ``functions`` reference is refreshed so correctness
+    never depends on pycasbin handing out the same dict object each call.
+
+    A compiled ``SimpleEval`` stores the request parameters on itself while it evaluates
+    (``simpleeval`` ``self.names``), so a shared instance is not safe to evaluate from two threads
+    at once. Handlers call ``enforce()`` from the request thread only, but as this is
+    authorization code the instance serializes ``enforce_ex`` behind its own lock rather than
+    relying on callers to keep it that way; with no contention the lock costs well under a
+    microsecond per decision.
+    """
+
+    def __init__(self, model=None, adapter=None, enable_log=False, cache_key_order=None):
+        # Instance attributes, assigned BEFORE the parent constructor so they exist for any
+        # evaluation the parent might perform while loading. Never class-level: see docstring.
+        self._expression_cache = {}
+        self._enforce_lock = threading.RLock()
+        super().__init__(model=model, adapter=adapter, enable_log=enable_log, cache_key_order=cache_key_order)
+
+    def enforce_ex(self, *rvals):
+        with self._enforce_lock:
+            return super().enforce_ex(*rvals)
+
+    def _get_expression(self, expr, functions=None):
+        """Return the compiled expression for ``expr``, compiling it on first sight.
+
+        Overrides the ``@staticmethod`` on ``CoreEnforcer``; the parent calls it as
+        ``self._get_expression(...)`` so an instance method binds. ``expr`` is the FULL matcher
+        text with the policy line's rule inlined, which is the only key that is both complete and
+        stable -- a line index would alias two different rules whenever the policy is rebuilt.
+        """
+        expression = self._expression_cache.get(expr)
+        if expression is None:
+            expression = FastEnforcer._get_expression(expr, functions)
+            self._expression_cache[expr] = expression
+        elif functions is not None and expression.functions is not functions:
+            # pycasbin 1.36.0 passes the enforcer's own function-map dict every call, so this
+            # branch is defensive: it keeps ``g`` bound to the caller's role manager even if a
+            # later release hands out a copy.
+            expression.functions = functions
+        return expression
+
 
 # Determine if MFA is enabled from claims
 def is_mfa_enabled(claims_and_roles):
@@ -790,7 +859,11 @@ class CasbinEnforcerService:
         # Casbin's library logging is off: with it on, every enforce() writes the caller id and the
         # full checked object to the function log. API-level decisions and data-level denials are
         # recorded through log_authorization_api / log_authorization.
-        _enforcer = FastEnforcer(model=new_model, adapter=new_string_adapter, enable_log=False)
+        #
+        # ExpressionCachingEnforcer compiles each policy line's matcher once per enforcer instance
+        # (see its docstring). The instance is owned by this service, so the compiled expressions
+        # are per user and go away with the service on TTL / MFA invalidation.
+        _enforcer = ExpressionCachingEnforcer(model=new_model, adapter=new_string_adapter, enable_log=False)
         return _enforcer
 
     def _scrub_object_fields(self, obj):
