@@ -157,12 +157,14 @@ function allFargatePipelinesWithCmk(c: any) {
         "useGenAiMetadata3dLabeling",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
+        "useGenAiVideoSopBom",
     ]) {
         c.app.pipelines[flag].enabled = true;
         if (c.app.pipelines[flag].autoRegisterWithVAMS !== undefined) {
             c.app.pipelines[flag].autoRegisterWithVAMS = false;
         }
     }
+    c.app.pipelines.useGenAiVideoSopBom.useCodeBuild = true;
 }
 
 /** Fargate job definitions, identified by the platform capability Batch receives. */
@@ -201,10 +203,32 @@ describe("every Fargate job definition logs to a VAMS-owned group", () => {
         });
     });
 
-    test("[control] the five Fargate job definitions are emitted in this synth", () => {
-        // Coordinate transform, Blender renderer, 3D thumbnail, PDAL and Potree. A lower count means a
-        // pipeline was left out of the mutate, and the loop below would then assert on nothing for it.
-        expect(fargateJobDefinitions(synth)).toHaveLength(5);
+    test("[control] the six Fargate job definitions are emitted in this synth", () => {
+        // Coordinate transform, Blender renderer, 3D thumbnail, PDAL and Potree, and the video SOP/BOM
+        // job. A lower count means a pipeline was left out of the mutate, and the loop below would then
+        // assert on nothing for it.
+        expect(fargateJobDefinitions(synth)).toHaveLength(6);
+    });
+
+    test("the video SOP/BOM job is sized 4 vCPU / 16 GiB; the other five keep 16 vCPU / 64 GiB", () => {
+        const requirementOf = (jd: Resource, type: string) =>
+            ((jd.properties as any).ContainerProperties?.ResourceRequirements ?? []).find(
+                (r: any) => r.Type === type
+            )?.Value;
+        const isVideo = (jd: Resource) =>
+            String((jd.properties as any).JobDefinitionName).startsWith("VideoSopBomJob_");
+        const video = fargateJobDefinitions(synth).filter(isVideo);
+        expect(video).toHaveLength(1);
+        expect(requirementOf(video[0], "VCPU")).toBe("4");
+        expect(requirementOf(video[0], "MEMORY")).toBe("16384");
+        const resized = fargateJobDefinitions(synth)
+            .filter((jd) => !isVideo(jd))
+            .filter(
+                (jd) =>
+                    requirementOf(jd, "VCPU") !== "16" || requirementOf(jd, "MEMORY") !== "65536"
+            )
+            .map((jd) => `${jd.stack}/${jd.logicalId}`);
+        expect(resized).toEqual([]);
     });
 
     test("each job definition names a group under the prefix the workflow Lambdas can read", () => {

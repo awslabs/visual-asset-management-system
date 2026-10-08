@@ -55,6 +55,17 @@ function enableContainerPipelines(c: any) {
         pipelines.useSplatToolbox.useCodeBuild = true;
         pipelines.useSplatToolbox.autoRegisterWithVAMS = false;
     }
+    if (pipelines.useGenAiVideoSopBom) {
+        pipelines.useGenAiVideoSopBom.enabled = true;
+        pipelines.useGenAiVideoSopBom.useCodeBuild = true;
+        pipelines.useGenAiVideoSopBom.autoRegisterWithVAMS = false;
+        // The restricted-partition templates ship the model id empty because the pipeline is off there;
+        // the construct refuses an empty id, so this harness (which bypasses getConfig()) supplies a
+        // foundation-model id. The role scope under test does not depend on which id it is.
+        if (!pipelines.useGenAiVideoSopBom.bedrockModelId) {
+            pipelines.useGenAiVideoSopBom.bedrockModelId = "anthropic.claude-sonnet-5";
+        }
+    }
 }
 
 const synthWithContainerPipelines = (name: TemplateName): SynthResult =>
@@ -94,6 +105,14 @@ describe.each(TEMPLATES)("%s: pipeline container job roles", (templateName) => {
         expect(roles.length).toBeGreaterThan(0);
         const splatJobRole = roles.filter((r) => /SplatToolboxContainerJobRole/i.test(r.logicalId));
         expect(splatJobRole.length).toBeGreaterThan(0);
+    });
+
+    test("the Video SOP/BOM container job role IS in this synth", () => {
+        // Same reason as the Splat control: the pipeline ships disabled, and this role is the one whose
+        // credentials a container decoding untrusted media can reach.
+        const roles = synth.ofType("AWS::IAM::Role");
+        const jobRole = roles.filter((r) => /VideoSopBomContainerJobRole/i.test(r.logicalId));
+        expect(jobRole.length).toBeGreaterThan(0);
     });
 
     test("no role carries a managed policy that grants iam:PassRole over a role wildcard", () => {

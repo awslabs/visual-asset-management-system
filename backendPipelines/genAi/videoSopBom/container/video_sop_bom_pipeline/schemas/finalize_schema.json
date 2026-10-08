@@ -1,0 +1,139 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/finalize_schema.json",
+    "title": "Tool input of the finalize call",
+    "description": "The merged step list, merged component observations and vision results go in; the final BOM rows (observable LCA columns only), the BOM rows each step touches, cross-window dependency edges, the SOP summary and safety notes, and the lab-summary text come out. lab_part_number, title, total_mass_g, component_count, materials_breakdown and contributors are computed by the renderer, never asked here.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "bom_rows",
+        "step_bom_refs",
+        "dependency_edges",
+        "summary",
+        "safety_notes",
+        "lab_summary"
+    ],
+    "properties": {
+        "bom_rows": { "type": "array", "items": { "$ref": "#/$defs/finalRow" } },
+        "step_bom_refs": {
+            "description": "For each SOP step (global number), the indexes into bom_rows it touches.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["step", "row_indexes"],
+                "properties": {
+                    "step": { "type": "integer", "minimum": 1 },
+                    "row_indexes": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+                }
+            }
+        },
+        "dependency_edges": {
+            "description": "Preconditions that cross window boundaries: step depends on depends_on_step (global numbers), or on prose only when depends_on_step is null.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["step", "depends_on_step", "text"],
+                "properties": {
+                    "step": { "type": "integer", "minimum": 1 },
+                    "depends_on_step": { "type": ["integer", "null"], "minimum": 1 },
+                    "text": { "type": "string" }
+                }
+            }
+        },
+        "summary": { "description": "SOP overview paragraph.", "type": "string" },
+        "safety_notes": { "type": "array", "items": { "type": "string" } },
+        "lab_summary": { "$ref": "#/$defs/labSummaryText" }
+    },
+    "$defs": {
+        "finalRow": {
+            "description": "An LCA row restricted to the columns a teardown can observe. part_level is base 0; the renderer adds partLevelBase.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "part_level",
+                "part_type",
+                "manufacturer_part_number",
+                "alternative",
+                "part_description",
+                "qty",
+                "material_or_component_type",
+                "mass_g_per_unit",
+                "primary_manufacturing_process"
+            ],
+            "properties": {
+                "part_level": { "type": "integer", "minimum": 0, "maximum": 5 },
+                "part_type": { "description": "One of the listed part types.", "type": "string" },
+                "manufacturer_part_number": {
+                    "description": "Printed or stated MPN, else empty.",
+                    "type": "string"
+                },
+                "alternative": { "type": "string", "enum": ["Yes", "No"] },
+                "part_description": { "type": "string", "minLength": 1 },
+                "qty": { "type": "number", "exclusiveMinimum": 0 },
+                "material_or_component_type": {
+                    "description": "One of the listed material or component types.",
+                    "type": "string"
+                },
+                "material_notes": { "type": ["string", "null"] },
+                "material_composition": {
+                    "type": ["number", "null"],
+                    "minimum": 0,
+                    "maximum": 100
+                },
+                "mass_g_per_unit": { "type": ["number", "null"], "minimum": 0 },
+                "manufacturing_country": {
+                    "description": "ISO 3166-1 alpha-2 when printed on the part, else null.",
+                    "type": ["string", "null"],
+                    "pattern": "^[A-Z]{2}$"
+                },
+                "method_for_weight": {
+                    "type": ["string", "null"],
+                    "enum": ["Measured", "Derived from CAD", null]
+                },
+                "primary_manufacturing_process": {
+                    "description": "One of the listed primary manufacturing techniques.",
+                    "type": ["string", "null"]
+                },
+                "secondary_manufacturing_process": { "type": ["string", "null"] },
+                "ic_type": { "type": ["string", "null"] },
+                "ic_package_type": { "type": ["string", "null"] },
+                "pcb_type": { "type": ["string", "null"] },
+                "pcb_layers": { "type": ["integer", "null"], "minimum": 1 },
+                "pcb_board_finish": { "type": ["string", "null"] },
+                "display_type": { "type": ["string", "null"] },
+                "battery_type": { "type": ["string", "null"] },
+                "battery_capacity_wh": { "type": ["number", "null"], "minimum": 0 }
+            }
+        },
+        "labSummaryText": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "product_description",
+                "product_source_url",
+                "background",
+                "materials_methodology",
+                "safety_considerations",
+                "existing_bom_provided",
+                "existing_bom_notes",
+                "primary_manufacturing_processes",
+                "key_observations",
+                "comparative_analysis"
+            ],
+            "properties": {
+                "product_description": { "type": "string" },
+                "product_source_url": { "type": ["string", "null"] },
+                "background": { "type": "string" },
+                "materials_methodology": { "type": "string" },
+                "safety_considerations": { "type": "string" },
+                "existing_bom_provided": { "type": "boolean" },
+                "existing_bom_notes": { "type": "string" },
+                "primary_manufacturing_processes": { "type": "string" },
+                "key_observations": { "type": "array", "items": { "type": "string" } },
+                "comparative_analysis": { "type": "string" }
+            }
+        }
+    }
+}

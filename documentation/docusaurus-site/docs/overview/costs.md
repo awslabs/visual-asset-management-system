@@ -104,6 +104,8 @@ Processing pipeline costs are variable and depend on the number of assets proces
 | **Amazon S3 (Pipeline Output)**       | 300 GB storage, 30 GB transfer out | $9.60             | $16.34          |
 | **Amazon CloudWatch (Pipeline Logs)** | 1 GB logs                          | $3.28             | $4.12           |
 | **Amazon Bedrock (GenAI Labeling)**   | 1M tokens (Claude Sonnet)          | $18.00            | N/A             |
+| **Amazon Transcribe (Video SOP/BOM)** | 100 audio minutes (batch)          | $0.60             | N/A             |
+| **Amazon Bedrock (Video SOP/BOM)**    | 1M tokens (Claude Sonnet)          | $18.00            | N/A             |
 | **Amazon ECR**                        | 40 GB container images (in-region) | $4.00             | $4.00           |
 
 :::tip[Pipeline Cost Optimization]

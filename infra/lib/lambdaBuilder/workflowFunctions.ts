@@ -247,9 +247,10 @@ export function buildExecutionServiceFunction(
             //   (3) pipeline state-machine groups — BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
             //       '/aws/vendedlogs/VAMSstateMachine-*' are used across pipelines (case varies);
             //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*' — the ECS pipelines and
-            //       the five Fargate Batch pipelines (coordinate transform, Blender renderer, 3D
-            //       thumbnail, PDAL, Potree), whose job definitions route container output there
-            //       through the awslogs driver and register that group per stage;
+            //       the six Fargate Batch pipelines (coordinate transform, Blender renderer, 3D
+            //       thumbnail, PDAL, Potree, video SOP/BOM extraction), whose job definitions route
+            //       container output there through the awslogs driver and register that group per
+            //       stage;
             //   (5) AWS Batch's default container group '/aws/batch/job' — the GPU Batch pipelines
             //       (Cosmos, GR00T, Isaac Lab, Splat) set no log configuration, so their container
             //       streams land there and that is the group they register.

@@ -39,6 +39,7 @@ LOGGER_COPIES = (
     "backendPipelines/genAi/nvidia/cosmos/reason/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/transfer/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/gr00t/lambda/customLogging/logger.py",
+    "backendPipelines/genAi/videoSopBom/lambda/customLogging/logger.py",
     "backendPipelines/multi/modelOps/lambda/customLogging/logger.py",
     "backendPipelines/multi/rapidPipeline/lambda/customLogging/logger.py",
     "backendPipelines/multi/rapidPipelineEKS/lambda/customLogging/logger.py",

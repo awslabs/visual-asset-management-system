@@ -67,6 +67,14 @@ The Coordinate Transform pipeline depends on the open-source [laspy](https://git
 The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0 licenses already used throughout VAMS and does not introduce any copyleft (LGPL/GPL) requirements. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed.
 :::
 
+### Video SOP/BOM Extraction Pipeline Library Notice
+
+The Video SOP/BOM Extraction pipeline container installs the Debian trixie `ffmpeg` package (FFmpeg 7.1.x) at image build time to probe video streams, extract and encode audio (FLAC), and extract key frames; the package is not version-pinned, and `7:7.1.5-0+deb13u1` is the version observed in the reference build. Debian builds FFmpeg with `--enable-gpl`, so the `ffmpeg` and `ffprobe` binaries are distributed under the GNU General Public License version 2 or later (GPL-2.0-or-later). The pipeline runs them as separate processes and does not link against the FFmpeg libraries. The pipeline's Python dependencies — boto3 and botocore (Apache-2.0), jsonschema (MIT), and Pillow (HPND) — are permissively licensed; the exact versions are in the repository's `NOTICE.md`.
+
+:::warning
+GPL-2.0-or-later terms apply only when this optional pipeline is enabled (`app.pipelines.useGenAiVideoSopBom.enabled`). Review the license requirements with your legal team before enabling it. See the [Video SOP/BOM Extraction pipeline](../pipelines/video-sop-bom.md#third-party-library-licenses) page.
+:::
+
 ### Gaussian Splat Toolbox Pipeline Model Notice
 
 The Gaussian Splat Toolbox container image ships the segmentation model weights its optional

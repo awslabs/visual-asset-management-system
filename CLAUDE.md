@@ -10,7 +10,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, and more
+-   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, video SOP/BOM extraction, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, and more
 
 ### **Version Info**
 
@@ -62,7 +62,8 @@ root/
 │   │   │   │   ├── reason/    # NVIDIA Cosmos Reason (video captioning)
 │   │   │   │   └── transfer/  # NVIDIA Cosmos Transfer (control-signal video restyle)
 │   │   │   └── gr00t/         # NVIDIA GR00T N1.5 fine-tuning
-│   │   └── metadata3dLabeling/
+│   │   ├── metadata3dLabeling/
+│   │   └── videoSopBom/       # Video SOP/BOM extraction (Amazon Transcribe + Amazon Bedrock)
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
 │   └── CLAUDE.md              # Documentation development guide
@@ -638,7 +639,7 @@ The same three-way constants update applies to new audit CloudWatch log groups. 
 
 ### **Adding a New Processing Pipeline**
 
-See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to the `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` condition blocks for the subnets its compute runs in: the pipeline-only endpoint block always, the subnet-creation block and `needsEcsPrivate` only for a private-subnet pipeline (the subnet-creation block adds a NAT gateway per Availability Zone; see `infra/lib/nestedStacks/pipelines/CLAUDE.md`). Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, register the step's sub-process and log sources on the orchestration bus (the `pipeline.execution.register` event with stage-aware log entries; a Batch pipeline's lambda gets its log-group env from `infra/lib/helper/batchJobLogGroup.ts`), update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
+See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to the `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` condition blocks its subnet placement requires: the pipeline-endpoint block (Batch, ECR API, ECR Docker) for every container pipeline; the subnet-creation and ECS-endpoint blocks only when `pipelineBuilder-nestedStack.ts` places the compute in `pipelineNetwork.privateSubnets.pipeline` (the subnet-creation block adds a NAT gateway per Availability Zone); and a service-endpoint gate (the Bedrock Runtime / Rekognition / Transcribe `if`s) when the container calls a service that has no endpoint yet — the derivation is in `infra/lib/nestedStacks/pipelines/CLAUDE.md`. Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, register the step's sub-process and log sources on the orchestration bus (the `pipeline.execution.register` event with stage-aware log entries; a Batch pipeline's lambda gets its log-group env from `infra/lib/helper/batchJobLogGroup.ts`), update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
 
 ---
 

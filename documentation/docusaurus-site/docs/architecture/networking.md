@@ -327,7 +327,7 @@ When VAMS creates the OpenSearch Serverless VPC endpoint, it uses its own securi
 
 ### Pipeline Interface Endpoints
 
-VPC-requiring pipelines (AWS Batch Fargate and GPU pipelines) create their own interface endpoints — a shared set of **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** whenever any AWS Batch pipeline is enabled, plus additional per-pipeline endpoints (Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry, Amazon EFS, Amazon Bedrock Runtime, Amazon Rekognition) depending on which pipelines are enabled.
+VPC-requiring pipelines (AWS Batch Fargate and GPU pipelines) create their own interface endpoints — a shared set of **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** whenever any AWS Batch pipeline is enabled, plus additional per-pipeline endpoints (Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry, Amazon EFS, Amazon Bedrock Runtime, Amazon Rekognition, Amazon Transcribe) depending on which pipelines are enabled.
 
 The authoritative per-pipeline endpoint matrix lives with the pipeline documentation. See [Pipeline System Overview — VPC and Network Requirements](../pipelines/overview.md#vpc-and-network-requirements) for the full chart of which interface endpoints each pipeline requires.
 
@@ -372,9 +372,9 @@ VAMS VPCs are created with:
 
 ## FIPS Endpoint Usage
 
-The `SERVICE_LOOKUP` table in `const.ts` maps each service to its standard and FIPS hostname per partition, and the partition-aware service helper (`service-helper.ts`) returns the FIPS hostname when `useFips = true` to a caller that does not ask for the standard one. Every caller in VAMS asks for the standard hostname except the Amazon Cognito hosted UI domain (SAML or OIDC federation, commercial partition only), whose entry carries the standard `auth.{region}.amazoncognito.com` domain in both fields, so the web Content Security Policy names the standard hostnames either way. The Lambda functions receive no FIPS endpoint setting and call each service's default regional endpoint. The resource `useFips` adds is the AWS KMS (FIPS) interface endpoint listed under [Conditional Interface Endpoints](#conditional-interface-endpoints).
+The `SERVICE_LOOKUP` table in `const.ts` maps each service to its standard and FIPS hostname per partition, and the partition-aware service helper (`service-helper.ts`) returns the FIPS hostname when `useFips = true` to a caller that does not ask for the standard one. Every caller in VAMS asks for the standard hostname except the Amazon Cognito hosted UI domain (SAML or OIDC federation, commercial partition only), whose entry carries the standard `auth.{region}.amazoncognito.com` domain in both fields, so the web Content Security Policy names the standard hostnames either way. The Lambda functions receive no FIPS endpoint setting and call each service's default regional endpoint. The resource `useFips` adds is the AWS KMS (FIPS) interface endpoint listed under [Conditional Interface Endpoints](#conditional-interface-endpoints). No FIPS variant exists for the Amazon Transcribe or Amazon Bedrock Runtime interface endpoints the Video SOP/BOM Extraction pipeline uses. The flag can be set in `config.json`, as the `useFips` CDK context value, or through the `AWS_USE_FIPS_ENDPOINT=true` environment variable at synthesis time.
 
-For example:
+The lookup table records, for example:
 
 | Service         | Standard Hostname                 | FIPS Hostname                          |
 | --------------- | --------------------------------- | -------------------------------------- |
@@ -383,7 +383,7 @@ For example:
 | AWS STS         | `sts.{region}.amazonaws.com`      | `sts-fips.{region}.amazonaws.com`      |
 
 :::note[GovCloud FIPS]
-Some AWS GovCloud (US) service endpoints are FIPS-validated by default and others publish a separate `-fips` hostname; the AWS GovCloud (US) User Guide lists which applies to each service. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
+Some AWS GovCloud (US) service endpoints are FIPS-validated by default and others publish a separate `-fips` hostname; the AWS GovCloud (US) User Guide lists which applies to each service. VAMS does not require `useFips` in AWS GovCloud (US); the GovCloud configuration template sets it to `true`, which adds the AWS KMS (FIPS) interface endpoint described above. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
 :::
 
 :::note[AWS European Sovereign Cloud]

@@ -1,0 +1,81 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/lab_summary_schema.json",
+    "title": "lab-summary.json",
+    "description": "The 1.1–1.9 section structure of Lab Summary.csv. total_mass_g, component_count and materials_breakdown are computed from the BOM rows, never asked of the model; contributors comes from the CONTRIBUTORS tag.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "product_name",
+        "product_name_from_narration",
+        "product_description",
+        "product_source_url",
+        "background",
+        "materials_methodology",
+        "safety_considerations",
+        "existing_bom_provided",
+        "existing_bom_notes",
+        "total_mass_g",
+        "component_count",
+        "materials_breakdown",
+        "primary_manufacturing_processes",
+        "key_observations",
+        "comparative_analysis",
+        "contributors"
+    ],
+    "properties": {
+        "product_name": { "type": "string" },
+        "product_name_from_narration": { "type": ["string", "null"] },
+        "product_description": { "description": "1.4", "type": "string" },
+        "product_source_url": { "description": "1.4 Sourced By", "type": ["string", "null"] },
+        "background": { "description": "1.1", "type": "string" },
+        "materials_methodology": { "description": "1.2", "type": "string" },
+        "safety_considerations": {
+            "description": "1.3; default: No safety procedures or precautions were needed for this teardown other than standardized laboratory best practices.",
+            "type": "string"
+        },
+        "existing_bom_provided": { "description": "1.5", "type": "boolean" },
+        "existing_bom_notes": {
+            "description": "1.5; default: No BOM was provided by the supplier for this request.",
+            "type": "string"
+        },
+        "total_mass_g": {
+            "description": "1.6, computed as the sum of qty × mass_g_per_unit over the BOM rows.",
+            "type": "number",
+            "minimum": 0
+        },
+        "component_count": {
+            "description": "1.6, the number of BOM rows.",
+            "type": "integer",
+            "minimum": 0
+        },
+        "materials_breakdown": {
+            "description": "1.6, computed from the BOM rows grouped by material_or_component_type.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["material", "mass_g", "percentage"],
+                "properties": {
+                    "material": { "type": "string" },
+                    "mass_g": { "type": "number", "minimum": 0 },
+                    "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                }
+            }
+        },
+        "primary_manufacturing_processes": { "description": "1.8", "type": "string" },
+        "key_observations": {
+            "description": "1.9; one paragraph or one sentence per item.",
+            "type": ["string", "array"],
+            "items": { "type": "string" }
+        },
+        "comparative_analysis": {
+            "description": "1.7; default: No BOM was provided so comparative analysis could not be performed.",
+            "type": "string"
+        },
+        "contributors": {
+            "description": "Header line 2: Name (email), Name (email); from the CONTRIBUTORS tag.",
+            "type": "string"
+        }
+    }
+}

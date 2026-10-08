@@ -1,0 +1,91 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/frames_schema.json",
+    "title": "frames.json",
+    "description": "Key-frame manifest keyed by momentIndex (the index into the merged key_moments list), so a skipped extraction never shifts a later frame's identity. file is the bare JPEG name beside this manifest; path is the post-extension asset path /sop-bom/<executionId>/keyframe-NNNN-HHhMMmSSs.jpg, NNNN being the zero-padded momentIndex.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["executionId", "frames", "skipped", "video_timeline"],
+    "properties": {
+        "executionId": { "type": "string" },
+        "frames": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/frame" }
+        },
+        "skipped": {
+            "description": "Key moments for which no frame was written, with the ffmpeg reason; the same objects analysis-report.json lists as framesSkipped.",
+            "type": "array",
+            "items": { "$ref": "#/$defs/skippedFrame" }
+        },
+        "video_timeline": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": { "$ref": "#/$defs/timelineEntry" }
+        }
+    },
+    "$defs": {
+        "skippedFrame": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["momentIndex", "timestamp_seconds", "reason"],
+            "properties": {
+                "momentIndex": { "type": "integer", "minimum": 0 },
+                "timestamp_seconds": { "type": "number", "minimum": 0 },
+                "reason": { "type": "string" }
+            }
+        },
+        "frame": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "momentIndex",
+                "file",
+                "path",
+                "timestamp_seconds",
+                "local_timestamp",
+                "video_index",
+                "video_key",
+                "reason",
+                "expected_content"
+            ],
+            "properties": {
+                "momentIndex": { "type": "integer", "minimum": 0 },
+                "file": {
+                    "type": "string",
+                    "pattern": "^keyframe-[0-9]{4}-[0-9]{2}h[0-9]{2}m[0-9]{2}s\\.jpg$"
+                },
+                "path": {
+                    "type": "string",
+                    "pattern": "^/sop-bom/.+/keyframe-[0-9]{4}-[0-9]{2}h[0-9]{2}m[0-9]{2}s\\.jpg$"
+                },
+                "timestamp_seconds": {
+                    "description": "Global (concatenated) timeline.",
+                    "type": "number",
+                    "minimum": 0
+                },
+                "local_timestamp": {
+                    "description": "Seconds into video_index.",
+                    "type": "number",
+                    "minimum": 0
+                },
+                "video_index": { "type": "integer", "minimum": 0 },
+                "video_key": { "type": "string", "pattern": "^/.+" },
+                "reason": { "type": "string" },
+                "expected_content": { "type": "string" }
+            }
+        },
+        "timelineEntry": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index", "video_key", "start_offset", "end_offset", "duration"],
+            "properties": {
+                "index": { "type": "integer", "minimum": 0 },
+                "video_key": { "type": "string", "pattern": "^/.+" },
+                "start_offset": { "type": "number", "minimum": 0 },
+                "end_offset": { "type": "number", "minimum": 0 },
+                "duration": { "type": "number", "exclusiveMinimum": 0 }
+            }
+        }
+    }
+}

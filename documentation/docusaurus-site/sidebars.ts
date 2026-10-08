@@ -125,6 +125,7 @@ const sidebars: SidebarsConfig = {
                         "pipelines/coordinate-transform",
                         "pipelines/gaussian-splatting",
                         "pipelines/genai-labeling",
+                        "pipelines/video-sop-bom",
                         "pipelines/nvidia-isaac-lab",
                         "pipelines/nvidia-cosmos-predict",
                         "pipelines/nvidia-cosmos-reason",

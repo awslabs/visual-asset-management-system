@@ -190,6 +190,8 @@ Home (index.mdx)
 └── Additional
 ```
 
+The per-category counts are the number of doc ids under each `sidebars.ts` category (nested categories included); recompute them with a short Node script that parses `sidebars.ts` and counts string items and `type: "doc"` entries per labelled category, rather than incrementing the numbers above.
+
 When adding new pages, always update `sidebars.ts` to include the page in the correct category.
 
 ### Deployment

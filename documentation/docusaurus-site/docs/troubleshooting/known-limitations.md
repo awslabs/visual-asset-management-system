@@ -113,6 +113,10 @@ Each truncation is reported as a warning in the response to the execute request.
 
 The 3D Preview Thumbnail pipeline supports a maximum input file size of **100 GB**. The pipeline performs a pre-download Amazon S3 size validation and rejects files exceeding this limit. Supporting larger files may require an Amazon Elastic File System (Amazon EFS) and AWS Fargate implementation.
 
+### Video SOP/BOM Extraction Pipeline Input Limits
+
+The Video SOP/BOM Extraction pipeline accepts at most **4 video files** per run (`limits.maxVideoFiles`), **4 GB** per video and **16 GB** per run (`config.ts` constants sized to the container's 100 GiB ephemeral volume), and **240 minutes** of summed audio (`limits.maxTotalDurationMinutes`, at most 480, the Amazon Transcribe ceiling). Templates and workflows cannot express these bounds, so the pipeline enforces them itself: the file count, extensions, and byte sizes are checked by the entry-point Lambda before any AWS Batch job is submitted, and the duration by the container from the extracted audio before the transcription starts. A refused run fails its pipeline step through the AWS Step Functions task token with a readable cause visible in the execution details (for example `VideoSopBomInputRejected: 5 video files selected; this deployment allows at most 4.`); no partial deliverables are written. Whole-asset and folder selections are refused by the execute API with a `400` response. See [Video SOP/BOM Extraction — Limits](../pipelines/video-sop-bom.md#limits).
+
 ### Pipeline Output Path Requirements
 
 Pipeline containers must preserve the input file's relative subdirectory path when writing output files. The workflow process-output step expects outputs at the same relative location as the input file within the asset. Failure to maintain this structure results in files being written to incorrect locations.

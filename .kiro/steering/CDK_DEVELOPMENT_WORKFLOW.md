@@ -315,8 +315,10 @@ Six rules for writing one:
    `Template.fromStack(root)` sees ~17 resources out of ~600.
 4. **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix
    and then a token boundary, so the assertion passes while checking nothing. Use `SynthResult.flatten()`.
-5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the fifteen
-   pipeline Dockerfiles that is **not in the repository** —
+5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the sixteen
+   pipeline Dockerfiles that is **not in the repository** (recompute as
+   `git ls-files backendPipelines | grep -c Dockerfile` tracked files plus the one gitignored splat file;
+   an on-disk `find` over-counts whenever a sync has left the splat file behind) —
    `backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under "Pipeline Source
    Download Ignore", because it arrives from an upstream sync. With the flag false,
    `batch-gpu-pipeline.ts:179` takes the `AssetImage.fromAsset(..., {file: dockerfileName})` branch, which
@@ -886,7 +888,7 @@ four does not reach it.
 
 ### **Pipeline Test Conventions**
 
-**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all seven `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). Two of seven pipelines had been fixed and five had not, with every per-pipeline suite green.
+**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). When the test was written it covered seven pipelines: two had been fixed and five had not, with every per-pipeline suite green. The handler count is the `PIPELINES` tuple in that file (`grep -c '^    ("[A-Za-z0-9]*", "backendPipelines/' backendPipelines/tests/test_open_pipeline_extension_gates.py`).
 
 **Give every test module a suite-private basename.** `test_extension_gate.py`, `test_manifest_refactor.py`, `test_construct_pipeline_failure_reporting.py`, `test_open_pipeline_function_error.py`, `test_pipeline_end_token_routes.py`, `test_output_relative_subdir.py`, and both `pcPotreeViewer` `conftest.py` files each exist in two or more pipelines. No tests directory carries an `__init__.py`, so one pytest process collecting two same-named modules errors with `import file mismatch` — `pytest backendPipelines/` therefore cannot run as a single command, and under a different invocation order a suite can import another pipeline's same-named module and assert against the wrong file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
 
@@ -908,6 +910,10 @@ backendPipelines/
 │   │   ├── lambda/
 │   │   ├── container/
 │   │   └── blender/            # Pipeline-specific tools
+│   ├── videoSopBom/            # Video SOP/BOM extraction (Amazon Transcribe + Amazon Bedrock)
+│   │   ├── lambda/
+│   │   ├── container/
+│   │   └── vamsSchema/
 │   └── nvidia/cosmos/          # NVIDIA Cosmos pipelines
 │       ├── 3/                  # Cosmos 3 (omni generation)
 │       │   ├── lambda/
@@ -1120,9 +1126,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The five **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree) write through the `awslogs` driver to a
-    VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and register **that** group;
+    Which group that is depends on the compute family. The six **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction) write through the
+    `awslogs` driver to a VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
+    register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
     so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
     `<jobDefinitionName>/default/<ecs-task-id>` — the Fargate construct sets `awslogs-stream-prefix` to the
@@ -1539,7 +1546,7 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
     - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
-    Four Batch pipelines run in isolated subnets (Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; seven run in private subnets (Splat Toolbox, ModelOps, RapidPipeline ECS and EKS, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA GR00T) and appear in all three. Isaac Lab training runs its compute in private subnets and appears in the subnet-creation and endpoint conditions, with its ECS endpoint gated separately by `needsEcsIsolated`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) use no Batch and appear in none. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is the one placement the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
 
 9. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
 

@@ -1,0 +1,43 @@
+{
+    "templateId": "video-sop-bom-transcript-only",
+    "templateName": "Transcript only (no Amazon Bedrock)",
+    "description": "Transcribes the selected videos with Amazon Transcribe and writes the transcript, subtitles and timeline; no SOP, BOM or lab summary.",
+    "configFormat": "json",
+    "configBody": "{\"mode\":\"transcript\",\"languageCode\":\"{{LANGUAGE_CODE}}\",\"videoOrder\":\"{{VIDEO_ORDER}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Select 1-4 narrated video files (MP4, MOV, M4V, WebM, MKV) explicitly, in playback order. Selection order is honoured when this pipeline is the workflow's first step; as a later step of a custom workflow the files arrive in path order, so set VIDEO_ORDER to filename or name the files in playback order (GX010001.MP4, GX010002.MP4). Whole-asset ('/') and folder selections are refused at execute. The narration is the source of every deliverable: a selection whose audio carries no detectable speech is refused (VideoSopBomInputRejected) rather than processed.\n\nLimits: this deployment's caps default to 4 files, 4 GB per video, 16 GB in total and 240 minutes of audio, and may be lower. A refused run names the active limit in its error; every run records the active values in results/summary.json.\n\nOutputs land in sop-bom/<executionId>/ on the asset: transcript.json, transcript.txt, transcript.vtt, transcript.srt, video-timeline.json and analysis-report.json. No Amazon Bedrock call is made: use this template as a dry run that proves the audio, the limits and Amazon Transcribe reachability before running the full template, or as the transcript deliverable for non-teardown footage. Asset metadata keys prefixed sopBom_ summarise the run.",
+    "tagSchema": [
+        {
+            "tagKey": "LANGUAGE_CODE",
+            "type": "enum",
+            "required": false,
+            "default": "en-US",
+            "enumValues": [
+                "auto",
+                "en-US",
+                "en-GB",
+                "en-AU",
+                "de-DE",
+                "fr-FR",
+                "es-US",
+                "es-ES",
+                "it-IT",
+                "pt-BR",
+                "ja-JP",
+                "ko-KR",
+                "zh-CN"
+            ],
+            "label": "Transcription language",
+            "description": "The language Amazon Transcribe expects in the narration. auto asks Amazon Transcribe to identify it; set an explicit language when the narration is sparse, since language identification needs enough speech to sample."
+        },
+        {
+            "tagKey": "VIDEO_ORDER",
+            "type": "enum",
+            "required": false,
+            "default": "selection",
+            "enumValues": ["selection", "filename"],
+            "label": "Video order",
+            "description": "selection keeps the order the files were selected in (honoured when this pipeline is the workflow's first step); filename sorts the files naturally by relative path, for chaptered camera files such as GX010001.MP4, GX010002.MP4."
+        }
+    ]
+}

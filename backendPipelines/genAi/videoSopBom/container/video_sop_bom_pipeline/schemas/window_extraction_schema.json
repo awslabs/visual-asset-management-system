@@ -1,0 +1,138 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/window_extraction_schema.json",
+    "title": "Tool input of the per-window transcript extraction call",
+    "description": "Everything the model extracts from one transcript window: steps in IdealSteps.md shape with window-local numbering, component observations in the compact draft-row shape, and the key moments to extract frames for. part_type and material_or_component_type are validated against the vocabulary after the call so an out-of-vocabulary value is kept and flagged rather than lost.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["product_name_from_narration", "steps", "components", "key_moments"],
+    "properties": {
+        "product_name_from_narration": {
+            "description": "The product name or model the narrator states, or null when none is stated in this window.",
+            "type": ["string", "null"]
+        },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+        "components": { "type": "array", "items": { "$ref": "#/$defs/component" } },
+        "key_moments": { "type": "array", "items": { "$ref": "#/$defs/keyMoment" } }
+    },
+    "$defs": {
+        "dependency": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["step", "text"],
+            "properties": {
+                "step": {
+                    "description": "Window-local number of the step that must be done first, or null when it was not captured as a step.",
+                    "type": ["integer", "null"],
+                    "minimum": 1
+                },
+                "text": { "description": "What must be done first, in prose.", "type": "string" }
+            }
+        },
+        "step": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "step",
+                "timestamp_seconds",
+                "action",
+                "component",
+                "fasteners",
+                "locations",
+                "dependencies",
+                "tools",
+                "motion",
+                "force",
+                "failure_modes",
+                "notes"
+            ],
+            "properties": {
+                "step": {
+                    "description": "Sequential within this window, starting at 1.",
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "timestamp_seconds": {
+                    "description": "Exact transcript timestamp of the action (global timeline).",
+                    "type": "number",
+                    "minimum": 0
+                },
+                "action": { "type": "string" },
+                "component": { "type": "string" },
+                "fasteners": { "type": "array", "items": { "type": "string" } },
+                "locations": { "type": "array", "items": { "type": "string" } },
+                "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency" } },
+                "tools": { "type": "array", "items": { "type": "string" } },
+                "motion": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["allowed", "restricted"],
+                    "properties": {
+                        "allowed": { "type": "array", "items": { "type": "string" } },
+                        "restricted": { "type": "array", "items": { "type": "string" } }
+                    }
+                },
+                "force": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["amount", "indicator"],
+                    "properties": {
+                        "amount": {
+                            "type": ["string", "null"],
+                            "enum": ["light", "moderate", "firm", null]
+                        },
+                        "indicator": { "type": ["string", "null"] }
+                    }
+                },
+                "failure_modes": { "type": "array", "items": { "type": "string" } },
+                "notes": { "type": "string" }
+            }
+        },
+        "component": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "part_level",
+                "part_type",
+                "part_description",
+                "qty",
+                "material_or_component_type",
+                "mass_g_per_unit",
+                "primary_manufacturing_process",
+                "first_seen_timestamp_seconds"
+            ],
+            "properties": {
+                "part_level": {
+                    "description": "0 = top assembly.",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5
+                },
+                "part_type": { "description": "One of the listed part types.", "type": "string" },
+                "part_description": { "type": "string", "minLength": 1 },
+                "qty": { "type": "number", "exclusiveMinimum": 0 },
+                "material_or_component_type": {
+                    "description": "One of the listed material or component types.",
+                    "type": "string"
+                },
+                "mass_g_per_unit": {
+                    "description": "Only when stated in the narration.",
+                    "type": ["number", "null"],
+                    "minimum": 0
+                },
+                "primary_manufacturing_process": { "type": ["string", "null"] },
+                "first_seen_timestamp_seconds": { "type": "number", "minimum": 0 }
+            }
+        },
+        "keyMoment": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["timestamp_seconds", "reason", "expected_content"],
+            "properties": {
+                "timestamp_seconds": { "type": "number", "minimum": 0 },
+                "reason": { "type": "string" },
+                "expected_content": { "type": "string" }
+            }
+        }
+    }
+}
