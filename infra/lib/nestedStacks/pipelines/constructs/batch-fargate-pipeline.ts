@@ -47,6 +47,12 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      */
     logGroup?: logs.ILogGroup;
     /**
+     * Additional environment variables for the container, merged over the AWS_REGION / AWS_ACCOUNT
+     * pair every job receives. Configuration pointers only (a model id, a secret ARN), never a
+     * credential value.
+     */
+    environment?: { [key: string]: string };
+    /**
      * Hard limit on a single job attempt, after which AWS Batch terminates the job itself.
      *
      * Required rather than optional so a new pipeline has to state its own bound: with no attempt
@@ -133,6 +139,7 @@ export class BatchFargatePipelineConstruct extends Construct {
                 environment: {
                     AWS_REGION: region,
                     AWS_ACCOUNT: account,
+                    ...(props.environment ?? {}),
                 },
                 jobRole: props.jobRole,
                 executionRole: props.executionRole,

@@ -107,6 +107,29 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": false
             },
+            "useGenAiCadStepAgent": {
+                "enabled": false,
+                "runtime": "agentcore",
+                "useCodeBuild": true,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false,
+                "bedrockModelId": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                "openAi": {
+                    "modelId": "",
+                    "apiKeySecretArn": ""
+                },
+                "allowInternetResearch": true,
+                "bedrockGuardrail": {
+                    "guardrailId": "",
+                    "guardrailVersion": ""
+                },
+                "agentCore": {
+                    "warmSessionSlots": 0,
+                    "idleRuntimeSessionTimeoutSeconds": 900,
+                    "maxLifetimeSeconds": 28800
+                },
+                "maxRunSeconds": 3600
+            },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,

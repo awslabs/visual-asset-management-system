@@ -67,6 +67,14 @@ The Coordinate Transform pipeline depends on the open-source [laspy](https://git
 The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0 licenses already used throughout VAMS and does not introduce any copyleft (LGPL/GPL) requirements. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed.
 :::
 
+### GenAI CAD STEP Agent Pipeline Library Notice
+
+The GenAI CAD STEP Agent pipeline container depends on [CadQuery](https://github.com/CadQuery/cadquery) (Apache-2.0) for STEP import, modelling and export, which in turn bundles the [OCP](https://github.com/CadQuery/OCP) bindings to Open CASCADE Technology. Open CASCADE Technology is distributed under the GNU Lesser General Public License v2.1 with the Open CASCADE exception, an LGPL license: the pipeline uses it as an unmodified, dynamically linked library inside the container image, which is the usage the LGPL permits without imposing its terms on the surrounding code. The agent framework [Strands Agents](https://github.com/strands-agents/sdk-python) and the [Amazon Bedrock AgentCore SDK](https://github.com/aws/bedrock-agentcore-sdk-python) are Apache-2.0; the web-search library `ddgs` is MIT; `httpx` is BSD-3-Clause.
+
+:::note
+The agent generates Python scripts at run time that import CadQuery. Those scripts are run inside the pipeline container and are not distributed with VAMS.
+:::
+
 ### Gaussian Splat Toolbox Pipeline Model Notice
 
 The Gaussian Splat Toolbox container image ships the segmentation model weights its optional

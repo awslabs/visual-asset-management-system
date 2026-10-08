@@ -18,6 +18,7 @@ import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipel
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
 import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { CoordinateTransformBuilderNestedStack } from "./conversion/coordinateTransform/coordinateTransformBuilder-nestedStack";
+import { CadStepAgentBuilderNestedStack } from "./genAi/cadStepAgent/cadStepAgentBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
 import { IsaacLabTrainingBuilderNestedStack } from "./simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack";
 import { Preview3dThumbnailBuilderNestedStack } from "./preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack";
@@ -285,6 +286,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
             props.config.app.pipelines.usePreview3dThumbnail.enabled ||
             props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
             props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
+            props.config.app.pipelines.useGenAiCadStepAgent?.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
             props.config.app.pipelines.useModelOps.enabled ||
@@ -332,6 +334,36 @@ export class PipelineBuilderNestedStack extends NestedStack {
 
                 this.pipelineVamsLambdaFunctionNames.push(
                     coordinateTransformPipelineNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            if (props.config.app.pipelines.useGenAiCadStepAgent.enabled) {
+                // The Fargate runtime runs the agent container in the private subnets so its research
+                // tools have NAT egress; the AgentCore runtime reaches the internet through the service
+                // (PUBLIC network mode), so only its Lambdas sit in the isolated pipeline subnets.
+                const cadStepAgentRuntime = props.config.app.pipelines.useGenAiCadStepAgent.runtime;
+                const cadStepAgentPipelineNestedStack = new CadStepAgentBuilderNestedStack(
+                    this,
+                    "CadStepAgentBuilderNestedStack",
+                    {
+                        ...props,
+                        config: props.config,
+                        vpc: props.vpc,
+                        pipelineSubnets:
+                            cadStepAgentRuntime === "fargate"
+                                ? pipelineNetwork.privateSubnets.pipeline
+                                : pipelineNetwork.isolatedSubnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        assetAuxiliaryBucket: props.storageResources.s3.assetAuxiliaryBucket,
+                        kmsKey: props.storageResources.encryption.kmsKey,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
+                    }
+                );
+
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cadStepAgentPipelineNestedStack.pipelineVamsLambdaFunctionName
                 );
             }
 

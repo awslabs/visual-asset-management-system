@@ -1,0 +1,29 @@
+{
+    "pipelineName": "GenAI CAD STEP Agent",
+    "category": "GenAI",
+    "description": "GenAI CAD STEP Agent Pipeline - A Strands agent creates or modifies a CAD STEP file (.stp, .step) from a prompt, optionally researching the design online, and writes the STEP file plus an outcome report back to the asset",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "7200",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "none",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": [],
+            "exclude": []
+        }
+    }
+}

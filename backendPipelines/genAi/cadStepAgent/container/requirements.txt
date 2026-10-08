@@ -1,0 +1,11 @@
+# Agent framework (Amazon Bedrock and OpenAI model providers) and the AgentCore runtime SDK
+strands-agents[openai]==1.57.0
+bedrock-agentcore==1.23.1
+# CAD kernel; cadquery-ocp publishes manylinux wheels for both x86_64 and aarch64 (cp312), which is what
+# lets one Dockerfile build the arm64 AgentCore image and the amd64 Fargate image.
+cadquery==2.8.0
+# Research tools (web search without an API key; bounded page fetch)
+ddgs==9.16.0
+httpx==0.28.1
+# AWS
+boto3==1.43.100

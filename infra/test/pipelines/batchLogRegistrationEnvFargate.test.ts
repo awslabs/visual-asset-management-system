@@ -23,6 +23,7 @@ import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/pr
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
 import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
+import { CadStepAgentConstruct } from "../../lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
 import {
     declaredStageNames,
@@ -302,5 +303,59 @@ describe("conversion/coordinateTransform executeBatchJob registration environmen
                 "executeBatchJob.py"
             )
         );
+    });
+});
+
+describe("genAi/cadStepAgent (fargate runtime) executeBatchJob registration environment", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("CadStepAgentEnvStack", (c) => {
+            c.app.pipelines.useGenAiCadStepAgent.enabled = true;
+            c.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
+            // Sources the container image from an ECR repository instead of a local Docker build.
+            c.app.pipelines.useGenAiCadStepAgent.useCodeBuild = true;
+            c.app.pipelines.useGenAiCadStepAgent.autoRegisterWithVAMS = false;
+        });
+        new CadStepAgentConstruct(h.stack, "CadStepAgentPipeline", {
+            config: h.config,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+            storageResources: h.storage,
+            kmsKey: h.kmsKey,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("the job-submitting lambda registers the vended group beside its job definition name", () => {
+        const env = registeringLambdaEnv(template, "executeBatchJob.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(template, env.BATCH_JOB_DEFINITION);
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("the stage the producer declares is a state of the machine", () => {
+        // The template holds two state machines: the pipeline's and the image-build Provider's
+        // isComplete waiter. The declared stage belongs to the pipeline's.
+        const machines = Object.entries(template.findResources("AWS::StepFunctions::StateMachine"));
+        expect(machines.map(([id]) => id).some((id) => /waiterstatemachine/i.test(id))).toBe(true);
+        const pipelineMachines = machines.filter(([id]) => !/waiterstatemachine/i.test(id));
+        expect(pipelineMachines).toHaveLength(1);
+        const declared = declaredStageNames(
+            path.join(PRODUCERS, "genAi", "cadStepAgent", "lambda", "executeBatchJob.py")
+        );
+        expect(declared.length).toBeGreaterThan(0);
+        const states = Object.keys(parseAsl((pipelineMachines[0][1] as any).Properties).States);
+        for (const name of declared) {
+            expect(states).toContain(name);
+        }
     });
 });

@@ -83,7 +83,7 @@ infra/
                                            # securitygroup-gateway-pipeline, vamsSchemaRegistration
         conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
-        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,nvidia/{cosmos,gr00t}}/
+        3dRecon/splatToolbox/  genAi/{cadStepAgent,metadata3dLabeling,nvidia/{cosmos,gr00t}}/
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
