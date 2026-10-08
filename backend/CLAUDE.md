@@ -730,7 +730,8 @@ feeds it back, and asserts page two begins where page one stopped; asserting onl
 ### Batch Reads
 
 Resolving many rows by full primary key (the assets a page of executions references, the
-pipelines a page of workflows references, the assets in a link tree) goes through
+pipelines a page of workflows references, the assets in a link tree, the current-version rows
+of a page of listed assets) goes through
 `common.dynamodb.batch_get_items(dynamodb, table_name, keys, *, max_retries=3,
 backoff_seconds=0.05)`, never a hand-rolled `batch_get_item` loop. It chunks at the 100-key
 per-call limit, deduplicates keys (DynamoDB rejects a chunk carrying a duplicate), and
@@ -741,9 +742,9 @@ It returns `(rows, unresolved_keys)`. A key absent from both is an item that doe
 a key in `unresolved_keys` is one the read did not complete within the budget. Keep the two
 apart in the caller — a throttled read must not be reported as a deleted asset or, after
 authorization, as a denial — and decide what to do with the leftover: read it per-item
-(`executionService`, `assetExportService`), report it as unresolved (`assetLinksService`),
-or log and degrade with `max_retries=0` where the data is a display-only hint
-(`workflowService`). A `ClientError` propagates; the caller owns its fallback.
+(`executionService`, `assetExportService`, `assetService` listings), report it as unresolved
+(`assetLinksService`), or log and degrade with `max_retries=0` where the data is a display-only
+hint (`workflowService`). A `ClientError` propagates; the caller owns its fallback.
 
 ### Archived Assets Pattern
 

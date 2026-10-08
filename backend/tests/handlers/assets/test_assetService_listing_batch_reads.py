@@ -1,15 +1,15 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The asset listings enrich a page with batched reads, not one read per asset (#389).
+"""The asset listings enrich a page with batched reads, not one read per asset (#389, #395).
 
 Both list branches of handle_get_request -- the per-database listing and the all-databases listing
 -- used to issue one versions-table get_item and one buckets-table query PER ASSET on the page. The
 page is now enriched by enrich_asset_listing_page: the current-version rows come back from
-BatchGetItem in chunks of 100 (UnprocessedKeys re-requested with backoff, bounded), and bucket
-details are resolved once per distinct bucketId.
+BatchGetItem through the shared common.dynamodb.batch_get_items (chunks of 100, UnprocessedKeys
+re-requested with backoff, bounded), and bucket details are resolved once per distinct bucketId.
 
-Three things are pinned here, each against the real assetService module loaded by file path:
+Four things are pinned here, each against the real assetService module loaded by file path:
 
 - PARITY: the response body is byte-identical to what the per-item path produces for the same page
   (250 assets, two bucketIds, every version state an asset can be in, a NextToken).
@@ -18,15 +18,38 @@ Three things are pinned here, each against the real assetService module loaded b
 - RETRY: UnprocessedKeys are re-requested with exponential backoff; keys still unprocessed after
   the retry budget (or a failed batch call) fall back to the per-item read, so a throttled batch
   never blanks version info or fails the page.
+- SHARED HELPER: the rows are read through the `batch_get_items` assetService resolved from
+  common.dynamodb -- not a private copy of the chunk + retry loop -- and a helper that raises
+  degrades the page to per-item reads instead of failing it.
+
+Every listing run patches the SHIPPED helper (common/dynamodb.py loaded by path) into assetService's
+globals -- the object enhance_assets_with_version_info's __globals__ resolves -- and the batch stubs sit
+on the module's `dynamodb` resource, which the handler passes to it. Two stand-ins otherwise compete
+for `common.dynamodb`: tests/conftest.py binds the real helper onto a MagicMock module at session
+start, and backend/conftest.py re-installs the tests/mocks mirror (same loop, no backoff sleep)
+before each test, so which one a lazily loaded assetService captured depends on when _load() first
+ran. Patching the real function in makes every chunk / retry / backoff assertion exercise the code
+that ships, in any test order.
 """
 
+import importlib.util
 import json
+import os
+from contextlib import ExitStack
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 from backend.tests.handlers.assets.test_assetService_history import _load
+
+_REAL_DDB_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "backend", "common", "dynamodb.py"
+))
+_spec = importlib.util.spec_from_file_location("real_common_dynamodb_for_asset_listing", _REAL_DDB_PATH)
+REAL_DDB = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(REAL_DDB)
 
 PAGE_SIZE = 250
 BUCKETS = {
@@ -34,6 +57,10 @@ BUCKETS = {
     "bucket-b": {"bucketId": "bucket-b", "bucketName": "vams-assets-b", "baseAssetsPrefix": "/b"},
 }
 NEXT_TOKEN = "eyJkYXRhYmFzZUlkIjogeyJTIjogImRiMSJ9fQ=="
+# The handler uses the helper's default budget; read it from the shipped module.
+CHUNK_SIZE = REAL_DDB.BATCH_GET_CHUNK_SIZE
+MAX_RETRIES = REAL_DDB.BATCH_GET_MAX_RETRIES
+BACKOFF_SECONDS = REAL_DDB.BATCH_GET_RETRY_BACKOFF_SECONDS
 
 
 def _version_key(asset):
@@ -106,7 +133,7 @@ class _VersionsTable:
         table_name = self.module.asset_versions_table_name
         assert list(RequestItems) == [table_name], RequestItems
         keys = RequestItems[table_name]["Keys"]
-        assert 1 <= len(keys) <= self.module.BATCH_GET_CHUNK_SIZE, len(keys)
+        assert 1 <= len(keys) <= CHUNK_SIZE, len(keys)
         call_index = len(self.batch_calls)
         self.batch_calls.append(list(keys))
         if call_index in self.fail_calls:
@@ -165,25 +192,32 @@ def _event(path_parameters):
     }
 
 
-def _run_listing(m, versions, buckets, items, path_parameters):
+def _run_listing(m, versions, buckets, items, path_parameters, extra_patches=()):
     """Run handle_get_request over a scripted page with every table stub in place.
 
-    Returns (response, per_item_expected_body). The expected body is computed through the per-item
-    functions FIRST, against the same stubs, and the stubs' counters are reset before the handler
-    runs, so the call-count assertions see only what the handler itself read."""
+    Returns (response, per_item_expected_body, sleep). The expected body is computed through the
+    per-item functions FIRST, against the same stubs, and the stubs' counters are reset before the
+    handler runs, so the call-count assertions see only what the handler itself read.
+    The shipped `batch_get_items` is patched into assetService's globals for the run (see the module
+    docstring); `extra_patches` are entered after it, so a `patch.object(m, "batch_get_items", ...)`
+    there replaces the helper with a scripted stand-in."""
     page = {"Items": [dict(i) for i in items], "NextToken": NEXT_TOKEN, "truncated": True}
-    with patch.object(m, "versions_table", versions.table), \
-            patch.object(m, "dynamodb", versions.resource), \
-            patch.object(m, "buckets_table", buckets), \
-            patch.object(m, "get_assets", return_value=page), \
-            patch.object(m, "get_all_assets", return_value=page), \
-            patch("time.sleep") as sleep:
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(m, "versions_table", versions.table))
+        stack.enter_context(patch.object(m, "dynamodb", versions.resource))
+        stack.enter_context(patch.object(m, "buckets_table", buckets))
+        stack.enter_context(patch.object(m, "get_assets", return_value=page))
+        stack.enter_context(patch.object(m, "get_all_assets", return_value=page))
+        stack.enter_context(patch.object(m, "batch_get_items", REAL_DDB.batch_get_items))
+        sleep = stack.enter_context(patch("time.sleep"))
         m.claims_and_roles = {"tokens": ["u1"]}
         expected_body = _per_item_expected_body(m, items)
         versions.table.get_item.reset_mock()
         buckets.query.reset_mock()
         versions.batch_calls.clear()
         versions.resource.batch_get_item.reset_mock()
+        for extra in extra_patches:
+            stack.enter_context(extra)
         response = m.handle_get_request(_event(path_parameters))
     return response, expected_body, sleep
 
@@ -260,13 +294,13 @@ class TestListingReadCount:
 
         assert response["statusCode"] == 200
         keyed_assets = [a for a in assets if "currentVersionId" in a]
-        expected_chunks = -(-len(keyed_assets) // m.BATCH_GET_CHUNK_SIZE)  # ceil
+        expected_chunks = -(-len(keyed_assets) // CHUNK_SIZE)  # ceil
         assert versions.resource.batch_get_item.call_count == expected_chunks
         assert versions.resource.batch_get_item.call_count <= -(-PAGE_SIZE // 100)
         # Every keyed asset was requested exactly once, in chunks no larger than the API limit
         requested = [k for call in versions.batch_calls for k in call]
         assert len(requested) == len(keyed_assets)
-        assert all(len(call) <= m.BATCH_GET_CHUNK_SIZE for call in versions.batch_calls)
+        assert all(len(call) <= CHUNK_SIZE for call in versions.batch_calls)
         assert {(k["databaseId:assetId"], k["assetVersionId"]) for k in requested} == \
             {_version_key(a) for a in keyed_assets}
         # No per-asset reads, one bucket query per distinct bucketId, no backoff needed
@@ -313,7 +347,7 @@ class TestListingReadCount:
         assert len(requested) == len(set(requested))
         distinct_keys = {_version_key(a) for a in assets if "currentVersionId" in a}
         assert set(requested) == distinct_keys
-        assert versions.resource.batch_get_item.call_count == -(-len(distinct_keys) // m.BATCH_GET_CHUNK_SIZE)
+        assert versions.resource.batch_get_item.call_count == -(-len(distinct_keys) // CHUNK_SIZE)
         versions.table.get_item.assert_not_called()
 
     @pytest.mark.parametrize("falsy_version_id", [None, ""], ids=["null", "empty"])
@@ -341,7 +375,7 @@ class TestListingReadCount:
         assert body["Items"][3]["currentVersion"] is None
         # The rest of the page still batches in ceil(N/100) calls, none of them carrying the bad key
         batched = [a for a in assets if a.get("currentVersionId")]
-        assert versions.resource.batch_get_item.call_count == -(-len(batched) // m.BATCH_GET_CHUNK_SIZE)
+        assert versions.resource.batch_get_item.call_count == -(-len(batched) // CHUNK_SIZE)
         assert versions.batch_calls
         assert all(k["assetVersionId"] for call in versions.batch_calls for k in call)
         # Exactly the malformed record was read individually
@@ -368,30 +402,30 @@ class TestUnprocessedKeysRetry:
         assert response["statusCode"] == 200
         assert response["body"] == expected_body
         keyed = [a for a in assets if "currentVersionId" in a]
-        expected_chunks = -(-len(keyed) // m.BATCH_GET_CHUNK_SIZE)
+        expected_chunks = -(-len(keyed) // CHUNK_SIZE)
         assert versions.resource.batch_get_item.call_count == expected_chunks + 1
         # The re-request carries exactly the keys the first call left unprocessed
         first_half_left = versions.batch_calls[0][len(versions.batch_calls[0]) // 2:]
         assert versions.batch_calls[1] == first_half_left
-        sleep.assert_called_once_with(m.BATCH_GET_RETRY_BACKOFF_SECONDS)
+        sleep.assert_called_once_with(BACKOFF_SECONDS)
         versions.table.get_item.assert_not_called()
 
     def test_backoff_is_exponential_and_bounded_then_falls_back_per_item(self):
         m = _load()
         assets, rows = _build_page(n=60)  # one chunk
         stuck = lambda keys: keys[:5]  # noqa: E731 -- these 5 keys never get processed
-        versions = _VersionsTable(m, rows, unprocessed={i: stuck for i in range(1 + m.BATCH_GET_MAX_RETRIES)})
+        versions = _VersionsTable(m, rows, unprocessed={i: stuck for i in range(1 + MAX_RETRIES)})
         buckets = _buckets_table()
 
         response, expected_body, sleep = _run_listing(m, versions, buckets, assets, {})
 
         assert response["statusCode"] == 200
         assert response["body"] == expected_body
-        # 1 initial call + BATCH_GET_MAX_RETRIES re-requests, then stop
-        assert versions.resource.batch_get_item.call_count == 1 + m.BATCH_GET_MAX_RETRIES
+        # 1 initial call + MAX_RETRIES re-requests, then stop
+        assert versions.resource.batch_get_item.call_count == 1 + MAX_RETRIES
         assert sleep.call_args_list  # keys stayed unprocessed, so at least one backoff happened
         assert [c.args[0] for c in sleep.call_args_list] == [
-            m.BATCH_GET_RETRY_BACKOFF_SECONDS * (2 ** i) for i in range(m.BATCH_GET_MAX_RETRIES)
+            BACKOFF_SECONDS * (2 ** i) for i in range(MAX_RETRIES)
         ]
         # Exactly the stuck keys were read individually -- not the whole chunk, not none
         stuck_keys = {(k["databaseId:assetId"], k["assetVersionId"]) for k in versions.batch_calls[0][:5]}
@@ -401,10 +435,14 @@ class TestUnprocessedKeysRetry:
         }
         assert read_individually == stuck_keys
 
-    def test_a_failed_batch_call_falls_back_to_per_item_reads_for_that_chunk(self):
+    def test_a_failed_batch_call_falls_back_to_per_item_reads_for_the_whole_page(self):
+        """The shared helper lets a failed batch call propagate (its docstring: "the caller owns its
+        fallback"), so the handler cannot tell which chunks did come back: every batched key takes
+        the per-item read, the page still answers 200 with the same body, and no chunk after the
+        failure is attempted."""
         m = _load()
         assets, rows = _build_page()
-        versions = _VersionsTable(m, rows, fail_calls={1})  # chunk 2 raises
+        versions = _VersionsTable(m, rows, fail_calls={0})  # chunk 1 raises
         buckets = _buckets_table()
 
         response, expected_body, sleep = _run_listing(m, versions, buckets, assets, {})
@@ -412,15 +450,121 @@ class TestUnprocessedKeysRetry:
         assert response["statusCode"] == 200
         assert response["body"] == expected_body
         keyed = [a for a in assets if "currentVersionId" in a]
-        expected_chunks = -(-len(keyed) // m.BATCH_GET_CHUNK_SIZE)
-        assert versions.resource.batch_get_item.call_count == expected_chunks
-        failed_chunk_keys = {(k["databaseId:assetId"], k["assetVersionId"]) for k in versions.batch_calls[1]}
+        assert -(-len(keyed) // CHUNK_SIZE) == 2  # chunk 2 exists and is never requested
+        assert versions.resource.batch_get_item.call_count == 1
         read_individually = {
             (c.kwargs["Key"]["databaseId:assetId"], c.kwargs["Key"]["assetVersionId"])
             for c in versions.table.get_item.call_args_list
         }
-        assert read_individually == failed_chunk_keys
+        assert read_individually == {_version_key(a) for a in keyed}
         sleep.assert_not_called()
+
+
+@pytest.mark.unit
+class TestVersionRowsAreReadThroughTheSharedHelper:
+    """assetService resolves `batch_get_items` from common.dynamodb; patch it THERE (the object
+    enhance_assets_with_version_info's __globals__ resolves) to pin the call path and the contract."""
+
+    def test_the_handler_resolves_the_shared_helper_not_a_private_loop(self):
+        m = _load()
+        assert m.enhance_assets_with_version_info.__globals__ is m.__dict__
+        # The bound name is a common.dynamodb `batch_get_items` -- whichever stand-in was live when
+        # the module loaded (both carry the shared helper's signature), never a function defined in
+        # assetService itself
+        helper = m.batch_get_items
+        assert helper.__name__ == "batch_get_items"
+        assert helper.__globals__ is not m.__dict__
+        assert helper.__globals__["__file__"].endswith(os.path.join("common", "dynamodb.py"))
+        # The private copy and the constants only it used are gone (#395); the shared module owns them
+        for name in ("_batch_get_version_rows", "BATCH_GET_CHUNK_SIZE", "BATCH_GET_MAX_RETRIES",
+                     "BATCH_GET_RETRY_BACKOFF_SECONDS"):
+            assert not hasattr(m, name), name
+        assert not hasattr(m, "time")  # the backoff sleep left with the loop
+
+    def test_the_page_is_read_with_one_helper_call_over_the_module_resource_and_table(self):
+        m = _load()
+        assets, rows = _build_page()
+        versions = _VersionsTable(m, rows)
+        buckets = _buckets_table()
+        helper = MagicMock(name="batch_get_items", wraps=REAL_DDB.batch_get_items)
+
+        response, expected_body, _ = _run_listing(
+            m, versions, buckets, assets, {"databaseId": "db1"},
+            extra_patches=[patch.object(m, "batch_get_items", helper)])
+
+        assert response["statusCode"] == 200
+        assert response["body"] == expected_body
+        helper.assert_called_once()
+        resource, table_name, keys = helper.call_args.args
+        assert resource is versions.resource
+        assert table_name == m.asset_versions_table_name
+        assert helper.call_args.kwargs == {}  # the helper's default retry budget
+        keyed = [a for a in assets if "currentVersionId" in a]
+        assert [(k["databaseId:assetId"], k["assetVersionId"]) for k in keys] == \
+            [_version_key(a) for a in keyed]
+        # The wrapped real helper did the chunking: no per-item reads were needed
+        assert versions.resource.batch_get_item.call_count == -(-len(keyed) // CHUNK_SIZE)
+        versions.table.get_item.assert_not_called()
+
+    def test_unresolved_keys_from_the_helper_take_the_per_item_read_and_missing_rows_do_not(self):
+        """A key the helper hands back as unresolved is re-read individually; a key absent from both
+        lists is a row that does not exist and is NOT re-read -- the distinction the helper exists
+        to keep."""
+        m = _load()
+        assets, rows = _build_page(n=9)  # assets 0,3,6 have rows; 1,4,7 have an id with no row
+        versions = _VersionsTable(m, rows)
+        buckets = _buckets_table()
+        keyed = [a for a in assets if "currentVersionId" in a]
+        unresolved = [m._current_version_key(assets[0]), m._current_version_key(assets[7])]
+        served = [dict(rows[_version_key(assets[3])]), dict(rows[_version_key(assets[6])])]
+        helper = MagicMock(name="batch_get_items", return_value=(served, unresolved))
+
+        response, expected_body, sleep = _run_listing(
+            m, versions, buckets, assets, {},
+            extra_patches=[patch.object(m, "batch_get_items", helper)])
+
+        assert response["statusCode"] == 200
+        assert response["body"] == expected_body
+        body = json.loads(response["body"])
+        assert body["Items"][0]["currentVersion"]["Version"] == "1"  # unresolved -> per-item read found it
+        assert body["Items"][3]["currentVersion"]["Version"] == "2"  # served by the batch
+        assert body["Items"][1]["currentVersion"] is None  # absent from both: no row, not re-read
+        assert body["Items"][7]["currentVersion"] is None  # unresolved, per-item read found nothing
+        helper.assert_called_once()
+        versions.resource.batch_get_item.assert_not_called()  # the stubbed helper never reached it
+        read_individually = {
+            (c.kwargs["Key"]["databaseId:assetId"], c.kwargs["Key"]["assetVersionId"])
+            for c in versions.table.get_item.call_args_list
+        }
+        assert read_individually == {_version_key(assets[0]), _version_key(assets[7])}
+        assert len(keyed) == 6
+        sleep.assert_not_called()
+
+    @pytest.mark.parametrize("error", [
+        ClientError({"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "x"}},
+                    "BatchGetItem"),
+        RuntimeError("connection reset"),
+    ], ids=["ClientError", "other"])
+    def test_a_helper_that_raises_degrades_the_page_to_per_item_reads_never_a_500(self, error):
+        m = _load()
+        assets, rows = _build_page(n=12)
+        versions = _VersionsTable(m, rows)
+        buckets = _buckets_table()
+        helper = MagicMock(name="batch_get_items", side_effect=error)
+
+        response, expected_body, _ = _run_listing(
+            m, versions, buckets, assets, {},
+            extra_patches=[patch.object(m, "batch_get_items", helper)])
+
+        assert response["statusCode"] == 200
+        assert response["body"] == expected_body
+        helper.assert_called_once()
+        keyed = [a for a in assets if "currentVersionId" in a]
+        read_individually = {
+            (c.kwargs["Key"]["databaseId:assetId"], c.kwargs["Key"]["assetVersionId"])
+            for c in versions.table.get_item.call_args_list
+        }
+        assert read_individually == {_version_key(a) for a in keyed}
 
 
 @pytest.mark.unit
