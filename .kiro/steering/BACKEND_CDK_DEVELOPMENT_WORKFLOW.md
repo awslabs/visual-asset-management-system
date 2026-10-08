@@ -879,6 +879,18 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
+**Compiled matcher expressions are cached per user enforcer, never decisions.**
+`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
+`_create_casbin_enforcer_helper` builds) keeps an **instance-level** dict of compiled `SimpleEval`
+expressions keyed on the full inlined rule string, so each distinct policy line is parsed once per
+enforcer while every `enforce()` still evaluates every line. The enforcer is owned by one
+`CasbinEnforcerService`, so the cache is per user and is discarded with the service on the
+60-second TTL / MFA invalidation. Never move the cache to class or module level: the compiled
+expression holds the enforcer's function map whose `g` is bound to that user's role manager, so a
+shared cache would evaluate one user's role links for another.
+`tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision
+parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness.
+
 #### **System User (`SYSTEM_USER`)**
 
 `SYSTEM_USER` is the **only** valid user ID for system-process actions — never use `SYSTEM`, `system`, or any other variant. It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role, so actions attributed to it pass Casbin authorization. Use it consistently for:
