@@ -1148,6 +1148,47 @@ class TestDatabaseNewFieldsDisplay:
             assert result.exit_code == 0
             assert 'Restrict Metadata Outside Schemas: False' in result.output
             assert 'Restrict File Uploads To Extensions: (none)' in result.output
+            assert 'Compliance Schema' not in result.output
+            assert 'Compliance Auto-Eval' not in result.output
+
+    def test_get_displays_the_compliance_binding(self, cli_runner, generic_command_mocks):
+        """The database row carries its compliance schema binding; `get` prints both fields."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'dateCreated': '2024-01-01T00:00:00Z',
+                'assetCount': 5,
+                'defaultBucketId': 'bucket-uuid',
+                'restrictMetadataOutsideSchemas': False,
+                'restrictFileUploadsToExtensions': '',
+                'complianceSchemaName': 'engineering-asset-standard',
+                'complianceAutoEval': False,
+            }
+
+            result = cli_runner.invoke(database, ['get', '-d', 'test-database'])
+
+            assert result.exit_code == 0
+            assert 'Compliance Schema: engineering-asset-standard' in result.output
+            # False is a value, not an absence: auto-evaluation off must still be shown.
+            assert 'Compliance Auto-Eval: False' in result.output
+
+    def test_get_omits_the_compliance_binding_when_null(self, cli_runner, generic_command_mocks):
+        """An unbound database answers both fields as null; neither line is printed."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'defaultBucketId': 'bucket-uuid',
+                'complianceSchemaName': None,
+                'complianceAutoEval': None,
+            }
+
+            result = cli_runner.invoke(database, ['get', '-d', 'test-database'])
+
+            assert result.exit_code == 0
+            assert 'Compliance Schema' not in result.output
+            assert 'Compliance Auto-Eval' not in result.output
     
     def test_list_displays_new_fields(self, cli_runner, generic_command_mocks):
         """Test that list command displays new configuration fields."""

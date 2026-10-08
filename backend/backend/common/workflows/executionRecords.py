@@ -119,6 +119,45 @@ def orchestration_event_prefix(event_source_prefix: str, execution_id: str,
     return f"{event_source_prefix}.execution.{execution_id}.pipeline.{pipeline_execution_id}"
 
 
+# DetailType of the orchestration-bus event emitted once a workflow execution's main row holds a
+# terminal status. Consumers (the compliance workflow callback) match on this detail type and on
+# `Source` under the deployment's event source prefix.
+WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE = "workflow.execution.completed"
+
+
+def workflow_execution_completed_source(event_source_prefix: str, execution_id: str) -> str:
+    """EventBridge `Source` of a completion event: '<eventSourcePrefix>.execution.<executionId>'."""
+    return f"{event_source_prefix}.execution.{execution_id}"
+
+
+def workflow_execution_completed_event(
+    event_bus_arn: str, event_source_prefix: str, execution_id: str, workflow_database_id: str,
+    workflow_id: str, status: str, started_at: str, completed_at: str, execution_group_id: str = "",
+) -> dict:
+    """One `put_events` entry announcing a workflow execution's terminal status.
+
+    `status` is the terminal status string stored on the main execution row (SUCCEEDED / FAILED /
+    ABORTED / TIMED_OUT); the timestamps are ISO-8601 UTC. The detail carries identifiers only —
+    no template bodies, tag values, or file locations.
+    """
+    detail = {
+        "executionId": execution_id,
+        "workflowDatabaseId": workflow_database_id,
+        "workflowId": workflow_id,
+        "status": status,
+        "startedAt": started_at or "",
+        "completedAt": completed_at or "",
+    }
+    if execution_group_id:
+        detail["executionGroupId"] = execution_group_id
+    return {
+        "EventBusName": event_bus_arn,
+        "Source": workflow_execution_completed_source(event_source_prefix, execution_id),
+        "DetailType": WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE,
+        "Detail": json.dumps(detail),
+    }
+
+
 # Reserved S3 prefix literals (mirror common/s3PathPatterns.py; duplicated here
 # as plain strings to keep this module dependency-free).
 _PIPELINES_PREFIX = "pipelines/"

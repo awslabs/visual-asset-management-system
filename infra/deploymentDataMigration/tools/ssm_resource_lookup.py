@@ -87,6 +87,12 @@ class ResourceParamKeys:
     PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE = "dynamoTables/pipelineTemplateTagSchemaStorage"
     WORKFLOW_STORAGE_TABLE_V2 = "dynamoTables/workflowStorageV2"
     WORKFLOW_TRIGGERS_STORAGE_TABLE = "dynamoTables/workflowTriggersStorage"
+    # Compliance tables
+    COMPLIANCE_SCHEMA_STORAGE_TABLE = "dynamoTables/complianceSchemaStorage"
+    COMPLIANCE_ASSET_STATE_STORAGE_TABLE = "dynamoTables/complianceAssetStateStorage"
+    COMPLIANCE_EVALUATION_STORAGE_TABLE = "dynamoTables/complianceEvaluationStorage"
+    COMPLIANCE_CASCADE_STORAGE_TABLE = "dynamoTables/complianceCascadeStorage"
+    COMPLIANCE_AUDIT_STORAGE_TABLE = "dynamoTables/complianceAuditStorage"
 
     # Deprecated tables retained for data migration only
     LEGACY_ASSET_VERSIONS_STORAGE_TABLE_V1 = "dynamoTables/legacy/assetVersionsStorageV1"

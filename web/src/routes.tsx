@@ -42,6 +42,11 @@ const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
 const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
 const AssetIngestion = React.lazy(() => import("./components/single/AssetIngestion"));
 const AssetDownloadsPage = React.lazy(() => import("./pages/AssetDownload"));
+const ComplianceSchemas = React.lazy(() => import("./pages/ComplianceSchemas"));
+const ComplianceQuarantine = React.lazy(() => import("./pages/ComplianceQuarantine"));
+const ComplianceCascades = React.lazy(() => import("./pages/ComplianceCascades"));
+const ComplianceAuditLog = React.lazy(() => import("./pages/ComplianceAuditLog"));
+const DatabaseCompliance = React.lazy(() => import("./pages/DatabaseCompliance"));
 
 interface RouteOption {
     path: string;
@@ -210,6 +215,31 @@ export const routeTable: RouteOption[] = [
         path: "/metadataschema",
         Page: MetadataSchema,
         active: "#/metadataschema",
+    },
+    {
+        path: "/databases/:databaseId/compliance",
+        Page: DatabaseCompliance,
+        active: "#/databases/",
+    },
+    {
+        path: "/compliance/schemas",
+        Page: ComplianceSchemas,
+        active: "#/compliance/schemas/",
+    },
+    {
+        path: "/compliance/quarantine",
+        Page: ComplianceQuarantine,
+        active: "#/compliance/quarantine/",
+    },
+    {
+        path: "/compliance/cascades",
+        Page: ComplianceCascades,
+        active: "#/compliance/cascades/",
+    },
+    {
+        path: "/compliance/audit",
+        Page: ComplianceAuditLog,
+        active: "#/compliance/audit/",
     },
     {
         path: "*",

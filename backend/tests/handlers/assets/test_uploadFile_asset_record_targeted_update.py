@@ -6,7 +6,10 @@
 An upload completion reads the asset once and finishes seconds to minutes later, so any
 field a concurrent writer changed in between is still in the record it holds. The
 completion owns exactly two attributes -- ``assetType`` for an asset-file upload and
-``previewLocation`` for a preview upload -- so it must write only those, and only to a
+``previewLocation`` for a preview upload -- plus the change-provenance attributes every
+completion records (``lastChangeSource``, ``lastChangeAt``, ``lastUploadAt`` for a user upload
+and, for a workflow execution's outputs, ``lastChangeWorkflowExecutionId``; covered in
+``test_uploadFile_asset_row_provenance.py``), so it must write only those, and only to a
 record that still exists: a full-record write reverts the concurrent edit, and an
 unconditional write recreates an asset removed during the upload.
 """
@@ -29,6 +32,19 @@ from backend.backend.handlers.assets import uploadFile  # noqa: F401,E402
 DATABASE_ID = "db-1"
 ASSET_ID = "asset-1"
 BUCKET = "asset-bucket"
+
+# The provenance attributes a plain (non-workflow) completion writes beside the attribute it owns.
+UPLOAD_PROVENANCE_KEYS = {'lastChangeSource', 'lastChangeAt', 'lastUploadAt'}
+
+
+def _only_owned_attribute_written(table, **owned):
+    """Exactly one targeted write happened, carrying the owned attribute and the provenance."""
+    assert len(table.updated_attributes) == 1, table.updated_attributes
+    written = table.updated_attributes[0]
+    assert set(written) == set(owned) | UPLOAD_PROVENANCE_KEYS, written
+    for name, value in owned.items():
+        assert written[name] == value
+    assert written['lastChangeSource'] == 'upload'
 
 
 def _real_to_update_expr(record, op="SET"):
@@ -175,7 +191,7 @@ class TestAssetFileCompletionWrite:
         _complete_external(_file_request(), table, _asset())
 
         assert table.put_item_calls == []
-        assert table.updated_attributes == [{'assetType': 'folder'}]
+        _only_owned_attribute_written(table, assetType='folder')
 
     def test_completion_still_records_the_determined_asset_type(self):
         """POSITIVE CONTROL: the attribute the completion owns is still written."""
@@ -261,7 +277,7 @@ class TestInternalMultipartCompletionWrite:
         _complete_multipart(_multipart_request("assetFile", "/out/scan.laz"), table, _asset())
 
         assert table.put_item_calls == []
-        assert table.updated_attributes == [{'assetType': 'folder'}]
+        _only_owned_attribute_written(table, assetType='folder')
 
     def test_multipart_completion_still_records_the_determined_asset_type(self):
         """POSITIVE CONTROL: the attribute the completion owns is still written."""
@@ -279,7 +295,7 @@ class TestInternalMultipartCompletionWrite:
 
         expected_key = f"{uploadFile.PREVIEW_PREFIX}{ASSET_ID}/thumb.png"
         assert response.overallSuccess is True
-        assert table.updated_attributes == [{'previewLocation': {'Key': expected_key}}]
+        _only_owned_attribute_written(table, previewLocation={'Key': expected_key})
         assert table.put_item_calls == []
         assert table.stored()['tags'] == ['edited']
 
@@ -306,5 +322,5 @@ class TestAssetPreviewCompletionWrite:
         _complete_external(_preview_request(), table, _asset())
 
         expected_key = f"{uploadFile.PREVIEW_PREFIX}{ASSET_ID}/thumb.png"
-        assert table.updated_attributes == [{'previewLocation': {'Key': expected_key}}]
+        _only_owned_attribute_written(table, previewLocation={'Key': expected_key})
         assert table.put_item_calls == []

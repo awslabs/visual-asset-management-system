@@ -1,0 +1,60 @@
+{
+    "metadata": {
+        "name": "3D Model Quality Schema",
+        "description": "Quality gate schema for 3D model assets. Requires polygon budget, coordinate system and unit metadata, and proves every model converts through the built-in 3D conversion pipeline before it is approved for use.",
+        "version": "2.0.0"
+    },
+    "schemaName": "3d-model-quality",
+    "description": "Quality requirements for 3D model assets: polygon count, coordinate system and unit metadata, plus a successful GLB conversion of the model file. The conversion rule selects source formats only and leaves out *.glb: the conversion pipeline writes its .glb output back into the asset, and selecting it would make the asset's own output a second conversion candidate.",
+    "schemaBody": {
+        "schemaFormat": "vams-rules-v1",
+        "rules": {
+            "model-metadata": {
+                "ruleType": "metadata",
+                "enforcement": "warn",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
+                },
+                "checks": [
+                    {
+                        "name": "geometry-fields-present",
+                        "description": "The default asset metadata schema's required fields are present and typed as declared, and the model documents its polygon count, coordinate reference system and unit of measurement.",
+                        "validateRequired": true,
+                        "validateTypes": true,
+                        "additionalRequiredFields": ["polygon_count", "coordinate_system", "units"]
+                    }
+                ]
+            },
+            "converts-to-glb": {
+                "ruleType": "pipeline",
+                "enforcement": "quarantine",
+                "pipelineRef": {
+                    "databaseId": "GLOBAL",
+                    "workflowId": "conversion-3d-basic",
+                    "pipelineDatabaseId": "GLOBAL",
+                    "pipelineId": "conversion-3d-basic",
+                    "templateId": "convert-to-glb"
+                },
+                "inputFiles": {
+                    "mode": "matching",
+                    "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.xyz"]
+                },
+                "checks": [
+                    {
+                        "name": "conversion-succeeds",
+                        "description": "The model file converts to GLB. The pipeline writes no compliance-output document, so the check reads the execution's own success measurement.",
+                        "outputField": "execution_success",
+                        "tolerance": { "operator": "eq", "value": 1 }
+                    },
+                    {
+                        "name": "conversion-duration",
+                        "description": "The conversion completes within ten minutes.",
+                        "outputField": "processing_duration_seconds",
+                        "tolerance": { "operator": "lte", "value": 600 }
+                    }
+                ]
+            }
+        }
+    }
+}

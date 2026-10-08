@@ -1,0 +1,50 @@
+{
+    "metadata": {
+        "name": "Retention Policy Schema",
+        "description": "Ensures assets have proper lifecycle and retention metadata. Use this to enforce data governance policies around asset expiry, archival, and disposal.",
+        "version": "2.0.0"
+    },
+    "schemaName": "retention-policy",
+    "description": "Enforces lifecycle and retention metadata for data governance compliance.",
+    "schemaBody": {
+        "schemaFormat": "vams-rules-v1",
+        "rules": {
+            "retention-terms": {
+                "ruleType": "metadata",
+                "enforcement": "warn",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
+                },
+                "checks": [
+                    {
+                        "name": "retention-fields-present",
+                        "description": "The asset states its retention period, the disposal method that applies once it expires, and the owner accountable for retention compliance.",
+                        "validateRequired": true,
+                        "validateTypes": true,
+                        "additionalRequiredFields": [
+                            "retention_days",
+                            "disposal_method",
+                            "data_owner"
+                        ]
+                    }
+                ]
+            },
+            "review-cadence": {
+                "ruleType": "metadata",
+                "enforcement": "inform",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAsset"
+                },
+                "checks": [
+                    {
+                        "name": "review-dates-recorded",
+                        "description": "The last access review and the next scheduled retention review are recorded.",
+                        "additionalRequiredFields": ["last_access_review", "next_review_date"]
+                    }
+                ]
+            }
+        }
+    }
+}

@@ -179,6 +179,40 @@ uses — but it is what makes two capabilities work:
     `subExecutionWarnings` entry, never a failed request — and the CloudWatch `nextToken` of a logs request is
     never passed to `get_execution_history`.
 
+## Workflow completion event
+
+Once the main execution row holds a terminal status, the lambda that wrote it puts one event on the
+orchestration event bus (`ORCHESTRATION_BUS_ARN`, with the source prefix from
+`ORCHESTRATION_EVENT_SOURCE_PREFIX`): `processWorkflowExecutionOutput` for a run that succeeds,
+`handleExecutionError` for a run that fails or times out, and `executionService` when an abort request
+stops the run or when one of its Step Functions status reconciles records a completion no other writer
+did. All of them publish through `emit_workflow_execution_completed` in
+`common/workflows/executionOutputs.py`, and only the writer whose terminal-status write landed
+publishes; the event is skipped when the bus ARN or the event source prefix is unset. The entry is
+built by `workflow_execution_completed_event` in
+`common/workflows/executionRecords.py`, the only place its shape lives:
+
+| Field          | Value                                                                                                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `EventBusName` | The orchestration bus ARN                                                                                                                                                                                                                        |
+| `Source`       | `{eventSourcePrefix}.execution.{executionId}`                                                                                                                                                                                                    |
+| `DetailType`   | `workflow.execution.completed`                                                                                                                                                                                                                   |
+| `Detail`       | `executionId`, `workflowDatabaseId`, `workflowId`, `status` (the stored terminal status: `SUCCEEDED`, `FAILED`, `ABORTED`, `TIMED_OUT`), `startedAt`, `completedAt` (ISO-8601 UTC), and `executionGroupId` when the execution belongs to a group |
+
+The detail carries identifiers and timestamps only — no template bodies, tag values or file locations; a
+consumer that needs those reads the V2 execution records by `executionId`. Publishing is best-effort:
+a `put_events` failure is logged and does not change the stored status.
+
+The compliance workflow callback is the standing consumer. Its Amazon EventBridge rule on the
+orchestration bus matches `source` by the deployment's event source prefix and `detail-type`
+`workflow.execution.completed`; the handler looks the `executionId` up in the compliance evaluation
+table's `ExecutionIdIndex` and, for an evaluation awaiting that execution, reads the pipeline's
+`compliance-output.json` from the `PipelineExecutionOutputResults` rows of the run and completes the
+pipeline rule (see [Compliance](../concepts/compliance.md#workflow-completion)). Any other consumer
+subscribes the same way; the `pipeline.execution.register` source form above and this one share the
+`{eventSourcePrefix}.execution.{executionId}` stem, so a rule using `source` prefix matching on the
+deployment prefix sees both.
+
 ## Adding a read or write path
 
 1. Resolve the table name with `get_table_name(ResourceKeys.*)` at module level. Never hardcode it.

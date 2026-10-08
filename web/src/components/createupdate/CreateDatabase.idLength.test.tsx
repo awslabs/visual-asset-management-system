@@ -24,6 +24,11 @@ jest.mock("../../services/APIService", () => ({
     fetchBuckets: jest.fn(),
 }));
 
+// The compliance binding fields gate on this hook; these tests exercise the name field only.
+jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => false }),
+}));
+
 const { fetchBuckets } = jest.requireMock("../../services/APIService");
 
 const LENGTH_MESSAGE = "Between 4 and 63 characters";

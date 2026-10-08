@@ -181,6 +181,27 @@ _bif_module = _s3mk_importlib_util.module_from_spec(_bif_spec)
 _bif_spec.loader.exec_module(_bif_module)
 sys.modules['common.batchItemFailures'] = _bif_module
 sys.modules['common'].batchItemFailures = _bif_module
+# indexerEvents is pure JSON/dict walking over a file-indexer message (no AWS deps). The file indexer
+# and the compliance trigger both import it at module level, so it is registered here for the same
+# reason as batchItemFailures: a MagicMock `common` cannot resolve the submodule import.
+_ixe_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.indexerEvents',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'indexerEvents.py')
+)
+_ixe_module = _s3mk_importlib_util.module_from_spec(_ixe_spec)
+_ixe_spec.loader.exec_module(_ixe_module)
+sys.modules['common.indexerEvents'] = _ixe_module
+sys.modules['common'].indexerEvents = _ixe_module
+# assetProvenance builds the asset-row change-provenance attributes (stdlib + the s3MetadataKeys
+# constants). The upload and large-file completion handlers import it at module level.
+_apv_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.assetProvenance',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'assetProvenance.py')
+)
+_apv_module = _s3mk_importlib_util.module_from_spec(_apv_spec)
+_apv_spec.loader.exec_module(_apv_module)
+sys.modules['common.assetProvenance'] = _apv_module
+sys.modules['common'].assetProvenance = _apv_module
 # `query_all_items` is the shared read-to-exhaustion helper (backend/CLAUDE.md Rule 14). Bind the
 # REAL one onto the MagicMock module, for the same reason `get_asset_object_from_id` is bound above:
 # a handler does `from common.dynamodb import query_all_items` at import time, so it captures

@@ -61,6 +61,17 @@ os.environ['WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME'] = 'workflowTriggersStorageTab
 os.environ.setdefault('WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME', 'workflowExecutionsStorageTableV2')
 os.environ['S3_ASSET_BUCKETS_STORAGE_TABLE_NAME'] = 's3AssetBucketsStorageTable'
 
+# Compliance tables (break-glass env overrides so the compliance handlers and the evaluation store
+# resolve test names without an SSM call at import). The other tables the evaluation store resolves
+# (database, asset file metadata, metadata schema V2, pipeline executions, output results) are NOT
+# seeded here: the handler suites for those domains setdefault their own values at import and assert
+# on them, so a root default would pre-empt theirs. The compliance test conftest seeds them.
+os.environ['COMPLIANCE_SCHEMA_STORAGE_TABLE_NAME'] = 'complianceSchemaStorageTable'
+os.environ['COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME'] = 'complianceAssetStateStorageTable'
+os.environ['COMPLIANCE_EVALUATION_STORAGE_TABLE_NAME'] = 'complianceEvaluationStorageTable'
+os.environ['COMPLIANCE_CASCADE_STORAGE_TABLE_NAME'] = 'complianceCascadeStorageTable'
+os.environ['COMPLIANCE_AUDIT_STORAGE_TABLE_NAME'] = 'complianceAuditStorageTable'
+
 # AWS credentials for testing
 os.environ['AWS_ACCESS_KEY_ID'] = 'test-access-key'
 os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'

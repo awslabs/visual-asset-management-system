@@ -101,6 +101,7 @@ web/
       FileOperationsService.ts
       MetadataService.ts    # Metadata CRUD operations
       MetadataSchemaService.ts  # Schema management
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
@@ -111,13 +112,24 @@ web/
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions,
+                            #   Compliance tabs
         versions/           # Asset version management
           AssetVersionManager.tsx
           AssetVersionComparison.tsx
           components/       # Edit and archive/unarchive version modals
           hooks/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
+      compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
+                            #   pipeline/metadata/relationship rules, incl. the pipeline-rule
+                            #   input-file selector: mode / globs / explicit paths); complianceSchemaRules.ts
+                            #   (pure pipelineRef fields/validation + rule-draft round-trip);
+                            #   ReasonModal.tsx (Cloudscape modal collecting a mandatory reason:
+                            #   reject cascade, grant quarantine exception, release from
+                            #   quarantine); complianceStateBadge.tsx
+                            #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
+                            #   `exception` renders as info/blue; EvaluationErrorIndicator flags a
+                            #   record whose lastEvaluationStatus is `error`)
       createupdate/         # CreateDatabase.tsx, UpdateAsset.tsx + form definitions
       filemanager/          # File tree and file operations; EnhancedFileManager lazy-loads the
                             #   orchestration execution quick view for a file's "View execution" link
@@ -154,6 +166,14 @@ web/
       search/               # SearchPage.tsx
       Subscription/
       Tag/
+
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      ComplianceSchemas.tsx
+      ComplianceQuarantine.tsx
+      ComplianceCascades.tsx
+      ComplianceAuditLog.tsx
+      DatabaseCompliance.tsx
 
       # Orchestration route shells — each reads route params and renders the matching
       # features/orchestration component; keep the page logic in the feature module.
