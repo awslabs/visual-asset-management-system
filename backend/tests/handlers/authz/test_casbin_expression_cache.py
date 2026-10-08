@@ -24,6 +24,7 @@ two DynamoDB reads are stubbed. Casbin 1.36.0 hook: ``core_enforcer.py`` ``enfor
 ``_get_expression`` L538-L544 -> ``util/expression.py`` ``SimpleEval.__init__`` L34 ``ast.parse``.
 """
 
+import sys
 import threading
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -648,11 +649,29 @@ def test_cache_hit_rebinds_functions_when_handed_a_different_dict():
     assert enforcer._get_expression("1 == 1", replacement).functions is replacement
 
 
+@pytest.fixture
+def _aggressive_thread_switching():
+    """Force the interpreter to switch threads every microsecond for the duration of one test.
+
+    The default 5 ms switch interval lets a ~50 us ``enforce()`` run to completion between
+    switches, so two threads sharing one compiled expression rarely interleave inside an
+    evaluation and a missing lock could survive the test by luck. At 1 us every evaluation is
+    interrupted many times, so the race is forced on every run rather than left to timing.
+    """
+    previous = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        yield
+    finally:
+        sys.setswitchinterval(previous)
+
+
 @pytest.mark.unit
-def test_concurrent_enforce_on_one_service_stays_correct():
+def test_concurrent_enforce_on_one_service_stays_correct(_aggressive_thread_switching):
     """A cached ``SimpleEval`` holds the request's parameters on itself during evaluation, so the
     enforcer serializes ``enforce_ex``. Eight threads hammer one service with requests whose
-    answers are known; every answer must be right."""
+    answers are known, under a 1 us thread switch interval so the threads interleave inside every
+    evaluation; every answer must be right."""
     policies = [
         _constraint("allow-db1", "asset", [_crit("databaseId", "equals", "db1")], [_gp("roleA", "GET")]),
         _constraint("deny-locked", "asset", [_crit("tags", "is_one_of", ["locked"])], [_gp("roleA", "GET", "deny")]),

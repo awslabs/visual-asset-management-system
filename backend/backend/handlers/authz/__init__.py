@@ -102,6 +102,13 @@ class ExpressionCachingEnforcer(FastEnforcer):
     ``CasbinEnforcer.__init__``. On a hit the ``functions`` reference is refreshed so correctness
     never depends on pycasbin handing out the same dict object each call.
 
+    Footprint: each cached expression keeps its parsed AST plus the last request's parameter dict,
+    about 10.8 KiB per distinct policy line (a 130-line service measures ~1.8 MiB against ~0.4 MiB
+    uncached, 4.4x), so a user's enforcer grows with the number of distinct lines their roles
+    carry. ``casbin_user_enforcer_map`` refreshes an entry on the TTL but never evicts an idle
+    user -- pre-existing behaviour, not introduced here -- so a warm container holds that footprint
+    for every distinct user it has served.
+
     A compiled ``SimpleEval`` stores the request parameters on itself while it evaluates
     (``simpleeval`` ``self.names``), so a shared instance is not safe to evaluate from two threads
     at once. Handlers call ``enforce()`` from the request thread only, but as this is
