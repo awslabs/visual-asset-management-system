@@ -55,6 +55,8 @@ Both tiers must allow an action for it to succeed. This creates a defense-in-dep
 | `ends_with`        | `.*value$`      | Suffix match                                  |
 | `does_not_contain` | `!.*value.*`    | Exclusion                                     |
 
+The `tags` field holds a list of values, so it takes only `is_one_of` / `is_not_one_of` (a membership test, no regex); the five pattern-matching operators above are rejected when a `tags` criterion is saved.
+
 ### HTTP Method Permissions
 
 | Permission | Operations                                                                                                                                      |
@@ -195,7 +197,7 @@ Key pattern for deny overlays:
 -   Use `type="deny"` on permissions (instead of `type="allow"`)
 -   Typically target a specific entity type (e.g., `asset`) with criteria to match the items to deny
 -   The `TAG_VALUE` variable pattern allows reuse: apply the same template multiple times with different tag values
--   Deny overlays can use the `tags` field on assets with `contains` operator to match tagged items
+-   Deny overlays can use the `tags` field on assets with the `is_one_of` operator to match tagged items
 
 Example: deny editing of assets tagged "locked":
 
@@ -204,7 +206,7 @@ Example: deny editing of assets tagged "locked":
     "name": "{{ROLE_NAME}}-deny-tagged-{{TAG_VALUE}}",
     "description": "Deny editing of assets tagged with {{TAG_VALUE}}",
     "objectType": "asset",
-    "criteriaAnd": [{ "field": "tags", "operator": "contains", "value": "{{TAG_VALUE}}" }],
+    "criteriaAnd": [{ "field": "tags", "operator": "is_one_of", "value": "{{TAG_VALUE}}" }],
     "criteriaOr": [],
     "groupPermissions": [
         { "action": "PUT", "type": "deny" },
