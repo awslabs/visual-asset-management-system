@@ -351,9 +351,11 @@ def enhance_assets_with_version_info(assets):
     Returns:
         List of enhanced asset copies, in the same order as `assets`
     """
+    # Only a truthy currentVersionId is batched: BatchGetItem rejects the whole chunk when any key
+    # carries an empty or null attribute, so a falsy value takes the per-item read instead
     keyed = {}
     for asset in assets:
-        if asset and 'currentVersionId' in asset:
+        if asset and asset.get('currentVersionId'):
             key = _current_version_key(asset)
             keyed.setdefault((key['databaseId:assetId'], key['assetVersionId']), key)
 
@@ -380,7 +382,8 @@ def enhance_assets_with_version_info(assets):
         if 'currentVersionId' in asset:
             key = _current_version_key(asset)
             key_tuple = (key['databaseId:assetId'], key['assetVersionId'])
-            if key_tuple in unresolved_keys:
+            if key_tuple not in keyed or key_tuple in unresolved_keys:
+                # Never batched (falsy id) or left unresolved by the batch: the per-item read
                 current_version = get_current_version_info(asset)
             else:
                 current_version = versions_by_key.get(key_tuple)

@@ -96,6 +96,9 @@ class _VersionsTable:
         self.batch_calls = []
 
     def _get_item(self, Key):
+        if not Key["assetVersionId"]:
+            # boto3 / DynamoDB reject a null or empty key attribute value
+            raise ValueError("Invalid key attribute value (simulated ParamValidationError)")
         row = self.rows.get((Key["databaseId:assetId"], Key["assetVersionId"]))
         return {"Item": dict(row)} if row else {}
 
@@ -104,12 +107,15 @@ class _VersionsTable:
         assert list(RequestItems) == [table_name], RequestItems
         keys = RequestItems[table_name]["Keys"]
         assert 1 <= len(keys) <= self.module.BATCH_GET_CHUNK_SIZE, len(keys)
-        assert len({(k["databaseId:assetId"], k["assetVersionId"]) for k in keys}) == len(keys), \
-            "BatchGetItem rejects duplicate keys"
         call_index = len(self.batch_calls)
         self.batch_calls.append(list(keys))
         if call_index in self.fail_calls:
             raise RuntimeError("ProvisionedThroughputExceededException (simulated)")
+        # DynamoDB rejects the WHOLE request -- not just the offending key -- in both of these cases
+        if any(not k["databaseId:assetId"] or not k["assetVersionId"] for k in keys):
+            raise ValueError("Key attribute cannot be null or empty (simulated ValidationException)")
+        if len({(k["databaseId:assetId"], k["assetVersionId"]) for k in keys}) != len(keys):
+            raise ValueError("Provided list of item keys contains duplicates (simulated ValidationException)")
         leave = self.unprocessed.get(call_index, lambda ks: [])(keys)
         leave_set = {(k["databaseId:assetId"], k["assetVersionId"]) for k in leave}
         served = [
@@ -281,6 +287,70 @@ class TestListingReadCount:
         # The memo is scoped to one request: the second request re-reads each bucket once
         assert first == len(BUCKETS)
         assert buckets.query.call_count == len(BUCKETS)
+
+    def test_two_records_sharing_a_version_key_are_requested_once(self):
+        """BatchGetItem rejects a request that names the same key twice, so a page carrying two
+        records with the same databaseId/assetId/currentVersionId must send that key once and
+        still enrich both records."""
+        m = _load()
+        assets, rows = _build_page()
+        duplicate = dict(assets[0], assetName="Asset 0 (second record)")
+        assets.insert(1, duplicate)
+        versions = _VersionsTable(m, rows)
+        buckets = _buckets_table()
+
+        response, expected_body, _ = _run_listing(m, versions, buckets, assets, {"databaseId": "db1"})
+
+        assert response["statusCode"] == 200
+        assert response["body"] == expected_body
+        body = json.loads(response["body"])
+        assert body["Items"][1]["assetName"] == "Asset 0 (second record)"
+        assert body["Items"][1]["currentVersion"] == body["Items"][0]["currentVersion"]
+        assert body["Items"][1]["currentVersion"]["Version"] == "1"
+        requested = [(k["databaseId:assetId"], k["assetVersionId"])
+                     for call in versions.batch_calls for k in call]
+        assert requested
+        assert len(requested) == len(set(requested))
+        distinct_keys = {_version_key(a) for a in assets if "currentVersionId" in a}
+        assert set(requested) == distinct_keys
+        assert versions.resource.batch_get_item.call_count == -(-len(distinct_keys) // m.BATCH_GET_CHUNK_SIZE)
+        versions.table.get_item.assert_not_called()
+
+    @pytest.mark.parametrize("falsy_version_id", [None, ""], ids=["null", "empty"])
+    def test_a_falsy_current_version_id_is_read_individually_not_batched(self, falsy_version_id):
+        """A null or empty currentVersionId would make DynamoDB reject the whole 100-key chunk, so
+        that record takes the per-item read on its own while the rest of the page still batches."""
+        m = _load()
+        assets, rows = _build_page()
+        malformed = {
+            "databaseId": "db1", "assetId": "asset-malformed", "assetName": "Malformed version id",
+            "description": "d", "isDistributable": False, "tags": [], "bucketId": "bucket-a",
+            "assetLocation": {"Key": "asset-malformed/"}, "object__type": "asset",
+            "currentVersionId": falsy_version_id,
+        }
+        assets.insert(3, malformed)
+        versions = _VersionsTable(m, rows)
+        buckets = _buckets_table()
+
+        response, expected_body, sleep = _run_listing(m, versions, buckets, assets, {})
+
+        assert response["statusCode"] == 200
+        assert response["body"] == expected_body
+        body = json.loads(response["body"])
+        assert body["Items"][3]["assetId"] == "asset-malformed"
+        assert body["Items"][3]["currentVersion"] is None
+        # The rest of the page still batches in ceil(N/100) calls, none of them carrying the bad key
+        batched = [a for a in assets if a.get("currentVersionId")]
+        assert versions.resource.batch_get_item.call_count == -(-len(batched) // m.BATCH_GET_CHUNK_SIZE)
+        assert versions.batch_calls
+        assert all(k["assetVersionId"] for call in versions.batch_calls for k in call)
+        # Exactly the malformed record was read individually
+        read_individually = {
+            (c.kwargs["Key"]["databaseId:assetId"], c.kwargs["Key"]["assetVersionId"])
+            for c in versions.table.get_item.call_args_list
+        }
+        assert read_individually == {("db1:asset-malformed", falsy_version_id)}
+        sleep.assert_not_called()
 
 
 @pytest.mark.unit
