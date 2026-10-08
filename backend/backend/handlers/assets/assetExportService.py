@@ -20,7 +20,7 @@ from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
-from common.dynamodb import query_all_items
+from common.dynamodb import query_all_items, batch_get_items
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -401,47 +401,53 @@ def flatten_tree_to_list(tree_data: Dict, root_asset_id: str, root_database_id: 
 #######################
 
 def batch_get_assets(asset_identifiers: List[Dict]) -> Dict[str, Dict]:
-    """Batch get asset details for multiple assets"""
+    """Batch get asset details for multiple assets.
+
+    Keys the batch read leaves unresolved after its retry budget are read individually, so a
+    throttled batch degrades to slower reads rather than to an export missing those assets.
+    """
     asset_details = {}
-    
-    # Process in batches of 100 (DynamoDB batch_get_item limit)
-    batch_size = 100
-    for i in range(0, len(asset_identifiers), batch_size):
-        batch = asset_identifiers[i:i + batch_size]
-        
+
+    keys = [
+        {
+            'databaseId': item['databaseId'],
+            'assetId': item['assetId']
+        }
+        for item in asset_identifiers
+    ]
+
+    try:
+        rows, unresolved_keys = batch_get_items(dynamodb, asset_storage_table_name, keys)
+
+        for item in rows:
+            key = f"{item['databaseId']}:{item['assetId']}"
+            asset_details[key] = item
+
+        if unresolved_keys:
+            logger.warning(
+                f"{len(unresolved_keys)} asset keys unretrieved by batch get; reading them individually")
+            asset_details.update(_get_assets_individually(unresolved_keys))
+
+    except Exception as e:
+        logger.exception(f"Error in batch get assets: {e}")
+        # Fall back to individual gets
+        asset_details.update(_get_assets_individually(keys))
+
+    return asset_details
+
+
+def _get_assets_individually(keys: List[Dict]) -> Dict[str, Dict]:
+    """One get_item per key, keyed by ``databaseId:assetId``; a failed read is logged and skipped."""
+    asset_details = {}
+    for key in keys:
         try:
-            request_items = {
-                asset_storage_table_name: {
-                    'Keys': [
-                        {
-                            'databaseId': item['databaseId'],
-                            'assetId': item['assetId']
-                        }
-                        for item in batch
-                    ]
-                }
-            }
-            
-            response = dynamodb.batch_get_item(RequestItems=request_items)
-            
-            for item in response.get('Responses', {}).get(asset_storage_table_name, []):
-                key = f"{item['databaseId']}:{item['assetId']}"
-                asset_details[key] = item
-                
-        except Exception as e:
-            logger.exception(f"Error in batch get assets: {e}")
-            # Fall back to individual gets for this batch
-            for item in batch:
-                try:
-                    response = asset_table.get_item(
-                        Key={'databaseId': item['databaseId'], 'assetId': item['assetId']}
-                    )
-                    if 'Item' in response:
-                        key = f"{item['databaseId']}:{item['assetId']}"
-                        asset_details[key] = response['Item']
-                except Exception as inner_e:
-                    logger.warning(f"Error getting asset {item['assetId']}: {inner_e}")
-    
+            response = asset_table.get_item(
+                Key={'databaseId': key['databaseId'], 'assetId': key['assetId']}
+            )
+            if 'Item' in response:
+                asset_details[f"{key['databaseId']}:{key['assetId']}"] = response['Item']
+        except Exception as inner_e:
+            logger.warning(f"Error getting asset {key['assetId']}: {inner_e}")
     return asset_details
 
 # How many metadata keys one aggregated log line names. Rule 9: a metadata key is an identifier,

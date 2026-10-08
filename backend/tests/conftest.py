@@ -224,6 +224,15 @@ sys.modules['common.dynamodb'].MAX_PAGINATION_PAGE_SIZE = _real_ddb_module.MAX_P
 # moment a module executes `from common.dynamodb import ...` depends on what has already run. A suite
 # that is the sole coverage for a finding must not depend on its neighbours being collected first.
 sys.modules['common.dynamodb'].query_has_match = _real_ddb_module.query_has_match
+# batch_get_items is the shared BatchGetItem chunk + UnprocessedKeys loop, bound for the same reason
+# as the two pagers above: it returns a (rows, unresolved_keys) TUPLE that every caller unpacks, so a
+# MagicMock stand-in raises "not enough values to unpack" inside the handler. Its retry constants are
+# bound alongside so a test asserting a read count sees the deployed budget.
+sys.modules['common.dynamodb'].batch_get_items = _real_ddb_module.batch_get_items
+sys.modules['common.dynamodb'].BATCH_GET_CHUNK_SIZE = _real_ddb_module.BATCH_GET_CHUNK_SIZE
+sys.modules['common.dynamodb'].BATCH_GET_MAX_RETRIES = _real_ddb_module.BATCH_GET_MAX_RETRIES
+sys.modules['common.dynamodb'].BATCH_GET_RETRY_BACKOFF_SECONDS = \
+    _real_ddb_module.BATCH_GET_RETRY_BACKOFF_SECONDS
 # apiRoutes is pure constants (no AWS deps), so load the REAL module by path
 # rather than a MagicMock (same approach as s3MetadataKeys above).
 _apir_spec = _s3mk_importlib_util.spec_from_file_location(
