@@ -37,7 +37,7 @@ from aws_lambda_powertools.utilities.parser import ValidationError
 from common.validators import validate
 from common.resourceNames import get_table_name, ResourceKeys
 from common.auth.apiEvent import normalize_event
-from common.dynamodb import validate_pagination_info, to_update_expr
+from common.dynamodb import validate_pagination_info, to_update_expr, batch_get_items
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -742,21 +742,19 @@ def _batch_pipeline_system_configs(workflow_items):
 
     configs = {}
     keys = [{"databaseId": db, "pipelineId": pid} for db, pid in sorted(wanted)]
-    for start in range(0, len(keys), 100):  # BatchGetItem caps at 100 keys per request
-        chunk = keys[start:start + 100]
-        try:
-            response = dynamodb.batch_get_item(
-                RequestItems={pipeline_table_name: {"Keys": chunk}})
-            for record in response.get("Responses", {}).get(pipeline_table_name, []):
-                configs[(record.get("databaseId", ""), record.get("pipelineId", ""))] = \
-                    record.get("systemConfig", {}) or {}
-            # UnprocessedKeys are left unread rather than retried: the aggregates are display-only, so
-            # a partial read degrades the hint instead of failing the list.
-            if response.get("UnprocessedKeys"):
-                logger.warning("Pipeline batch read left keys unprocessed; workflow filter "
-                               "aggregates on this page may be incomplete")
-        except Exception:
-            logger.exception("Failed batch-reading pipeline configs for workflow aggregates")
+    try:
+        # UnprocessedKeys are left unread rather than retried: the aggregates are display-only, so
+        # a partial read degrades the hint instead of failing the list.
+        rows, unresolved_keys = batch_get_items(
+            dynamodb, pipeline_table_name, keys, max_retries=0)
+        for record in rows:
+            configs[(record.get("databaseId", ""), record.get("pipelineId", ""))] = \
+                record.get("systemConfig", {}) or {}
+        if unresolved_keys:
+            logger.warning("Pipeline batch read left keys unprocessed; workflow filter "
+                           "aggregates on this page may be incomplete")
+    except Exception:
+        logger.exception("Failed batch-reading pipeline configs for workflow aggregates")
     return configs
 
 

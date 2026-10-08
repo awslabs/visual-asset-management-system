@@ -25,7 +25,7 @@ backend/
 │   ├── common/                # Shared utilities
 │   │   ├── constants.py       # Constants and configuration
 │   │   ├── validators.py      # Input validation functions
-│   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, …)
+│   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, batch_get_items, …)
 │   └── customLogging/         # Logging utilities
 ├── tests/                     # Test files (mirror handler structure)
 │   ├── handlers/              # Handler tests
@@ -263,6 +263,22 @@ Two details decide whether that loop is correct:
     the function's `__globals__` actually resolves (`patch.object` is effective only when
     `function.__globals__ is module.__dict__`; one source file loaded twice yields two
     module objects sharing a `__file__` but owning separate globals).
+
+**Batch reads.** Resolving many rows by full primary key (the assets a page of executions
+references, the pipelines a page of workflows references, the assets in a link tree) goes
+through `common.dynamodb.batch_get_items(dynamodb, table_name, keys, *, max_retries=3,
+backoff_seconds=0.05)`, never a hand-rolled `batch_get_item` loop. It chunks at the 100-key
+per-call limit, deduplicates keys (DynamoDB rejects a chunk carrying a duplicate), and
+re-requests `UnprocessedKeys` with exponential backoff — the shape a partial throttle or a
+16 MB response takes, which arrives as HTTP 200 and so sits outside the botocore retry config.
+
+It returns `(rows, unresolved_keys)`. A key absent from both is an item that does not exist;
+a key in `unresolved_keys` is one the read did not complete within the budget. Keep the two
+apart in the caller — a throttled read must not be reported as a deleted asset or, after
+authorization, as a denial — and decide what to do with the leftover: read it per-item
+(`executionService`, `assetExportService`), report it as unresolved (`assetLinksService`),
+or log and degrade with `max_retries=0` where the data is a display-only hint
+(`workflowService`). A `ClientError` propagates; the caller owns its fallback.
 
 ### **Rule 3: Paginate large GET responses; never return an unbounded in-memory set**
 

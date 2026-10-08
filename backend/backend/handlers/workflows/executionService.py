@@ -20,7 +20,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_actions
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, batch_get_items
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
@@ -279,17 +279,6 @@ GLOBAL_LIST_QUERY_LIMIT = 500
 # is strictly worse than a short page — hence the ~2x margin. A page cut short here says so in
 # `warnings` and carries a continuation.
 GLOBAL_LIST_WALK_BUDGET_SECONDS = 10
-
-# Keys per BatchGetItem request. 100 is the DynamoDB hard limit for a single BatchGetItem; a larger
-# key set is split across sequential requests.
-BATCH_GET_CHUNK_SIZE = 100
-
-# Attempts spent re-requesting a BatchGetItem's UnprocessedKeys (throttling / a response that hit the
-# 16 MB size limit) before the remainder falls back to per-item reads.
-BATCH_GET_MAX_RETRIES = 3
-
-# Base seconds for the exponential backoff between UnprocessedKeys retries.
-BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
 
 # Upper bound on the DISTINCT assets one global-list page resolves for authorization. The page size is
 # already capped, but a page's cost is the number of assets its executions reference, not the number of
@@ -600,34 +589,18 @@ def get_asset_details(databaseId, assetId):
 
 
 def _batch_get_rows(table_name, keys):
-    """BatchGetItem `keys` (a list of full primary-key dicts) from one table. Chunks at the DynamoDB
-    per-call key limit and re-requests UnprocessedKeys — throttling, or a response that reached the
-    16 MB size limit — with exponential backoff.
+    """BatchGetItem `keys` (a list of full primary-key dicts) from one table through the shared
+    `batch_get_items`, which chunks at the per-call key limit and re-requests UnprocessedKeys.
 
     Returns the rows that came back. Never raises: a failed or incomplete batch simply yields fewer
     rows, leaving the caller to resolve the remainder with its per-item read."""
-    items = []
-    for start in range(0, len(keys), BATCH_GET_CHUNK_SIZE):
-        pending = keys[start:start + BATCH_GET_CHUNK_SIZE]
-        attempt = 0
-        while pending:
-            try:
-                response = dynamodb.batch_get_item(RequestItems={table_name: {'Keys': pending}})
-            except Exception as e:
-                logger.warning(f"Batch read of {table_name} failed "
-                               f"(falling back to per-item reads): {e}")
-                break
-            items.extend(response.get('Responses', {}).get(table_name, []))
-            pending = (response.get('UnprocessedKeys', {}).get(table_name, {}).get('Keys', []))
-            if not pending:
-                break
-            attempt += 1
-            if attempt > BATCH_GET_MAX_RETRIES:
-                logger.info(f"Batch read of {table_name} left {len(pending)} keys unprocessed after "
-                            f"{BATCH_GET_MAX_RETRIES} retries; reading them individually")
-                break
-            time.sleep(BATCH_GET_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
-    return items
+    try:
+        rows, _unresolved_keys = batch_get_items(dynamodb, table_name, keys)
+    except Exception as e:
+        logger.warning(f"Batch read of {table_name} failed "
+                       f"(falling back to per-item reads): {e}")
+        return []
+    return rows
 
 
 def prewarm_asset_details(pairs):
