@@ -47,6 +47,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   **GPU pipeline Batch containers run as non-root** — The Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, and Isaac Lab training containers now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
 -   **Potree point cloud viewer pipeline** — The container job role can send the workflow task-token heartbeat (`states:SendTaskHeartbeat`, scoped to the deployment account and region), so a long PDAL/Potree conversion keeps its parent task alive instead of logging an `AccessDeniedException` on every heartbeat.
+-   **Asset listing read fan-out** — The per-database and all-databases asset listings enrich a page with batched reads instead of two DynamoDB reads per asset: current-version rows come from `BatchGetItem` in chunks of 100 (unprocessed keys re-requested with bounded exponential backoff, the remainder read individually) and bucket details are resolved once per distinct bucket on the page. The response shape is unchanged. (issue #389)
 
 **Other changes:**
 

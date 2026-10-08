@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
 -   **Pipelines** The Potree point cloud viewer container job role holds `states:SendTaskHeartbeat` alongside `SendTaskSuccess`/`SendTaskFailure` (scoped to the deployment account and region), so the PDAL/Potree container's workflow task-token heartbeat is delivered instead of logging an `AccessDeniedException` on every job.
+-   **Assets** The asset listings (`GET /database/{databaseId}/assets` and `GET /assets`) enrich each page with batched reads instead of two DynamoDB reads per asset: current-version rows are fetched with `BatchGetItem` in chunks of 100 (unprocessed keys re-requested with bounded exponential backoff, the remainder read individually), and bucket details are resolved once per distinct bucket on the page. The response shape is unchanged. (issue #389)
 
 ### Chores
 
