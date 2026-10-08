@@ -6,7 +6,6 @@ import boto3
 import json
 import base64
 import uuid
-import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
@@ -23,7 +22,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items
 from common.s3 import is_object_version_archived, list_all_object_versions
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -67,16 +66,6 @@ logger = safeLogger(service_name="AssetService")
 # Worker pool size for per-object S3 operations (archive/unarchive loops);
 # bounds Lambda concurrency and matches the S3 client connection pool
 MAX_PARALLEL_S3_WORKERS = 10
-
-# BatchGetItem accepts at most 100 keys per call.
-BATCH_GET_CHUNK_SIZE = 100
-# Attempts spent re-requesting a BatchGetItem's UnprocessedKeys (throttling / a response that hit the
-# 16 MB size limit) before the remainder falls back to per-item reads. batch_get_item answers a
-# partially throttled request with HTTP 200 and an UnprocessedKeys map, which the botocore retry
-# config does not cover.
-BATCH_GET_MAX_RETRIES = 3
-# Base seconds for the exponential backoff between UnprocessedKeys retries.
-BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
 
 # Global variables for claims and roles
 claims_and_roles = {}
@@ -211,11 +200,12 @@ def get_asset_bucket_details(asset):
 def enrich_asset_listing_page(items):
     """Attach version information and bucketName to one page of listed asset records.
 
-    Version rows are read with BatchGetItem (one call per BATCH_GET_CHUNK_SIZE assets) and bucket
-    details are resolved once per distinct bucketId for the page, so a page costs a handful of reads
-    rather than two per asset. Each returned record is identical to what the per-asset
-    enhance_asset_with_version_info + get_default_bucket_details pair produces. Records without a
-    bucketId are skipped so one malformed item cannot fail the whole listing.
+    Version rows are read with BatchGetItem (one call per 100 assets, through the shared
+    common.dynamodb.batch_get_items) and bucket details are resolved once per distinct bucketId for
+    the page, so a page costs a handful of reads rather than two per asset. Each returned record is
+    identical to what the per-asset enhance_asset_with_version_info + get_default_bucket_details pair
+    produces. Records without a bucketId are skipped so one malformed item cannot fail the whole
+    listing.
 
     Args:
         items: Asset dictionaries for the page, in response order
@@ -297,53 +287,15 @@ def get_current_version_info(asset):
     
     return None
 
-def _batch_get_version_rows(keys):
-    """BatchGetItem `keys` (full primary-key dicts) from the versions table.
-
-    Chunks at the DynamoDB per-call key limit and re-requests UnprocessedKeys with exponential
-    backoff, up to BATCH_GET_MAX_RETRIES. Returns (rows, unresolved_keys): the rows that came back,
-    and the keys whose read did not complete. A key absent from both is a row that does not exist,
-    which is a different answer from a read that failed -- the caller resolves unresolved keys with
-    the per-item read so a throttled batch never blanks version info. Never raises.
-    """
-    rows = []
-    unresolved = []
-    for start in range(0, len(keys), BATCH_GET_CHUNK_SIZE):
-        pending = keys[start:start + BATCH_GET_CHUNK_SIZE]
-        attempt = 0
-        while pending:
-            try:
-                response = dynamodb.batch_get_item(
-                    RequestItems={asset_versions_table_name: {'Keys': pending}}
-                )
-            except Exception as e:
-                logger.warning(f"Batch read of asset versions failed "
-                               f"(falling back to per-item reads): {e}")
-                break
-            rows.extend(response.get('Responses', {}).get(asset_versions_table_name, []))
-            pending = response.get('UnprocessedKeys', {}).get(
-                asset_versions_table_name, {}).get('Keys', [])
-            if not pending:
-                break
-            attempt += 1
-            if attempt > BATCH_GET_MAX_RETRIES:
-                logger.info(f"Batch read of asset versions left {len(pending)} keys unprocessed "
-                            f"after {BATCH_GET_MAX_RETRIES} retries; reading them individually")
-                break
-            # Must be the last comment line before the call -- semgrep attaches `nosemgrep`
-            # to the next line only.
-            # nosemgrep: arbitrary-sleep
-            time.sleep(BATCH_GET_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
-        unresolved.extend(pending)
-    return rows, unresolved
-
 def enhance_assets_with_version_info(assets):
     """Batched counterpart of enhance_asset_with_version_info for one listing page.
 
-    Reads every asset's current-version row with BatchGetItem instead of one get_item per asset.
-    Each enhanced copy is identical to what enhance_asset_with_version_info would return for that
-    asset: a key the batch could not resolve falls back to the per-item read, and an asset without a
-    currentVersionId (or whose version row does not exist) carries no currentVersion.
+    Reads every asset's current-version row through the shared common.dynamodb.batch_get_items
+    (which owns the 100-key chunking and the UnprocessedKeys re-requests) instead of one get_item
+    per asset. Each enhanced copy is identical to what enhance_asset_with_version_info would return
+    for that asset: a key the batch could not resolve falls back to the per-item read, and an asset
+    without a currentVersionId (or whose version row does not exist) carries no currentVersion.
+    The batch path never raises -- a failed batch call degrades the page to per-item reads.
 
     Args:
         assets: Asset dictionaries, in response order
@@ -361,7 +313,17 @@ def enhance_assets_with_version_info(assets):
 
     versions_by_key = {}
     if keyed and asset_versions_table_name:
-        rows, unresolved = _batch_get_version_rows(list(keyed.values()))
+        # (rows, unresolved): a key absent from both is a row that does not exist, a key in
+        # `unresolved` is a read that did not complete -- only the latter takes the per-item read
+        try:
+            rows, unresolved = batch_get_items(dynamodb, asset_versions_table_name, list(keyed.values()))
+        except Exception as e:
+            logger.warning(f"Batch read of asset versions failed "
+                           f"(falling back to per-item reads): {e}")
+            rows, unresolved = [], list(keyed.values())
+        if unresolved:
+            logger.info(f"Batch read of asset versions left {len(unresolved)} keys unprocessed; "
+                        f"reading them individually")
         for row in rows:
             row_key = (row.get('databaseId:assetId'), row.get('assetVersionId'))
             try:
