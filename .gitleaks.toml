@@ -147,6 +147,11 @@ regexes = [
     # a credential. Listed in full so nothing else can match.
     '''eyJkYXRhYmFzZUlkIjoibXktZGIiLCAiYXNzZXRJZCI6Im15LWFzc2V0In0=''',
 
+    # NextToken fixture in backend/tests/handlers/assets/test_assetService_listing_batch_reads.py.
+    # Decodes to {"databaseId": {"S": "db1"}}, a DynamoDB LastEvaluatedKey for a stub database id;
+    # matched only because base64-encoded JSON opens like a JWT header. Listed in full.
+    '''eyJkYXRhYmFzZUlkIjogeyJTIjogImRiMSJ9fQ==''',
+
     # Example key ID in the retired tools/VamsCLI/docs/commands/api-key-management.md (history only).
     # The hex runs a1b2c3d4-e5f6-7890-abcd-ef1234567890 in sequence: a hand-typed UUID, not a generated
     # one, and a key *id* rather than a key in any case.
