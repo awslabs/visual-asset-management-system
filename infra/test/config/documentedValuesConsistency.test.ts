@@ -225,11 +225,18 @@ describe("documented values match the code that produces them", () => {
             expect(offending).toEqual([]);
         });
 
-        test("states that the bucket must be in the deployment Region", () => {
-            // getConfig() now rejects a mismatch, so the page must not describe it as merely recommended.
-            expect(extMd).toMatch(
-                /same AWS Region as the deployment|must equal the VAMS deployment Region/i
-            );
+        test("states the default-bucket Region rule and describes cross-Region buckets as supported", () => {
+            // getConfig() accepts a non-default bucket in another Region of the partition and rejects
+            // only a cross-Region DEFAULT bucket, so the page must say exactly that — neither "must
+            // equal the deployment Region" for every bucket nor "cross-Region is not supported".
+            expect(extMd).toMatch(/default asset bucket[^\n]*must be in the deployment Region/i);
+            expect(extMd).toMatch(/^## Cross-Region buckets$/m);
+            const offending = extMd
+                .split("\n")
+                .filter((l) =>
+                    /cross-Region is not supported|must equal the VAMS deployment Region/i.test(l)
+                );
+            expect(offending).toEqual([]);
         });
 
         test("does not describe the external KMS grant as manual-only", () => {

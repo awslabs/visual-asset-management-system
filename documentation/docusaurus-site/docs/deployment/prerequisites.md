@@ -85,6 +85,7 @@ The IAM principal used for deployment must have sufficient permissions to create
 -   AWS Identity and Access Management (IAM) roles and policies
 -   AWS CloudTrail trails
 -   AWS WAF web ACLs
+-   `vpce:AllowMultiRegion` (an EC2 permission-only action), when an external asset bucket is registered in another Region with `app.useGlobalVpc.enabled` and `app.useGlobalVpc.addCrossRegionS3Endpoints` on — it authorizes creating the cross-Region Amazon S3 interface endpoint, and a service control policy must not deny it ([External S3 setup](./external-s3-setup.md#cross-region-buckets))
 
 :::warning[Least privilege]
 Use the least-permissive IAM role that can still generate the needed AWS components from AWS CloudFormation. Consult your organization's security team for appropriate permission boundaries.
@@ -92,7 +93,7 @@ Use the least-permissive IAM role that can still generate the needed AWS compone
 
 ### CDK bootstrap
 
-AWS CDK requires a one-time bootstrap operation per account and AWS Region combination. This creates the staging resources that CDK uses during deployment.
+AWS CDK requires a one-time bootstrap operation per account and AWS Region combination. This creates the staging resources that CDK uses during deployment. Bootstrap every Region a stack deploys into: the deployment Region, `us-east-1` when Amazon CloudFront with AWS WAF is enabled, and each Region that holds an external asset bucket outside the deployment Region (its per-Region notification stack deploys there).
 
 **Commercial AWS Regions:**
 

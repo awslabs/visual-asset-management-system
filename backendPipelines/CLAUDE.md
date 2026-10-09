@@ -646,7 +646,21 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     A pipeline that reads the workflow manifest also vendors `manifestHelper.py`. **All copies must stay
     byte-identical** — verify with
     `find backendPipelines -name manifestHelper.py -exec md5sum {} \; | awk '{print $1}' | sort -u`,
-    which must print exactly one hash. Edit one copy, then propagate to the rest in the same change.
+    which must print exactly one hash. Edit one copy, then propagate to the rest in the same change
+    (`backendPipelines/tests/test_pipeline_cross_region_inputs.py` lists the copies and pins the digest).
+
+    An asset bucket may be in another Region than the deployment. The manifest names it on every input
+    file (`inputFiles[].bucketRegion`, plus `bucketAccountId` for a cross-account bucket) and on the
+    output bucket (`outputs.bucketRegion`); an empty value is the deployment Region. `resolve_inputs`
+    exposes them as `inputBucketRegion` / `outputBucketRegion`, and `manifestHelper.s3_client_for_region()`
+    builds the client that reads or writes there (adaptive retries, regional `us-east-1` endpoint, no
+    `endpoint_url`). **A pipeline whose AWS Batch compute runs in the isolated subnets** (Potree viewer,
+    3D thumbnail, GenAI metadata labeling, coordinate transform) reaches Amazon S3 in the deployment
+    Region only, so its `vamsExecute` handler calls `manifestHelper.enforce_inputs_in_region(resolved)`
+    right after `enforce_single_input_file`, inside the `try` that reports `SendTaskFailure`; the
+    private-subnet pipelines and the Lambda-container pipelines do not, and the Lambda-container entry
+    points (`lambdaContainer/lambda.py`) read the input and write the output with a client for the Region
+    the manifest names. Moving a pipeline between placements means adding or removing that call.
     `fetch_manifest` RAISES when a referenced manifest cannot be read (it returns `None` only when the
     payload references no manifest at all): the manifest is the sole carrier of asset identity and the
     output paths, so swallowing that error starts a job that fails only after its compute — a GPU
