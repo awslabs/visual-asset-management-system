@@ -16,7 +16,6 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
 -   **Pipelines** The Potree point cloud viewer container job role holds `states:SendTaskHeartbeat` alongside `SendTaskSuccess`/`SendTaskFailure` (scoped to the deployment account and region), so the PDAL/Potree container's workflow task-token heartbeat is delivered instead of logging an `AccessDeniedException` on every job.
--   **Assets** The asset listings (`GET /database/{databaseId}/assets` and `GET /assets`) enrich each page with batched reads instead of two DynamoDB reads per asset: current-version rows are fetched with `BatchGetItem` in chunks of 100 (unprocessed keys re-requested with bounded exponential backoff, the remainder read individually), and bucket details are resolved once per distinct bucket on the page. The response shape is unchanged. (issue #389)
 -   **Authorization/Performance** The per-user Casbin enforcer compiles each policy line's matcher expression once and reuses it for the life of the enforcer, instead of re-parsing every line on every authorization check. Only compiled expressions are cached, never decisions; every check still evaluates every policy line, and the cache is discarded with the enforcer on the existing 60-second policy refresh and on an MFA state change. List endpoints that authorize each returned item no longer pay a parse cost proportional to policy size per item. (issue #390)
 -   **Documentation** The `/generate-permissions` agent skill's deny-tagged overlay guidance and example use `is_one_of` on the list-valued `tags` field (previously `contains`, which the constraint API rejects), and its operator table states that `tags` accepts only `is_one_of` / `is_not_one_of`. (issue #391)
 
@@ -25,6 +24,33 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin.
 -   **Backend** The DynamoDB BatchGetItem chunk + `UnprocessedKeys` retry loop is a single shared helper, `common.dynamodb.batch_get_items`, returning `(rows, unresolved_keys)` so a missing row and an incomplete read stay distinguishable; the execution, asset-links, asset-export, workflow and asset listing services read through it instead of carrying their own copy. (issue #395)
     -   Note: the asset export previously read only the first response of each batch, so an asset DynamoDB deferred into `UnprocessedKeys` (a partial throttle, or a response at the 16 MB cap) was silently missing from the export. Those keys are now retried and, if still unresolved, read individually.
+
+### Known Outstanding Issues
+
+### Troubleshooting
+
+## [2.6.5] (2026-10-16)
+
+### Major Change Summary:
+
+-   Hotfix release: asset export applies the two download controls the download endpoint applies (the distributable check and the file download audit log); the shipped AWS WAF policy stops blocking ordinary asset file requests and its throttle response is readable by the browser; the asset listings read their per-asset data in batches.
+-   Behavior changes to review before upgrading: an asset export with `generatePresignedUrls` returns `presignedFileDownloadUrl: null` for every file of a non-distributable asset, where it returned a working URL; six more AWS Common Rule Set rules are evaluated in `count` mode (see the Bug Fixes note). See the notes under Bug Fixes.
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+### Bug Fixes
+
+-   **Backend** Asset export (`POST /database/{databaseId}/assets/{assetId}/export`) with `generatePresignedUrls` issues presigned download URLs only for files of assets whose `isDistributable` is true, and records every URL it issues in the file download audit log (one entry per file, `downloadType` `export`). It signed a URL for every non-archived file of every exported asset regardless of the flag and wrote no download audit entry, so a caller with `GET` on a non-distributable asset could obtain working download URLs through the export route that `POST .../download` refuses, invisibly to the download audit log group. A non-distributable asset is still exported; each of its files carries `presignedFileDownloadUrl: null` and the entry's `isdistributable` is `false`. ([#399](https://github.com/awslabs/visual-asset-management-system/issues/399))
+-   **CDK** The shipped AWS WAF policy (`infra/config/policy/wafPolicyConfig.json`) overrides six further AWS Common Rule Set rules to `count` — `SizeRestrictions_URIPATH`, `RestrictedExtensions_URIPATH`, `RestrictedExtensions_QUERYARGUMENTS`, `GenericLFI_URIPATH`, `GenericLFI_QUERYARGUMENTS`, and `GenericLFI_BODY` — so requests carrying validated asset file keys (file names ending `.log`/`.ini`/`.cfg`/`.conf`, encoded `../` the backend already rejects, and URL-encoded keys over 1024 bytes on the file stream routes) are not blocked at the edge. Every other Common Rule Set rule and the Known Bad Inputs and Amazon IP Reputation List groups keep blocking. ([#400](https://github.com/awslabs/visual-asset-management-system/issues/400))
+    -   Note: the override set is pinned by `infra/test/waf/wafCommonRuleSetOverrides.test.ts`; the per-rule rationale is in the configuration reference under "WAF rule policy".
+-   **CDK** The AWS WAF rate-based rule's `429` custom response carries `Access-Control-Allow-Origin`, `Access-Control-Allow-Headers`, `Access-Control-Allow-Methods`, `Access-Control-Expose-Headers`, and `Retry-After: 1` headers, so a browser surfaces the real `429` to the web application — which retries after `Retry-After` — instead of a CORS failure (`TypeError: Failed to fetch`). ([#400](https://github.com/awslabs/visual-asset-management-system/issues/400))
+-   **Assets** The asset listings (`GET /database/{databaseId}/assets` and `GET /assets`) enrich each page with batched reads instead of two DynamoDB reads per asset: current-version rows are fetched with `BatchGetItem` in chunks of 100 (unprocessed keys re-requested with bounded exponential backoff, the remainder read individually), and bucket details are resolved once per distinct bucket on the page. The response shape is unchanged. (issue #389)
+-   **Security** Documentation site build dependencies updated to resolve security advisories: `tinypool` 2.1.2 (pinned through an npm `overrides` entry because `@docusaurus/core` 3.10.2 declares `^1.x`, which has no patched release), `shell-quote` 1.11.0, `proxy-addr` 2.0.8, `source-map-js` 1.2.2 and `compression` 1.8.2. These are build-time tooling of the documentation site; nothing in the deployed VAMS stack changes.
+    -   Note: remove the `tinypool` override when `@docusaurus/core` moves to `tinypool` 2.x.
+
+### Chores
 
 ### Known Outstanding Issues
 
