@@ -2322,6 +2322,8 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 
 **`PRESIGNED_URL_TIMEOUT_SECONDS` is not global.** Only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, for the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`), and all five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level. A handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start — CDK synth, lint, and env-patching unit tests all pass. Add the variable to the handler's own builder before reading it.
 
+**Every path that hands out asset file content applies two controls on top of Casbin.** A presigned GET URL or a streamed body — in `downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, and `assetExportService` — is refused (or, for the export's per-asset entries, withheld) when the asset's `isDistributable` is false, and every URL or body actually issued is written to the file-download audit log (`log_file_download` / `log_file_download_bulk` / `log_file_download_streamed` in `customLogging/auditLogging.py`). A new download surface gets both; `downloadAsset.py`'s `lambda_handler` is the reference call shape.
+
 ### **AWS Client Configuration Pattern**
 
 ```python

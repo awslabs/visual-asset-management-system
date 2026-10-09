@@ -25,6 +25,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_file_download_bulk
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetExport import (
     AssetExportRequestModel,
@@ -1148,6 +1149,7 @@ def process_asset_batch(
     asset_identifiers: List[Dict],
     request_model: AssetExportRequestModel,
     claims_and_roles: Dict,
+    event: Dict,
     file_budget: Optional[int] = None,
     start_after_key: Optional[str] = None
 ) -> Tuple[List[Dict], Dict]:
@@ -1158,10 +1160,16 @@ def process_asset_batch(
     holding more files than the budget is exported across successive pages: its entry reports
     files_truncated, and the returned page state names the key its listing resumes after.
 
+    Presigned download URLs are issued only for a distributable asset's files, and every URL
+    issued is written to the file download audit log, the same two controls the dedicated
+    download routes apply. A non-distributable asset is still exported, with its files carrying
+    no URL and its entry reporting isdistributable false.
+
     Args:
         asset_identifiers: The assets to process, in tree order
         request_model: The parsed export request
         claims_and_roles: The caller's claims
+        event: The API Gateway event, which the download audit entries attribute to the caller
         file_budget: Maximum files this page may export across the whole batch. None exports
             every file of every asset in the batch.
 
@@ -1355,6 +1363,12 @@ def process_asset_batch(
 
             asset_location_key = asset.get('assetLocation', {}).get('Key', '')
 
+            # Download URLs are issued only for a distributable asset, the same check the
+            # dedicated download routes make before signing anything.
+            distributable = bool(asset.get('isDistributable', False))
+            sign_files = request_model.generatePresignedUrls and distributable
+            signed_files = []
+
             # Filter on what the listing carries, read the survivors' primaryType, then apply
             # the one filter that selects on it. primaryType lives only in the object's own
             # metadata, so a file another filter drops costs no read.
@@ -1454,10 +1468,10 @@ def process_asset_batch(
                                     'value': None if value is None else str(value)
                                 }
 
-                # Generate presigned URL if requested (skip for archived files)
+                # Generate presigned URL if requested (skip for non-distributable assets, folders and archived files)
                 presigned_url = None
                 presigned_expires = None
-                if request_model.generatePresignedUrls and not file['isFolder'] and not file.get('isArchived', False):
+                if sign_files and not file['isFolder'] and not file.get('isArchived', False):
                     presigned_url = generate_presigned_url(
                         bucket_name,
                         file['key'],
@@ -1465,6 +1479,7 @@ def process_asset_batch(
                     )
                     if presigned_url:
                         presigned_expires = int(presigned_url_timeout)
+                        signed_files.append({"filePath": file['key'], "versionId": file['versionId']})
 
                 # Find preview file for this base file
                 preview_file_path = ''
@@ -1499,6 +1514,28 @@ def process_asset_batch(
                 }
                 export_files.append(export_file)
 
+            # The refusal is recorded once per asset so the attempt has a server-side trace, the
+            # way the dedicated download route's refusal does. Identifiers and a count only: the
+            # line carries no file key and no payload value.
+            if request_model.generatePresignedUrls and not distributable:
+                withheld_count = sum(
+                    1 for file in base_files_list
+                    if not file['isFolder'] and not file.get('isArchived', False))
+                logger.info(
+                    f"Presigned URLs withheld for non-distributable asset {asset['assetId']} "
+                    f"in database {asset['databaseId']}: {withheld_count} file(s) not signed")
+
+            # AUDIT LOG: File download - one entry per file that received a download URL, in a
+            # single batched CloudWatch write per asset.
+            if signed_files:
+                log_file_download_bulk(
+                    event,
+                    asset['databaseId'],
+                    asset['assetId'],
+                    signed_files,
+                    {"downloadType": "export"}
+                )
+
             # Build export asset model
             return {
                 'is_root_lookup_asset': asset_info.get('isRoot', False),
@@ -1511,7 +1548,7 @@ def process_asset_batch(
                 'bucketprefix': bucket_prefix,
                 'assettype': asset.get('assetType', 'none'),
                 'description': asset.get('description', ''),
-                'isdistributable': asset.get('isDistributable', False),
+                'isdistributable': distributable,
                 'tags': asset.get('tags', []),
                 'asset_version_id': current_version_id,
                 'asset_version_createdate': version_info.get('dateCreated', '') if version_info else '',
@@ -1584,6 +1621,7 @@ def export_assets(
             asset_tree,
             request_model,
             claims_and_roles,
+            event,
             file_budget=request_model.maxFiles,
             start_after_key=resume_after_key
         )
@@ -1686,6 +1724,7 @@ def export_assets(
         batch_asset_ids,
         request_model,
         claims_and_roles,
+        event,
         file_budget=request_model.maxFiles,
         start_after_key=resume_after_key
     )
