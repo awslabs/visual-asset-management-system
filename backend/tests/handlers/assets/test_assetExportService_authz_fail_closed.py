@@ -264,7 +264,7 @@ def _run_process_asset_batch(identifiers, claims_and_roles, enforcer):
             patch.object(m, "get_asset_file_versions", MagicMock(return_value=None)):
         # process_asset_batch returns (assets, page state); only the assets are under test here.
         result, _page_state = m.process_asset_batch(
-            identifiers, m.AssetExportRequestModel(), claims_and_roles)
+            identifiers, m.AssetExportRequestModel(), claims_and_roles, {'requestContext': {}})
 
     return result, {"bucket": bucket_spy, "files": files_spy, "metadata": metadata_spy}
 

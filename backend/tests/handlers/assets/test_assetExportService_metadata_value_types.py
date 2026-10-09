@@ -146,6 +146,7 @@ def _run_batch(*, asset_metadata=None, file_metadata=None, file_attributes=None,
             [{"databaseId": _DB, "assetId": _ASSET, "isRoot": True}],
             _request_model(m),
             {"tokens": ["user@example.com"], "roles": [], "mfaEnabled": False},
+            {'requestContext': {}},
         )
     finally:
         for p in reversed(patches):
