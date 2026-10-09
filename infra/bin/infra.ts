@@ -9,6 +9,7 @@ import "source-map-support/register";
 import * as cdk from "aws-cdk-lib";
 import { CoreVAMSStack } from "../lib/core-stack";
 import { CfWafStack } from "../lib/cf-waf-stack";
+import { buildCrossRegionBucketNotificationStacks } from "../lib/crossRegionBucketNotifications-stack";
 import { AwsSolutionsChecks, NagSuppressions, NIST80053R5Checks } from "cdk-nag";
 import { Aspects, Annotations } from "aws-cdk-lib";
 import { WAFScope } from "../lib/constructs/wafv2-basic-construct";
@@ -42,6 +43,15 @@ const vamsCoreStackName = `${config.name}-core-${
     config.app.baseStackName || process.env.DEMO_LABEL || "dev"
 }`;
 config.env.coreStackName = vamsCoreStackName;
+
+// One notification stack per Region that holds an external asset bucket outside the deployment
+// Region (Amazon S3 delivers bucket notifications only within the bucket's Region). None when every
+// asset bucket is in the deployment Region. The core stack subscribes its queues to these topics.
+const crossRegionBuckets = buildCrossRegionBucketNotificationStacks(
+    app,
+    config,
+    buildBootstrapSynthesizer(config)
+);
 
 // let ssmWafArn: string = "";
 
@@ -104,6 +114,7 @@ if (config.app.useWaf) {
         },
         ssmWafArnRegional: regionalWafStack.wafArn,
         ssmWafArnCloudfront: cloudfrontWafStack ? cloudfrontWafStack.wafArn : "",
+        crossRegionBucketTopics: crossRegionBuckets.topics,
         config: config,
         description: STACK_CORE_DESCRIPTION,
         synthesizer: buildBootstrapSynthesizer(config),
@@ -112,6 +123,9 @@ if (config.app.useWaf) {
     coreVamsStack.addStackDependency(regionalWafStack);
     if (cloudfrontWafStack) {
         coreVamsStack.addStackDependency(cloudfrontWafStack);
+    }
+    for (const crossRegionStack of crossRegionBuckets.stacks) {
+        coreVamsStack.addStackDependency(crossRegionStack);
     }
 
     //Stack level NAG supressions
@@ -150,10 +164,15 @@ else {
         },
         ssmWafArnRegional: "",
         ssmWafArnCloudfront: "",
+        crossRegionBucketTopics: crossRegionBuckets.topics,
         config: config,
         description: STACK_CORE_DESCRIPTION,
         synthesizer: buildBootstrapSynthesizer(config),
     });
+
+    for (const crossRegionStack of crossRegionBuckets.stacks) {
+        coreVamsStack.addStackDependency(crossRegionStack);
+    }
 
     //Stack level NAG supressions
     if (config.app.govCloud.enabled) {

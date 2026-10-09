@@ -947,6 +947,11 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
                         // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
                         regex: "/^Resource::<.*Bucket.*\\.Arn>/\\*$/g",
                     },
+                    {
+                        // The same grant on an imported external asset bucket, whose ARN is a
+                        // configured literal rather than a stack reference.
+                        regex: "/^Resource::arn:[a-z-]+:s3:::[^/]+/\\*$/g",
+                    },
                 ],
             },
             {
