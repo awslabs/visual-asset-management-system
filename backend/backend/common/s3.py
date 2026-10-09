@@ -286,9 +286,14 @@ def register_bucket_region(bucket_name: str, region: str) -> None:
 
 
 def _lookup_bucket_region(bucket_name: str) -> str:
-    """Read the bucket's row through the asset buckets table's bucketNameGSI. A name the table does
-    not describe, or a read failure, resolves to the deployment Region and is remembered for the
-    cache window rather than retried on every call."""
+    """Read the bucket's row through the asset buckets table's bucketNameGSI.
+
+    Only an EMPTY result means "not an asset bucket" (the auxiliary and artefacts buckets, an upload
+    staging bucket): that answer is the deployment Region and is remembered for the cache window. A
+    read that FAILS -- AccessDeniedException because the Lambda's role lacks the table grant, a
+    throttle, a missing table -- is a fault, not an answer: it is logged at error level with its
+    code, resolves to the deployment Region for this call only, and is retried on the next call, so
+    a permission defect stays visible instead of being cached as "not registered"."""
     global _buckets_table
     now = time.monotonic()
     missed_at = _bucket_regions_misses.get(bucket_name)
@@ -304,13 +309,24 @@ def _lookup_bucket_region(bucket_name: str) -> str:
             IndexName='bucketNameGSI',
             KeyConditionExpression=Key('bucketName').eq(bucket_name),
             Limit=1)
-        items = response.get('Items') or []
-        if items:
-            region = items[0].get('bucketRegion') or deployment_region()
-            _bucket_regions_by_name[bucket_name] = region
-            return region
+    except ClientError as e:
+        code = e.response.get('Error', {}).get('Code', 'ClientError')
+        logger.error(
+            f"Could not read the Region of bucket {bucket_name} from the buckets table "
+            f"({code}); signing this call for the deployment Region. A request for a bucket in "
+            f"another Region fails until the read succeeds -- check the Lambda role's grant on the "
+            f"buckets table.")
+        return deployment_region()
     except Exception as e:
-        logger.warning(f"Could not read the Region of bucket {bucket_name} from the buckets table: {e}")
+        logger.error(
+            f"Could not read the Region of bucket {bucket_name} from the buckets table "
+            f"({type(e).__name__}: {e}); signing this call for the deployment Region.")
+        return deployment_region()
+    items = response.get('Items') or []
+    if items:
+        region = items[0].get('bucketRegion') or deployment_region()
+        _bucket_regions_by_name[bucket_name] = region
+        return region
     _bucket_regions_misses[bucket_name] = now
     return deployment_region()
 

@@ -115,14 +115,61 @@ class TestBucketRegionHelpers:
         assert client.meta.region_name == "eu-west-1"
         assert shipped.s3_client_for_bucket({"bucketName": "local-b"}).meta.region_name == "us-west-2"
 
-    def test_an_unknown_name_falls_back_to_the_deployment_region_without_raising(self, shipped):
-        # The table lookup fails here (no table); the miss is remembered, not retried per call.
-        with patch.object(shipped, "_lookup_bucket_region", wraps=shipped._lookup_bucket_region) as lookup:
-            with patch.object(shipped.boto3, "resource", side_effect=RuntimeError("no dynamodb")):
-                assert shipped.bucket_region_for_name("never-registered") == "us-west-2"
-                assert shipped.bucket_region_for_name("never-registered") == "us-west-2"
-            assert lookup.call_count == 2
-        assert "never-registered" in shipped._bucket_regions_misses
+    def test_an_empty_result_is_not_an_asset_bucket_and_is_remembered(self, shipped):
+        # The auxiliary/artefacts/staging buckets have no row: that is an ANSWER (deployment
+        # Region), cached for the window so the table is not queried on every call.
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        shipped._buckets_table = table
+        assert shipped.bucket_region_for_name("aux-bucket") == "us-west-2"
+        assert shipped.bucket_region_for_name("aux-bucket") == "us-west-2"
+        assert table.query.call_count == 1
+        assert "aux-bucket" in shipped._bucket_regions_misses
+
+    def test_a_denied_read_is_logged_as_an_error_with_its_code_and_is_not_cached(self, shipped):
+        # A role without the buckets-table grant must stay VISIBLE: error-level log naming the code,
+        # deployment Region for this call only, and the next call tries again rather than reading a
+        # cached "not registered".
+        from botocore.exceptions import ClientError
+        table = MagicMock()
+        table.query.side_effect = ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "not authorized"}}, "Query")
+        shipped._buckets_table = table
+        with patch.object(shipped.logger, "error") as error, patch.object(shipped.logger, "warning") as warning:
+            assert shipped.bucket_region_for_name("remote-denied") == "us-west-2"
+            assert shipped.bucket_region_for_name("remote-denied") == "us-west-2"
+        assert table.query.call_count == 2
+        assert "remote-denied" not in shipped._bucket_regions_misses
+        assert "remote-denied" not in shipped._bucket_regions_by_name
+        assert error.call_count == 2
+        assert "AccessDeniedException" in str(error.call_args.args[0])
+        assert "remote-denied" in str(error.call_args.args[0])
+        warning.assert_not_called()
+
+    def test_a_throttled_read_is_not_cached_and_the_next_call_can_succeed(self, shipped):
+        from botocore.exceptions import ClientError
+        table = MagicMock()
+        table.query.side_effect = [
+            ClientError({"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "slow"}}, "Query"),
+            {"Items": [{"bucketName": "remote-b", "bucketRegion": "eu-west-1"}]},
+        ]
+        shipped._buckets_table = table
+        with patch.object(shipped.logger, "error") as error:
+            assert shipped.bucket_region_for_name("remote-b") == "us-west-2"
+            assert shipped.bucket_region_for_name("remote-b") == "eu-west-1"
+        assert "ProvisionedThroughputExceededException" in str(error.call_args.args[0])
+        assert shipped._bucket_regions_by_name["remote-b"] == "eu-west-1"
+
+    def test_a_non_client_failure_is_logged_as_an_error_and_not_cached(self, shipped):
+        # No table reachable at all (the resource cannot be built): still an error, still retried.
+        shipped._buckets_table = None
+        with patch.object(shipped.boto3, "resource", side_effect=RuntimeError("no dynamodb")), \
+                patch.object(shipped.logger, "error") as error:
+            assert shipped.bucket_region_for_name("never-registered") == "us-west-2"
+            assert shipped.bucket_region_for_name("never-registered") == "us-west-2"
+        assert error.call_count == 2
+        assert "RuntimeError" in str(error.call_args.args[0])
+        assert "never-registered" not in shipped._bucket_regions_misses
 
     def test_the_table_lookup_reads_the_bucket_name_gsi(self, shipped):
         table = MagicMock()
