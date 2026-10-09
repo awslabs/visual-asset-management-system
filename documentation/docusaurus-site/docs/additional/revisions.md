@@ -79,13 +79,13 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **AWS WAF throttle responses are readable by the browser** — The rate-based rule's `429` response carries CORS headers and `Retry-After: 1`, so a web application that calls the API cross-origin (the Application Load Balancer topology, or a direct call to the API Gateway endpoint) sees a `429` and retries rather than reporting a CORS failure; on the Amazon CloudFront topology `/api/*` is same-origin and unaffected.
 -   **Asset listing read fan-out** — The per-database and all-databases asset listings enrich a page with batched reads instead of two DynamoDB reads per asset: current-version rows come from `BatchGetItem` in chunks of 100 (unprocessed keys re-requested with bounded exponential backoff, the remainder read individually) and bucket details are resolved once per distinct bucket on the page. The response shape is unchanged. (issue #389)
 
-**Other changes:**
+**Dependencies:**
 
--   Documentation site build dependencies updated for security advisories: `tinypool` 2.1.2 (npm `overrides` pin; `@docusaurus/core` 3.10.2 declares `^1.x`), `shell-quote` 1.11.0, `proxy-addr` 2.0.8, `source-map-js` 1.2.2, `compression` 1.8.2. Build-time tooling only.
+-   Documentation site build dependencies: `tinypool` 2.1.2 through an npm `overrides` pin, because `@docusaurus/core` 3.10.2 declares `^1.x` and no patched 1.x exists (resolves GHSA-5gmw-xhrv-c9v3 and GHSA-85c8-ppgw-ccpr); `shell-quote` 1.11.0 (GHSA-pqg4-j6r4-53mv); `proxy-addr` 2.0.8 (GHSA-jqcg-44mw-7w3h); `source-map-js` 1.2.2 (GHSA-68fv-2mgg-jv7q); `compression` 1.8.2 (GHSA-vc2v-76pw-4v95). Build-time tooling of the documentation site only; nothing in the deployed stack changes.
 
 **Known issues:**
 
--   The documentation site lockfile keeps `http-cache-semantics` 4.2.0 and `braces` 3.0.3, which carry High advisories with no patched release; both are build-time only.
+-   The documentation site lockfile keeps `http-cache-semantics` 4.2.0 (GHSA-ch52-4w7c-c8xp; its advisory names no patched version, and the 4.3.0 release of 2026-10-04 is younger than the repository's 7-day dependency intake floor) and `braces` 3.0.3 (GHSA-vfj7-8cjw-p6xm; no patched release). Both are build-time only.
 
 ### 2.6.4
 
