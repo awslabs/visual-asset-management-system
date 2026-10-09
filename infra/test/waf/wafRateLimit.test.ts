@@ -17,7 +17,6 @@ import {
     WAFScope,
     WafPolicyConfig,
 } from "../../lib/constructs/wafv2-basic-construct";
-import { API_CORS_ALLOW_HEADERS, API_CORS_ALLOW_METHODS } from "../../lib/helper/apiCorsHeaders";
 import { newTestApp } from "../support/testApp";
 
 const buildStack = (policy?: WafPolicyConfig, scope = WAFScope.REGIONAL): cdk.Stack => {
@@ -112,27 +111,17 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])("%s-scoped web ACL", (wa
     });
 
     /**
-     * Guards issue #400 part B. WAF answers a throttled request itself, so API Gateway's
-     * `GatewayResponseDefault4XX` CORS injection never runs for it. On the CloudFront topology
-     * `/api/*` is same-origin and the 429 is readable without these headers; on a cross-origin
-     * topology (ALB fronting, direct execute-api callers) a browser reports the 429 as a CORS
-     * failure (`TypeError: Failed to fetch`) without them and the web apiClient's 429 retry
-     * never sees the status. The allow-headers and allow-methods values must be the API's own,
-     * so they are compared against the constants the API construct itself emits.
+     * Guards issue #400 part B. The REGIONAL ACL is associated with the REST API stage, and API
+     * Gateway renders a WAF block through its WAF_FILTERED gateway response, which the API's
+     * `GatewayResponseDefault4XX` already decorates with `Access-Control-Allow-Origin` and
+     * `Access-Control-Allow-Headers`. So a browser can read the 429 in every topology; what it
+     * cannot read without help is `Retry-After` — the hint `web/src/services/apiClient.ts` sleeps
+     * on before its single retry — because `Retry-After` is not CORS-safelisted. The WAF response
+     * therefore carries exactly `Retry-After` and `Access-Control-Expose-Headers: Retry-After`,
+     * and nothing API Gateway already adds.
      */
-    test("the 429 custom response carries CORS headers and a Retry-After the client can read", () => {
-        // Positive control for the shared constants: an emptied or truncated constant would
-        // make the equality below pass vacuously for both the API and the WAF.
-        expect(API_CORS_ALLOW_HEADERS.split(",")).toEqual(
-            expect.arrayContaining(["Authorization", "Content-Type"])
-        );
-        expect(API_CORS_ALLOW_METHODS.split(",")).toEqual(
-            expect.arrayContaining(["GET", "POST", "OPTIONS"])
-        );
+    test("the 429 custom response carries exactly Retry-After and its CORS exposure", () => {
         const expectedHeaders: Record<string, string> = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": API_CORS_ALLOW_HEADERS,
-            "Access-Control-Allow-Methods": API_CORS_ALLOW_METHODS,
             "Access-Control-Expose-Headers": "Retry-After",
             "Retry-After": "1",
         };
@@ -140,6 +129,7 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])("%s-scoped web ACL", (wa
             const customResponse = getRule(template, policyRule.name).Action.Block.CustomResponse;
             const headers: Array<{ Name: string; Value: string }> = customResponse.ResponseHeaders;
             expect(Array.isArray(headers)).toBe(true);
+            expect(headers).toHaveLength(Object.keys(expectedHeaders).length);
             const byName = Object.fromEntries(headers.map((h) => [h.Name, h.Value]));
             expect(byName).toEqual(expectedHeaders);
             // Header values are literals: WAF does not expand variables in custom response
@@ -153,6 +143,35 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])("%s-scoped web ACL", (wa
             expect(byName["Content-Type"]).toBeUndefined();
             // Still the registered JSON body, not a header-only response.
             expect(customResponse.CustomResponseBodyKey).toBe("VamsRateLimitBody");
+        });
+    });
+
+    /**
+     * The CORS allow headers must stay off the WAF response. API Gateway's gateway response
+     * already adds `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers` to every 4XX
+     * it renders, WAF blocks included; a second copy from WAF is appended to the first, the
+     * browser sees `Access-Control-Allow-Origin: *, *` and rejects the response — the 429 becomes
+     * unreadable cross-origin, which is the failure these headers were once added to prevent.
+     * `Access-Control-Allow-Methods` is kept off for the same reason of discipline: it matters
+     * only on a preflight, and a throttled OPTIONS can never be a successful preflight. The
+     * equality assertion above already excludes them; this guard names them so the reason
+     * survives a rewrite of that test.
+     */
+    test("the 429 custom response does not repeat the CORS allow headers API Gateway adds", () => {
+        const forbidden = [
+            "Access-Control-Allow-Origin",
+            "Access-Control-Allow-Headers",
+            "Access-Control-Allow-Methods",
+        ];
+        shippedRateRules.forEach((policyRule) => {
+            const headers: Array<{ Name: string; Value: string }> = getRule(
+                template,
+                policyRule.name
+            ).Action.Block.CustomResponse.ResponseHeaders;
+            const names = headers.map((h) => h.Name.toLowerCase());
+            forbidden.forEach((name) => {
+                expect(names).not.toContain(name.toLowerCase());
+            });
         });
     });
 
@@ -245,9 +264,9 @@ describe("Wafv2BasicConstruct rate-based rule construction", () => {
         });
         const customResponse = getRule(template, "R").Action.Block.CustomResponse;
         expect(customResponse.ResponseCode).toBe(503);
-        // The CORS headers are not tied to the 429 status: a configured code keeps them.
+        // The headers are not tied to the 429 status: a configured code keeps them.
         expect(customResponse.ResponseHeaders.map((h: { Name: string }) => h.Name)).toEqual(
-            expect.arrayContaining(["Access-Control-Allow-Origin", "Retry-After"])
+            expect.arrayContaining(["Access-Control-Expose-Headers", "Retry-After"])
         );
     });
 

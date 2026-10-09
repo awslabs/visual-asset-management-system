@@ -7,7 +7,6 @@ import * as cdk from "aws-cdk-lib";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { generateUniqueNameHash } from "../helper/security";
-import { API_CORS_ALLOW_HEADERS, API_CORS_ALLOW_METHODS } from "../helper/apiCorsHeaders";
 import { Construct } from "constructs";
 export enum WAFScope {
     CLOUDFRONT = "CLOUDFRONT",
@@ -22,27 +21,21 @@ const WAF_RATE_LIMIT_BODY_CONTENT = JSON.stringify({
     message: "Rate limit exceeded. Please retry shortly.",
 });
 
-// Headers on the throttle response. WAF answers a blocked request itself, before API Gateway,
-// so none of the CORS headers the API emits — on the OPTIONS preflight (buildOpenApiSpec.ts) or
-// on `GatewayResponseDefault4XX/5XX` (rest-api-gateway-construct.ts) — are added to it. On the
-// default CloudFront topology that does not matter: the web app calls `/api/*` on its own
-// distribution, so the request is same-origin and the browser reads the 429 without a CORS
-// check. Where the API is called cross-origin — the ALB topology (web app on the ALB host, API on
-// the execute-api host) or a client calling the execute-api endpoint directly from another
-// origin — a browser exposes the 429 only when the response carries CORS headers; otherwise the
-// web apiClient sees `TypeError: Failed to fetch` instead of the 429 it retries on. The
-// allow-headers and allow-methods values are the API's own (helper/apiCorsHeaders.ts), so the
-// two cannot drift. A throttled OPTIONS preflight still fails regardless of these headers: WAF
-// answers it before the API's MOCK integration, and a preflight needs a success status.
-// Retry-After is the delta the apiClient sleeps before its single retry — a short value is
-// right for a rule that counts over a 5-minute window — and Access-Control-Expose-Headers
-// is what lets a cross-origin caller read it (Retry-After is not CORS-safelisted). WAF custom
-// response headers are literal strings only, and WAF sets Content-Type itself from the body's
-// contentType, so it is not listed here.
+// Headers on the throttle response. The REGIONAL ACL is associated with the REST API stage, and
+// API Gateway renders a WAF block — this custom response included — through its WAF_FILTERED
+// gateway response, which `GatewayResponseDefault4XX` (rest-api-gateway-construct.ts) decorates
+// with the API's CORS allow headers (Access-Control-Allow-Origin, Access-Control-Allow-Headers)
+// on every 4XX it renders. A browser can therefore read the 429 in every topology, and the WAF
+// response must not repeat those headers: API Gateway appends WAF's copy to its own, the browser
+// sees `Access-Control-Allow-Origin: *, *` and rejects the response outright. Allow-Methods is
+// not needed either — it matters only on a preflight, and a throttled OPTIONS is answered by WAF
+// before the API's MOCK integration, so it can never be a successful preflight. What API Gateway
+// does not add is Retry-After, the delta the web apiClient sleeps before its single retry (a
+// short value is right for a rule that counts over a 5-minute window), and
+// Access-Control-Expose-Headers, which lets a cross-origin caller read it (Retry-After is not
+// CORS-safelisted). WAF custom response headers are literal strings only, and WAF sets
+// Content-Type itself from the body's contentType, so it is not listed here.
 const WAF_RATE_LIMIT_RESPONSE_HEADERS: ReadonlyArray<{ name: string; value: string }> = [
-    { name: "Access-Control-Allow-Origin", value: "*" },
-    { name: "Access-Control-Allow-Headers", value: API_CORS_ALLOW_HEADERS },
-    { name: "Access-Control-Allow-Methods", value: API_CORS_ALLOW_METHODS },
     { name: "Access-Control-Expose-Headers", value: "Retry-After" },
     { name: "Retry-After", value: "1" },
 ];
@@ -198,7 +191,8 @@ function buildRulesFromPolicy(
 
         // Throttle blocks return a real throttle status (429) with a JSON body, not the WAF
         // default 403 — so clients can tell rate-limiting apart from an auth/permission denial.
-        // The response carries CORS headers and Retry-After so a browser can read the status.
+        // The response carries Retry-After, exposed to cross-origin callers, so a client can honor
+        // the server's retry hint.
         const blockAction = {
             block: {
                 customResponse: {
