@@ -19,6 +19,19 @@ export interface VPCBuilderNestedStackProps extends cdk.StackProps {
 }
 
 /**
+ * The Amazon S3 interface endpoint service name in another Region, e.g. com.amazonaws.us-east-1.s3.
+ * The partition prefix comes from CDK's Region table (the VPC endpoint service prefix minus its
+ * ".vpce" suffix), so no partition string is hardcoded. Exported for unit tests.
+ */
+export function crossRegionS3ServiceName(bucketRegion: string): string {
+    const vpcePrefix =
+        cdk.region_info.RegionInfo.get(bucketRegion).vpcEndpointServiceNamePrefix ||
+        cdk.region_info.Default.VPC_ENDPOINT_SERVICE_NAME_PREFIX;
+    const servicePrefix = vpcePrefix.replace(/\.vpce$/, "");
+    return `${servicePrefix}.${bucketRegion}.s3`;
+}
+
+/**
  * Default input properties
  */
 const defaultProps: Partial<VPCBuilderNestedStackProps> = {};
@@ -645,6 +658,31 @@ export class VPCBuilderNestedStack extends NestedStack {
                         vpc: this.vpc,
                         privateDnsEnabled: true,
                         service: ec2.InterfaceVpcEndpointAwsService.KMS_FIPS,
+                        subnets: { subnets: this.isolatedSubnets },
+                        securityGroups: [vpceSecurityGroup],
+                    });
+                }
+            }
+
+            // Amazon S3 interface endpoints for external asset buckets in other Regions. The S3
+            // gateway endpoint below serves the deployment Region only, so each other Region that
+            // holds an asset bucket gets a cross-Region interface endpoint (service in the bucket
+            // Region, endpoint in this VPC) with private DNS, which resolves that Region's
+            // s3.<region> hostnames to the endpoint from inside the VPC. Cross-Region AWS
+            // PrivateLink is offered in the commercial partition only; getConfig() rejects the flag
+            // elsewhere when a cross-Region bucket is configured.
+            if (props.config.app.useGlobalVpc.addCrossRegionS3Endpoints) {
+                for (const bucketRegion of Config.crossRegionExternalBucketRegions(
+                    props.config.app.assetBuckets.externalAssetBuckets,
+                    props.config.env.region
+                )) {
+                    new ec2.InterfaceVpcEndpoint(this, `S3CrossRegionEndpoint-${bucketRegion}`, {
+                        vpc: this.vpc,
+                        privateDnsEnabled: true,
+                        service: new ec2.InterfaceVpcEndpointService(
+                            crossRegionS3ServiceName(bucketRegion)
+                        ),
+                        serviceRegion: bucketRegion,
                         subnets: { subnets: this.isolatedSubnets },
                         securityGroups: [vpceSecurityGroup],
                     });
