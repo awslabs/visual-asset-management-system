@@ -176,6 +176,7 @@ const COMMERCIAL: ConfigShape = {
             enabled: false,
             useForAllLambdas: false,
             addVpcEndpoints: true,
+            addCrossRegionS3Endpoints: true,
             optionalExternalVpcId: null,
             optionalExternalIsolatedSubnetIds: null,
             optionalExternalPrivateSubnetIds: null,
