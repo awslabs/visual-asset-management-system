@@ -17,6 +17,7 @@ import {
     WAFScope,
     WafPolicyConfig,
 } from "../../lib/constructs/wafv2-basic-construct";
+import { API_CORS_ALLOW_HEADERS, API_CORS_ALLOW_METHODS } from "../../lib/helper/apiCorsHeaders";
 import { newTestApp } from "../support/testApp";
 
 const buildStack = (policy?: WafPolicyConfig, scope = WAFScope.REGIONAL): cdk.Stack => {
@@ -112,17 +113,26 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])("%s-scoped web ACL", (wa
 
     /**
      * Guards issue #400 part B. WAF answers a throttled request itself, so API Gateway's
-     * `GatewayResponseDefault4XX` CORS injection never runs for it; without these headers a
-     * browser reports the 429 as a CORS failure (`TypeError: Failed to fetch`) and the web
-     * apiClient's 429 retry never sees the status. The allow-headers value must stay identical
-     * to the one `rest-api-gateway-construct.ts` emits on its gateway responses.
+     * `GatewayResponseDefault4XX` CORS injection never runs for it. On the CloudFront topology
+     * `/api/*` is same-origin and the 429 is readable without these headers; on a cross-origin
+     * topology (ALB fronting, direct execute-api callers) a browser reports the 429 as a CORS
+     * failure (`TypeError: Failed to fetch`) without them and the web apiClient's 429 retry
+     * never sees the status. The allow-headers and allow-methods values must be the API's own,
+     * so they are compared against the constants the API construct itself emits.
      */
     test("the 429 custom response carries CORS headers and a Retry-After the client can read", () => {
+        // Positive control for the shared constants: an emptied or truncated constant would
+        // make the equality below pass vacuously for both the API and the WAF.
+        expect(API_CORS_ALLOW_HEADERS.split(",")).toEqual(
+            expect.arrayContaining(["Authorization", "Content-Type"])
+        );
+        expect(API_CORS_ALLOW_METHODS.split(",")).toEqual(
+            expect.arrayContaining(["GET", "POST", "OPTIONS"])
+        );
         const expectedHeaders: Record<string, string> = {
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers":
-                "Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin",
-            "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,HEAD,OPTIONS",
+            "Access-Control-Allow-Headers": API_CORS_ALLOW_HEADERS,
+            "Access-Control-Allow-Methods": API_CORS_ALLOW_METHODS,
             "Access-Control-Expose-Headers": "Retry-After",
             "Retry-After": "1",
         };

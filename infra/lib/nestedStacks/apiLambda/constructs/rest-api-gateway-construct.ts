@@ -19,6 +19,7 @@ import { RouteRegistry } from "../apiRouteRegistry";
 import { buildOpenApiSpec } from "./buildOpenApiSpec";
 import { buildApiGatewayAuthorizerRestFunction } from "../../../lambdaBuilder/authFunctions";
 import { generateUniqueNameHash } from "../../../helper/security";
+import { API_CORS_ALLOW_HEADERS, API_CORS_ALLOW_METHODS } from "../../../helper/apiCorsHeaders";
 import { AmplifyConfigLambdaConstruct } from "./amplify-config-lambda-construct";
 import { VamsVersionLambdaConstruct } from "./vams-version-lambda-construct";
 import { samlSettings } from "../../../../config/saml-config";
@@ -206,9 +207,8 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             partition: Partition(),
             cors: {
                 allowOrigins: "*",
-                allowHeaders:
-                    "Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin",
-                allowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD",
+                allowHeaders: API_CORS_ALLOW_HEADERS,
+                allowMethods: API_CORS_ALLOW_METHODS,
             },
             endpointType: apiGatewayRest.endpointType,
             vpcEndpointIds: apiGatewayVpcEndpointId ? [apiGatewayVpcEndpointId] : undefined,
@@ -275,8 +275,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         // so cross-origin callers can read the real status.
         const gatewayResponseCorsHeaders = {
             "Access-Control-Allow-Origin": "'*'",
-            "Access-Control-Allow-Headers":
-                "'Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin'",
+            "Access-Control-Allow-Headers": `'${API_CORS_ALLOW_HEADERS}'`,
         };
         new apigw.GatewayResponse(this, "GatewayResponseDefault4XX", {
             restApi: this.restApi,

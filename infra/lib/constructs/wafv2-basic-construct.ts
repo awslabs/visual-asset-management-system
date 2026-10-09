@@ -7,6 +7,7 @@ import * as cdk from "aws-cdk-lib";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { generateUniqueNameHash } from "../helper/security";
+import { API_CORS_ALLOW_HEADERS, API_CORS_ALLOW_METHODS } from "../helper/apiCorsHeaders";
 import { Construct } from "constructs";
 export enum WAFScope {
     CLOUDFRONT = "CLOUDFRONT",
@@ -22,11 +23,17 @@ const WAF_RATE_LIMIT_BODY_CONTENT = JSON.stringify({
 });
 
 // Headers on the throttle response. WAF answers a blocked request itself, before API Gateway,
-// so the CORS headers the API injects on its own gateway responses
-// (`GatewayResponseDefault4XX/5XX` in rest-api-gateway-construct.ts) are never added to it.
-// Without them a cross-origin browser call sees a CORS failure — `TypeError: Failed to fetch`
-// in the web apiClient — instead of the 429 it retries on. The allow-headers value is the
-// list the API's gateway responses emit; the allow-methods value is the set the API serves.
+// so none of the CORS headers the API emits — on the OPTIONS preflight (buildOpenApiSpec.ts) or
+// on `GatewayResponseDefault4XX/5XX` (rest-api-gateway-construct.ts) — are added to it. On the
+// default CloudFront topology that does not matter: the web app calls `/api/*` on its own
+// distribution, so the request is same-origin and the browser reads the 429 without a CORS
+// check. Where the API is called cross-origin — the ALB topology (web app on the ALB host, API on
+// the execute-api host) or a client calling the execute-api endpoint directly from another
+// origin — a browser exposes the 429 only when the response carries CORS headers; otherwise the
+// web apiClient sees `TypeError: Failed to fetch` instead of the 429 it retries on. The
+// allow-headers and allow-methods values are the API's own (helper/apiCorsHeaders.ts), so the
+// two cannot drift. A throttled OPTIONS preflight still fails regardless of these headers: WAF
+// answers it before the API's MOCK integration, and a preflight needs a success status.
 // Retry-After is the delta the apiClient sleeps before its single retry — a short value is
 // right for a rule that counts over a 5-minute window — and Access-Control-Expose-Headers
 // is what lets a cross-origin caller read it (Retry-After is not CORS-safelisted). WAF custom
@@ -34,11 +41,8 @@ const WAF_RATE_LIMIT_BODY_CONTENT = JSON.stringify({
 // contentType, so it is not listed here.
 const WAF_RATE_LIMIT_RESPONSE_HEADERS: ReadonlyArray<{ name: string; value: string }> = [
     { name: "Access-Control-Allow-Origin", value: "*" },
-    {
-        name: "Access-Control-Allow-Headers",
-        value: "Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin",
-    },
-    { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,DELETE,HEAD,OPTIONS" },
+    { name: "Access-Control-Allow-Headers", value: API_CORS_ALLOW_HEADERS },
+    { name: "Access-Control-Allow-Methods", value: API_CORS_ALLOW_METHODS },
     { name: "Access-Control-Expose-Headers", value: "Retry-After" },
     { name: "Retry-After", value: "1" },
 ];
