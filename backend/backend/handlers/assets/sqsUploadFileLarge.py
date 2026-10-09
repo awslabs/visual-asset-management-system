@@ -15,7 +15,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from common.dynamodb import to_update_expr
-from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource
+from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, register_bucket_region
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -990,6 +990,12 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
     
     try:
         logger.info(f"Starting large file processing - {correlation_str}")
+
+        # The message names each bucket's Region, so the Region-routing S3 client signs for it
+        # without a buckets-table lookup; a message queued without the fields falls back to the
+        # lookup.
+        register_bucket_region(file_info.get('bucketName'), file_info.get('bucketRegion'))
+        register_bucket_region(file_info.get('sourceBucketName'), file_info.get('sourceBucketRegion'))
         
         # Step 1: Complete multipart upload at temporary location
         logger.info(f"Step 1: Completing multipart upload - {correlation_str}")

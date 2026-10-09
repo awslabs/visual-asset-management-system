@@ -42,7 +42,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
+from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields, bucket_region_for_name
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
@@ -1378,7 +1378,11 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         "tempS3Key": file.tempKey,
                         "finalS3Key": final_s3_key,
                         "bucketName": bucket_name,
+                        "bucketRegion": bucketDetails.get('bucketRegion'),
                         "sourceBucketName": source_bucket,
+                        "sourceBucketRegion": (bucketDetails.get('bucketRegion')
+                                               if source_bucket == bucket_name
+                                               else bucket_region_for_name(source_bucket)),
                         "databaseId": databaseId,
                         "assetId": assetId,
                         "uploadId": uploadId,
@@ -1966,6 +1970,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     "tempS3Key": temp_s3_key,
                     "finalS3Key": final_s3_key,
                     "bucketName": bucket_name,
+                    "bucketRegion": bucketDetails.get('bucketRegion'),
                     "databaseId": databaseId,
                     "assetId": assetId,
                     "uploadId": uploadId,
