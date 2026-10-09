@@ -20,6 +20,8 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: the override set is pinned by `infra/test/waf/wafCommonRuleSetOverrides.test.ts`; the per-rule rationale is in the configuration reference under "WAF rule policy".
 -   **CDK** The AWS WAF rate-based rule's `429` custom response carries `Access-Control-Allow-Origin`, `Access-Control-Allow-Headers`, `Access-Control-Allow-Methods`, `Access-Control-Expose-Headers`, and `Retry-After: 1` headers, so a browser surfaces the real `429` to the web application — which retries after `Retry-After` — instead of a CORS failure (`TypeError: Failed to fetch`). ([#400](https://github.com/awslabs/visual-asset-management-system/issues/400))
 -   **Assets** The asset listings (`GET /database/{databaseId}/assets` and `GET /assets`) enrich each page with batched reads instead of two DynamoDB reads per asset: current-version rows are fetched with `BatchGetItem` in chunks of 100 (unprocessed keys re-requested with bounded exponential backoff, the remainder read individually), and bucket details are resolved once per distinct bucket on the page. The response shape is unchanged. (issue #389)
+-   **Security** Documentation site build dependencies updated to resolve security advisories: `tinypool` 2.1.2 (pinned through an npm `overrides` entry because `@docusaurus/core` 3.10.2 declares `^1.x`, which has no patched release), `shell-quote` 1.11.0, `proxy-addr` 2.0.8, `source-map-js` 1.2.2 and `compression` 1.8.2. These are build-time tooling of the documentation site; nothing in the deployed VAMS stack changes.
+    -   Note: remove the `tinypool` override when `@docusaurus/core` moves to `tinypool` 2.x.
 
 ### Chores
 
