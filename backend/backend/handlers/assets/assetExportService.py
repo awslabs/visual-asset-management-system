@@ -1514,6 +1514,17 @@ def process_asset_batch(
                 }
                 export_files.append(export_file)
 
+            # The refusal is recorded once per asset so the attempt has a server-side trace, the
+            # way the dedicated download route's refusal does. Identifiers and a count only: the
+            # line carries no file key and no payload value.
+            if request_model.generatePresignedUrls and not distributable:
+                withheld_count = sum(
+                    1 for file in base_files_list
+                    if not file['isFolder'] and not file.get('isArchived', False))
+                logger.info(
+                    f"Presigned URLs withheld for non-distributable asset {asset['assetId']} "
+                    f"in database {asset['databaseId']}: {withheld_count} file(s) not signed")
+
             # AUDIT LOG: File download - one entry per file that received a download URL, in a
             # single batched CloudWatch write per asset.
             if signed_files:

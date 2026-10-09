@@ -19,8 +19,15 @@ export spanning linked assets with mixed flags keeps exporting all of them:
 The audit assertions check the file list the helper is handed, not merely that it was called,
 because a call carrying folders or archived files would record downloads that never happened.
 `generatePresignedUrls` false is the control: no URL and no audit entry, unchanged.
+
+A refusal is also logged, once per non-distributable asset, naming the database, the asset and
+how many files went unsigned -- never a file key -- so the attempt has a server-side trace the
+way the download route's refusal does. Two further guards pin the gate's place in the order of
+controls: a Casbin-refused linked asset is never signed whatever its flag, and the stored flag
+is read with the same truthiness rule `downloadAsset.py` applies.
 """
 
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -91,12 +98,19 @@ class _Spies:
     def __init__(self):
         self.sign = MagicMock(return_value=_SIGNED_URL)
         self.audit = MagicMock(return_value=None)
+        self.log = MagicMock()
 
 
-def _patches(m, assets, spies, listings=None):
-    """Stub every read except the code under test; the signer and the audit helper are spies."""
+def _patches(m, assets, spies, listings=None, enforce=None):
+    """Stub every read except the code under test; the signer, the audit helper and the logger are spies.
+
+    `enforce` replaces the Casbin verdict (default: grant every asset) with a callable of
+    (asset, action), so a batch can carry an asset the enforcer refuses.
+    """
     enforcer = MagicMock()
     enforcer.return_value.enforce.return_value = True
+    if enforce is not None:
+        enforcer.return_value.enforce.side_effect = enforce
     details = {f"{_DB}:{asset['assetId']}": asset for asset in assets}
     listings = listings or {asset['assetId']: _listing(asset['assetId']) for asset in assets}
 
@@ -122,15 +136,25 @@ def _patches(m, assets, spies, listings=None):
         patch.object(m, "get_asset_metadata", MagicMock(return_value={})),
         patch.object(m, "generate_presigned_url", spies.sign),
         patch.object(m, "log_file_download_bulk", spies.audit),
+        patch.object(m, "logger", spies.log),
     ]
 
 
-def _run_batch(m, assets, spies, event=_EVENT, **request_overrides):
+def _entries_by_asset(exported):
+    """Key a batch's entries by asset id.
+
+    An entry Casbin refused carries only `assetId`, `databaseId` and `unauthorizedAsset`; an
+    exported one carries the lower-case `assetid` of the export model.
+    """
+    return {entry.get('assetid', entry.get('assetId')): entry for entry in exported}
+
+
+def _run_batch(m, assets, spies, event=_EVENT, enforce=None, **request_overrides):
     identifiers = [{'databaseId': _DB, 'assetId': asset['assetId'], 'isRoot': index == 0}
                    for index, asset in enumerate(assets)]
     request_model = m.AssetExportRequestModel(
         includeFileMetadata=False, includeAssetMetadata=False, **request_overrides)
-    patches = _patches(m, assets, spies)
+    patches = _patches(m, assets, spies, enforce=enforce)
     for one in patches:
         one.start()
     try:
@@ -139,7 +163,7 @@ def _run_batch(m, assets, spies, event=_EVENT, **request_overrides):
     finally:
         for one in reversed(patches):
             one.stop()
-    return {entry['assetid']: entry for entry in exported}
+    return _entries_by_asset(exported)
 
 
 def _run_export(m, assets, spies, event=_EVENT, **request_overrides):
@@ -163,7 +187,7 @@ def _run_export(m, assets, spies, event=_EVENT, **request_overrides):
     finally:
         for one in reversed(patches):
             one.stop()
-    return {entry['assetid']: entry for entry in response['assets']}
+    return _entries_by_asset(response['assets'])
 
 
 def _urls(entry):
@@ -178,6 +202,11 @@ def _audit_calls_by_asset(spies):
         assert asset_id not in by_asset, f"two audit writes for {asset_id}: {spies.audit.call_args_list}"
         by_asset[asset_id] = (event, database_id, file_entries, custom_data)
     return by_asset
+
+
+def _info_lines(spies):
+    """The message of every info-level line the handler emitted, rendered as the logger saw it."""
+    return [str(call.args[0]) for call in spies.log.info.call_args_list]
 
 
 @pytest.mark.unit
@@ -354,6 +383,110 @@ class TestLinkedAssetsWithMixedFlags:
             assert database_id == _DB
             assert [entry["filePath"] for entry in file_entries] == _live_keys(asset_id), file_entries
             assert custom_data == {"downloadType": "export"}
+
+
+@pytest.mark.unit
+class TestCasbinDenialOutranksTheDistributableFlag:
+    def test_a_denied_linked_asset_gets_no_url_and_no_audit_write_even_when_distributable(self):
+        """Tier-2 authorization is decided before the flag is read.
+
+        A linked asset Casbin refuses is reported as unauthorized and never listed, so however it
+        is flagged it is never signed and never audited. Today that holds structurally (the
+        refusal keeps the asset out of the worker); this pins it against a reordering.
+        """
+        m = _load_asset_export_service()
+        spies = _Spies()
+        assets = [_asset_item(_ASSET, distributable=True), _asset_item(_OTHER_ASSET, distributable=True)]
+
+        exported = _run_batch(
+            m, assets, spies, generatePresignedUrls=True,
+            enforce=lambda asset, action: asset['assetId'] != _OTHER_ASSET)
+
+        assert set(exported) == {_ASSET, _OTHER_ASSET}, exported.keys()
+        denied = exported[_OTHER_ASSET]
+        assert denied.get('unauthorizedAsset') is True, denied
+        assert 'files' not in denied, denied
+        assert _urls(exported[_ASSET]) == {
+            '/model.glb': _SIGNED_URL, '/texture.png': _SIGNED_URL}, _urls(exported[_ASSET])
+
+        assert sorted(call.args[1] for call in spies.sign.call_args_list) == [
+            f"{_DB}/{_ASSET}/model.glb", f"{_DB}/{_ASSET}/texture.png"]
+        assert set(_audit_calls_by_asset(spies)) == {_ASSET}, spies.audit.call_args_list
+
+
+@pytest.mark.unit
+class TestStoredFlagTruthinessMatchesTheDownloadRoute:
+    @pytest.mark.parametrize("stored", [None, 0, "", "false", "true", 1])
+    def test_the_export_signs_exactly_when_download_asset_would_allow(self, stored):
+        """downloadAsset.py refuses iff `not asset.get('isDistributable', False)`.
+
+        The stored value is whatever a writer put there; the two routes must agree on every
+        shape, including the string "false", which Python reads as truthy and both routes
+        therefore treat as distributable. The entry's `isdistributable` reports the same verdict.
+        """
+        m = _load_asset_export_service()
+        spies = _Spies()
+        asset = _asset_item()
+        asset['isDistributable'] = stored
+        download_route_allows = not (not asset.get('isDistributable', False))
+
+        exported = _run_batch(m, [asset], spies, generatePresignedUrls=True)
+
+        entry = exported[_ASSET]
+        assert entry['isdistributable'] is download_route_allows, (stored, entry['isdistributable'])
+        if download_route_allows:
+            assert _urls(entry) == {'/model.glb': _SIGNED_URL, '/texture.png': _SIGNED_URL}, _urls(entry)
+            assert set(_audit_calls_by_asset(spies)) == {_ASSET}
+        else:
+            assert all(url is None for url in _urls(entry).values()), _urls(entry)
+            spies.sign.assert_not_called()
+            spies.audit.assert_not_called()
+
+
+@pytest.mark.unit
+class TestWithheldUrlsAreLogged:
+    """The refusal leaves a server-side trace, the way the download route's refusal does.
+
+    The line is found by the identifiers it must name, not by its wording, so a rephrasing
+    does not fail these tests while a line that drops an identifier, adds a file key, or
+    fires for the wrong asset does.
+    """
+
+    def test_one_info_line_per_non_distributable_asset_naming_ids_and_a_count_only(self):
+        """A mixed batch: exactly one line for the refused asset, none for the signed one.
+
+        The count is the files that would have been signed -- the two live files; the folder
+        and the archived file were never candidates -- and no file key or name appears, so the
+        line carries nothing safeLogger's key-driven redaction would miss.
+        """
+        m = _load_asset_export_service()
+        spies = _Spies()
+        assets = [_asset_item(_ASSET, distributable=False), _asset_item(_OTHER_ASSET, distributable=True)]
+
+        _run_batch(
+            m, assets, spies,
+            generatePresignedUrls=True, includeFolderFiles=True, includeArchivedFiles=True)
+
+        lines = _info_lines(spies)
+        withheld = [line for line in lines if _ASSET in line]
+        assert len(withheld) == 1, lines
+        line = withheld[0]
+        assert _DB in line, line
+        without_ids = line.replace(_ASSET, "").replace(_DB, "")
+        assert re.search(r"\b2\b", without_ids), line
+        for row in _listing(_ASSET):
+            assert row['key'] not in line, line
+            assert row['fileName'] not in line, line
+        assert [line for line in lines if _OTHER_ASSET in line] == [], lines
+
+    def test_no_line_when_urls_were_not_requested(self):
+        """Nothing was withheld: the caller did not ask for URLs, so the flag was never the reason."""
+        m = _load_asset_export_service()
+        spies = _Spies()
+
+        _run_batch(m, [_asset_item(distributable=False)], spies)
+
+        assert [line for line in _info_lines(spies) if _ASSET in line] == [], _info_lines(spies)
 
 
 @pytest.mark.unit
