@@ -21,6 +21,28 @@ const WAF_RATE_LIMIT_BODY_CONTENT = JSON.stringify({
     message: "Rate limit exceeded. Please retry shortly.",
 });
 
+// Headers on the throttle response. WAF answers a blocked request itself, before API Gateway,
+// so the CORS headers the API injects on its own gateway responses
+// (`GatewayResponseDefault4XX/5XX` in rest-api-gateway-construct.ts) are never added to it.
+// Without them a cross-origin browser call sees a CORS failure — `TypeError: Failed to fetch`
+// in the web apiClient — instead of the 429 it retries on. The allow-headers value is the
+// list the API's gateway responses emit; the allow-methods value is the set the API serves.
+// Retry-After is the delta the apiClient sleeps before its single retry — a short value is
+// right for a rule that counts over a 5-minute window — and Access-Control-Expose-Headers
+// is what lets a cross-origin caller read it (Retry-After is not CORS-safelisted). WAF custom
+// response headers are literal strings only, and WAF sets Content-Type itself from the body's
+// contentType, so it is not listed here.
+const WAF_RATE_LIMIT_RESPONSE_HEADERS: ReadonlyArray<{ name: string; value: string }> = [
+    { name: "Access-Control-Allow-Origin", value: "*" },
+    {
+        name: "Access-Control-Allow-Headers",
+        value: "Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin",
+    },
+    { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,DELETE,HEAD,OPTIONS" },
+    { name: "Access-Control-Expose-Headers", value: "Retry-After" },
+    { name: "Retry-After", value: "1" },
+];
+
 // The aggregation key every rate-based rule counts on, in both the CLOUDFRONT-scoped and the
 // REGIONAL ACL: the request-origin address, which WAF takes from the connection and is therefore
 // present on every request and not settable by the caller.
@@ -38,10 +60,16 @@ export interface WafPolicyConfig {
         priority: number;
         block?: boolean; // true => the group's own block actions apply; false => count-only
         // Per-rule action overrides within the managed group. Use to set a specific rule to
-        // "count" while the rest of the group stays in block mode — e.g. SizeRestrictions_BODY,
-        // which would otherwise block VAMS's large multi-part upload initialize/complete bodies,
-        // and SizeRestrictions_QUERYSTRING, which caps a query string at 2048 bytes and would
-        // otherwise block the SuperSplat viewer's presigned-URL "?load=" parameter.
+        // "count" while the rest of the group stays in block mode. The shipped policy counts the
+        // Common Rule Set rules that match ordinary VAMS requests: the two size rules
+        // (SizeRestrictions_BODY for large multi-part upload bodies, SizeRestrictions_QUERYSTRING
+        // for the SuperSplat viewer's presigned-URL "?load=" parameter) and the six rules that
+        // fire on asset file keys carried in the URI path, query string, or JSON body —
+        // SizeRestrictions_URIPATH (encoded keys over 1024 bytes on the stream routes),
+        // RestrictedExtensions_URIPATH / _QUERYARGUMENTS (file names ending .log, .ini, .cfg,
+        // .conf, ... that the backend upload blocklist admits), and GenericLFI_URIPATH /
+        // _QUERYARGUMENTS / _BODY (any encoded "../"; the backend rejects ".." path segments
+        // itself and resolves keys against S3, not a local filesystem).
         ruleActionOverrides?: Array<{ name: string; action: "count" | "block" | "allow" }>;
     }>;
     rateBasedRules?: Array<{
@@ -166,11 +194,13 @@ function buildRulesFromPolicy(
 
         // Throttle blocks return a real throttle status (429) with a JSON body, not the WAF
         // default 403 — so clients can tell rate-limiting apart from an auth/permission denial.
+        // The response carries CORS headers and Retry-After so a browser can read the status.
         const blockAction = {
             block: {
                 customResponse: {
                     responseCode: rateRule.blockResponseCode ?? WAF_RATE_LIMIT_RESPONSE_CODE,
                     customResponseBodyKey: WAF_RATE_LIMIT_BODY_KEY,
+                    responseHeaders: WAF_RATE_LIMIT_RESPONSE_HEADERS.map((h) => ({ ...h })),
                 },
             },
         };

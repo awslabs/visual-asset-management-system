@@ -111,6 +111,58 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])("%s-scoped web ACL", (wa
     });
 
     /**
+     * Guards issue #400 part B. WAF answers a throttled request itself, so API Gateway's
+     * `GatewayResponseDefault4XX` CORS injection never runs for it; without these headers a
+     * browser reports the 429 as a CORS failure (`TypeError: Failed to fetch`) and the web
+     * apiClient's 429 retry never sees the status. The allow-headers value must stay identical
+     * to the one `rest-api-gateway-construct.ts` emits on its gateway responses.
+     */
+    test("the 429 custom response carries CORS headers and a Retry-After the client can read", () => {
+        const expectedHeaders: Record<string, string> = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers":
+                "Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin",
+            "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,HEAD,OPTIONS",
+            "Access-Control-Expose-Headers": "Retry-After",
+            "Retry-After": "1",
+        };
+        shippedRateRules.forEach((policyRule) => {
+            const customResponse = getRule(template, policyRule.name).Action.Block.CustomResponse;
+            const headers: Array<{ Name: string; Value: string }> = customResponse.ResponseHeaders;
+            expect(Array.isArray(headers)).toBe(true);
+            const byName = Object.fromEntries(headers.map((h) => [h.Name, h.Value]));
+            expect(byName).toEqual(expectedHeaders);
+            // Header values are literals: WAF does not expand variables in custom response
+            // headers, so a token or placeholder here would be sent to the browser verbatim.
+            headers.forEach((h) => {
+                expect(typeof h.Value).toBe("string");
+                expect(h.Value).not.toMatch(/[${}]/);
+            });
+            // WAF sets Content-Type from the registered body's contentType and rejects a
+            // custom response that also names it.
+            expect(byName["Content-Type"]).toBeUndefined();
+            // Still the registered JSON body, not a header-only response.
+            expect(customResponse.CustomResponseBodyKey).toBe("VamsRateLimitBody");
+        });
+    });
+
+    test("Retry-After is a delta-seconds value the web apiClient's parser accepts", () => {
+        // `parseRetryAfterMs` in web/src/services/apiClient.ts reads Number(header) first; a
+        // non-numeric value would fall through to Date.parse and then the 2 s default.
+        shippedRateRules.forEach((policyRule) => {
+            const headers: Array<{ Name: string; Value: string }> = getRule(
+                template,
+                policyRule.name
+            ).Action.Block.CustomResponse.ResponseHeaders;
+            const retryAfter = headers.find((h) => h.Name === "Retry-After");
+            expect(retryAfter).toBeDefined();
+            const seconds = Number(retryAfter?.Value);
+            expect(Number.isInteger(seconds)).toBe(true);
+            expect(seconds).toBeGreaterThan(0);
+        });
+    });
+
+    /**
      * No emitted rule may key on a request header. Neither fallback behavior is a way out:
      * WAF skips a forwarded-IP rule entirely for a request that carries no such header (a
      * missing header never reaches the fallback), so NO_MATCH exempts every direct execute-api
@@ -181,7 +233,12 @@ describe("Wafv2BasicConstruct rate-based rule construction", () => {
         const template = buildTemplate({
             rateBasedRules: [{ name: "R", priority: 10, limit: 2000, blockResponseCode: 503 }],
         });
-        expect(getRule(template, "R").Action.Block.CustomResponse.ResponseCode).toBe(503);
+        const customResponse = getRule(template, "R").Action.Block.CustomResponse;
+        expect(customResponse.ResponseCode).toBe(503);
+        // The CORS headers are not tied to the 429 status: a configured code keeps them.
+        expect(customResponse.ResponseHeaders.map((h: { Name: string }) => h.Name)).toEqual(
+            expect.arrayContaining(["Access-Control-Allow-Origin", "Retry-After"])
+        );
     });
 
     test("no custom-response body is registered when there are no rate rules", () => {
