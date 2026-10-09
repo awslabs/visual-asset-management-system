@@ -17,16 +17,12 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_streamed
-from common.s3 import validateUnallowedFileExtensionAndContentType
+from common.s3 import validateUnallowedFileExtensionAndContentType, region_routing_s3_client, bucket_region_fields
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from handlers.assets.assetVersions import (
     resolve_file_version_from_asset_version,
     resolve_asset_version_id_from_alias
 )
-
-# Set environment variable for S3 client configuration
-# 'regional' set to add region descriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional"
 
 # Standardized retry configuration merged with existing S3 config
 s3_config = Config(
@@ -38,7 +34,7 @@ s3_config = Config(
     }
 )
 
-s3_client = boto3.client('s3', config=s3_config)
+s3_client = region_routing_s3_client()
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 logger = safeLogger(service_name="StreamAsset")
 
@@ -91,7 +87,8 @@ def get_default_bucket_details(bucketId):
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")

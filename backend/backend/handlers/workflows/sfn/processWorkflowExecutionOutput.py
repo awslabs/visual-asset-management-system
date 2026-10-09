@@ -28,7 +28,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import success, validation_error, VAMSGeneralErrorResponse
-from common.s3 import validateUnallowedFileExtensionAndContentType, list_all_objects
+from common.s3 import validateUnallowedFileExtensionAndContentType, list_all_objects, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import AssetUploadTableModel
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
@@ -97,8 +97,8 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
                    max_pool_connections=MAX_PARALLEL_S3_WORKERS)
 
-s3c = boto3.client('s3', config=s3_config)
-s3r = boto3.resource('s3', config=s3_config)
+s3c = region_routing_s3_client()
+s3r = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 client = boto3.client('lambda', config=retry_config)
 logs_client = boto3.client('logs', config=retry_config)
@@ -153,7 +153,8 @@ def get_default_bucket_details(bucketId):
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")

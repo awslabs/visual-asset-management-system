@@ -3,6 +3,7 @@
 
 import os
 import boto3
+from common.s3 import region_routing_s3_client
 import json
 from botocore.config import Config
 from handlers.authz import CasbinEnforcer
@@ -27,7 +28,7 @@ from models.assetsV3 import (
 region = os.environ['AWS_REGION']
 s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'},
                    retries={'max_attempts': 5, 'mode': 'adaptive'})
-s3 = boto3.client('s3', region_name=region, config=s3_config)
+s3 = region_routing_s3_client()
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 lambda_client = boto3.client('lambda', config=retry_config)

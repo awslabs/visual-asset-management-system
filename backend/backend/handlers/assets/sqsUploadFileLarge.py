@@ -15,7 +15,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from common.dynamodb import to_update_expr
-from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived
+from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -42,8 +42,8 @@ retry_config = Config(
     }
 )
 
-s3 = boto3.client('s3', config=retry_config)
-s3_resource = boto3.resource('s3', config=retry_config)
+s3 = region_routing_s3_client()
+s3_resource = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="SqsUploadFileLarge")

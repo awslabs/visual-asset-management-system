@@ -581,7 +581,9 @@ def get_buckets(query_params, claims_and_roles=None):
                 bucketId=deserialized_document.get('bucketId'),
                 bucketName=deserialized_document.get('bucketName', ''),
                 baseAssetsPrefix=deserialized_document.get('baseAssetsPrefix', ''),
-                isDefault=bool(deserialized_document.get('isDefault', False))
+                isDefault=bool(deserialized_document.get('isDefault', False)),
+                bucketRegion=deserialized_document.get('bucketRegion') or None,
+                bucketAccountId=deserialized_document.get('bucketAccountId') or None
             )
             items.append(bucket_model)
 

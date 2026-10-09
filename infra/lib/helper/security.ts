@@ -241,6 +241,16 @@ export function globalLambdaEnvironmentsAndPermissions(
         "DEFAULT_ROLE_NAME",
         config.app.authProvider.authorizerOptions?.defaultUserRoleName || ""
     );
+
+    // Whether the handler Lambdas run inside the VPC. In the VPC an asset bucket in another Region
+    // is reached through an Amazon S3 interface endpoint, which does not serve CopyObject between
+    // Regions, so the handlers stream such copies instead (common/s3.py copy_s3_object).
+    lambdaFunction.addEnvironment(
+        "VAMS_LAMBDAS_IN_VPC",
+        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+            ? "true"
+            : "false"
+    );
 }
 
 /**

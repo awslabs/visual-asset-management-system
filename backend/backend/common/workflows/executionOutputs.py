@@ -204,7 +204,7 @@ def _key_eq(attr, value):
 # ---------------------------------------------------------------------------
 
 def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, output_files_prefix,
-                                 current_output_files=None):
+                                 current_output_files=None, output_bucket_region=""):
     """Resolve the next pipeline's input FILE entries (the shadowing logic).
 
     original_inputs: list of self-locating entries {relativePath, databaseId, assetId,
@@ -218,7 +218,10 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
         located in the output bucket.
 
     current_output_files: the output-files listing when the caller already has it (the attribution
-        step in the same invocation lists the identical set), so the listing is not repeated."""
+        step in the same invocation lists the identical set), so the listing is not repeated.
+
+    output_bucket_region: the output bucket's Region, carried as bucketRegion on every entry that
+        points into it (shadowed inputs and new output files); an original input keeps its own."""
     output_files = (current_output_files if current_output_files is not None
                     else list_current_output_files(s3_client, output_bucket, output_files_prefix))
     output_by_rel = {}
@@ -238,19 +241,23 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
                 rel, output_bucket, shadow["key"], shadow.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
                 asset_root_s3_key=entry.get("assetRootS3Key", ""),
-                aux_preview_prefix=entry.get("auxPreviewPrefix", "")))
+                aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
+                bucket_region=output_bucket_region))
         else:
             resolved.append(er.build_manifest_entry(
                 rel, entry.get("bucket", ""), entry.get("key", ""), entry.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
                 asset_root_s3_key=entry.get("assetRootS3Key", ""),
-                aux_preview_prefix=entry.get("auxPreviewPrefix", "")))
+                aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
+                bucket_region=entry.get("bucketRegion", ""),
+                bucket_account_id=entry.get("bucketAccountId", "")))
 
     # New output files (no matching original input path) become additional inputs, located in
     # the output bucket (no originating asset identity).
     for rel, f in output_by_rel.items():
         if rel not in seen_rel:
-            resolved.append(er.build_manifest_entry(rel, output_bucket, f["key"], f.get("versionId", "")))
+            resolved.append(er.build_manifest_entry(rel, output_bucket, f["key"], f.get("versionId", ""),
+                                                    bucket_region=output_bucket_region))
     return resolved
 
 
@@ -270,7 +277,8 @@ def build_resolved_manifest(s3_client, original_inputs, output_bucket, output_fi
     ctx = envelope_context or {}
     resolved_files = resolve_manifest_input_files(
         s3_client, original_inputs, output_bucket, output_files_prefix,
-        current_output_files=current_output_files)
+        current_output_files=current_output_files,
+        output_bucket_region=(ctx.get("outputs") or {}).get("bucketRegion", ""))
     return er.build_manifest_envelope(
         input_files=resolved_files,
         input_metadata_s3_location=ctx.get("inputMetadataS3Location", ""),

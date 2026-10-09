@@ -66,6 +66,7 @@ from common.workflows.defaultBucket import (
     default_bucket_key,
     DefaultBucketNotFoundError,
 )
+from common.s3 import region_routing_s3_client
 from common.workflows.triggerTemplateValidation import (
     triggers_referencing_template,
     validate_template_not_breaking_triggers,
@@ -75,7 +76,7 @@ logger = safeLogger(service_name="PipelineTemplateService")
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-s3_client = boto3.client("s3", config=retry_config)
+s3_client = region_routing_s3_client()
 
 try:
     pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)

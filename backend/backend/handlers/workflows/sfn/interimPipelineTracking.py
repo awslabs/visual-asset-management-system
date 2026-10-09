@@ -38,12 +38,13 @@ from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 from common.workflows import executionValidation as ev
 from common.workflows import templateRender as tr
+from common.s3 import region_routing_s3_client
 from models.common import VAMSGeneralErrorResponse
 
 logger = safeLogger(service="InterimPipelineTracking")
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
-s3c = boto3.client('s3', config=retry_config)
+s3c = region_routing_s3_client()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 
 # The declared arity of a step that consumes no input files (models/pipelines.py inputFileArity).
@@ -295,6 +296,7 @@ def prepare_next_pipeline(body, current_output_files=None):
         "inputMetadataS3Location": next_metadata_location,
         "outputs": er.build_manifest_outputs(
             bucket=wf_exec_bucket,
+            bucket_region=os.environ["AWS_REGION"],
             files=er.run_bucket_key(base_prefix, body.get('outputFilesPrefixRelative', '')),
             previews=er.run_bucket_key(base_prefix, body.get('outputPreviewsPrefixRelative', '')),
             metadata=er.run_bucket_key(base_prefix, body.get('outputMetadataPrefixRelative', '')),

@@ -42,7 +42,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
+from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
@@ -50,10 +50,6 @@ from models.assetsV3 import (
     CompleteExternalUploadRequestModel, ExternalFileModel,
     AssetUploadTableModel
 )
-
-#Set environment variable for S3 client configuration
-#'regional' set to add region decriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional" 
 
 # Configure AWS clients with retry configuration
 region = os.environ['AWS_REGION']
@@ -77,8 +73,8 @@ s3_config = Config(
     max_pool_connections=MAX_PARALLEL_S3_WORKERS
 )
 
-s3 = boto3.client('s3', region_name=region, config=s3_config)
-s3_resource = boto3.resource('s3', region_name=region, config=s3_config)
+s3 = region_routing_s3_client()
+s3_resource = region_routing_s3_resource()
 lambda_client = boto3.client('lambda', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 dynamodb_client = boto3.client('dynamodb', config=s3_config)
@@ -268,7 +264,8 @@ def get_default_bucket_details(bucketId):
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
