@@ -36,7 +36,7 @@ from common.s3PathPatterns import (
 )
 from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL
 from common.dynamodb import to_update_expr
-from common.validators import validate
+from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -1062,11 +1062,18 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
                 if not is_valid:
                     raise VAMSGeneralErrorResponse(error_message)
 
+    # Get bucket details from asset's bucketId. Fetched ahead of the per-file checks because the
+    # key-length rule below reads each key as S3 will see it, which carries the bucket's asset prefix.
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucket_name = bucketDetails['bucketName']
+    baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
+
     # Every remaining per-file rule is checked here, before any upload is initiated. Each reads only
-    # relativeKey, file_size and uploadType, so none of it depends on the per-file work below. Run
-    # inside that loop instead, a rejection on the second or later file leaves the earlier files with
-    # multipart uploads already created in S3 and no upload record to find them by, so they linger
-    # until the bucket lifecycle rule expires them.
+    # relativeKey, file_size, uploadType and the asset's location, so none of it depends on the
+    # per-file work below. Run inside that loop instead, a rejection on the second or later file leaves
+    # the earlier files with multipart uploads already created in S3 and no upload record to find them
+    # by, so they linger until the bucket lifecycle rule expires them.
+    temp_s3_keys = []
     for file in request_model.files:
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
             raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
@@ -1079,6 +1086,29 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         # Validate file size for preview files
         if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
             raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
+
+        # Determine final S3 key based on upload type
+        if uploadType == "assetFile":
+            # Get the asset's base key from assetLocation
+            asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+            final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+        else:  # assetPreview
+            #We only want the filename and none of the path if there is a path
+            filename = os.path.basename(file.relativeKey)
+            final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
+
+        # Determine temporary S3 key by adding temp prefix to final key
+        temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+
+        # The request model bounded relativeKey; the keys S3 measures carry the asset prefix and, for
+        # the temporary object, the temp-uploads prefix as well, so a relativeKey inside the limit can
+        # resolve to a key S3 refuses. Refuse both forms here, with a generic message that does not echo
+        # the key, so S3's KeyTooLongError never surfaces as a 500 after an earlier file's multipart
+        # upload has already been created.
+        if exceeds_s3_object_key_limit(final_s3_key) or exceeds_s3_object_key_limit(temp_s3_key):
+            raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+
+        temp_s3_keys.append(temp_s3_key)
 
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
@@ -1094,28 +1124,10 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     # Process files
     file_responses = []
     total_parts = 0
-            
-    # Get bucket details from asset's bucketId
-    bucketDetails = get_default_bucket_details(asset['bucketId'])
-    bucket_name = bucketDetails['bucketName']
-    baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
-    
+
     # Every file has already passed validation above, so no rejection can occur once the first
     # multipart upload has been created.
-    for file in request_model.files:
-        # Determine final S3 key based on upload type
-        if uploadType == "assetFile":
-            # Get the asset's base key from assetLocation
-            asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-            final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
-        else:  # assetPreview
-            #We only want the filename and none of the path if there is a path
-            filename = os.path.basename(file.relativeKey)
-            final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
-            
-        # Determine temporary S3 key by adding temp prefix to final key
-        temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
-        
+    for file, temp_s3_key in zip(request_model.files, temp_s3_keys):
         # Calculate number of parts
         num_parts = calculate_num_parts(file.file_size, file.num_parts)
         total_parts += num_parts

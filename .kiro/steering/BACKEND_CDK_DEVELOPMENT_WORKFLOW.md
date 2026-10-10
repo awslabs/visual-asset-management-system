@@ -477,10 +477,13 @@ A new validator name is one `_VALIDATOR_DISPATCH` entry **plus** one `LEGITIMATE
 The file-key validators (`RELATIVE_FILE_PATH`, `RELATIVE_FILE_PATH_ARRAY`, `DOWNLOAD_KEY_ARRAY`,
 `ASSET_PATH`, `ASSET_AUXILIARYPREVIEW_PATH`) also refuse a key whose **UTF-8 encoding** exceeds
 `MAX_S3_OBJECT_KEY_BYTES` (1024, the Amazon S3 object-key limit) — bytes, not characters. The
-validator sees only the asset-relative part, so `streamAsset.py`, `streamAuxiliaryPreviewAsset.py` and
-`downloadAsset.py` re-check the RESOLVED key against the same constant after the asset prefix is added
-and before any S3 call; an over-long key is a `400`, never an S3 `ClientError` reported as a `500`
-(issue #407).
+validator sees only the asset-relative part, so the handlers that resolve a key against the asset prefix
+re-check the RESOLVED key before their first S3 call and answer a generic `400` that does not echo the
+key: `streamAsset.py`, `streamAuxiliaryPreviewAsset.py`, `downloadAsset.py`, `uploadFile.py`
+`initialize_upload` (final and `temp-uploads/` key, in the pre-loop block so a refused batch creates no
+multipart upload) and `assetFiles.py` `create_folder` / `move_file` / `copy_file` (destination key).
+Every guard calls `common/validators.exceeds_s3_object_key_limit(key)` rather than re-implementing the
+byte comparison; an over-long key is a `400`, never an S3 `ClientError` reported as a `500` (issue #407).
 
 #### **Request/Response Model Strategy**:
 

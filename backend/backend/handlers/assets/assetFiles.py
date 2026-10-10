@@ -45,7 +45,7 @@ from common.apiRoutes import (
     API_DELETE_ASSET_PREVIEW, API_DELETE_AUXILIARY_PREVIEW,
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
-from common.validators import validate
+from common.validators import validate, exceeds_s3_object_key_limit
 from common.dynamodb import validate_pagination_info, query_all_items
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -2602,6 +2602,12 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # Use smart path resolution to avoid duplication for both source and destination
     source_key = resolve_asset_file_path(source_base_key, source_path)
     dest_key = resolve_asset_file_path(dest_base_key, dest_path)
+
+    # The request model bounded destinationPath; the resolved key carries the destination asset's prefix
+    # as well and is what S3 measures. Refuse it here, before the source is even looked up, so an
+    # over-long destination is a plain 400 rather than a misleading "Error accessing destination path".
+    if exceeds_s3_object_key_limit(dest_key):
+        raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
     
     # Check if source exists
     try:
@@ -2711,6 +2717,12 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # Use smart path resolution to avoid duplication
     source_key = resolve_asset_file_path(base_key, source_path)
     dest_key = resolve_asset_file_path(base_key, dest_path)
+
+    # The request model bounded destinationPath; the resolved key carries the asset prefix as well and
+    # is what S3 measures. Refuse it here, before the source is even looked up, so an over-long
+    # destination is a plain 400 rather than a misleading "Error checking destination file".
+    if exceeds_s3_object_key_limit(dest_key):
+        raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
     
     # Check if source exists and is not archived
     try:
@@ -3139,6 +3151,12 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
 
     # Normalize the path by combining asset base key with the relative folder path
     normalized_key_path = resolve_asset_file_path(asset_base_key, request_model.relativeKey)
+
+    # The request model bounded relativeKey; the resolved key carries the asset prefix as well and is
+    # what S3 measures. Refuse it here, before put_object, so an over-long folder key is a plain 400
+    # rather than S3's KeyTooLongError reported as "Error creating folder".
+    if exceeds_s3_object_key_limit(normalized_key_path):
+        raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
     
     # Create the folder in S3 (in S3, folders are represented by zero-byte objects with a trailing slash)
     try:
