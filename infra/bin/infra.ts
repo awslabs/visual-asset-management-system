@@ -133,6 +133,8 @@ if (config.app.useWaf) {
         // Enable checks for NIST 800-53 R5
         // TODO: RE-ENABLE WHEN WORKING THROUGH ISSUES
         // Aspects.of(app).add(new NIST80053R5Checks({verbose: true}));
+        // (The cross-Region bucket notification stacks already run this check pack: see
+        // buildCrossRegionBucketNotificationStacks, which applies it under this same condition.)
 
         // Feature check suppression
         NagSuppressions.addStackSuppressions(
@@ -179,6 +181,8 @@ else {
         // Enable checks for NIST 800-53 R5
         // TODO: RE-ENABLE WHEN WORKING THROUGH ISSUES
         // Aspects.of(app).add(new NIST80053R5Checks({verbose: true}));
+        // (The cross-Region bucket notification stacks already run this check pack: see
+        // buildCrossRegionBucketNotificationStacks, which applies it under this same condition.)
 
         // Feature check suppression
         NagSuppressions.addStackSuppressions(

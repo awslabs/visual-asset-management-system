@@ -37,6 +37,9 @@ import { crossRegionTopicKey } from "../../lib/helper/s3AssetBuckets";
 import { newTestApp } from "../support/testApp";
 import { synthTemplate, expectAbsent, SynthResult, Resource } from "../support/templateSynth";
 import commercialTemplate from "../../config/config.template.commercial.json";
+import govcloudTemplate from "../../config/config.template.govcloud.json";
+import * as cxapi from "aws-cdk-lib/cx-api";
+import { NIST80053R5Checks } from "cdk-nag";
 
 const REMOTE_BUCKET_ARN = "arn:aws:s3:::remote-assets-bucket";
 const REMOTE_REGION = "eu-west-1";
@@ -411,6 +414,48 @@ describe("cross-Region external asset bucket: a same-Region deployment is unchan
     });
 });
 
+describe("cross-Region stack: NIST 800-53 R5 checks in a restricted partition (D6)", () => {
+    // bin/infra.ts runs its NIST 800-53 R5 block under `config.app.govCloud.enabled`; the shared
+    // builder applies the check pack to each per-Region stack under that same condition, so both the
+    // entry point and this harness see it. The flag is false here because getConfig() rejects the
+    // cross-Region endpoint flag outside the commercial partition.
+    test.each([
+        ["CMK on", (c: any) => (c.app.useKmsCmkEncryption.enabled = true)],
+        ["CMK off", (c: any) => (c.app.useKmsCmkEncryption.enabled = false)],
+    ])(
+        "govcloud, %s: the per-Region stack carries the aspect and synthesizes with no unsuppressed finding",
+        (_label, mutate) => {
+            const app = newTestApp();
+            const config = loadGovcloudConfigForUnitTest(mutate);
+            const { stacks } = buildCrossRegionBucketNotificationStacks(app, config);
+            expect(stacks).toHaveLength(1);
+            expect(stacks[0].stackName).toBe("vams-xregion-xregion-unit-us-gov-east-1");
+            expect(cdk.Aspects.of(stacks[0]).all.some((a) => a instanceof NIST80053R5Checks)).toBe(
+                true
+            );
+
+            // cdk-nag reports a finding as an error-level annotation; `cdk synth` then exits non-zero.
+            // Every finding on this stack must therefore carry a suppression with a reason.
+            const asm = app.synth();
+            const findings = asm
+                .getStackArtifact(stacks[0].artifactId)
+                .messages.filter((m) => m.level === cxapi.SynthesisMessageLevel.ERROR)
+                .map((m) => `${m.id}: ${String(m.entry.data)}`);
+            expect(findings).toEqual([]);
+        }
+    );
+
+    test("commercial: the aspect is not applied (the condition, not the stack, decides)", () => {
+        const app = newTestApp();
+        const config = loadConfigForUnitTest(withExternalBuckets);
+        const { stacks } = buildCrossRegionBucketNotificationStacks(app, config);
+        expect(stacks).toHaveLength(1);
+        expect(cdk.Aspects.of(stacks[0]).all.some((a) => a instanceof NIST80053R5Checks)).toBe(
+            false
+        );
+    });
+});
+
 function countByType(resources: Resource[]): Record<string, number> {
     const counts: Record<string, number> = {};
     for (const r of resources) {
@@ -432,6 +477,34 @@ function loadConfigForUnitTest(mutate: (c: any) => void): Config.Config {
     config.app.baseStackName = "xregion-unit";
     const internal = config as any;
     internal.enableCdkNag = false;
+    mutate(internal);
+    Service.SetConfig(config);
+    return config;
+}
+
+/**
+ * The govcloud counterpart of loadConfigForUnitTest: a deployment in us-gov-west-1 with one external
+ * asset bucket in us-gov-east-1 and the cross-Region endpoint flag off (the only value getConfig()
+ * accepts outside the commercial partition).
+ */
+function loadGovcloudConfigForUnitTest(mutate: (c: any) => void = () => undefined): Config.Config {
+    const config = JSON.parse(JSON.stringify(govcloudTemplate)) as Config.Config;
+    config.env.account = "123456789012";
+    config.env.region = "us-gov-west-1";
+    config.env.partition = "aws-us-gov";
+    config.env.coreStackName = "vams-xregion-unit";
+    config.app.baseStackName = "xregion-unit";
+    const internal = config as any;
+    internal.enableCdkNag = false;
+    internal.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
+    internal.app.assetBuckets.externalAssetBuckets = [
+        {
+            bucketArn: "arn:aws-us-gov:s3:::remote-assets-bucket",
+            baseAssetsPrefix: "/team/",
+            defaultSyncDatabaseId: "remote",
+            bucketRegion: "us-gov-east-1",
+        },
+    ];
     mutate(internal);
     Service.SetConfig(config);
     return config;
