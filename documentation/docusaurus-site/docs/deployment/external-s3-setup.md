@@ -180,7 +180,7 @@ An external bucket may be in a Region other than the one VAMS is deployed in, as
 
 ### The per-Region notification stack
 
-Amazon S3 delivers a bucket's event notifications only to a destination in the bucket's Region. For every Region that holds at least one external asset bucket outside the deployment Region, VAMS therefore deploys an additional CloudFormation stack into that Region, named `<name>-xregion-<baseStackName>-<bucketRegion>` (for example `vams-xregion-prod-us-west-2-us-east-1`). The stack owns, for each registered bucket entry in that Region:
+Amazon S3 delivers a bucket's event notifications only to a destination in the bucket's Region. For every Region that holds at least one external asset bucket outside the deployment Region, VAMS therefore deploys an additional CloudFormation stack into that Region, named `<name>-xregion-<baseStackName>-<bucketRegion>`. `<baseStackName>` is the configured `app.baseStackName` with the deployment Region already appended, the same value the core stack name carries: a deployment with `name: vams`, `app.baseStackName: prod`, `region: us-west-2` and a bucket in `us-east-1` has the core stack `vams-core-prod-us-west-2` and the per-Region stack `vams-xregion-prod-us-west-2-us-east-1` (deployment Region first, bucket Region last). The stack owns, for each registered bucket entry in that Region:
 
 -   the object-created and object-removed Amazon SNS topics, with TLS enforced;
 -   the bucket's event notification configuration, merged with any entries another consumer owns exactly as for a same-Region bucket ([Event notifications on a shared bucket](#event-notifications-on-a-shared-bucket));
