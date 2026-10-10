@@ -922,8 +922,9 @@ def enrich_files_with_primary_type(bucket: str, files: List[Dict]) -> None:
     """Fill in each listed file's primaryType from its S3 object metadata
 
     primaryType is stored in the object's user metadata, which no listing returns, so it takes
-    one HeadObject per file -- the only per-file S3 call the export makes. The calls run through
-    a bounded pool. Folder markers carry no primary type and are skipped.
+    one HeadObject per file -- one of the two per-file S3 calls the export makes, the other being
+    the blocklist head a file about to be signed pays. The calls run through a bounded pool.
+    Folder markers carry no primary type and are skipped.
     """
     targets = [file for file in files if not file['isFolder']]
     if not targets:
@@ -952,7 +953,8 @@ def file_type_allowed_for_download(bucket: str, key: str, version_id: str,
     then `validateUnallowedFileExtensionAndContentType` on the key and the reported ContentType.
     False withholds the URL -- for a blocklisted file, and for a file whose head failed, so a
     type that cannot be verified is never read as a pass. Both are logged with identifiers and
-    the file's extension only, never the key or file name.
+    the file's extension only, never the key or file name. A failed head withholds this file
+    alone, whatever raised: the pass over the asset continues, the way the primaryType read's does.
     """
     params = {
         'Bucket': bucket,
@@ -964,10 +966,15 @@ def file_type_allowed_for_download(bucket: str, key: str, version_id: str,
 
     try:
         head = s3_client.head_object(**params)
-    except ClientError as e:
+    except Exception as e:
+        # An S3 error is named by its code, anything else -- a botocore timeout or connection
+        # error that outlived the retries -- by its class. Neither carries the key; the message
+        # of a transport error names the request URL, which does.
+        reason = (e.response.get('Error', {}).get('Code', 'ClientError')
+                  if isinstance(e, ClientError) else type(e).__name__)
         logger.warning(
             f"Export did not sign a file of asset {asset_id} in database {database_id}: "
-            f"HeadObject failed with {e.response.get('Error', {}).get('Code', 'ClientError')}")
+            f"HeadObject failed with {reason}")
         return False
 
     if validateUnallowedFileExtensionAndContentType(key, head.get('ContentType', '')):
@@ -977,6 +984,30 @@ def file_type_allowed_for_download(bucket: str, key: str, version_id: str,
         f"Export withheld download URL for blocklisted file type: asset {asset_id} in database "
         f"{database_id}, extension '{os.path.splitext(key)[1].lower()}'")
     return False
+
+def mark_files_allowed_for_download(bucket: str, files: List[Dict],
+                                    database_id: str, asset_id: str) -> None:
+    """Set each live file's downloadAllowed from the executable blocklist, through a bounded pool.
+
+    The HeadObject behind `file_type_allowed_for_download` is paid once per file the signing
+    loop will consider -- a non-folder, non-archived file -- and the calls run through the same
+    pool as the primaryType read, the way `downloadAsset.py` fans the identical head out for a
+    bulk download: an asset holds thousands of files and serial round trips exceed the API
+    Gateway integration timeout. A file the pass does not visit carries no flag, which the loop
+    reads as not allowed, so a file is signed only when its own head and check passed.
+    """
+    targets = [file for file in files
+               if not file['isFolder'] and not file.get('isArchived', False)]
+    if not targets:
+        return
+
+    def _mark(file_item):
+        file_item['downloadAllowed'] = file_type_allowed_for_download(
+            bucket, file_item['key'], file_item['versionId'], database_id, asset_id)
+
+    max_workers = min(MAX_PARALLEL_FILE_WORKERS, len(targets))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        list(executor.map(_mark, targets))
 
 def generate_presigned_url(bucket: str, key: str, version_id: str) -> Optional[str]:
     """Generate presigned URL for file download"""
@@ -1441,6 +1472,16 @@ def process_asset_batch(
                     preview_lookup[base_key] = []
                 preview_lookup[base_key].append(preview_file['key'])
 
+            # The executable blocklist check the download and stream routes make before they
+            # hand out content, run on the version about to be signed for every file the loop
+            # below would sign. One pooled pass per asset, so the loop itself stays free of S3
+            # calls; nothing is read when no file would be signed. A blocklisted file, or one
+            # whose type cannot be verified, stays in the listing with no URL and no download
+            # audit entry.
+            if sign_files:
+                mark_files_allowed_for_download(
+                    bucket_name, base_files_list, asset['databaseId'], asset['assetId'])
+
             # One asset-wide read each for metadata and attributes, keyed by file path, so the
             # per-file blocks below are in-memory lookups rather than two queries per file. None
             # means the row set could not be read in full and the per-file reads run instead.
@@ -1509,14 +1550,9 @@ def process_asset_batch(
                 presigned_url = None
                 presigned_expires = None
                 if sign_files and not file['isFolder'] and not file.get('isArchived', False):
-                    # The executable blocklist check the download and stream routes make before
-                    # they hand out content, run on the version about to be signed. Only a file
-                    # that is about to be signed pays the HeadObject -- the download route pays
-                    # the same per file -- and a blocklisted file, or one whose type cannot be
-                    # verified, stays in the listing with no URL and no download audit entry.
-                    if file_type_allowed_for_download(
-                            bucket_name, file['key'], file['versionId'],
-                            asset['databaseId'], asset['assetId']):
+                    # downloadAllowed is the pre-pass verdict for this file; a file it did not
+                    # visit, or that it withheld, carries no truthy flag and is not signed.
+                    if file.get('downloadAllowed', False):
                         presigned_url = generate_presigned_url(
                             bucket_name,
                             file['key'],
