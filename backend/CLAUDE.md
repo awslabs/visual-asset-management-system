@@ -766,6 +766,8 @@ A request `body` is masked whether it arrives as a dict or as a JSON string — 
 
 `backend/customLogging/auditLogging.py` exposes `log_authentication`, `log_authorization`, `log_authorization_api`, `log_file_upload`, `log_file_download`, `log_errors`, and other event-type functions — writing to **9 CloudWatch log groups** whose names resolve from SSM via `get_log_group_name(ResourceKeys.*)`. All audit functions extract user context via `request_to_claims(event)`. Every entry carries a `--- [event: ...]` echo of the triggering API event, passed through `mask_sensitive_data` first. **Silent failure**: a failed audit write is logged locally, and Lambda execution continues — `mask_sensitive_data` upholds that contract by returning `<redacted>` rather than raising on a structure it cannot walk.
 
+**Every path that hands out asset file content** — a presigned GET URL or a streamed body, in `downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, and `assetExportService` — applies three controls on top of Casbin: it refuses (or, for the export's per-asset entries, withholds the URL) when the asset's `isDistributable` is false; it runs `validateUnallowedFileExtensionAndContentType` on the file's key and the `ContentType` a `head_object` of the version about to be served reports, and refuses (export: withholds the URL, keeps the file in the listing) when the file is blocklisted or the head fails; and it writes a file-download audit entry (`log_file_download` / `log_file_download_bulk` / `log_file_download_streamed`) for every URL or body it actually issued. A new download surface gets all three; `downloadAsset.py`'s `lambda_handler` is the reference call shape, and `assetExportService.py` `file_type_allowed_for_download` is the withhold-not-refuse form. A surface that checks many files in one request runs the heads through a bounded pool (`downloadAsset.py`'s bulk branch, `assetExportService.py` `mark_files_allowed_for_download`): serial per-file heads over an asset of thousands of files exceed the API Gateway integration timeout.
+
 ---
 
 ## Response Functions (`models/common.py`)
@@ -817,7 +819,7 @@ asset_table = dynamodb.Table(asset_table_name)
 
 ## File Security
 
-Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists live in `common/constants.py`; extend them there, never bypass.
+Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists live in `common/constants.py`; extend them there, never bypass. The one helper that applies them, `common/s3.py` `validateUnallowedFileExtensionAndContentType`, compares case-insensitively: the file extension and the media-type part of the content type (parameters such as `; charset=binary` stripped) are lower-cased before the membership test, so `.EXE` and `Application/X-Msdownload` are rejected like their lower-case forms. Keep every list entry lower-case and listed once — `tests/common/test_s3_blocklist_case_insensitive.py` fails on an entry that is not.
 
 ---
 

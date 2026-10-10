@@ -2124,7 +2124,7 @@ paths:
                                 generatePresignedUrls:
                                     type: boolean
                                     default: false
-                                    description: "Generate presigned S3 URLs for file downloads (skipped for archived files)"
+                                    description: "Generate presigned S3 URLs for file downloads. URLs are issued only for files of assets whose isDistributable is true (a non-distributable asset is still exported, with presignedFileDownloadUrl null on each file), and are never issued for folders or archived files. A file whose extension or content type is on the executable blocklist is listed but receives no download URL. Every URL issued is recorded in the file download audit log."
                                 includeFolderFiles:
                                     type: boolean
                                     default: false
@@ -2221,6 +2221,7 @@ paths:
                                                     type: string
                                                 isdistributable:
                                                     type: boolean
+                                                    description: "Whether the asset's files can be downloaded. When false, no file of this asset carries a presignedFileDownloadUrl regardless of generatePresignedUrls."
                                                 tags:
                                                     type: array
                                                     items:
