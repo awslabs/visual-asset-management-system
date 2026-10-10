@@ -719,7 +719,7 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 | `startingToken`               | string        | --      | Pagination token from a previous response.                            |
 
 :::note[Presigned URLs Follow the Asset's Distributable Flag]
-`generatePresignedUrls` applies the same controls as the [Download Asset](#download-asset) endpoint. A URL is issued only for a file of an asset whose `isDistributable` is `true`, and never for a folder or an archived file. An asset that is not distributable is still exported with its files, metadata, and relationships; each of its files carries `presignedFileDownloadUrl: null`, and its `isdistributable` field tells the client why. Every URL the export issues is recorded in the file download audit log, one entry per file, with a `downloadType` of `export`.
+`generatePresignedUrls` applies the same controls as the [Download Asset](#download-asset) endpoint. A URL is issued only for a file of an asset whose `isDistributable` is `true`, and never for a folder or an archived file. An asset that is not distributable is still exported with its files, metadata, and relationships; each of its files carries `presignedFileDownloadUrl: null`, and its `isdistributable` field tells the client why. A file whose extension or content type is on the executable blocklist is listed but receives no download URL, as the download endpoint refuses it. Every URL the export issues is recorded in the file download audit log, one entry per file, with a `downloadType` of `export`.
 :::
 
 **Response:**

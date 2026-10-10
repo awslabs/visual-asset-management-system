@@ -21,6 +21,7 @@ from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXT
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items
+from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -942,6 +943,41 @@ def enrich_files_with_primary_type(bucket: str, files: List[Dict]) -> None:
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(executor.map(_read_primary_type, targets))
 
+def file_type_allowed_for_download(bucket: str, key: str, version_id: str,
+                                   database_id: str, asset_id: str) -> bool:
+    """Whether a file about to receive an export download URL passes the executable blocklist.
+
+    The check `downloadAsset.py` makes before it signs: one HeadObject on the version
+    `generate_presigned_url` pins (an unversioned bucket lists 'null', which is not a VersionId),
+    then `validateUnallowedFileExtensionAndContentType` on the key and the reported ContentType.
+    False withholds the URL -- for a blocklisted file, and for a file whose head failed, so a
+    type that cannot be verified is never read as a pass. Both are logged with identifiers and
+    the file's extension only, never the key or file name.
+    """
+    params = {
+        'Bucket': bucket,
+        'Key': key
+    }
+
+    if version_id and version_id != 'null':
+        params['VersionId'] = version_id
+
+    try:
+        head = s3_client.head_object(**params)
+    except ClientError as e:
+        logger.warning(
+            f"Export did not sign a file of asset {asset_id} in database {database_id}: "
+            f"HeadObject failed with {e.response.get('Error', {}).get('Code', 'ClientError')}")
+        return False
+
+    if validateUnallowedFileExtensionAndContentType(key, head.get('ContentType', '')):
+        return True
+
+    logger.warning(
+        f"Export withheld download URL for blocklisted file type: asset {asset_id} in database "
+        f"{database_id}, extension '{os.path.splitext(key)[1].lower()}'")
+    return False
+
 def generate_presigned_url(bucket: str, key: str, version_id: str) -> Optional[str]:
     """Generate presigned URL for file download"""
     try:
@@ -1160,10 +1196,11 @@ def process_asset_batch(
     holding more files than the budget is exported across successive pages: its entry reports
     files_truncated, and the returned page state names the key its listing resumes after.
 
-    Presigned download URLs are issued only for a distributable asset's files, and every URL
-    issued is written to the file download audit log, the same two controls the dedicated
-    download routes apply. A non-distributable asset is still exported, with its files carrying
-    no URL and its entry reporting isdistributable false.
+    Presigned download URLs are issued only for a distributable asset's files, only for a file
+    whose extension and content type pass the executable blocklist, and every URL issued is
+    written to the file download audit log -- the controls the dedicated download routes apply.
+    A non-distributable asset is still exported, with its files carrying no URL and its entry
+    reporting isdistributable false; a blocklisted file stays in the listing with no URL.
 
     Args:
         asset_identifiers: The assets to process, in tree order
@@ -1472,11 +1509,19 @@ def process_asset_batch(
                 presigned_url = None
                 presigned_expires = None
                 if sign_files and not file['isFolder'] and not file.get('isArchived', False):
-                    presigned_url = generate_presigned_url(
-                        bucket_name,
-                        file['key'],
-                        file['versionId']
-                    )
+                    # The executable blocklist check the download and stream routes make before
+                    # they hand out content, run on the version about to be signed. Only a file
+                    # that is about to be signed pays the HeadObject -- the download route pays
+                    # the same per file -- and a blocklisted file, or one whose type cannot be
+                    # verified, stays in the listing with no URL and no download audit entry.
+                    if file_type_allowed_for_download(
+                            bucket_name, file['key'], file['versionId'],
+                            asset['databaseId'], asset['assetId']):
+                        presigned_url = generate_presigned_url(
+                            bucket_name,
+                            file['key'],
+                            file['versionId']
+                        )
                     if presigned_url:
                         presigned_expires = int(presigned_url_timeout)
                         signed_files.append({"filePath": file['key'], "versionId": file['versionId']})
