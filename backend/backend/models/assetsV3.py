@@ -70,7 +70,7 @@ MAX_S3_BUCKET_NAME_LENGTH = 63
 MAX_S3_UPLOAD_ID_LENGTH = 1024
 
 
-def validate_asset_file_path(field_name: str, value: str) -> str:
+def validate_asset_file_path(field_name: str, value: str, new_object: bool = False) -> str:
     """Validate one caller-supplied asset file path via the shared validate() dispatcher.
 
     The file-operation APIs accept both the asset-relative form ('/dir/file.txt')
@@ -82,6 +82,19 @@ def validate_asset_file_path(field_name: str, value: str) -> str:
     no control characters, and a length within the S3 key limit. Spaces and
     unicode are legitimate file-name characters and stay accepted, so the charset
     rule here is narrower than the ASCII set bucketExistingKey allows.
+
+    ``new_object`` is set by the validators of a path this request CREATES — an
+    upload's relativeKey, a folder, the destination of a move or copy. Those also
+    refuse a final path segment that ends in a dot or whitespace: Windows drops a
+    trailing dot or space when a non-browser client writes the file to disk, so
+    ``payload.exe.`` lands as ``payload.exe`` past the extension blocklist (issue
+    #420). Only the final segment is checked (``/dir./file.txt`` is accepted), and a
+    dot-only basename such as ``.gitignore`` stays accepted — it is a legitimate
+    file name, and common/s3.py validateUnallowedFileExtensionAndContentType
+    treats it as its own extension so ``.exe`` is still blocked. The read paths
+    (download, file info, archive, the source of a move or copy) leave the flag
+    off: an object with such a key may already exist in the bucket and has to
+    stay reachable, and the blocklist helper covers the executable case on read.
     """
     (valid, message) = validate({
         field_name: {'value': [value], 'validator': 'DOWNLOAD_KEY_ARRAY'}
@@ -95,6 +108,12 @@ def validate_asset_file_path(field_name: str, value: str) -> str:
         raise ValueError(message)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
         message = f"{field_name} cannot contain control characters"
+        logger.error(message)
+        raise ValueError(message)
+    # The final segment ends in a dot or whitespace exactly when the whole value does: a path
+    # ending in '/' has an empty final segment and is not affected.
+    if new_object and (value.endswith('.') or value[-1:].isspace()):
+        message = f"{field_name} cannot end with a dot or whitespace"
         logger.error(message)
         raise ValueError(message)
     return value
@@ -276,7 +295,8 @@ class UploadFileModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
-        return validate_asset_file_path('relativeKey', v)
+        # The key this upload creates: a trailing dot or whitespace is refused here (issue #420).
+        return validate_asset_file_path('relativeKey', v, new_object=True)
     num_parts: Optional[int] = Field(None, ge=0, le=MAX_PARTS_PER_FILE)  # Allow 0 parts for zero-byte files; S3 max parts per object
     
     @root_validator
@@ -414,7 +434,9 @@ class UploadFileCompletionModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
-        return validate_asset_file_path('relativeKey', v)
+        # complete_upload derives the final S3 key from this value (and creates a zero-byte object
+        # from it when no parts are supplied), so it names a key this request creates (issue #420).
+        return validate_asset_file_path('relativeKey', v, new_object=True)
 
 class CompleteUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing a file upload"""
@@ -480,7 +502,9 @@ class ExternalFileModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey', 'tempKey')
     def validate_keys(cls, v, field):
-        return validate_asset_file_path(field.name, v)
+        # relativeKey names the final key this completion creates; tempKey is an object that already
+        # exists in the bucket and is only read, so it keeps the read-path rules (issue #420).
+        return validate_asset_file_path(field.name, v, new_object=(field.name == 'relativeKey'))
 
 class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing an external file upload"""
@@ -575,7 +599,9 @@ class CreateFolderRequestModel(BaseModel, extra='ignore'):
         """Ensure the relative key ends with a slash (folder prefix)"""
         if not v.endswith('/'):
             raise ValueError("Relative key must end with a slash to represent a folder")
-        return validate_asset_file_path('relativeKey', v)
+        # The prefix this request creates. The trailing-dot/whitespace rule looks at the final
+        # segment, which the slash above leaves empty, so a folder named 'dir.' is not refused.
+        return validate_asset_file_path('relativeKey', v, new_object=True)
 
 class CreateFolderResponseModel(BaseModel, extra='ignore'):
     """Response model for creating a folder in S3"""
@@ -676,7 +702,9 @@ class MoveFileRequestModel(BaseModel, extra='ignore'):
 
     @validator('sourcePath', 'destinationPath')
     def validate_paths(cls, v, field):
-        return validate_asset_file_path(field.name, v)
+        # destinationPath is the key this move creates; sourcePath already exists and keeps the
+        # read-path rules so an existing object stays movable (issue #420).
+        return validate_asset_file_path(field.name, v, new_object=(field.name == 'destinationPath'))
 
 class CopyFileRequestModel(BaseModel, extra='ignore'):
     """Request model for copying files within or across databases"""
@@ -689,7 +717,9 @@ class CopyFileRequestModel(BaseModel, extra='ignore'):
 
     @validator('sourcePath', 'destinationPath')
     def validate_paths(cls, v, field):
-        return validate_asset_file_path(field.name, v)
+        # destinationPath is the key this copy creates; sourcePath already exists and keeps the
+        # read-path rules so an existing object stays copyable (issue #420).
+        return validate_asset_file_path(field.name, v, new_object=(field.name == 'destinationPath'))
 
     @root_validator
     def validate_fields(cls, values):
