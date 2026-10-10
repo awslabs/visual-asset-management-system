@@ -185,7 +185,11 @@ def validateUnallowedFileExtensionAndContentType(keyPath: str, contentType: str)
     #Check if the file extension of the keyPath is in the list of unallowed file extensions. The
     #extension is everything from the last dot of the key's final non-empty segment, read after
     #trailing dots and whitespace are removed: "payload.exe.", "payload.exe/", "..exe" -> ".exe".
-    name = os.path.basename(keyPath.rstrip('/'))
+    #The segment is cut at its first ':' before that, since on NTFS a ':' opens a stream name that
+    #is not part of the file Windows materializes ("payload.exe::$DATA" -> ".exe"); a ':' in an
+    #ordinary name is still accepted here for an object already in a bucket, only a created key
+    #refuses it.
+    name = os.path.basename(keyPath.rstrip('/')).split(':', 1)[0]
     while name and (name[-1] == '.' or name[-1].isspace()):
         name = name[:-1]
     extension = name[name.rfind('.'):].lower() if '.' in name else ''

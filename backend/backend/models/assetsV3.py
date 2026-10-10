@@ -86,7 +86,9 @@ def validate_asset_file_path(field_name: str, value: str, new_object: bool = Fal
 
     ``new_object`` is set for a path this request creates (an upload's relativeKey,
     a folder, the destination of a move or copy): its final segment may not end in
-    a dot or whitespace, which Windows drops when writing the file to disk.
+    a dot or whitespace, which Windows drops when writing the file to disk, and no
+    segment may contain ':', which Windows forbids in a name and reads as the start
+    of an NTFS stream name.
     ``file_only`` is set for a path that names a file, never a folder: it may not
     end in '/'. The read paths — download key, file info, archive, the source of a
     move or copy — set neither, so an object already stored under such a key stays
@@ -113,6 +115,10 @@ def validate_asset_file_path(field_name: str, value: str, new_object: bool = Fal
     # The final segment ends in a dot or whitespace exactly when the whole value does.
     if new_object and (value.endswith('.') or value[-1:].isspace()):
         message = f"{field_name} cannot end with a dot or whitespace"
+        logger.error(message)
+        raise ValueError(message)
+    if new_object and ':' in value:
+        message = f"{field_name} cannot contain a colon"
         logger.error(message)
         raise ValueError(message)
     return value
