@@ -19,9 +19,12 @@ os.environ.setdefault("AWS_S3_US_EAST_1_REGIONAL_ENDPOINT", "regional")
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
-# Concurrency the asset handlers use for parallel per-file S3 work; the connection pool of every
-# Regional client is sized to match so parallel calls do not queue on botocore's default pool of 10.
+# Concurrency the asset handlers use for parallel per-file S3 work. The connection pool of every
+# Regional client covers the widest of those pools -- downloadAsset's whole-asset download runs
+# DOWNLOAD_MAX_PARALLEL_S3_WORKERS threads (default 25) against the one client -- so parallel calls
+# do not queue on botocore's default pool of 10 and threads do not serialize on connections.
 MAX_PARALLEL_S3_WORKERS = 16
+S3_CLIENT_MAX_POOL_CONNECTIONS = 50
 
 # The one client configuration for asset-bucket traffic. SigV4 and path-style addressing make the
 # signing Region part of every request, so a client is built per Region and a request for a bucket
@@ -30,7 +33,7 @@ S3_ASSET_CLIENT_CONFIG = Config(
     signature_version='s3v4',
     s3={'addressing_style': 'path', 'us_east_1_regional_endpoint': 'regional'},
     retries={'max_attempts': 5, 'mode': 'adaptive'},
-    max_pool_connections=MAX_PARALLEL_S3_WORKERS
+    max_pool_connections=S3_CLIENT_MAX_POOL_CONNECTIONS
 )
 
 s3c = boto3.client('s3', config=retry_config)

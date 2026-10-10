@@ -75,7 +75,8 @@ class TestClientFactory:
         assert config.s3 and config.s3.get("addressing_style") == "path"
         assert config.retries.get("mode") == "adaptive"
         assert config.retries.get("total_max_attempts") == 6
-        assert config.max_pool_connections == shipped.MAX_PARALLEL_S3_WORKERS
+        assert config.max_pool_connections == shipped.S3_CLIENT_MAX_POOL_CONNECTIONS
+        assert shipped.S3_CLIENT_MAX_POOL_CONNECTIONS >= shipped.MAX_PARALLEL_S3_WORKERS
 
     def test_no_endpoint_url_is_set(self, shipped):
         # Partition rule 2: the SDK resolves the endpoint per Region.
@@ -334,7 +335,8 @@ class TestMockParity:
                "s3_client_for_bucket", "s3_resource_for_bucket", "s3_client_for_bucket_name",
                "s3_resource_for_bucket_name", "copy_s3_object", "RegionRoutingS3Client",
                "RegionRoutingS3Resource", "region_routing_s3_client", "region_routing_s3_resource",
-               "s3_asset_client", "s3_asset_resource", "S3_ASSET_CLIENT_CONFIG", "MAX_PARALLEL_S3_WORKERS"]
+               "s3_asset_client", "s3_asset_resource", "S3_ASSET_CLIENT_CONFIG", "MAX_PARALLEL_S3_WORKERS",
+               "S3_CLIENT_MAX_POOL_CONNECTIONS"]
 
     def test_the_mock_exposes_the_surface(self, mock_module):
         missing = [name for name in self.SURFACE if not hasattr(mock_module, name)]

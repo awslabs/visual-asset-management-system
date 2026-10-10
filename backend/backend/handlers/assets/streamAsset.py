@@ -24,18 +24,12 @@ from handlers.assets.assetVersions import (
     resolve_asset_version_id_from_alias
 )
 
-# Standardized retry configuration merged with existing S3 config
-s3_config = Config(
-    signature_version='s3v4', 
-    s3={'addressing_style': 'path'},
-    retries={
-        'max_attempts': 5,
-        'mode': 'adaptive'
-    }
-)
+# The S3 client is the Region-routing client from common.s3 (its per-Region clients carry
+# S3_ASSET_CLIENT_CONFIG); the DynamoDB resource gets the standard adaptive retries.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 s3_client = region_routing_s3_client()
-dynamodb = boto3.resource('dynamodb', config=s3_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="StreamAsset")
 
 # Delivery mode toggle. When True, every file is delivered by 307-redirecting to a short-lived

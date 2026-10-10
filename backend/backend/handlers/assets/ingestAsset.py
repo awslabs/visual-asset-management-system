@@ -24,10 +24,8 @@ from models.assetsV3 import (
     CreateAssetRequestModel, UploadFileModel
 )
 
-# Configure AWS clients
+# Configure AWS clients (the S3 client is the Region-routing client from common.s3)
 region = os.environ['AWS_REGION']
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'},
-                   retries={'max_attempts': 5, 'mode': 'adaptive'})
 s3 = region_routing_s3_client()
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})

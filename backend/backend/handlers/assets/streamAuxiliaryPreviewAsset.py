@@ -19,18 +19,12 @@ from customLogging.auditLogging import log_file_download_streamed
 from common.s3 import validateUnallowedFileExtensionAndContentType, region_routing_s3_client
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 
-# Standardized retry configuration merged with existing S3 config
-s3_config = Config(
-    signature_version='s3v4', 
-    s3={'addressing_style': 'path'},
-    retries={
-        'max_attempts': 5,
-        'mode': 'adaptive'
-    }
-)
+# The S3 client is the Region-routing client from common.s3 (its per-Region clients carry
+# S3_ASSET_CLIENT_CONFIG); the DynamoDB resource gets the standard adaptive retries.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 s3_client = region_routing_s3_client()
-dynamodb = boto3.resource('dynamodb', config=s3_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="StreamAuxiliaryPreviewAsset")
 
 # Delivery mode toggle. When True, every file is delivered by 307-redirecting to a short-lived

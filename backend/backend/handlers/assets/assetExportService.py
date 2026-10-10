@@ -48,7 +48,6 @@ retry_config = Config(
     }
 )
 
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'}, retries={'max_attempts': 5, 'mode': 'adaptive'})
 s3_client = region_routing_s3_client()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)

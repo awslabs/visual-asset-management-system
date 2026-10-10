@@ -27,11 +27,12 @@ from botocore.config import Config
 # ---------------------------------------------------------------------------
 
 MAX_PARALLEL_S3_WORKERS = 16
+S3_CLIENT_MAX_POOL_CONNECTIONS = 50
 S3_ASSET_CLIENT_CONFIG = Config(
     signature_version='s3v4',
     s3={'addressing_style': 'path', 'us_east_1_regional_endpoint': 'regional'},
     retries={'max_attempts': 5, 'mode': 'adaptive'},
-    max_pool_connections=MAX_PARALLEL_S3_WORKERS,
+    max_pool_connections=S3_CLIENT_MAX_POOL_CONNECTIONS,
 )
 
 _s3_clients_by_region = {}
