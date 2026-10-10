@@ -554,6 +554,21 @@ Scalar validators: `ID` (`^[-_a-zA-Z0-9]{3,63}$` — databaseId, pipelineId, etc
 `STRING_30`, `STRING_256`, `STRING_16384` (free-form caller text, e.g. `commentBody`), `STRING_JSON`,
 `FILE_EXTENSION` (`^[\\.]([a-zA-Z0-9]){1,7}$`).
 
+The file-key validators — `RELATIVE_FILE_PATH`, `RELATIVE_FILE_PATH_ARRAY`, `DOWNLOAD_KEY_ARRAY`,
+`ASSET_PATH`, `ASSET_AUXILIARYPREVIEW_PATH` — also refuse a key whose **UTF-8 encoding** is over
+`MAX_S3_OBJECT_KEY_BYTES` (1024, the Amazon S3 object-key limit), measured in bytes rather than
+characters so a 350-character key of 3-byte characters is refused as S3 would refuse it. The validator
+only sees the asset-relative part; the handlers that resolve a key against the asset prefix re-check the
+RESOLVED key before their first S3 call and answer a generic `400` ("File key exceeds the maximum S3
+object key length", the key is not echoed): the stream and download handlers (`streamAsset.py`,
+`streamAuxiliaryPreviewAsset.py`, `downloadAsset.py`), upload initialization (`uploadFile.py`
+`initialize_upload`, which checks the final AND the `temp-uploads/` key in its pre-loop validation block
+so no multipart upload is created for any file of a refused batch), and `create_folder`, `move_file` and
+`copy_file` in `assetFiles.py` (destination key). Every guard calls the one predicate
+`common/validators.exceeds_s3_object_key_limit(key)` — do not re-implement the byte comparison in a
+handler. An over-long key is therefore a `400` and never an S3 `ClientError` reported as a `500`
+(issue #407). `ASSET_ID` keeps its separate 256-character cap.
+
 Partition-aware AWS-resource validators (used by pipeline sub-process registration):
 `ARN` (any AWS resource ARN), `CLOUDWATCH_LOG_GROUP_ARN`, `CLOUDWATCH_LOG_GROUP_NAME`
 (1-512 chars, `-_./#`+alnum), `LOG_STREAM_NAME` (1-512 chars, no `:`/`*`),
