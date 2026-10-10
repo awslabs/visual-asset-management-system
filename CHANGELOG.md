@@ -54,7 +54,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
--   **Security** Documentation site build dependencies updated to resolve security advisories: `tinypool` 2.1.2 (pinned through an npm `overrides` entry because `@docusaurus/core` 3.10.2 declares `^1.x`, which has no patched release), `shell-quote` 1.11.0, `proxy-addr` 2.0.8, `source-map-js` 1.2.2 and `compression` 1.8.2. These are build-time tooling of the documentation site; nothing in the deployed VAMS stack changes.
+-   **Security** Documentation site build dependencies updated to resolve security advisories: `tinypool` 2.1.2 (pinned through an npm `overrides` entry because `@docusaurus/core` 3.10.2 declares `^1.x`, which has no patched release), `shell-quote` 1.11.0, `proxy-addr` 2.0.8, `source-map-js` 1.2.2 and `compression` 1.8.2. These are build-time tooling of the documentation site; nothing in the deployed VAMS stack changes. ([#405](https://github.com/awslabs/visual-asset-management-system/issues/405))
     -   Note: remove the `tinypool` override when `@docusaurus/core` moves to `tinypool` 2.x.
 
 ### Known Outstanding Issues
