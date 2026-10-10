@@ -11,7 +11,7 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.validators import validate
+from common.validators import validate, MAX_S3_OBJECT_KEY_BYTES
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -179,6 +179,13 @@ def handle_head_request(event, claims_and_roles):
     # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
     # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
     object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+
+    # The validator bounded the asset-relative part; the resolved key carries the database and asset
+    # prefix as well and is what S3 measures. Refuse it here so an over-long key never reaches head_object.
+    if len(object_key.encode('utf-8')) > MAX_S3_OBJECT_KEY_BYTES:
+        message = "File key exceeds the maximum S3 object key length"
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
 
     try:
         # Use head_object to get metadata without downloading file content
@@ -364,6 +371,21 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
                 # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
                 object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+
+                # The validator bounded the asset-relative part; the resolved key carries the database and
+                # asset prefix as well and is what S3 measures. Refuse it here so an over-long key never
+                # reaches get_object.
+                if len(object_key.encode('utf-8')) > MAX_S3_OBJECT_KEY_BYTES:
+                    message = "File key exceeds the maximum S3 object key length"
+                    logger.error(message)
+                    streaming_headers = {
+                        'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
+                        'Cache-Control': 'no-cache, no-store',
+                    }
+                    error_response = validation_error(body={'message': message}, event=event)
+                    error_response['headers'].update(streaming_headers)
+                    return error_response
 
                 # Prepare the S3 GetObject request parameters
                 s3_params = {

@@ -474,6 +474,14 @@ A new validator name is one `_VALIDATOR_DISPATCH` entry **plus** one `LEGITIMATE
 `test_the_table_covers_every_implemented_name` fails otherwise) and a negative sample in
 `backend/tests/common/test_mock_validators_delegates.py`.
 
+The file-key validators (`RELATIVE_FILE_PATH`, `RELATIVE_FILE_PATH_ARRAY`, `DOWNLOAD_KEY_ARRAY`,
+`ASSET_PATH`, `ASSET_AUXILIARYPREVIEW_PATH`) also refuse a key whose **UTF-8 encoding** exceeds
+`MAX_S3_OBJECT_KEY_BYTES` (1024, the Amazon S3 object-key limit) — bytes, not characters. The
+validator sees only the asset-relative part, so `streamAsset.py`, `streamAuxiliaryPreviewAsset.py` and
+`downloadAsset.py` re-check the RESOLVED key against the same constant after the asset prefix is added
+and before any S3 call; an over-long key is a `400`, never an S3 `ClientError` reported as a `500`
+(issue #407).
+
 #### **Request/Response Model Strategy**:
 
 1. **Use validators first** where a validation type exists

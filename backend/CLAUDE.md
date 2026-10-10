@@ -554,6 +554,16 @@ Scalar validators: `ID` (`^[-_a-zA-Z0-9]{3,63}$` — databaseId, pipelineId, etc
 `STRING_30`, `STRING_256`, `STRING_16384` (free-form caller text, e.g. `commentBody`), `STRING_JSON`,
 `FILE_EXTENSION` (`^[\\.]([a-zA-Z0-9]){1,7}$`).
 
+The file-key validators — `RELATIVE_FILE_PATH`, `RELATIVE_FILE_PATH_ARRAY`, `DOWNLOAD_KEY_ARRAY`,
+`ASSET_PATH`, `ASSET_AUXILIARYPREVIEW_PATH` — also refuse a key whose **UTF-8 encoding** is over
+`MAX_S3_OBJECT_KEY_BYTES` (1024, the Amazon S3 object-key limit), measured in bytes rather than
+characters so a 350-character key of 3-byte characters is refused as S3 would refuse it. The validator
+only sees the asset-relative part; the stream and download handlers (`streamAsset.py`,
+`streamAuxiliaryPreviewAsset.py`, `downloadAsset.py`) re-check the RESOLVED key against the same
+constant right after the asset prefix is added and before any S3 call, so an over-long key is a `400`
+and never a `ClientError` reported as a `500` (issue #407). `ASSET_ID` keeps its separate 256-character
+cap.
+
 Partition-aware AWS-resource validators (used by pipeline sub-process registration):
 `ARN` (any AWS resource ARN), `CLOUDWATCH_LOG_GROUP_ARN`, `CLOUDWATCH_LOG_GROUP_NAME`
 (1-512 chars, `-_./#`+alnum), `LOG_STREAM_NAME` (1-512 chars, no `:`/`*`),
