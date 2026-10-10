@@ -376,6 +376,20 @@ def delete_upload_details(uploadId, assetId):
         logger.exception(f"Error deleting upload details: {e}")
         # Don't raise here, just log the error
 
+def get_initialized_file_keys(upload_details, uploadId):
+    """Return the set of relativeKeys the upload was initialized with, or None.
+
+    Completion accepts a submitted relativeKey only if initialization recorded it. A record saved
+    before the list was stored has no 'files' attribute; such an upload is completed without the
+    membership check (the blocklist checks still run) and the gap is logged. Upload records are
+    short-lived, so this covers only uploads in flight across the deploy that introduced the list.
+    """
+    initialized_files = upload_details.get('files')
+    if initialized_files is None:
+        logger.warning(f"Upload record {uploadId} carries no initialized file list; completing without the membership check")
+        return None
+    return set(initialized_files)
+
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
     """Determine if file is archived based on S3 delete markers.
 
@@ -1171,7 +1185,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
                 partUploadUrls=part_urls
             ))
     
-    # Save summary upload details to DynamoDB
+    # Save summary upload details to DynamoDB. The relativeKeys are recorded so completion can
+    # accept only the files this initialization validated and bind each submitted key to them.
     upload_record = AssetUploadTableModel(
         uploadId=uploadId,
         assetId=assetId,
@@ -1182,7 +1197,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         totalFiles=len(request_model.files),
         totalParts=total_parts,
         status="initialized",
-        UserId=user_id  # Include user ID for rate limiting
+        UserId=user_id,  # Include user ID for rate limiting
+        files=[file.relativeKey for file in request_model.files]
     )
     save_upload_details(upload_record)
     
@@ -1275,6 +1291,31 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     # Process each file in the request
     for file in request_model.files:
         try:
+            # The object is created under a key derived from relativeKey, while the content check
+            # further down inspects the staged tempKey object, so the destination name itself is
+            # run through the blocklist here before anything is copied.
+            if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
+                log_file_upload(
+                    event,
+                    databaseId,
+                    assetId,
+                    file.relativeKey,
+                    True,  # Upload denied
+                    "File contains potentially malicious executable type",
+                    {
+                        "uploadId": uploadId,
+                        "uploadType": uploadType
+                    }
+                )
+                file_results.append(FileCompletionResult(
+                    relativeKey=file.relativeKey,
+                    uploadIdS3="external",
+                    success=False,
+                    error="File contains a potentially malicious executable type object"
+                ))
+                has_failures = True
+                continue
+
             # Validate the extension of an asset preview and of a .previewFile. file
             if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
                 if not validate_preview_file_extension(file.relativeKey):
@@ -1771,6 +1812,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     
     allowed_extensions = database.get('restrictFileUploadsToExtensions', '')
     
+    # Files recorded at initialization; None for a record that predates the list (see helper).
+    initialized_keys = get_initialized_file_keys(upload_details, uploadId)
+    
     # Track file completion results
     file_results = []
     successful_files = []
@@ -1779,6 +1823,31 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     # Complete multipart uploads for each file
     for file in request_model.files:
         try:
+            # Accept only files this upload was initialized with. Initialization validated every
+            # recorded key, so a key outside the set has passed no check; nothing in S3 is touched
+            # for it because no upload was created under this uploadId for that key.
+            if initialized_keys is not None and file.relativeKey not in initialized_keys:
+                log_file_upload(
+                    event,
+                    databaseId,
+                    assetId,
+                    file.relativeKey,
+                    True,  # Upload denied
+                    "File was not part of the initialized upload",
+                    {
+                        "uploadId": uploadId,
+                        "uploadType": uploadType
+                    }
+                )
+                file_results.append(FileCompletionResult(
+                    relativeKey=file.relativeKey,
+                    uploadIdS3=file.uploadIdS3,
+                    success=False,
+                    error="File was not part of the initialized upload"
+                ))
+                has_failures = True
+                continue
+
             # Validate file extension if restrictions are configured
             # Only apply to regular asset files, not asset previews or file preview files
             if allowed_extensions and allowed_extensions.strip() != "" and uploadType == "assetFile":
@@ -1826,6 +1895,52 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
                 
             temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+            
+            # Every branch below creates an object under final_s3_key -- the zero-byte and abandoned
+            # branches write one directly, the multipart branch completes one -- so the name-level
+            # blocklist and preview-extension rules run here, before any of them, on the submitted
+            # name. The multipart branch additionally re-checks the completed object's content type.
+            name_check_error = None
+            if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
+                name_check_error = "File contains a potentially malicious executable type object"
+            elif (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) \
+                    and not validate_preview_file_extension(file.relativeKey):
+                name_check_error = "Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+            
+            if name_check_error:
+                # AUDIT LOG: upload denied on the file name before any object was created
+                log_file_upload(
+                    event,
+                    databaseId,
+                    assetId,
+                    file.relativeKey,
+                    True,  # Upload denied
+                    name_check_error,
+                    {
+                        "uploadId": uploadId,
+                        "uploadType": uploadType
+                    }
+                )
+                
+                # Abort the multipart upload if one exists (zero-byte files never created one)
+                if file.uploadIdS3 != "zero-byte":
+                    try:
+                        s3.abort_multipart_upload(
+                            Bucket=bucket_name,
+                            Key=temp_s3_key,
+                            UploadId=file.uploadIdS3
+                        )
+                    except Exception as abort_error:
+                        logger.warning(f"Error aborting multipart upload for rejected file name: {abort_error}")
+                
+                file_results.append(FileCompletionResult(
+                    relativeKey=file.relativeKey,
+                    uploadIdS3=file.uploadIdS3,
+                    success=False,
+                    error=name_check_error
+                ))
+                has_failures = True
+                continue
             
             # Handle zero-byte files (identified by uploadIdS3 = "zero-byte")
             if file.uploadIdS3 == "zero-byte":

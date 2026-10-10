@@ -638,6 +638,8 @@ VAMS validates all uploaded files against blocked extension and MIME type lists 
 
 `application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/javascript`, `application/x-powershell`, `application/vbscript`, and additional potentially dangerous MIME types.
 
+Upload completion applies the blocked-extension check to every object it creates, including zero-byte and abandoned uploads, before the object is written, and accepts only the files that were declared when the upload was initialized.
+
 ## Audit Logging
 
 VAMS maintains nine dedicated Amazon CloudWatch Log Groups for audit logging, each retained for 1 year:
