@@ -118,6 +118,7 @@ class TestUnprocessedKeys:
         assert unresolved == []
         assert reader.chunks == [[{"databaseId": DB, "assetId": "a1"}, {"databaseId": DB, "assetId": "a2"}],
                                  [{"databaseId": DB, "assetId": "a2"}]]
+        assert len(sleep.call_args_list) == 1
         assert [c.args[0] for c in sleep.call_args_list] == [als.BATCH_GET_RETRY_BASE_SECONDS]
 
     def test_the_budget_is_still_max_batch_get_attempts_total_calls(self):
@@ -127,6 +128,7 @@ class TestUnprocessedKeys:
         # One backoff before each re-request, doubling; none after the final attempt.
         base = als.BATCH_GET_RETRY_BASE_SECONDS
         expected_backoff = [base * (2 ** i) for i in range(als.MAX_BATCH_GET_ATTEMPTS - 1)]
+        assert len(sleep.call_args_list) == len(expected_backoff)
         assert [c.args[0] for c in sleep.call_args_list] == expected_backoff
         # The unresolved key is reported as a (databaseId, assetId) tuple, not read individually and
         # not dropped.
