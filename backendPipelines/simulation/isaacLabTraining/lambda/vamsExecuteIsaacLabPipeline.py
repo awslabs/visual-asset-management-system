@@ -176,6 +176,11 @@ def lambda_handler(event, context):
             # Metadata + config S3 locations only; container reads from S3 if needed
             "inputMetadataS3Location": resolved["inputMetadataS3Location"],
             "inputConfigurationS3Location": resolved["inputConfigurationS3Location"],
+            # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+            # is in the deployment Region), so the Batch container signs its requests for each bucket
+            # with a client for that bucket's Region.
+            "inputBucketRegion": resolved["inputBucketRegion"],
+            "outputBucketRegion": resolved["outputBucketRegion"],
             "orchestrationEventPrefix": resolved["orchestrationEventPrefix"],
             "externalSfnTaskToken": external_task_token,
             "executingUserName": executing_userName,

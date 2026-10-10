@@ -43,7 +43,7 @@ def main_module():
     """
     container_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     stubbed = {}
-    for name in ("boto3", "vams_utils", "vams_utils.manifest_io"):
+    for name in ("boto3", "vams_utils", "vams_utils.manifest_io", "vams_utils.aws", "vams_utils.aws.s3"):
         if name not in sys.modules:
             stubbed[name] = MagicMock()
     sys.modules.update(stubbed)
@@ -196,6 +196,15 @@ def _write_child_workspace(tmp_path, stand_in_main):
     (stub_package / "manifest_io.py").write_text(
         "def fetch_metadata(location):\n    return {}\n\n\n"
         "def fetch_input_configuration(location):\n    return {}\n",
+        encoding="utf-8")
+    # The launcher installs the per-bucket-Region S3 routing from vams_utils.aws.s3 before main.py
+    stub_aws = stub_package / "aws"
+    stub_aws.mkdir(exist_ok=True)
+    (stub_aws / "__init__.py").write_text("", encoding="utf-8")
+    (stub_aws / "s3.py").write_text(
+        "def register_bucket_regions(bucket_regions):\n    pass\n\n\n"
+        "def client_for_bucket(bucket_name):\n    return None\n\n\n"
+        "def region_routing_client():\n    return None\n",
         encoding="utf-8")
     (tmp_path / "main.py").write_text("\n".join(stand_in_main) + "\n", encoding="utf-8")
 

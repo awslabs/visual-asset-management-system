@@ -661,6 +661,20 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     private-subnet pipelines and the Lambda-container pipelines do not, and the Lambda-container entry
     points (`lambdaContainer/lambda.py`) read the input and write the output with a client for the Region
     the manifest names. Moving a pipeline between placements means adding or removing that call.
+    **Batch containers get the Regions through the job definition:** `vamsExecute` passes
+    `inputBucketRegion` / `outputBucketRegion` to `openPipeline` (state-machine input), `constructPipeline`
+    turns them into the definition's `bucketRegions` map (`bucket_regions(event)`: bucket name -> Region,
+    deployment-Region buckets left out; the container `PipelineDefinition` dataclass has
+    `bucketRegions: dict = None`), and the container's S3 helper (`register_bucket_regions`,
+    `client_for_bucket`) signs each registered bucket's requests with a cached client for that Region --
+    adaptive retries, regional `us-east-1` endpoint, no `endpoint_url` -- called from `core.run` before
+    the first S3 call. Every bucket-addressed helper call routes through `client_for_bucket`; the
+    auxiliary bucket is never registered and stays on the default client. Splat Toolbox hands the map to
+    the upstream `main.py`'s process (`VAMS_BUCKET_REGIONS`), where the launcher replaces a bare
+    `boto3.client('s3')` with `vams_utils.aws.s3.region_routing_client()`; Isaac Lab carries the map in
+    its job config and `openPipeline` reads the asset bucket with `manifestHelper.s3_client_for_region`.
+    A new Batch pipeline copies this chain; its lambda and container tests assert the map end to end
+    (`test_*_bucket_regions.py`, `test_*_s3_region_client.py`).
     `fetch_manifest` RAISES when a referenced manifest cannot be read (it returns `None` only when the
     payload references no manifest at all): the manifest is the sole carrier of asset identity and the
     output paths, so swallowing that error starts a job that fails only after its compute — a GPU

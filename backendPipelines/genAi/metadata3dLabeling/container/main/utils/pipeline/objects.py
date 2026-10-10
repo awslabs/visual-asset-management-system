@@ -75,6 +75,9 @@ class PipelineDefinition(JsonEncodable):
     localTest: str = "False"
     completedStages: list[PipelineStage] = None
     currentStage: PipelineStage = None
+    # Bucket name -> Region for the asset buckets this job reads and writes (constructPipeline builds it
+    # from the manifest); buckets absent from it are in the deployment Region.
+    bucketRegions: dict = None
 
 
 @dataclass

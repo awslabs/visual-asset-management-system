@@ -218,6 +218,8 @@ def run_pipeline():
     print("=" * 60)
 
     s3 = S3Client()
+    # Sign each asset bucket's requests for its own Region before any S3 call (see utils/aws/s3.py).
+    s3.register_bucket_regions(job_config.get("bucketRegions"))
 
     # Download and install custom environment if provided
     if config.custom_environment_s3_uri:
@@ -305,7 +307,7 @@ def download_policy(s3: S3Client, config: PipelineConfig) -> str:
         raise ValueError(f"Policy must be an s3:// URI: {config.policy_s3_uri}")
     bucket = parsed.netloc
     key = parsed.path.lstrip("/")
-    s3.client.download_file(bucket, key, policy_path)
+    s3.client_for_bucket(bucket).download_file(bucket, key, policy_path)
     print(f"Policy downloaded to {policy_path}")
     return policy_path
 
@@ -350,7 +352,7 @@ def download_and_install_custom_environment(s3: S3Client, s3_uri: str):
     local_path = f"/tmp/{filename}"
 
     print(f"Downloading {filename} from s3://{bucket}/{key}")
-    s3.client.download_file(bucket, key, local_path)
+    s3.client_for_bucket(bucket).download_file(bucket, key, local_path)
 
     print(f"Installing custom environment: {local_path}")
     result = subprocess.run(

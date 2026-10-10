@@ -31,7 +31,8 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path,
                      asset_id, database_id,
                      input_metadata_s3_location, input_configuration_s3_location,
                      external_task_token, executing_userName, executing_requestContext,
-                     orchestration_event_prefix=""):
+                     orchestration_event_prefix="",
+                     input_bucket_region="", output_bucket_region=""):
 
     messagePayload = {
         "inputS3AssetFilePath": input_s3_asset_file_path,
@@ -43,6 +44,11 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path,
         "databaseId": database_id,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+        # is in the deployment Region), so the Batch container signs its requests for each bucket
+        # with a client for that bucket's Region.
+        "inputBucketRegion": input_bucket_region,
+        "outputBucketRegion": output_bucket_region,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
@@ -134,6 +140,8 @@ def lambda_handler(event, context):
             executing_userName,
             executing_requestContext,
             resolved['orchestrationEventPrefix'],
+            input_bucket_region=resolved['inputBucketRegion'],
+            output_bucket_region=resolved['outputBucketRegion'],
         )
 
         return {'statusCode': 200, 'body': 'Success'}

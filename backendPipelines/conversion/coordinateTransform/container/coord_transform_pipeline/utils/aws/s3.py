@@ -23,6 +23,38 @@ client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), co
 s3 = boto3.resource("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
 
 
+# An asset bucket may be in another Region than this container. The pipeline definition carries a
+# bucket name -> Region map (constructPipeline builds it from the manifest's bucket Regions), the
+# entry point registers it, and every request for a registered bucket is signed with a client for
+# that Region; the client above serves the buckets the map leaves out (the auxiliary bucket, a
+# definition from an older Lambda). Per-Region clients keep the adaptive retry mode and address the
+# regional us-east-1 endpoint, which an interface endpoint's private DNS covers where the global
+# s3.amazonaws.com name is not.
+_bucket_regions = {}
+_clients_by_region = {}
+_regional_retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                                s3={'us_east_1_regional_endpoint': 'regional'})
+
+
+def register_bucket_regions(bucket_regions):
+    """Record the Region of each named bucket from a definition's bucketRegions map."""
+    for bucket_name, region in (bucket_regions or {}).items():
+        if bucket_name and region:
+            _bucket_regions[bucket_name] = region
+
+
+def client_for_bucket(bucket_name):
+    """The S3 client for the Region a bucket was registered in; the default client otherwise."""
+    region = _bucket_regions.get(bucket_name)
+    if not region or region == client.meta.region_name:
+        return client
+    regional = _clients_by_region.get(region)
+    if regional is None:
+        regional = boto3.client("s3", region_name=region, config=_regional_retry_config)
+        _clients_by_region[region] = regional
+    return regional
+
+
 def download(bucket_name: str, object_key: str, file_path: str) -> str | None:
     """Download an object from S3 to a local file path."""
     logger.info(
@@ -32,7 +64,7 @@ def download(bucket_name: str, object_key: str, file_path: str) -> str | None:
     try:
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "wb") as data:
-            client.download_fileobj(bucket_name, object_key, data)
+            client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data)
     except ClientError as e:
         logger.exception(e)
         return None
@@ -53,7 +85,7 @@ def upload(bucket_name: str, object_key: str, file_path: str) -> str | None:
             multipart_chunksize=100 * MB,
             use_threads=True,
         )
-        s3.meta.client.upload_file(
+        client_for_bucket(bucket_name).upload_file(
             file_path,
             bucket_name,
             object_key,
