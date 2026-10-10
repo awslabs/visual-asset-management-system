@@ -16,7 +16,7 @@ from common.s3MetadataKeys import (
     VAMS_STATUS_ARCHIVED,
     VAMS_STATUS_DELETED,
 )
-from common.validators import validate, MAX_S3_OBJECT_KEY_BYTES
+from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -337,7 +337,7 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
     # asset prefix as well and is what S3 measures. Refuse it here so an over-long
     # key never reaches head_object or the presigner. Raised through the same
     # per-file channel as the other refusals, so a bulk request skips just this key.
-    if len(final_key.encode('utf-8')) > MAX_S3_OBJECT_KEY_BYTES:
+    if exceeds_s3_object_key_limit(final_key):
         raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
 
     # Resolve version ID first -- an asset-version pin (whole-set) resolves the

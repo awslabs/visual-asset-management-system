@@ -165,8 +165,15 @@ def validate_guid(name, value):
         return (False, name + " is invalid. Must follow the regexp "+execution_id_pattern)
     return (True, '')
 
-def _exceeds_s3_object_key_limit(value):
-    """True when the UTF-8 encoding of value is longer than an S3 object key may be."""
+def exceeds_s3_object_key_limit(value):
+    """True when the UTF-8 encoding of value is longer than an S3 object key may be.
+
+    The one predicate for the S3 object-key limit. The path validators below apply it to the
+    asset-relative part a request carries; the asset handlers (stream, download, upload initialize,
+    createFolder, move, copy) apply it again to the RESOLVED key once the asset prefix has been
+    added, before their first S3 call. Measured in bytes, not characters: a 350-character key of
+    3-byte characters is over the limit.
+    """
     return len(value.encode('utf-8')) > MAX_S3_OBJECT_KEY_BYTES
 
 def _s3_object_key_limit_message(name):
@@ -179,7 +186,7 @@ def validate_relative_file_path(name, value):
         return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
     elif len(value) < 3:
         return (False, name + " is invalid. Must be at least 3 characters long.")
-    elif _exceeds_s3_object_key_limit(value):
+    elif exceeds_s3_object_key_limit(value):
         return (False, _s3_object_key_limit_message(name))
     return (True, '')
 
@@ -207,7 +214,7 @@ def validate_download_key_array(name, values):
             return (False, name + " entries must be non-empty strings")
         if '..' in value:
             return (False, name + " is invalid. Cannot contain '..' path segments.")
-        if _exceeds_s3_object_key_limit(value):
+        if exceeds_s3_object_key_limit(value):
             return (False, _s3_object_key_limit_message(name))
     return (True, '')
 
@@ -224,7 +231,7 @@ def validate_asset_path(name, value, isFolder):
         return (False, name + " is invalid. Must be at least 4 characters long.")
     elif isFolder and '//' in value:
         return (False, name + " is invalid. Cannot contain consecutive forward slashes (//).")
-    elif _exceeds_s3_object_key_limit(value):
+    elif exceeds_s3_object_key_limit(value):
         return (False, _s3_object_key_limit_message(name))
     return (True, '')
 
@@ -235,7 +242,7 @@ def validate_asset_auxiliarypreview_path(name, value):
         return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
     elif '//' in value:
         return (False, name + " is invalid. Cannot contain consecutive forward slashes (//).")
-    elif _exceeds_s3_object_key_limit(value):
+    elif exceeds_s3_object_key_limit(value):
         return (False, _s3_object_key_limit_message(name))
     
     # Check for minimum length requirements

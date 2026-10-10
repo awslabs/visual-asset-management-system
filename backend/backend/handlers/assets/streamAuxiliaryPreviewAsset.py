@@ -11,7 +11,7 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.validators import validate, MAX_S3_OBJECT_KEY_BYTES
+from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -182,7 +182,7 @@ def handle_head_request(event, claims_and_roles):
 
     # The validator bounded the asset-relative part; the resolved key carries the database and asset
     # prefix as well and is what S3 measures. Refuse it here so an over-long key never reaches head_object.
-    if len(object_key.encode('utf-8')) > MAX_S3_OBJECT_KEY_BYTES:
+    if exceeds_s3_object_key_limit(object_key):
         message = "File key exceeds the maximum S3 object key length"
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
@@ -375,7 +375,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # The validator bounded the asset-relative part; the resolved key carries the database and
                 # asset prefix as well and is what S3 measures. Refuse it here so an over-long key never
                 # reaches get_object.
-                if len(object_key.encode('utf-8')) > MAX_S3_OBJECT_KEY_BYTES:
+                if exceeds_s3_object_key_limit(object_key):
                     message = "File key exceeds the maximum S3 object key length"
                     logger.error(message)
                     streaming_headers = {

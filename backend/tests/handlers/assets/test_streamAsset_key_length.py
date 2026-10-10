@@ -13,7 +13,9 @@ The fixture shape is the one named in the brief -- a 1000-byte relative path aga
 base key, 1060 bytes resolved -- so the relative part passes the validator (``RELATIVE_FILE_PATH`` /
 ``ASSET_AUXILIARYPREVIEW_PATH`` / the download request model) and only the handler-level guard can
 refuse it. Each class carries a paired control at the same base key with a short path, which proves
-the guard refuses the length and not the shape.
+the guard refuses the length and not the shape, and one multibyte case -- 3-byte characters, inside
+the limit in characters and over it in bytes once resolved -- which proves the guard measures what S3
+measures; a guard rewritten to ``len(key)`` passes the ASCII cases and fails that one.
 
 Negative control (recorded in the report, not in this file): with the fix stashed, every refusal test
 here reaches the S3 mock -- ``get_object`` / ``head_object`` is called with the over-long key -- and
@@ -57,6 +59,35 @@ SHORT_AUX_PATH = "scans/pump.e57/preview/r/octree.bin"
 LONG_DOWNLOAD_KEY = "/" + _relative_path("scans/", 999, ".glb")
 SHORT_DOWNLOAD_KEY = "/scans/pump.glb"
 assert len(LONG_DOWNLOAD_KEY.encode("utf-8")) == 1000
+
+# A 3-byte UTF-8 character (U+4E2D). The multibyte fixtures below are inside the limit in CHARACTERS
+# at every layer -- relative part and resolved key alike -- and over it only in BYTES once the asset
+# prefix is added. A guard rewritten to count characters lets every one of them through.
+THREE_BYTE_CHAR = "\u4e2d"
+assert len(THREE_BYTE_CHAR.encode("utf-8")) == 3
+
+
+def _multibyte_path(prefix, char_count, suffix):
+    """A relative path of ``char_count`` 3-byte characters between ``prefix`` and ``suffix``."""
+    return prefix + (THREE_BYTE_CHAR * char_count) + suffix
+
+
+def _assert_over_in_bytes_only(resolved_key):
+    assert len(resolved_key) < 1024, "fixture must be inside the limit when counted in characters"
+    assert len(resolved_key.encode("utf-8")) > 1024, "fixture must be over the limit in bytes"
+
+
+# 6 + 330*3 + 4 = 1000 bytes (340 characters): passes the validator; 1060 bytes resolved.
+MULTIBYTE_STREAM_PATH = _multibyte_path("scans/", 330, ".glb")
+_assert_over_in_bytes_only(ASSET_BASE_KEY + MULTIBYTE_STREAM_PATH)
+
+# 23 + 325*3 + 4 = 1002 bytes (352 characters); 1066 bytes once 'db1/' and the base key are added.
+MULTIBYTE_AUX_PATH = _multibyte_path("scans/pump.e57/preview/", 325, ".bin")
+_assert_over_in_bytes_only("db1/" + ASSET_BASE_KEY + MULTIBYTE_AUX_PATH)
+
+# 7 + 330*3 + 4 = 1001 bytes (341 characters); 1060 bytes resolved.
+MULTIBYTE_DOWNLOAD_KEY = "/" + _multibyte_path("scans/", 330, ".glb")
+_assert_over_in_bytes_only(ASSET_BASE_KEY + MULTIBYTE_DOWNLOAD_KEY.lstrip("/"))
 
 
 def _assert_no_s3_call(mock_s3):
@@ -111,6 +142,18 @@ class TestStreamAssetResolvedKeyLength:
         assert response["headers"]["Access-Control-Allow-Origin"] == "*"
         assert response["headers"]["Access-Control-Allow-Headers"] == "Range"
 
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    def test_the_guard_measures_bytes_not_characters(self, method):
+        """A resolved key under 1024 characters but over 1024 bytes is still refused."""
+        m = asset_stream._load()
+        mock_s3 = _stream_wire(m)
+
+        response = m.lambda_handler(_stream_event(MULTIBYTE_STREAM_PATH, method), MagicMock())
+
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"])["message"] == MESSAGE
+        _assert_no_s3_call(mock_s3)
+
     @pytest.mark.parametrize("method,s3_call,status", [("GET", "get_object", 307), ("HEAD", "head_object", 200)])
     def test_a_short_key_at_the_same_base_still_reaches_s3(self, method, s3_call, status):
         """Paired control: the guard refuses the length, not the base key or the shape."""
@@ -154,6 +197,18 @@ class TestStreamAuxiliaryPreviewAssetResolvedKeyLength:
         mock_s3 = _aux_wire(m)
 
         response = m.lambda_handler(_aux_event(LONG_AUX_PATH, method), MagicMock())
+
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"])["message"] == MESSAGE
+        _assert_no_s3_call(mock_s3)
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    def test_the_guard_measures_bytes_not_characters(self, method):
+        """A resolved key under 1024 characters but over 1024 bytes is still refused."""
+        m = aux_stream._load()
+        mock_s3 = _aux_wire(m)
+
+        response = m.lambda_handler(_aux_event(MULTIBYTE_AUX_PATH, method), MagicMock())
 
         assert response["statusCode"] == 400
         assert json.loads(response["body"])["message"] == MESSAGE
@@ -214,6 +269,18 @@ class TestDownloadAssetResolvedKeyLength:
         assert response["statusCode"] == 400
         assert MESSAGE in json.loads(response["body"])["message"]
         assert LONG_DOWNLOAD_KEY[:40] not in response["body"], "the response echoed the key"
+        _assert_no_s3_call(mock_s3)
+
+    def test_the_guard_measures_bytes_not_characters(self):
+        """A resolved key under 1024 characters but over 1024 bytes is still refused."""
+        m = download._load()
+        mock_s3 = _download_wire(m)
+
+        response = m.lambda_handler(
+            _download_event({"downloadType": "assetFile", "key": MULTIBYTE_DOWNLOAD_KEY}), MagicMock())
+
+        assert response["statusCode"] == 400
+        assert MESSAGE in json.loads(response["body"])["message"]
         _assert_no_s3_call(mock_s3)
 
     def test_a_short_key_at_the_same_base_is_still_signed(self):
