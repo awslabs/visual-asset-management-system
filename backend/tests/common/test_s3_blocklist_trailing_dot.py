@@ -1,22 +1,26 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trailing-dot, trailing-whitespace and dot-only basenames on the executable blocklist (issue #420).
+"""Trailing-dot, trailing-whitespace, dot-only, leading-dot and trailing-slash basenames on the executable
+blocklist (issue #420).
 
 common.s3.validateUnallowedFileExtensionAndContentType is the one executable blocklist behind every
 upload, download, stream and workflow-output path. It used to read the extension straight from
 ``os.path.splitext(keyPath)[1]``, which is a literal suffix split: ``payload.exe.`` gave ``.``,
-``payload.exe `` gave ``.exe `` and ``.exe`` gave nothing, so none of the three was ever compared with
-the list. Windows drops a trailing dot or space when a non-browser client writes the file to disk --
-``payload.exe.`` lands as ``payload.exe`` -- and a file named ``.exe`` is already executable there.
+``payload.exe `` gave ``.exe ``, ``.exe`` and ``..exe`` gave nothing and ``payload.exe/`` has an empty
+basename, so none of them was ever compared with the list. Windows drops a trailing dot or space when a
+non-browser client writes the file to disk -- ``payload.exe.`` lands as ``payload.exe`` -- a file named
+``.exe`` or ``..exe`` is already executable there, and the CLI builds the local path with ``pathlib``,
+which drops a trailing slash.
 
-The helper now takes the extension from the key's basename after every trailing dot and whitespace
-character has been removed (``str.isspace``, so U+00A0 and U+3000 count), and a dot-only basename is
-its own extension. ``.gitignore`` is therefore inspected as ``.gitignore`` and stays allowed, and a key
-ending in ``/`` (an empty basename, a folder marker) is left as it was.
+The helper now takes the extension from the last dot of the key's final non-empty segment, after every
+trailing dot and whitespace character has been removed (``str.isspace``, so U+00A0 and U+3000 count).
+``.gitignore`` is therefore inspected as ``.gitignore`` and stays allowed, ``archive.tar.gz`` as ``.gz``,
+and a folder whose own name ends in a blocked extension (``builds.exe/``) is refused.
 
 NEGATIVE CONTROL: the ``TestNormalizedBasename`` rejections FAIL when this file is run against
-8c42a676f (the #412 base this branch is stacked on), because that helper still splits the raw key.
+8c42a676f (the #412 base this branch is stacked on), because that helper still splits the raw key; the
+leading-dot and trailing-slash cases also FAIL against 7d57156f0, the first #420 commit.
 ``TestUnchangedBehaviour`` passes on both; it is the positive control that the normalization did not
 narrow what was accepted before.
 
@@ -109,6 +113,17 @@ class TestNormalizedBasename:
     def test_a_dot_only_basename_is_its_own_extension(self, validate, key):
         assert validate(key, BENIGN_CONTENT_TYPE) is False
 
+    @pytest.mark.parametrize("key", ["..exe", "...bat", "..exe.", "..EXE", "dir/..exe"])
+    def test_leading_dots_do_not_hide_the_extension(self, validate, key):
+        # The extension starts at the LAST dot, so "..exe" is ".exe" exactly as Windows reads it.
+        assert validate(key, BENIGN_CONTENT_TYPE) is False
+
+    @pytest.mark.parametrize("key", ["payload.exe/", "dir/payload.EXE/", "/payload.exe/", "payload.exe./"])
+    def test_a_trailing_slash_does_not_hide_the_extension(self, validate, key):
+        # The last non-empty segment is the name: a client that builds a local path with pathlib drops
+        # the trailing slash, so "payload.exe/" is "payload.exe" on disk.
+        assert validate(key, BENIGN_CONTENT_TYPE) is False
+
     def test_case_and_trailing_dot_together(self, validate):
         # #412's lower-casing applies after the basename is normalized.
         assert validate(".EXE.", BENIGN_CONTENT_TYPE) is False
@@ -132,15 +147,18 @@ class TestNormalizedBasename:
 class TestUnchangedBehaviour:
     """Positive control: these pass before and after the normalization."""
 
-    @pytest.mark.parametrize("key", [".gitignore", "dir/.env.example", ".tar.gz", "archive.tar.gz"])
+    @pytest.mark.parametrize(
+        "key", [".gitignore", "dir/.env.example", ".tar.gz", "archive.tar.gz", "..gitignore", "a..txt"]
+    )
     def test_dotfiles_and_multi_suffix_names_stay_allowed(self, validate, key):
-        # ".gitignore" is inspected as ".gitignore" (not listed); ".tar.gz" still yields ".gz".
+        # The extension starts at the last dot: ".gitignore" and "..gitignore" are inspected as
+        # ".gitignore" (not listed), ".tar.gz" yields ".gz" and "a..txt" yields ".txt".
         assert validate(key, BENIGN_CONTENT_TYPE) is True
 
-    @pytest.mark.parametrize("key", ["payload.exe/", "dir/payload.exe/", "assets/"])
-    def test_a_folder_marker_is_not_a_file(self, validate, key):
-        # Pinned so the behaviour is explicit: a key ending in '/' has an empty basename and is left
-        # as it is -- folder markers are not downloaded through the routes that call this helper.
+    @pytest.mark.parametrize("key", ["assets/", "docs.v2/", "dir/sub/", "/"])
+    def test_a_folder_name_without_a_blocked_extension_is_allowed(self, validate, key):
+        # A key ending in '/' is inspected by its last non-empty segment, so an ordinary folder name
+        # passes; one that ends in a blocked extension does not (TestNormalizedBasename).
         assert validate(key, BENIGN_CONTENT_TYPE) is True
 
     @pytest.mark.parametrize("key", ["payload.exe", "payload.EXE", "script.bAt", "library.DLL"])

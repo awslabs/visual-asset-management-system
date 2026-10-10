@@ -182,23 +182,13 @@ def validateUnallowedFileExtensionAndContentType(keyPath: str, contentType: str)
         logger.error(f"Unallowed file content type detected in asset: {keyPath}")
         return False
     
-    #check if the file extension of the keyPath is in the list of unallowed file extensions.
-    #The extension is read from the key's basename after every trailing dot and whitespace character is
-    #removed, and a dot-only basename counts as its own extension. os.path.splitext is a literal suffix
-    #split, so "payload.exe." yields ".", "payload.exe " yields ".exe " and ".exe" yields nothing, none
-    #of which is on the list; Windows drops a trailing dot or space when a non-browser client writes
-    #the file to disk, and a dot-only name such as ".exe" is already executable there. The strip loop
-    #uses str.isspace so a non-ASCII space (U+00A0, U+3000) is removed like an ASCII one. A dot-only
-    #basename becomes the extension (".exe" -> ".exe"; ".gitignore" -> ".gitignore", not listed, stays
-    #allowed; ".tar.gz" still yields ".gz"). A key ending in "/" has an empty basename and is left as
-    #it is: a folder marker is not a file and is not downloaded through these routes.
-    name = os.path.basename(keyPath)
+    #Check if the file extension of the keyPath is in the list of unallowed file extensions. The
+    #extension is everything from the last dot of the key's final non-empty segment, read after
+    #trailing dots and whitespace are removed: "payload.exe.", "payload.exe/", "..exe" -> ".exe".
+    name = os.path.basename(keyPath.rstrip('/'))
     while name and (name[-1] == '.' or name[-1].isspace()):
         name = name[:-1]
-    extension = os.path.splitext(name)[1]
-    if not extension and name.startswith('.'):
-        extension = name
-    extension = extension.lower()
+    extension = name[name.rfind('.'):].lower() if '.' in name else ''
     if extension and extension in UNALLOWED_FILE_EXTENSION_LIST:
         logger.error(f"Unallowed file extension detected in asset: {keyPath}")
         return False

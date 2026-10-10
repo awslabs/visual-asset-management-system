@@ -1,33 +1,39 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A path a request CREATES may not end in a dot or whitespace (issue #420).
+"""A path a request CREATES may not end in a dot or whitespace, and a file path may not end in '/'
+(issue #420).
 
-``validate_asset_file_path`` accepted ``/payload.exe.`` and ``/payload.exe `` on every path, so a key
-whose basename Windows rewrites on download (``payload.exe.`` lands as ``payload.exe``) could be created
-through the ordinary upload API. The validator now takes ``new_object``; the models whose path names a
-key the request will create pass it, and refuse a final segment ending in a dot or whitespace:
+``validate_asset_file_path`` accepted ``/payload.exe.``, ``/payload.exe `` and ``/payload.exe/`` on
+every path, so a key whose basename Windows rewrites on download (``payload.exe.`` lands as
+``payload.exe``) or whose trailing slash the CLI's ``pathlib`` path building drops (``payload.exe/``
+lands as ``payload.exe``) could be created through the ordinary upload API. The validator now takes
+``new_object`` and ``file_only``; the models whose path names a key the request will create pass the
+first and refuse a final segment ending in a dot or whitespace, and the three whose path names a FILE
+pass the second as well and refuse a trailing slash:
 
-    UploadFileModel.relativeKey              upload initialize
-    UploadFileCompletionModel.relativeKey    complete upload (the final key is derived from it)
-    ExternalFileModel.relativeKey            complete external upload (tempKey is an existing object)
-    CreateFolderRequestModel.relativeKey     create folder (final segment is empty, so never refused)
-    MoveFileRequestModel.destinationPath     move / rename
-    CopyFileRequestModel.destinationPath     copy
+    UploadFileModel.relativeKey              upload initialize              new_object, file_only
+    UploadFileCompletionModel.relativeKey    complete upload                new_object, file_only
+    ExternalFileModel.relativeKey            complete external upload       new_object, file_only
+    CreateFolderRequestModel.relativeKey     create folder (its own rule REQUIRES the slash)   new_object
+    MoveFileRequestModel.destinationPath     move / rename                  new_object
+    CopyFileRequestModel.destinationPath     copy                           new_object
 
 Three things are deliberately NOT refused and are pinned here. A dot-only basename (``/.gitignore``)
-is a legitimate file name -- common/s3.py validateUnallowedFileExtensionAndContentType treats it as
-its own extension, so ``.exe`` is still blocked there. A trailing dot inside the path
+is a legitimate file name -- common/s3.py validateUnallowedFileExtensionAndContentType reads the
+extension from its last dot, so ``.exe`` is still blocked there. A trailing dot inside the path
 (``/dir./file.txt``) is not the final segment. And the READ paths -- the download ``key``, file info,
-archive, the source of a move or copy -- keep accepting such a key, because an object stored under it
-may already exist in a bucket and has to stay reachable; the blocklist helper covers the executable
-case on read.
+archive, the source of a move or copy, the external completion's ``tempKey`` -- keep accepting such a
+key, because an object stored under it may already exist in a bucket and has to stay reachable; the
+blocklist helper covers the executable case on read.
 
 NEGATIVE CONTROL: ``TestWritePathsRefuseTrailingDotOrWhitespace`` FAILS on 8c42a676f (the #412 base
-this branch is stacked on): the model-level cases there are accepted by every model at the base. The
-model-level cases of the other two classes pass on both and are the positive control. The cases that
-call ``validate_asset_file_path`` with ``new_object=`` directly cannot run at the base at all (the
-parameter does not exist there, TypeError), so they are not part of either control.
+this branch is stacked on): the model-level cases there are accepted by every model at the base.
+``TestFilePathsRefuseTrailingSlash`` FAILS on 8c42a676f and on 7d57156f0 (the first #420 commit) the
+same way. The model-level cases of the other classes pass on both and are the positive control. The
+cases that call ``validate_asset_file_path`` with ``new_object=`` or ``file_only=`` directly cannot run
+at the base at all (the parameter does not exist there, TypeError), so they are not part of either
+control.
 """
 
 import pytest
@@ -69,6 +75,16 @@ ACCEPTED_FILE_KEYS = [
     "/dir/mon dossier/café.glb",
     "/dir/v1.2/model.glb",
     "LICENSE",
+]
+
+# A file key that ends in '/' passes every pre-existing rule and the trailing-dot rule; only the
+# file_only rule refuses it. Stored as given, it is a folder marker whose name the CLI's pathlib path
+# building drops the slash from, so "/payload.exe/" would land as "payload.exe".
+REFUSED_SLASH_KEYS = [
+    "/payload.exe/",
+    "/dir/payload.exe/",
+    "/notes.txt/",
+    "assetId/dir/",
 ]
 
 
@@ -118,12 +134,48 @@ class TestWritePathsRefuseTrailingDotOrWhitespace:
 
 
 @pytest.mark.unit
+class TestFilePathsRefuseTrailingSlash:
+    """Negative control: every model-level case here is accepted at 8c42a676f and at 7d57156f0."""
+
+    @pytest.mark.parametrize("key", REFUSED_SLASH_KEYS)
+    def test_the_validator_refuses_a_file_key_ending_in_a_slash(self, key):
+        with pytest.raises(ValueError) as exc:
+            validate_asset_file_path("relativeKey", key, new_object=True, file_only=True)
+        # Generic message, the key is not echoed (root CLAUDE.md Rule 11).
+        assert str(exc.value) == "relativeKey cannot end with a slash"
+        assert key not in str(exc.value)
+
+    @pytest.mark.parametrize("key", REFUSED_SLASH_KEYS)
+    def test_upload_initialize_relative_key(self, key):
+        with pytest.raises(ValidationError):
+            UploadFileModel(relativeKey=key, file_size=5)
+
+    @pytest.mark.parametrize("key", REFUSED_SLASH_KEYS)
+    def test_upload_completion_relative_key(self, key):
+        with pytest.raises(ValidationError):
+            _upload_completion(key)
+
+    @pytest.mark.parametrize("key", REFUSED_SLASH_KEYS)
+    def test_external_completion_relative_key(self, key):
+        with pytest.raises(ValidationError):
+            ExternalFileModel(relativeKey=key, tempKey="temp-uploads/x/payload.exe")
+
+    def test_file_only_is_independent_of_new_object(self):
+        # The slash rule is the file rule, the dot rule is the created-key rule; each fires alone.
+        with pytest.raises(ValueError):
+            validate_asset_file_path("relativeKey", "/payload.exe/", file_only=True)
+        assert validate_asset_file_path("relativeKey", "/payload.exe.", file_only=True) == "/payload.exe."
+        assert validate_asset_file_path("relativeKey", "/payload.exe/", new_object=True) == "/payload.exe/"
+
+
+@pytest.mark.unit
 class TestWritePathsStillAcceptLegitimateNames:
     """Positive control: a gate that refuses everything would satisfy the class above on its own."""
 
     @pytest.mark.parametrize("key", ACCEPTED_FILE_KEYS)
     def test_the_validator_accepts_a_new_object_key(self, key):
         assert validate_asset_file_path("relativeKey", key, new_object=True) == key
+        assert validate_asset_file_path("relativeKey", key, new_object=True, file_only=True) == key
 
     @pytest.mark.parametrize("key", ACCEPTED_FILE_KEYS)
     def test_upload_initialize_relative_key(self, key):

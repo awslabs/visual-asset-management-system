@@ -70,7 +70,8 @@ MAX_S3_BUCKET_NAME_LENGTH = 63
 MAX_S3_UPLOAD_ID_LENGTH = 1024
 
 
-def validate_asset_file_path(field_name: str, value: str, new_object: bool = False) -> str:
+def validate_asset_file_path(field_name: str, value: str, new_object: bool = False,
+                             file_only: bool = False) -> str:
     """Validate one caller-supplied asset file path via the shared validate() dispatcher.
 
     The file-operation APIs accept both the asset-relative form ('/dir/file.txt')
@@ -83,18 +84,13 @@ def validate_asset_file_path(field_name: str, value: str, new_object: bool = Fal
     unicode are legitimate file-name characters and stay accepted, so the charset
     rule here is narrower than the ASCII set bucketExistingKey allows.
 
-    ``new_object`` is set by the validators of a path this request CREATES — an
-    upload's relativeKey, a folder, the destination of a move or copy. Those also
-    refuse a final path segment that ends in a dot or whitespace: Windows drops a
-    trailing dot or space when a non-browser client writes the file to disk, so
-    ``payload.exe.`` lands as ``payload.exe`` past the extension blocklist (issue
-    #420). Only the final segment is checked (``/dir./file.txt`` is accepted), and a
-    dot-only basename such as ``.gitignore`` stays accepted — it is a legitimate
-    file name, and common/s3.py validateUnallowedFileExtensionAndContentType
-    treats it as its own extension so ``.exe`` is still blocked. The read paths
-    (download, file info, archive, the source of a move or copy) leave the flag
-    off: an object with such a key may already exist in the bucket and has to
-    stay reachable, and the blocklist helper covers the executable case on read.
+    ``new_object`` is set for a path this request creates (an upload's relativeKey,
+    a folder, the destination of a move or copy): its final segment may not end in
+    a dot or whitespace, which Windows drops when writing the file to disk.
+    ``file_only`` is set for a path that names a file, never a folder: it may not
+    end in '/'. The read paths — download key, file info, archive, the source of a
+    move or copy — set neither, so an object already stored under such a key stays
+    reachable.
     """
     (valid, message) = validate({
         field_name: {'value': [value], 'validator': 'DOWNLOAD_KEY_ARRAY'}
@@ -110,8 +106,11 @@ def validate_asset_file_path(field_name: str, value: str, new_object: bool = Fal
         message = f"{field_name} cannot contain control characters"
         logger.error(message)
         raise ValueError(message)
-    # The final segment ends in a dot or whitespace exactly when the whole value does: a path
-    # ending in '/' has an empty final segment and is not affected.
+    if file_only and value.endswith('/'):
+        message = f"{field_name} cannot end with a slash"
+        logger.error(message)
+        raise ValueError(message)
+    # The final segment ends in a dot or whitespace exactly when the whole value does.
     if new_object and (value.endswith('.') or value[-1:].isspace()):
         message = f"{field_name} cannot end with a dot or whitespace"
         logger.error(message)
@@ -295,8 +294,8 @@ class UploadFileModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
-        # The key this upload creates: a trailing dot or whitespace is refused here (issue #420).
-        return validate_asset_file_path('relativeKey', v, new_object=True)
+        # The file key this upload creates.
+        return validate_asset_file_path('relativeKey', v, new_object=True, file_only=True)
     num_parts: Optional[int] = Field(None, ge=0, le=MAX_PARTS_PER_FILE)  # Allow 0 parts for zero-byte files; S3 max parts per object
     
     @root_validator
@@ -434,9 +433,8 @@ class UploadFileCompletionModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
-        # complete_upload derives the final S3 key from this value (and creates a zero-byte object
-        # from it when no parts are supplied), so it names a key this request creates (issue #420).
-        return validate_asset_file_path('relativeKey', v, new_object=True)
+        # complete_upload derives the final S3 key from this value.
+        return validate_asset_file_path('relativeKey', v, new_object=True, file_only=True)
 
 class CompleteUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing a file upload"""
@@ -500,11 +498,14 @@ class ExternalFileModel(BaseModel, extra='ignore'):
     relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
     tempKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)  # Full temporary key in S3
 
-    @validator('relativeKey', 'tempKey')
-    def validate_keys(cls, v, field):
-        # relativeKey names the final key this completion creates; tempKey is an object that already
-        # exists in the bucket and is only read, so it keeps the read-path rules (issue #420).
-        return validate_asset_file_path(field.name, v, new_object=(field.name == 'relativeKey'))
+    @validator('relativeKey')
+    def validate_relative_key(cls, v):
+        # The final file key this completion creates; tempKey is an object that already exists.
+        return validate_asset_file_path('relativeKey', v, new_object=True, file_only=True)
+
+    @validator('tempKey')
+    def validate_temp_key(cls, v):
+        return validate_asset_file_path('tempKey', v)
 
 class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing an external file upload"""
@@ -702,8 +703,7 @@ class MoveFileRequestModel(BaseModel, extra='ignore'):
 
     @validator('sourcePath', 'destinationPath')
     def validate_paths(cls, v, field):
-        # destinationPath is the key this move creates; sourcePath already exists and keeps the
-        # read-path rules so an existing object stays movable (issue #420).
+        # destinationPath is the key this move creates; sourcePath is an object that already exists.
         return validate_asset_file_path(field.name, v, new_object=(field.name == 'destinationPath'))
 
 class CopyFileRequestModel(BaseModel, extra='ignore'):
@@ -717,8 +717,7 @@ class CopyFileRequestModel(BaseModel, extra='ignore'):
 
     @validator('sourcePath', 'destinationPath')
     def validate_paths(cls, v, field):
-        # destinationPath is the key this copy creates; sourcePath already exists and keeps the
-        # read-path rules so an existing object stays copyable (issue #420).
+        # destinationPath is the key this copy creates; sourcePath is an object that already exists.
         return validate_asset_file_path(field.name, v, new_object=(field.name == 'destinationPath'))
 
     @root_validator
