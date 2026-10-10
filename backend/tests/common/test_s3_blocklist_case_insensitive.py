@@ -215,6 +215,7 @@ class TestBlocklistHygiene:
         # os.path.splitext returns the suffix with its dot, so a dotless entry never matches.
         assert all(entry.startswith(".") for entry in UNALLOWED_FILE_EXTENSION_LIST)
 
+    @pytest.mark.temporary  # pins the one-time removal of the duplicated .java / .exe entries from the lists
     def test_dedup_added_and_removed_nothing(self):
         # Positive control for the list hygiene: the same set of entries as before, only once each.
         assert set(UNALLOWED_FILE_EXTENSION_LIST) == DOCUMENTED_EXTENSIONS
