@@ -22,6 +22,7 @@ infra/
 ├── lib/
 │   ├── core-stack.ts         # Main orchestration stack
 │   ├── cf-waf-stack.ts       # Web Application Firewall stack
+│   ├── crossRegionBucketNotifications-stack.ts  # Per-Region S3 notification topics (+ regional CMK) for asset buckets outside the deployment Region
 │   ├── nestedStacks/         # Modular nested stack implementations
 │   │   ├── auth/             # Authentication (Cognito/External OAuth)
 │   │   ├── apiLambda/        # API Gateway, Lambda layers, handlers
@@ -3108,13 +3109,15 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 
 4. **Gate unavailable services in `getConfig()`** so a bad combination fails at synth with a clear message rather than mid-deploy; mirror the rule into `ConfigBuilder/validation.ts` by hand.
 
-5. **Service versions and model ids can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates.
+5. **Cross-Region AWS PrivateLink is commercial-only.** A cross-Region interface endpoint (`serviceRegion` on `InterfaceVpcEndpoint`) exists in the `aws` partition only. The cross-Region Amazon S3 endpoint the VPC builder adds for an external asset bucket in another Region is gated in `getConfig()` on `config.env.partition !== "aws"` (not `govCloud.enabled`); `app.useGlobalVpc.addCrossRegionS3Endpoints: false` is the operator's way through, and the bucket's notification topics still come from its per-Region `CrossRegionBucketNotificationsStack`. Paired assertion: `infra/test/vpc/crossRegionS3Endpoint.test.ts`.
 
-6. **Update all three config templates together** — `commercial`, `govcloud`, `eusovereign`. `useFips` is the one capability flag where the restricted templates disagree (`true` GovCloud, `false` EU Sovereign). It only adds the AWS KMS FIPS interface endpoint, and `getConfig()` warns when it is `true` in `aws-eusc`, which offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF).
+6. **Service versions and model ids can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates.
 
-7. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
+7. **Update all three config templates together** — `commercial`, `govcloud`, `eusovereign`. `useFips` is the one capability flag where the restricted templates disagree (`true` GovCloud, `false` EU Sovereign). It only adds the AWS KMS FIPS interface endpoint, and `getConfig()` warns when it is `true` in `aws-eusc`, which offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF).
 
-8. **IAM resource matching is case-sensitive.** Log-group grants are explicit allow-lists: the `/aws/vendedlogs/*` prefixes (pipeline constructs are split across `VAMSStateMachine-*` and `VAMSstateMachine-*`, both granted) plus AWS Batch's default container group `/aws/batch/job`, which the executionService reads because the built-in Batch pipelines register it as a per-stage log source (`infra/lib/helper/batchJobLogGroup.ts` names it; no VAMS job definition sets a log configuration). A new pipeline inventing a third casing silently loses log-read access.
+8. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
+
+9. **IAM resource matching is case-sensitive.** Log-group grants are explicit allow-lists: the `/aws/vendedlogs/*` prefixes (pipeline constructs are split across `VAMSStateMachine-*` and `VAMSstateMachine-*`, both granted) plus AWS Batch's default container group `/aws/batch/job`, which the executionService reads because the built-in Batch pipelines register it as a per-stage log source (`infra/lib/helper/batchJobLogGroup.ts` names it; no VAMS job definition sets a log configuration). A new pipeline inventing a third casing silently loses log-read access.
 
 ### **Verifying a partition change**
 

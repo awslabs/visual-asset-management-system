@@ -42,6 +42,16 @@ interface BucketOption {
     baseAssetsPrefix: string;
     // The VAMS default asset bucket, which houses pipeline template data and execution-time run I/O.
     isDefault?: boolean;
+    // The bucket's Region; absent on a bucket in the deployment Region registered without one.
+    bucketRegion?: string | null;
+    bucketAccountId?: string | null;
+}
+
+// "name - prefix (region) (VAMS default)", with the optional parts present when known.
+function bucketOptionLabel(bucket: BucketOption): string {
+    return `${bucket.bucketName}${bucket.baseAssetsPrefix ? ` - ${bucket.baseAssetsPrefix}` : ""}${
+        bucket.bucketRegion ? ` (${bucket.bucketRegion})` : ""
+    }${bucket.isDefault ? " (VAMS default)" : ""}`;
 }
 
 // null when the name holds only letters, digits, - and _; otherwise the character-set message
@@ -163,9 +173,7 @@ export default function CreateDatabase({
                     if (bucketsData.Items.length === 1) {
                         const bucket = bucketsData.Items[0];
                         const option = {
-                            label: `${bucket.bucketName}${
-                                bucket.baseAssetsPrefix ? ` - ${bucket.baseAssetsPrefix}` : ""
-                            }`,
+                            label: bucketOptionLabel(bucket),
                             value: bucket.bucketId,
                         };
                         setSelectedBucket(option);
@@ -340,11 +348,7 @@ export default function CreateDatabase({
                                     });
                                 }}
                                 options={buckets.map((bucket) => ({
-                                    label: `${bucket.bucketName}${
-                                        bucket.baseAssetsPrefix
-                                            ? ` - ${bucket.baseAssetsPrefix}`
-                                            : ""
-                                    }${bucket.isDefault ? " (VAMS default)" : ""}`,
+                                    label: bucketOptionLabel(bucket),
                                     value: bucket.bucketId,
                                 }))}
                                 placeholder="Select a bucket"

@@ -226,6 +226,11 @@ class BucketModel(BaseModel, extra='ignore'):
     # true. Defaults to false so a row written before the flag existed reads as non-default rather
     # than absent, which keeps a client's boolean check total.
     isDefault: bool = False
+    # The bucket's Region and owning account. Clients sign and route per-bucket requests with
+    # the Region; both are absent on a row written before they were recorded, which readers treat
+    # as the deployment Region and the deployment account.
+    bucketRegion: Optional[str] = None
+    bucketAccountId: Optional[str] = None
 
 class GetBucketsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing buckets"""

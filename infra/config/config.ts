@@ -43,6 +43,10 @@ export const STACK_CORE_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-CORE) (version:" +
     VAMS_VERSION +
     ") Primary Components for the Visual Asset Management Systems";
+export const STACK_XREGION_DESCRIPTION =
+    "(SO9299) (uksb-1608h3hqer) (VAMS-XREGION) (version:" +
+    VAMS_VERSION +
+    ") Cross-Region asset bucket notification components for the Visual Asset Management Systems";
 
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
@@ -999,6 +1003,12 @@ export function getConfig(app: cdk.App): Config {
         config.app.useAlb.addAlbS3SpecialVpcEndpoint = true;
     }
 
+    // Cross-Region Amazon S3 interface endpoints for external buckets in other Regions. Inert
+    // until such a bucket is configured, so it defaults on.
+    if (config.app.useGlobalVpc.addCrossRegionS3Endpoints == undefined) {
+        config.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+    }
+
     if (config.app.assetBuckets.createNewBucket == undefined) {
         config.app.assetBuckets.createNewBucket = true;
     }
@@ -1885,6 +1895,41 @@ export function getConfig(app: cdk.App): Config {
             config.env.account,
             config.env.region
         );
+    }
+
+    //Cross-Region external buckets reach the deployment through a per-Region notification stack
+    //and, inside the VPC, through an Amazon S3 interface endpoint per bucket Region. Cross-Region
+    //AWS PrivateLink to AWS services is offered in the commercial partition only, so the endpoint
+    //flag cannot stay on where it cannot be created. The check is on the resolved partition, not
+    //app.govCloud.enabled, so a restricted-partition deployment is blocked whatever that flag says.
+    const crossRegionBuckets = crossRegionExternalBuckets(
+        config.app.assetBuckets.externalAssetBuckets,
+        config.env.region
+    );
+    if (crossRegionBuckets.length > 0) {
+        if (config.app.useGlobalVpc.addCrossRegionS3Endpoints && config.env.partition !== "aws") {
+            const bucketConfig = crossRegionBuckets[0];
+            throw new Error(
+                `Configuration Error: app.useGlobalVpc.addCrossRegionS3Endpoints is true, but cross-Region AWS PrivateLink to Amazon S3 is available in the commercial partition only. External bucket ${bucketConfig.bucketArn} is in '${bucketConfig.bucketRegion}' while the deployment is in '${config.env.region}' (${config.env.partition}). Set app.useGlobalVpc.addCrossRegionS3Endpoints to false and provide your own network path from the VPC to Amazon S3 in '${bucketConfig.bucketRegion}'.`
+            );
+        }
+        if (
+            config.app.useGlobalVpc.enabled &&
+            config.app.useGlobalVpc.useForAllLambdas &&
+            !config.app.useGlobalVpc.addCrossRegionS3Endpoints
+        ) {
+            const regions = crossRegionExternalBucketRegions(
+                config.app.assetBuckets.externalAssetBuckets,
+                config.env.region
+            );
+            console.warn(
+                `Configuration Warning: app.useGlobalVpc.useForAllLambdas is true and app.useGlobalVpc.addCrossRegionS3Endpoints is false, but external asset buckets are configured in ${regions
+                    .map((region) => `'${region}'`)
+                    .join(
+                        ", "
+                    )}. Lambdas in the VPC's isolated subnets have no route to Amazon S3 in another Region, so uploads, downloads and indexing of those buckets fail unless the VPC provides its own path (interface endpoint, NAT gateway or proxy) to Amazon S3 in each of those Regions.`
+            );
+        }
     }
 
     // Validate the default asset bucket (houses all VAMS-managed pipeline template + run I/O data).
@@ -3041,8 +3086,10 @@ export function validatePresignedUrlRestrictions(
  * registered under multiple prefixes, but the prefixes must not overlap (S3 permits
  * only one notification configuration per bucket and cannot route an object to an
  * ambiguous prefix), and the per-bucket attributes (account, region, KMS key) must
- * be consistent across every entry for that ARN. Throws a Configuration Error on any
- * violation. Exported for unit testing.
+ * be consistent across every entry for that ARN. A bucket may be in another Region of
+ * the deployment's partition, except the default asset bucket, which must be in the
+ * deployment Region. Throws a Configuration Error on any violation. Exported for unit
+ * testing.
  */
 export function validateExternalAssetBuckets(
     externalAssetBuckets: ConfigPublicAssetS3Buckets[],
@@ -3111,14 +3158,31 @@ export function validateExternalAssetBuckets(
             }
         }
 
-        // The bucket must be in the deployment region. Amazon S3 requires a notification
-        // destination (the SNS topic VAMS creates) to be in the same region as the bucket,
-        // and VAMS creates its topics in the deployment region. A mismatch is rejected here
-        // because otherwise it surfaces only as a PutBucketNotificationConfiguration
-        // InvalidArgument failure from a custom resource, deep into the deploy.
-        if (region && deploymentRegion && region != deploymentRegion) {
+        // bucketRegion, when provided, must be a well-formed Region name in the deployment's
+        // partition. A bucket in another Region of the same partition is supported: its
+        // notification topics are created in that Region by a per-Region stack. A malformed
+        // value (an Availability Zone, a typo) would otherwise surface only when that stack's
+        // environment fails to resolve.
+        if (region) {
+            if (!AWS_REGION_NAME_PATTERN.test(region)) {
+                throw new Error(
+                    `Configuration Error: external bucket ${bucketConfig.bucketArn} bucketRegion '${region}' is not a valid AWS Region name (for example 'us-east-1').`
+                );
+            }
+            const regionPartition = region_info.RegionInfo.get(region).partition;
+            if (regionPartition && regionPartition != deploymentPartition) {
+                throw new Error(
+                    `Configuration Error: external bucket ${bucketConfig.bucketArn} bucketRegion '${region}' is in partition '${regionPartition}' which does not match the deployment partition '${deploymentPartition}'. Cross-Region buckets must be in the deployment's partition.`
+                );
+            }
+        }
+
+        // The default asset bucket holds pipeline template data and every execution's run I/O,
+        // which the workflow Lambdas and pipeline compute read and write from the deployment
+        // Region. It stays in the deployment Region.
+        if (bucketConfig.isDefault && region && deploymentRegion && region != deploymentRegion) {
             throw new Error(
-                `Configuration Error: external bucket ${bucketConfig.bucketArn} bucketRegion '${region}' does not match the deployment region '${deploymentRegion}'. Amazon S3 requires an event-notification destination to be in the same region as the bucket, and VAMS creates its notification topics in the deployment region. Register a bucket in '${deploymentRegion}', or deploy VAMS into '${region}'.`
+                `Configuration Error: external bucket ${bucketConfig.bucketArn} is marked isDefault but is in '${region}' while the deployment is in '${deploymentRegion}'. The default asset bucket (pipeline template data and run I/O) must be in the deployment Region.`
             );
         }
 
@@ -3190,10 +3254,49 @@ export interface ConfigPublicAssetS3Buckets {
     isDefault?: boolean;
     // Optional cross-account / encryption fields. Required for buckets that live
     // in a different account (bucketAccountId) or use a customer managed KMS key
-    // (bucketKmsKeyArn). bucketRegion defaults to the deployment region.
+    // (bucketKmsKeyArn). bucketRegion is the bucket's Region and defaults to the
+    // deployment Region; a bucket in another Region gets its notification topics
+    // (and, with CMK encryption, a regional key) in that Region.
     bucketAccountId?: string;
     bucketRegion?: string;
     bucketKmsKeyArn?: string;
+}
+
+/**
+ * Region names accepted for an external bucket's bucketRegion: a partition prefix
+ * (us, eu, ap, cn, eusc, ...), one or more area words (east, gov-west, iso-east,
+ * de-east, ...) and a digit. Rejects Availability Zone names and other malformed values
+ * without pinning the list of Regions, which grows.
+ */
+export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
+
+/**
+ * External asset bucket entries whose bucketRegion is set and differs from the
+ * deployment Region. Shared by getConfig() and the stacks that create per-Region
+ * resources so the two agree on what "cross-Region" means.
+ */
+export function crossRegionExternalBuckets(
+    externalAssetBuckets: ConfigPublicAssetS3Buckets[] | undefined,
+    deploymentRegion: string
+): ConfigPublicAssetS3Buckets[] {
+    return (externalAssetBuckets || []).filter((bucketConfig) => {
+        const region = bucketConfig && bucketConfig.bucketRegion;
+        return !!region && region != "" && region != "UNDEFINED" && region != deploymentRegion;
+    });
+}
+
+/** Distinct Regions of the cross-Region external buckets, in configuration order. */
+export function crossRegionExternalBucketRegions(
+    externalAssetBuckets: ConfigPublicAssetS3Buckets[] | undefined,
+    deploymentRegion: string
+): string[] {
+    return Array.from(
+        new Set(
+            crossRegionExternalBuckets(externalAssetBuckets, deploymentRegion).map(
+                (bucketConfig) => bucketConfig.bucketRegion as string
+            )
+        )
+    );
 }
 
 //Public config values that should go into a configuration file
@@ -3237,6 +3340,11 @@ export interface ConfigPublic {
             enabled: boolean;
             useForAllLambdas: boolean;
             addVpcEndpoints: boolean;
+            // One Amazon S3 interface endpoint per distinct external-bucket Region that differs
+            // from the deployment Region, created in the isolated subnets with private DNS, so
+            // in-VPC Lambdas and pipelines reach those buckets without internet egress.
+            // Cross-Region AWS PrivateLink is offered in the commercial partition only.
+            addCrossRegionS3Endpoints: boolean;
             optionalExternalVpcId: string;
             optionalExternalIsolatedSubnetIds: string;
             optionalExternalPrivateSubnetIds: string;

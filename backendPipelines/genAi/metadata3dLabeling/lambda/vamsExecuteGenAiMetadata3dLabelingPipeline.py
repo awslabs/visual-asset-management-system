@@ -27,7 +27,8 @@ sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGIO
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
-                                        , executing_userName, executing_requestContext, orchestration_event_prefix=""):
+                                        , executing_userName, executing_requestContext, orchestration_event_prefix="",
+                     input_bucket_region="", output_bucket_region=""):
 
     # Create the object message to be sent
     messagePayload = {
@@ -38,6 +39,11 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+        # is in the deployment Region), so the Batch container signs its requests for each bucket
+        # with a client for that bucket's Region.
+        "inputBucketRegion": input_bucket_region,
+        "outputBucketRegion": output_bucket_region,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
@@ -131,6 +137,9 @@ def lambda_handler(event, context):
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
         # Single input file per execution today (SFN/manifest layer is multi-file-ready).
         manifestHelper.enforce_single_input_file(resolved)
+        # This pipeline's AWS Batch compute runs in the VPC's isolated subnets, which reach Amazon S3
+        # in the deployment Region only; an input in another Region is rejected before submission.
+        manifestHelper.enforce_inputs_in_region(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         # Starts excution of pipeline
@@ -145,7 +154,9 @@ def lambda_handler(event, context):
             external_task_token,
             executing_userName,
             executing_requestContext,
-            resolved['orchestrationEventPrefix']
+            resolved['orchestrationEventPrefix'],
+            input_bucket_region=resolved['inputBucketRegion'],
+            output_bucket_region=resolved['outputBucketRegion']
         )
 
         return {

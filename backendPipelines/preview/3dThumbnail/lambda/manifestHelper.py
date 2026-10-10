@@ -14,9 +14,10 @@ everything static a pipeline needs:
     {
       "schemaVersion": 1,
       "inputFiles": [ { "relativePath", "databaseId", "assetId",
-                        "assetRootS3Key", "auxPreviewPrefix", "bucket", "key", "versionId" } ],
+                        "assetRootS3Key", "auxPreviewPrefix", "bucket", "bucketRegion",
+                        "bucketAccountId", "key", "versionId" } ],
       "inputMetadataS3Location": "s3://.../metadata.json",
-      "outputs": { "bucket", "files", "previews", "metadata", "results" },  # bucket + relative keys
+      "outputs": { "bucket", "bucketRegion", "files", "previews", "metadata", "results" },  # bucket + relative keys
       "auxBucket": "aux-bucket-name",
       "auxTempPrefix": "pipelines/{pipelineName}/{executionId}/",
       "auxPreviewPipelineSuffix": "",
@@ -27,7 +28,10 @@ Locations are carried as relative keys plus their bucket (never a pre-built ``s3
 ``outputs`` block pairs a single ``bucket`` with bucket-relative prefixes, ``auxBucket`` is the
 auxiliary bucket NAME, ``auxTempPrefix`` is bucket-relative, and each input file carries its own
 ``assetRootS3Key`` (bucket-relative asset root) and ``auxPreviewPrefix`` (bucket-relative, unique
-per file). ``resolve_inputs`` RECONSTRUCTS the ``s3://`` forms into the same flat field names the
+per file). An asset bucket may be in another Region than the deployment: each input file's
+``bucketRegion`` and the ``outputs`` block's ``bucketRegion`` name it (empty means the deployment
+Region), and ``s3_client_for_region`` builds the client that reads or writes there.
+``resolve_inputs`` RECONSTRUCTS the ``s3://`` forms into the same flat field names the
 pipelines already forward (``inputS3AssetFilePath``, ``outputS3AssetFilesPath``, ...), preferring
 the manifest and falling back to the legacy payload fields when no manifest is present, so a payload
 without a manifest resolves to the pre-manifest behavior. A payload that DOES reference a manifest
@@ -37,6 +41,10 @@ provisioned.
 """
 
 import json
+import os
+
+import boto3
+from botocore.config import Config
 
 # Output S3 paths must keep a trailing slash so containers can append filenames.
 _OUTPUT_KEYS = ("files", "previews", "metadata", "results")
@@ -375,6 +383,10 @@ def resolve_inputs(data, manifest=None):
         "assetId": "",
         "databaseId": "",
         "inputFiles": [],
+        # Region of the first input file's bucket and of the output bucket, from the manifest; ""
+        # (the deployment Region) for a legacy payload or a manifest written without them.
+        "inputBucketRegion": "",
+        "outputBucketRegion": "",
         # Reconstructed s3:// aux preview location for the first input file (auxBucket +
         # per-file auxPreviewPrefix + the per-pipeline auxPreviewPipelineSuffix). No legacy
         # fallback: aux preview locations are manifest-only.
@@ -422,10 +434,12 @@ def resolve_inputs(data, manifest=None):
             resolved["assetId"] = first_file["assetId"]
         if first_file.get("databaseId"):
             resolved["databaseId"] = first_file["databaseId"]
+        resolved["inputBucketRegion"] = first_file.get("bucketRegion", "") or ""
 
     # Outputs are reconstructed from the single output bucket + each bucket-relative prefix.
     outputs = manifest.get("outputs") or {}
     output_bucket = outputs.get("bucket", "")
+    resolved["outputBucketRegion"] = outputs.get("bucketRegion", "") or ""
     if outputs.get("files"):
         resolved["outputS3AssetFilesPath"] = _join_s3(output_bucket, outputs["files"])
     if outputs.get("previews"):
@@ -488,6 +502,52 @@ def enforce_single_input_file(resolved):
             f"This pipeline processes a single input file per execution, but the workflow "
             f"manifest supplied {len(input_files)} input files. Multi-file input is not yet "
             f"supported for this pipeline.")
+
+
+# The regional us-east-1 endpoint rather than the global s3.amazonaws.com: inside a VPC a bucket in
+# another Region is reached through an interface endpoint whose private DNS covers the regional
+# hostnames only.
+_s3_client_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                           s3={'us_east_1_regional_endpoint': 'regional'})
+_s3_clients_by_region = {}
+
+
+def s3_client_for_region(region=""):
+    """An S3 client for ``region`` (the deployment Region when empty), built once per Region with the
+    adaptive retry configuration and no endpoint_url, so the SDK resolves the partition's endpoint. A
+    bucket in another Region answers only requests signed for that Region, so a pipeline reads an input
+    file with the client for its ``bucketRegion`` and writes outputs with the client for the output
+    bucket's Region."""
+    region = region or os.environ.get("AWS_REGION", "")
+    client = _s3_clients_by_region.get(region)
+    if client is None:
+        client = boto3.client("s3", region_name=region or None, config=_s3_client_config)
+        _s3_clients_by_region[region] = client
+    return client
+
+
+def input_file_region(entry):
+    """The Region of one manifest input file's bucket, or ``""`` for the deployment Region."""
+    return ((entry or {}).get("bucketRegion", "") or "")
+
+
+def enforce_inputs_in_region(resolved, region=None):
+    """Raise when any resolved input file is in a bucket outside ``region`` (the deployment Region when
+    None).
+
+    A pipeline whose compute runs in the VPC's isolated subnets reaches Amazon S3 through the
+    deployment Region's gateway endpoint only, so it cannot read a bucket in another Region. Failing
+    here, before the job is submitted, reports the cause through ``SendTaskFailure`` instead of
+    provisioning compute that fails on its first read."""
+    region = region or os.environ.get("AWS_REGION", "")
+    remote = sorted({input_file_region(entry) for entry in ((resolved or {}).get("inputFiles") or [])
+                     if input_file_region(entry) and input_file_region(entry) != region})
+    if remote:
+        raise Exception(
+            f"This pipeline runs in the VPC's isolated subnets and reads Amazon S3 in {region} only, but "
+            f"the workflow input is in an asset bucket in {', '.join(remote)}. Cross-Region inputs are not "
+            f"supported for this pipeline; move the pipeline's compute to private subnets with a route to "
+            f"Amazon S3 in that Region, or run it on an asset in a {region} bucket.")
 
 
 def _unambiguous_vams_view(envelope):

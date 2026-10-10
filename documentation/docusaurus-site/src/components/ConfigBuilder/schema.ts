@@ -406,6 +406,15 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.useGlobalVpc.enabled"),
     },
     {
+        path: "app.useGlobalVpc.addCrossRegionS3Endpoints",
+        label: "Add cross-Region S3 endpoints",
+        input: "boolean",
+        section: "networking",
+        advanced: true,
+        help: "Create one Amazon S3 interface endpoint (private DNS) in the isolated subnets per Region that holds an external asset bucket outside the deployment Region. Commercial partition only. Disable to provide your own path to Amazon S3 in those Regions.",
+        visibleWhen: (c) => !!getByPath(c, "app.useGlobalVpc.enabled"),
+    },
+    {
         path: "app.useGlobalVpc.optionalExternalVpcId",
         label: "External VPC ID (import)",
         input: "text",

@@ -139,7 +139,8 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
         subnets: ec2.ISubnet[],
-        resourceNameRegistry: ResourceNameRegistry
+        resourceNameRegistry: ResourceNameRegistry,
+        crossRegionBucketTopics: s3AssetBuckets.CrossRegionBucketTopics = {}
     ) {
         super(parent, name);
 
@@ -149,7 +150,8 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
             lambdaCommonBaseLayer,
             vpc,
             subnets,
-            resourceNameRegistry
+            resourceNameRegistry,
+            crossRegionBucketTopics
         );
 
         // Nag suppressions. Delegated to the shared helper, which carries one individually justified
@@ -214,7 +216,8 @@ export function storageResourcesBuilder(
     lambdaCommonBaseLayer: LayerVersion,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
-    resourceNameRegistry: ResourceNameRegistry
+    resourceNameRegistry: ResourceNameRegistry,
+    crossRegionBucketTopics: s3AssetBuckets.CrossRegionBucketTopics = {}
 ): storageResources {
     //Import or generate new encryption keys
     let kmsEncryptionKey: kms.IKey | undefined = undefined;
@@ -456,22 +459,25 @@ export function storageResourcesBuilder(
                 bucketConfig.defaultSyncDatabaseId,
                 bucketAccountId,
                 bucketKmsKeyArn,
-                !!bucketConfig.isDefault
+                !!bucketConfig.isDefault,
+                bucketRegion && bucketRegion != config.env.region ? bucketRegion : undefined
             );
         }
     }
 
-    // When VAMS generated its own CMK and there are cross-account external buckets,
-    // the S3 service in the bucket's account must be able to generate data keys with
-    // the VAMS key to encrypt notifications published to the VAMS-owned SNS topics.
-    // Add an additive statement scoped to those external accounts. (No-op when the
-    // key was imported by ARN or when there are no cross-account buckets, so existing
-    // deployments without externals see no key-policy change.)
+    // When VAMS generated its own CMK and there are cross-account external buckets in the
+    // deployment Region, the S3 service in the bucket's account must be able to generate data
+    // keys with the VAMS key to encrypt notifications published to the VAMS-owned SNS topics.
+    // Add an additive statement scoped to those external accounts. (No-op when the key was
+    // imported by ARN or when there are no such buckets, so existing deployments without
+    // externals see no key-policy change. A bucket in another Region publishes to topics
+    // encrypted with that Region's key, which carries its own statement.)
     if (vamsGeneratedKmsKey && kmsEncryptionKey) {
         const externalBucketAccountIds = Array.from(
             new Set(
                 s3AssetBuckets
                     .getS3AssetBucketRecords()
+                    .filter((record) => !record.region)
                     .map((record) => record.accountId)
                     .filter((accountId): accountId is string => !!accountId)
             )
@@ -516,6 +522,46 @@ export function storageResourcesBuilder(
     const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     let index = 0;
     for (const record of assetBucketRecords) {
+        // A bucket in another Region has its topics and notification configuration in that
+        // Region (CrossRegionBucketNotificationsStack): Amazon S3 delivers notifications only to
+        // a destination in the bucket's Region. Import those topics so the queue subscriptions
+        // below attach to them; CDK derives the subscription Region from the topic ARN.
+        if (record.region) {
+            const topicKey = s3AssetBuckets.crossRegionTopicKey(
+                record.bucket.bucketArn,
+                record.prefix
+            );
+            const topicArns = crossRegionBucketTopics[topicKey];
+            if (!topicArns) {
+                throw new Error(
+                    `Cross-Region asset bucket ${record.bucket.bucketName} (${
+                        record.region
+                    }, prefix ${
+                        record.prefix || "/"
+                    }) has no notification topics. Build the app through bin/infra.ts so the ` +
+                        `per-Region notification stack is created before the core stack.`
+                );
+            }
+            record.snsS3ObjectCreatedTopic = sns.Topic.fromTopicArn(
+                scope,
+                `${config.app.baseStackName}-S3ObjectCreatedTopic-${index}`,
+                topicArns.createdTopicArn
+            );
+            index = index + 1;
+            record.snsS3ObjectDeletedTopic = sns.Topic.fromTopicArn(
+                scope,
+                `${config.app.baseStackName}-S3ObjectRemovedTopic-${index}`,
+                topicArns.removedTopicArn
+            );
+            index = index + 1;
+            console.log(
+                `Imported ${record.region} event notification topics for bucket ${
+                    record.bucket.bucketName
+                } with prefix ${record.prefix || "/"}`
+            );
+            continue;
+        }
+
         // Create bucket-specific SNS topics
         const createdTopic = createSNSTopicWithPolicy(
             scope,

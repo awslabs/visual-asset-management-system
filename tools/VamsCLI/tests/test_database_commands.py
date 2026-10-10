@@ -890,6 +890,49 @@ class TestDatabaseListBucketsCommand:
             
             # Verify API call
             mocks['api_client'].list_buckets.assert_called_once_with({})
+
+    def test_list_buckets_shows_the_region_and_account(self, cli_runner, generic_command_mocks):
+        """A bucket in another Region (or account) is labelled with it; a row without a Region is in
+        the deployment Region."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'bucket-uuid-1', 'bucketName': 'local-bucket',
+                     'baseAssetsPrefix': '/', 'isDefault': True, 'bucketRegion': 'us-west-2'},
+                    {'bucketId': 'bucket-uuid-2', 'bucketName': 'remote-bucket',
+                     'baseAssetsPrefix': 'team/', 'isDefault': False, 'bucketRegion': 'us-east-1',
+                     'bucketAccountId': '222222222222'},
+                    {'bucketId': 'bucket-uuid-3', 'bucketName': 'legacy-bucket',
+                     'baseAssetsPrefix': '/'},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets'])
+
+            assert result.exit_code == 0
+            assert 'Region: us-west-2' in result.output
+            assert 'Region: us-east-1' in result.output
+            assert 'Account: 222222222222' in result.output
+            assert 'Region: deployment Region' in result.output
+            assert result.output.count('Account:') == 1
+
+    def test_list_buckets_json_output_carries_the_region_fields(self, cli_runner, generic_command_mocks):
+        """--json-output is what the MCP server and the connectors parse: the fields pass through."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'bucket-uuid-2', 'bucketName': 'remote-bucket',
+                     'baseAssetsPrefix': 'team/', 'isDefault': False, 'bucketRegion': 'us-east-1',
+                     'bucketAccountId': '222222222222'},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets', '--json-output'])
+
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload['Items'][0]['bucketRegion'] == 'us-east-1'
+            assert payload['Items'][0]['bucketAccountId'] == '222222222222'
     
     def test_list_buckets_empty(self, cli_runner, generic_command_mocks):
         """Test bucket listing with no buckets."""

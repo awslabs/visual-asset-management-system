@@ -107,6 +107,8 @@ def _log_peak_memory(chunk_size: int, total_points: int) -> None:
 def run(params: dict) -> PipelineExecutionParams:
     """Run the coordinate transform pipeline."""
     definition = PipelineDefinition(**params)
+    # Sign each asset bucket's requests for its own Region before any S3 call (see utils s3 helper).
+    s3.register_bucket_regions(definition.bucketRegions)
     logger.info(f"Pipeline Definition: {definition.jobName}")
 
     if definition.currentStage is None:

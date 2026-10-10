@@ -9,7 +9,7 @@ from ..utils.pipeline.objects import (
     PipelineStatus,
     PipelineType,
 )
-from ..utils.aws import sfn
+from ..utils.aws import s3, sfn
 from ..utils.logging import log
 from ..utils.pipeline import extensions as ext
 
@@ -28,6 +28,8 @@ def run(params: dict) -> PipelineExecutionParams:
     """
     # convert input to data type
     definition = PipelineDefinition(**params)
+    # Sign each asset bucket's requests for its own Region before any S3 call (see utils s3 helper).
+    s3.register_bucket_regions(definition.bucketRegions)
     # Log the job name only: the definition carries externalSfnTaskToken, and this container's
     # plain-logging output is not redacted on its way to CloudWatch.
     logger.info(f"Pipeline Definition: {definition.jobName}")
