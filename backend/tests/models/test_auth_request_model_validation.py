@@ -405,6 +405,26 @@ class TestShippedTemplateApiGrants:
         assert "/logs" not in get_grants
         assert "/workflows/executions/" not in get_grants
 
+    @pytest.mark.parametrize("name", ["database-readonly.json", "global-readonly.json"])
+    def test_read_only_templates_grant_get_only_on_self_service_api_keys(self, name):
+        """A read-only role may view its own API keys but not mint, extend or delete them.
+
+        `POST /auth/user/api-keys` lets an API-key-authenticated caller issue itself a fresh
+        key with a new maximum expiry, so a write grant here turns a view-only role into one
+        that can renew its own credential indefinitely.
+        """
+        template = _shipped_templates()[name]
+        assert "/auth/user/api-keys" in _api_route_grants(template, "GET")
+        for action in ("POST", "PUT", "DELETE"):
+            assert "/auth/user/api-keys" not in _api_route_grants(template, action), (name, action)
+
+    @pytest.mark.parametrize("name", ["database-admin.json", "database-user.json"])
+    def test_write_templates_still_grant_self_service_api_key_management(self, name):
+        """POSITIVE CONTROL: the GET-only rule is specific to the read-only templates."""
+        template = _shipped_templates()[name]
+        for action in ("GET", "POST", "PUT", "DELETE"):
+            assert "/auth/user/api-keys" in _api_route_grants(template, action), (name, action)
+
 
 @pytest.mark.unit
 class TestUserRolesAndPagination:
