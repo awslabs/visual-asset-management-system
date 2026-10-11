@@ -324,8 +324,8 @@ and it is best-effort (any read failure degrades to the default) because it runs
 4. A bare `ProfileManager()` / `APIClient(url)` targets the **default** profile. Pass the resolved
    profile (`ProfileManager(read_active_profile_name())`) when no manager is supplied.
 5. **A hint names a command Click accepts.** `--profile`, `--verbose` and `--version` are
-   root-group options and go **before** the subcommand: `vamscli --profile <name> setup <url>`,
-   never `vamscli setup <url> --profile <name>`. Token-override guidance names
+   root-group options and go **before** the subcommand: `vamscli --profile <name> setup <url>`;
+   placed after the subcommand, Click rejects them with "No such option". Token-override guidance names
    `auth set-override -u <user-id> --token-stdin` or
    `auth login --user-id <user-id> --token-override-stdin`; there is no root `--token-override`.
    `tests/test_setup_check.py` scans the CLI, MCP and connector sources for any

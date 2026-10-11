@@ -478,8 +478,8 @@ vamscli auth status
 # Test without setup
 vamscli auth login -u test@example.com
 
-# Test with invalid arguments
-vamscli assets create --invalid-option
+# Test with invalid arguments (any option the command does not define)
+vamscli assets create --<unknown-option>
 
 # Test with missing required arguments
 vamscli assets create
