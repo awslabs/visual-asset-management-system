@@ -450,12 +450,14 @@ export function getConfig(app: cdk.App): Config {
     );
     config.env.partition = region_info.RegionInfo.get(config.env.region).partition!;
 
+    // Required: it forms part of every stack name. CDK context `stack-name` and the STACK_NAME
+    // environment variable override the config.json value.
     const baseStackName =
         app.node.tryGetContext("stack-name") || config.app.baseStackName || process.env.STACK_NAME;
     if (!baseStackName) {
         throw new Error(
-            "Configuration Error: app.baseStackName must be set (or supplied as CDK context " +
-                "`stack-name` or the STACK_NAME environment variable). It forms part of every stack name."
+            "Configuration Error: app.baseStackName is required (CDK context `stack-name` or the " +
+                "STACK_NAME environment variable may supply it). It forms part of every stack name."
         );
     }
     config.app.baseStackName = baseStackName + "-" + config.env.region;
@@ -2114,15 +2116,8 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    // The admin user is a CloudFormation-managed resource keyed on its username, so changing either
-    // field after the first deployment REPLACES it. Which way that goes depends only on whether the new
-    // username already exists in the pool: if it does, the create fails with AlreadyExists and the core
-    // stack rolls back; if it does not, the new user is created and the previous admin identity is
-    // orphaned (the resource carries a retain policy so it is not deleted, but it is no longer managed
-    // and its role assignments do not follow). Synthesis cannot see the deployed values, so it cannot
-    // tell a first deployment from a change; the constraint is documented with both fields in the
-    // configuration reference rather than warned about here. The two values legitimately differ --
-    // the shipped templates pair a plain username with an email address.
+    // adminUserId and adminEmailAddress are immutable after the first deployment (the Amazon Cognito
+    // admin user is keyed on its username); see configuration-reference.md.
 
     //Error check when implementing openSearch
     if (

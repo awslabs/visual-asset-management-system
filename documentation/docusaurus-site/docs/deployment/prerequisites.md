@@ -6,16 +6,16 @@ Before deploying Visual Asset Management System (VAMS), ensure that your develop
 
 The following software must be installed on the machine used to build and deploy VAMS.
 
-| Software                   | Minimum version                | Purpose                                                                                                  |
-| -------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| Python                     | 3.12                           | AWS Lambda runtime, backend dependencies                                                                 |
-| Docker                     | Latest stable                  | Container builds for AWS Lambda layers and pipelines                                                     |
-| Git                        | Latest stable                  | Cloning the repository; the frontend install also clones two viewer repositories from GitHub             |
-| Node.js                    | 22.0.0 (`.nvmrc` pins 22.22.3) | Frontend build tooling, AWS CDK CLI                                                                      |
-| npm                        | 11.10.0                        | Package management for frontend and infrastructure. Node.js 22 bundles npm 10; install npm 11 separately |
-| Node Version Manager (nvm) | Latest stable                  | Ensures the correct Node.js version is active                                                            |
-| AWS CLI                    | v2 (latest)                    | AWS account authentication and resource management                                                       |
-| AWS CDK CLI                | Pinned in `infra/package.json` | Infrastructure-as-code deployment; run it as `npx cdk` from `infra/` so the pinned version is used       |
+| Software                   | Minimum version                    | Purpose                                                                                                            |
+| -------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Python                     | 3.12                               | AWS Lambda runtime, backend dependencies                                                                           |
+| Docker                     | Latest stable                      | Container builds for AWS Lambda layers and pipelines                                                               |
+| Git                        | Latest stable                      | Cloning the repository; the frontend install also clones the viewer repositories listed under Network requirements |
+| Node.js                    | 22.0.0 (`web/.nvmrc` pins 22.22.3) | Frontend build tooling, AWS CDK CLI                                                                                |
+| npm                        | 11.10.0                            | Package management for frontend and infrastructure. Node.js 22 bundles npm 10; install npm 11 separately           |
+| Node Version Manager (nvm) | Latest stable                      | Ensures the correct Node.js version is active                                                                      |
+| AWS CLI                    | v2 (latest)                        | AWS account authentication and resource management                                                                 |
+| AWS CDK CLI                | Pinned in `infra/package.json`     | Infrastructure-as-code deployment; run it as `npx cdk` from `infra/` so the pinned version is used                 |
 
 :::tip[Verify installed versions]
 Run the following commands to confirm your tools are at the required versions:
@@ -24,17 +24,17 @@ Run the following commands to confirm your tools are at the required versions:
 python --version   # 3.12+
 docker --version
 git --version
-node --version     # v22.0.0 or later; `nvm use` in the repository selects v22.22.3
+node --version     # v22.0.0 or later; `nvm use` in the web/ directory selects v22.22.3
 npm --version      # 11.10.0 or later
 nvm --version
 aws --version      # aws-cli/2.x
 cd infra && npx cdk --version   # the version pinned in infra/package.json
 ```
 
-Node.js 22 ships with npm 10, and the `package.json` files declare `engine-strict` with `npm >=11.10.0`, so `npm install` fails with `EBADENGINE` until npm 11 is installed. nvm keeps a separate npm per Node.js version, so install it after `nvm use`:
+Node.js 22 ships with npm 10, and the `package.json` files declare `engine-strict` with `npm >=11.10.0`, so `npm install` fails with `EBADENGINE` until npm 11 is installed. nvm keeps a separate npm per Node.js version, so install it after `nvm use` (the `.nvmrc` is in the `web/` directory):
 
 ```bash
-nvm use
+cd web && nvm use
 npm install -g npm@11
 npm --version      # 11.10.0 or later
 ```
@@ -152,16 +152,16 @@ The same variable turns on `app.useFips` at synthesis. Setting `app.useFips` to 
 
 The build machine requires outbound internet access to download dependencies from the following sources:
 
-| Source                              | Protocol | Purpose                                                                                    |
-| ----------------------------------- | -------- | ------------------------------------------------------------------------------------------ |
-| npm registry (`registry.npmjs.org`) | HTTPS    | Node.js packages for frontend and CDK                                                      |
-| GitHub (`github.com`)               | HTTPS    | The frontend install clones the `needle-tools/usd-viewer` and `potree/potree` repositories |
-| PyPI (`pypi.org`)                   | HTTPS    | Python packages for Lambda layers                                                          |
-| Docker Hub / Amazon ECR Public      | HTTPS    | Base container images for pipeline container builds                                        |
-| AWS service endpoints               | HTTPS    | CDK deployment, AWS CloudFormation operations                                              |
+| Source                              | Protocol | Purpose                                                                                                             |
+| ----------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| npm registry (`registry.npmjs.org`) | HTTPS    | Node.js packages for frontend and CDK                                                                               |
+| GitHub (`github.com`)               | HTTPS    | The frontend install clones the `needle-tools/usd-viewer`, `potree/potree` and `playcanvas/supersplat` repositories |
+| PyPI (`pypi.org`)                   | HTTPS    | Python packages for Lambda layers                                                                                   |
+| Docker Hub / Amazon ECR Public      | HTTPS    | Base container images for pipeline container builds                                                                 |
+| AWS service endpoints               | HTTPS    | CDK deployment, AWS CloudFormation operations                                                                       |
 
 :::note[Network-restricted environments]
-For deployments in VPC-isolated or network-restricted environments, you must pre-stage all npm packages, Python packages, and container images in internal registries, and mirror the two Git repositories the frontend install clones: `https://github.com/needle-tools/usd-viewer.git` (see `web/customInstalls/needletools-usd-viewer/usdViewerInstall.js`) and `https://github.com/potree/potree.git` (see `web/customInstalls/potree/potreeInstall.js`). Consult the [Plan your deployment](plan-your-deployment.md) page for VPC-isolated deployment architecture.
+For deployments in VPC-isolated or network-restricted environments, you must pre-stage all npm packages, Python packages, and container images in internal registries, and mirror the Git repositories the frontend install clones: `https://github.com/needle-tools/usd-viewer.git` (see `web/customInstalls/needletools-usd-viewer/usdViewerInstall.js`), `https://github.com/potree/potree.git` (see `web/customInstalls/potree/potreeInstall.js`) and `https://github.com/playcanvas/supersplat.git` (see `web/customInstalls/supersplat/superSplatInstall.js`). Each install script exits non-zero when its clone fails, which fails `npm install`. Consult the [Plan your deployment](plan-your-deployment.md) page for VPC-isolated deployment architecture.
 :::
 
 ### SSL proxy considerations

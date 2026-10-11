@@ -14,7 +14,9 @@ import pytest
 from vamscli.main import cli
 from vamscli.utils.json_output import mask_url_key
 
-FULL_KEY = "v1.public.eyJqdGkiOiJhYmNkZWYifQ.LONGSIGNATURE"
+# A hand-built, key-shaped value: the `v1.public.` prefix plus 40 hex characters. Not a credential and
+# deliberately not JWT-shaped, so secret scanners do not read it as one.
+FULL_KEY = "v1.public.0123456789abcdef0123456789abcdef01234567"
 STYLE_URL = f"https://maps.geo.us-east-1.amazonaws.com/maps/v0/maps/m/style-descriptor?key={FULL_KEY}"
 MASKED_URL = "https://maps.geo.us-east-1.amazonaws.com/maps/v0/maps/m/style-descriptor?key=v1.publi…"
 

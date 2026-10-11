@@ -41,7 +41,7 @@ npm install
 npm run build
 ```
 
-Node.js 22 bundles npm 10, and the `package.json` files require npm 11.10.0 or later (`engine-strict`), so `npm install` fails with `EBADENGINE` until npm 11 is installed. nvm keeps a separate npm per Node.js version, so run `npm install -g npm@11` after `nvm use`. The install also clones two viewer repositories from `github.com`; see the [Prerequisites](prerequisites.md#network-requirements) page.
+Node.js 22 bundles npm 10, and the `package.json` files require npm 11.10.0 or later (`engine-strict`), so `npm install` fails with `EBADENGINE` until npm 11 is installed. nvm keeps a separate npm per Node.js version, so run `npm install -g npm@11` after `nvm use`. The install also clones viewer repositories from `github.com`; they are listed on the [Prerequisites](prerequisites.md#network-requirements) page.
 
 The build output is written to `web/dist/`, which the CDK infrastructure references during deployment.
 

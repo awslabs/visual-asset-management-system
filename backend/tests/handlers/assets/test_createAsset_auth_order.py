@@ -23,7 +23,8 @@ VALID_BODY = {
     'tags': [],
 }
 
-SHORT_NAME_BODY = dict(VALID_BODY, assetName='a')
+# `databaseId` has `min_length=4`, so this body fails the model; `assetName` allows a single character.
+SHORT_ID_BODY = dict(VALID_BODY, databaseId='ab')
 
 
 def _event(body):
@@ -53,7 +54,7 @@ class TestRouteAuthorizationPrecedesTheBody:
     def test_an_unauthorized_caller_with_an_invalid_body_gets_403(self, handler):
         handler.enforcer.enforceAPI.return_value = False
 
-        response = handler.lambda_handler(_event(SHORT_NAME_BODY), None)
+        response = handler.lambda_handler(_event(SHORT_ID_BODY), None)
 
         assert response['statusCode'] == 403
 
@@ -74,10 +75,21 @@ class TestRouteAuthorizationPrecedesTheBody:
     def test_a_caller_with_no_tokens_is_denied_before_the_body(self, handler):
         handler.request_to_claims = lambda event: {'tokens': [], 'roles': []}
 
-        response = handler.lambda_handler(_event(SHORT_NAME_BODY), None)
+        response = handler.lambda_handler(_event(SHORT_ID_BODY), None)
 
         assert response['statusCode'] == 403
         handler.enforcer.enforceAPI.assert_not_called()
+
+    def test_an_authorized_caller_with_an_invalid_body_gets_one_clear_400(self, handler):
+        """POSITIVE CONTROL for the invalid body: it really fails the model, so the 403s above are
+        the route check answering before the body is read, not a valid body slipping through."""
+        response = handler.lambda_handler(_event(SHORT_ID_BODY), None)
+
+        assert response['statusCode'] == 400, response['body']
+        message = json.loads(response['body'])['message']
+        assert 'databaseId' in message
+        assert 'at least 4 characters' in message
+        handler.create_asset.assert_not_called()
 
     def test_an_authorized_caller_with_a_valid_body_succeeds(self, handler):
         """POSITIVE CONTROL: the 403s above come from the enforcer, not from a broken happy path."""

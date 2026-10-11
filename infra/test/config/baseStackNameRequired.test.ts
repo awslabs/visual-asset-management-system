@@ -54,13 +54,13 @@ describe("getConfig() requires a stack name", () => {
 
     test("a null app.baseStackName with no context and no STACK_NAME is rejected", () => {
         expect(resolve((c) => (c.app.baseStackName = null))).toThrow(
-            /app\.baseStackName must be set/
+            /app\.baseStackName is required/
         );
     });
 
     test("an empty app.baseStackName is rejected", () => {
         expect(resolve((c) => (c.app.baseStackName = ""))).toThrow(
-            /app\.baseStackName must be set/
+            /app\.baseStackName is required/
         );
     });
 

@@ -275,6 +275,10 @@ View-only access scoped to a single database. Can browse assets, view files, and
 
 Key differences from the admin and user roles: web routes are a narrower set of pages, and the UI respects the lack of write permissions. API routes only allow `GET` method, plus `POST` on non-mutating operations. Data constraints have only `GET` permission on all object types.
 
+:::note[Existing read-only roles keep the grants they were imported with]
+Importing a template creates constraints; it does not modify the constraints of an existing role, and each import creates new constraint identifiers. A role imported from an earlier version of this template holds a `<role>-user-api-keys` constraint that allows `POST`, `PUT` and `DELETE` on `/auth/user/api-keys`. To narrow it, edit that constraint to `GET` only (`vamscli role constraint update`) or delete it (`vamscli role constraint delete`); re-importing the template adds a second constraint alongside the first. The same applies to the Global read-only template below.
+:::
+
 ### Global read-only
 
 View-only access across all databases (12 constraints). Same as database read-only, except the entity constraints match every database with `databaseId contains .*` instead of scoping to one `databaseId`.
