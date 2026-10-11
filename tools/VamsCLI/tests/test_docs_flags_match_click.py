@@ -17,6 +17,11 @@ a flag can be real on nine sibling commands and absent on the tenth (`--confirm`
 `assets delete` but not on `pipeline delete`), so a group-level union check reports clean on exactly
 the case worth catching. Long forms and short forms are both checked, character for character.
 
+Root-group options (`--profile`, `--verbose`, `--version`) are accepted only **before** the
+subcommand. Click rejects them after it with "No such option", so an example or option table that
+places one there is reported as a misplaced global option -- a shape that went undetected while the
+checks treated the global options as valid everywhere.
+
 Scope limits, deliberate and worth knowing before trusting a pass:
 
 -   The option-table check reads only the **first column** of a table row. A flag named in a
@@ -48,20 +53,31 @@ from vamscli.main import cli
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _DOCS_CLI = os.path.join(_REPO_ROOT, "documentation", "docusaurus-site", "docs", "cli")
 
+# Pages outside docs/cli/ that carry runnable `vamscli` examples: the developer setup guide and the
+# CLI package's own README and docs, which a reader installing from the package sees first.
+_EXTRA_PAGE_GLOBS = (
+    os.path.join(_REPO_ROOT, "documentation", "docusaurus-site", "docs", "developer", "setup.md"),
+    os.path.join(_REPO_ROOT, "tools", "VamsCLI", "README.md"),
+    os.path.join(_REPO_ROOT, "tools", "VamsCLI", "docs", "*.md"),
+)
+
 
 def _discover_pages():
     """Every CLI documentation page, so a newly added page is checked without editing this file."""
     pages = []
     for ext in ("*.md", "*.mdx"):
         pages.extend(glob.glob(os.path.join(_DOCS_CLI, "**", ext), recursive=True))
-    return sorted(pages)
+    for pattern in _EXTRA_PAGE_GLOBS:
+        pages.extend(glob.glob(pattern))
+    return sorted(set(pages))
 
 
 _PAGES = _discover_pages()
 
 
 def _page_id(path):
-    return os.path.relpath(path, _DOCS_CLI).replace(os.sep, "/")
+    base = _DOCS_CLI if os.path.abspath(path).startswith(_DOCS_CLI + os.sep) else _REPO_ROOT
+    return os.path.relpath(path, base).replace(os.sep, "/")
 
 
 # ---------------------------------------------------------------------------
@@ -169,15 +185,22 @@ def check_option_tables(text):
             continue
 
         for flag in _TABLE_FLAG.findall(cells[0]):
-            if flag in _GLOBAL_OPTS:
-                continue
             cells_checked += 1
-            if flag not in current_flags:
+            if flag in current_flags or flag == "--help":
+                continue
+            if flag in _GLOBAL_OPTS:
                 problems.append(
-                    f"line {lineno}: option table for `{current_name}` documents {flag}, "
-                    f"which is not a parameter of that command. Real options: "
-                    f"{', '.join(sorted(current_flags))}"
+                    f"line {lineno}: option table for `{current_name}` documents {flag}, which is a "
+                    f"global option, not a parameter of that command: it must come before the "
+                    f"command (`vamscli {flag} ... {current_name}`), so it does not belong in a "
+                    f"per-command table"
                 )
+                continue
+            problems.append(
+                f"line {lineno}: option table for `{current_name}` documents {flag}, "
+                f"which is not a parameter of that command. Real options: "
+                f"{', '.join(sorted(current_flags))}"
+            )
 
     return problems, cells_checked, commands_resolved
 
@@ -295,19 +318,30 @@ def check_examples(text):
                     f"has no such option. Global options: {', '.join(sorted(_GLOBAL_OPTS))}"
                 )
 
-        allowed = _flags_of(node) | _GLOBAL_OPTS
+        # After the subcommand only the command's own options are accepted; `--help` exists on every
+        # command. A root option here is rejected by Click with "No such option", so it is reported
+        # as misplaced rather than as unknown.
+        allowed = _flags_of(node) | {"--help"}
         for token in rest:
             flag = token.split("=")[0]
             if not flag.startswith("-"):
                 continue
             if not (_LONG_OPT.match(flag) or _SHORT_OPT.match(flag)):
                 continue
-            if flag not in allowed:
+            if flag in allowed:
+                continue
+            if flag in _GLOBAL_OPTS:
                 problems.append(
-                    f"line {lineno}: `vamscli {' '.join(path)}` example passes {flag}, "
-                    f"which is not a parameter of that command. Real options: "
-                    f"{', '.join(sorted(allowed - _GLOBAL_OPTS))}"
+                    f"line {lineno}: `vamscli {' '.join(path)}` example passes {flag} after the "
+                    f"command, but it is a global option and must come before the command: "
+                    f"`vamscli {flag} ... {' '.join(path)}`"
                 )
+                continue
+            problems.append(
+                f"line {lineno}: `vamscli {' '.join(path)}` example passes {flag}, "
+                f"which is not a parameter of that command. Real options: "
+                f"{', '.join(sorted(allowed - {'--help'}))}"
+            )
 
     return problems, invocations
 
@@ -453,6 +487,47 @@ def test_example_checker_reports_a_bad_flag_and_accepts_the_real_one():
     problems, invocations = check_examples(good)
     assert invocations == 1
     assert problems == []
+
+
+def test_example_checker_reports_a_global_option_after_the_command():
+    """Control: a root option written after the subcommand is reported as misplaced.
+
+    `--profile` is a root-group option. Click rejects `vamscli auth login -u x --profile p` with
+    "No such option", so a documented example in that shape fails for every reader who pastes it.
+    The same line with `--profile` before the command is accepted.
+    """
+    misplaced = "```bash\nvamscli auth login -u x --profile p\n```"
+    correct = "```bash\nvamscli --profile p auth login -u x\n```"
+
+    problems, invocations = check_examples(misplaced)
+    assert invocations == 1, "example did not resolve to a command"
+    assert len(problems) == 1
+    assert "--profile" in problems[0]
+    assert "must come before the command" in problems[0]
+
+    problems, invocations = check_examples(correct)
+    assert invocations == 1
+    assert problems == []
+
+
+def test_option_table_checker_reports_a_global_option_under_a_command():
+    """Control: a per-command option table listing a root option is reported; `--help` is not."""
+    page = "\n".join([
+        "## auth login",
+        "",
+        "| Option      | Type | Required | Description |",
+        "| ----------- | ---- | -------- | ----------- |",
+        "| `--user-id` | Text | No       | Real option |",
+        "| `--profile` | Text | No       | Global option, misplaced |",
+        "| `--help`    | Flag | No       | Every command has it |",
+    ])
+    problems, cells, commands = check_option_tables(page)
+
+    assert commands == 1, "heading did not resolve to a command"
+    assert cells == 3
+    assert len(problems) == 1
+    assert "--profile" in problems[0]
+    assert "global option" in problems[0]
 
 
 def test_example_checker_ignores_a_piped_program():
