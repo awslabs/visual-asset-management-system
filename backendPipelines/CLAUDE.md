@@ -656,11 +656,20 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     builds the client that reads or writes there (adaptive retries, regional `us-east-1` endpoint, no
     `endpoint_url`). **A pipeline whose AWS Batch compute runs in the isolated subnets** (Potree viewer,
     3D thumbnail, GenAI metadata labeling, coordinate transform) reaches Amazon S3 in the deployment
-    Region only, so its `vamsExecute` handler calls `manifestHelper.enforce_inputs_in_region(resolved)`
-    right after `enforce_single_input_file`, inside the `try` that reports `SendTaskFailure`; the
-    private-subnet pipelines and the Lambda-container pipelines do not, and the Lambda-container entry
-    points (`lambdaContainer/lambda.py`) read the input and write the output with a client for the Region
-    the manifest names. Moving a pipeline between placements means adding or removing that call.
+    Region through the S3 gateway endpoint and in each cross-Region asset bucket's Region through the
+    cross-Region S3 interface endpoint the VPC builder creates in those subnets
+    (`app.useGlobalVpc.addCrossRegionS3Endpoints`), so its `vamsExecute` handler calls
+    `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file`, inside
+    the `try` that reports `SendTaskFailure`. The gate admits the deployment Region and the Regions in
+    `CROSS_REGION_S3_ENDPOINT_REGIONS`, which the pipeline's lambda builder sets on the `vamsExecute`
+    function from `Config.crossRegionS3EndpointRegions(config)` -- the same helper the VPC builder
+    iterates to create the endpoints, so the two cannot drift -- and rejects any other Region with a
+    message naming both remedies (the flag with the bucket registered, or private subnets). The
+    private-subnet pipelines and the Lambda-container pipelines do not call it, and the Lambda-container
+    entry points (`lambdaContainer/lambda.py`) read the input and write the output with a client for the
+    Region the manifest names. Moving a pipeline between placements means adding or removing that call
+    and the env var. `infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts` holds the
+    four functions' value to the VPC builder's endpoint list.
     **Batch containers get the Regions through the job definition:** `vamsExecute` passes
     `inputBucketRegion` / `outputBucketRegion` to `openPipeline` (state-machine input), `constructPipeline`
     turns them into the definition's `bucketRegions` map (`bucket_regions(event)`: bucket name -> Region,

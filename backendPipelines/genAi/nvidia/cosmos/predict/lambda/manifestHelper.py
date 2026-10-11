@@ -531,23 +531,54 @@ def input_file_region(entry):
     return ((entry or {}).get("bucketRegion", "") or "")
 
 
-def enforce_inputs_in_region(resolved, region=None):
-    """Raise when any resolved input file is in a bucket outside ``region`` (the deployment Region when
-    None).
+CROSS_REGION_S3_ENDPOINT_REGIONS_ENV = "CROSS_REGION_S3_ENDPOINT_REGIONS"
 
-    A pipeline whose compute runs in the VPC's isolated subnets reaches Amazon S3 through the
-    deployment Region's gateway endpoint only, so it cannot read a bucket in another Region. Failing
-    here, before the job is submitted, reports the cause through ``SendTaskFailure`` instead of
-    provisioning compute that fails on its first read."""
+
+def cross_region_s3_endpoint_regions():
+    """The Regions the VPC reaches Amazon S3 in through a cross-Region interface endpoint, as the
+    comma-separated ``CROSS_REGION_S3_ENDPOINT_REGIONS`` the CDK sets on an isolated-subnet pipeline's
+    ``vamsExecute`` Lambda from the same list the VPC builder creates the endpoints from. Empty when the
+    VPC builder creates none (the flag off, or no cross-Region asset bucket)."""
+    return tuple(region.strip()
+                 for region in os.environ.get(CROSS_REGION_S3_ENDPOINT_REGIONS_ENV, "").split(",")
+                 if region.strip())
+
+
+def remote_input_regions(resolved, region=None, reachable_regions=()):
+    """The sorted Regions of the resolved input files' buckets that are neither ``region`` (the
+    deployment Region when None) nor in ``reachable_regions``."""
     region = region or os.environ.get("AWS_REGION", "")
-    remote = sorted({input_file_region(entry) for entry in ((resolved or {}).get("inputFiles") or [])
-                     if input_file_region(entry) and input_file_region(entry) != region})
+    reachable = set(reachable_regions or ())
+    return sorted({input_file_region(entry) for entry in ((resolved or {}).get("inputFiles") or [])
+                   if input_file_region(entry) and input_file_region(entry) != region
+                   and input_file_region(entry) not in reachable})
+
+
+def enforce_inputs_in_region(resolved, region=None, reachable_regions=None):
+    """Raise when any resolved input file is in a bucket in a Region the pipeline's isolated-subnet
+    compute cannot reach.
+
+    Compute in the VPC's isolated subnets reaches Amazon S3 in ``region`` (the deployment Region when
+    None) through the S3 gateway endpoint, and in each of ``reachable_regions`` through a cross-Region
+    S3 interface endpoint -- by default the Regions the CDK names in ``CROSS_REGION_S3_ENDPOINT_REGIONS``
+    (``cross_region_s3_endpoint_regions``); pass ``()`` to accept the deployment Region only. An input in
+    any other Region is rejected here, before the job is submitted, so the cause is reported through
+    ``SendTaskFailure`` instead of provisioning compute that fails on its first read."""
+    region = region or os.environ.get("AWS_REGION", "")
+    if reachable_regions is None:
+        reachable_regions = cross_region_s3_endpoint_regions()
+    remote = remote_input_regions(resolved, region, reachable_regions)
     if remote:
+        reachable_text = (f" and, through the VPC's cross-Region S3 endpoints, in {', '.join(reachable_regions)}"
+                          if reachable_regions else "")
+        remote_text = ', '.join(remote)
         raise Exception(
-            f"This pipeline runs in the VPC's isolated subnets and reads Amazon S3 in {region} only, but "
-            f"the workflow input is in an asset bucket in {', '.join(remote)}. Cross-Region inputs are not "
-            f"supported for this pipeline; move the pipeline's compute to private subnets with a route to "
-            f"Amazon S3 in that Region, or run it on an asset in a {region} bucket.")
+            f"This pipeline runs in the VPC's isolated subnets and reads Amazon S3 in {region}{reachable_text} "
+            f"only, but the workflow input is in an asset bucket in {remote_text}. Cross-Region inputs are not "
+            f"supported for this pipeline from {remote_text}: enable app.useGlobalVpc.addCrossRegionS3Endpoints "
+            f"with that bucket registered under app.assetBuckets.externalAssetBuckets so the VPC gets a "
+            f"cross-Region S3 endpoint for {remote_text}, or move the pipeline's compute to private subnets "
+            f"with a route to Amazon S3 in {remote_text}.")
 
 
 def _unambiguous_vams_view(envelope):

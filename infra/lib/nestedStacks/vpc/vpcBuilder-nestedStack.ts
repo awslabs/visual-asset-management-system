@@ -670,23 +670,19 @@ export class VPCBuilderNestedStack extends NestedStack {
             // Region, endpoint in this VPC) with private DNS, which resolves that Region's
             // s3.<region> hostnames to the endpoint from inside the VPC. Cross-Region AWS
             // PrivateLink is offered in the commercial partition only; getConfig() rejects the flag
-            // elsewhere when a cross-Region bucket is configured.
-            if (props.config.app.useGlobalVpc.addCrossRegionS3Endpoints) {
-                for (const bucketRegion of Config.crossRegionExternalBucketRegions(
-                    props.config.app.assetBuckets.externalAssetBuckets,
-                    props.config.env.region
-                )) {
-                    new ec2.InterfaceVpcEndpoint(this, `S3CrossRegionEndpoint-${bucketRegion}`, {
-                        vpc: this.vpc,
-                        privateDnsEnabled: true,
-                        service: new ec2.InterfaceVpcEndpointService(
-                            crossRegionS3ServiceName(bucketRegion)
-                        ),
-                        serviceRegion: bucketRegion,
-                        subnets: { subnets: this.isolatedSubnets },
-                        securityGroups: [vpceSecurityGroup],
-                    });
-                }
+            // elsewhere when a cross-Region bucket is configured. The same helper gives the
+            // isolated-subnet pipelines the Regions their compute can read an input from.
+            for (const bucketRegion of Config.crossRegionS3EndpointRegions(props.config)) {
+                new ec2.InterfaceVpcEndpoint(this, `S3CrossRegionEndpoint-${bucketRegion}`, {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: new ec2.InterfaceVpcEndpointService(
+                        crossRegionS3ServiceName(bucketRegion)
+                    ),
+                    serviceRegion: bucketRegion,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
             }
 
             //Pipeline-Only Required Endpoints

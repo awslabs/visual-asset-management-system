@@ -3299,6 +3299,30 @@ export function crossRegionExternalBucketRegions(
     );
 }
 
+/**
+ * The Regions the VPC reaches Amazon S3 in through a cross-Region interface endpoint: the Regions
+ * of the cross-Region external asset buckets when the VPC builder creates those endpoints (the VPC
+ * on, addVpcEndpoints and addCrossRegionS3Endpoints on, not a context-only synth), otherwise none.
+ * The VPC builder creates one endpoint per Region returned, and the isolated-subnet pipelines set
+ * the same list on their vamsExecute Lambdas as the Regions an input may come from, so the two
+ * cannot drift apart.
+ */
+export function crossRegionS3EndpointRegions(config: ConfigPublic): string[] {
+    const vpcConfig = config.app.useGlobalVpc;
+    if (
+        !vpcConfig.enabled ||
+        !vpcConfig.addVpcEndpoints ||
+        !vpcConfig.addCrossRegionS3Endpoints ||
+        config.env.loadContextIgnoreVPCStacks
+    ) {
+        return [];
+    }
+    return crossRegionExternalBucketRegions(
+        config.app.assetBuckets.externalAssetBuckets,
+        config.env.region
+    );
+}
+
 //Public config values that should go into a configuration file
 export interface ConfigPublic {
     name: string;

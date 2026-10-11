@@ -141,8 +141,9 @@ def lambda_handler(event, context):
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
         # Single input file per execution today (SFN/manifest layer is multi-file-ready).
         manifestHelper.enforce_single_input_file(resolved)
-        # This pipeline's AWS Batch compute runs in the VPC's isolated subnets, which reach Amazon S3
-        # in the deployment Region only; an input in another Region is rejected before submission.
+        # This pipeline's AWS Batch compute runs in the VPC's isolated subnets, which reach Amazon S3 in
+        # the deployment Region and in the Regions served by the VPC's cross-Region S3 endpoints
+        # (CROSS_REGION_S3_ENDPOINT_REGIONS); an input anywhere else is rejected before submission.
         manifestHelper.enforce_inputs_in_region(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 

@@ -10,10 +10,12 @@ input in another Region signs the request for that Region.
 
 The four Batch pipelines whose compute runs in the VPC's isolated subnets (Potree viewer, 3D
 thumbnail, GenAI metadata labeling, coordinate transform) reach Amazon S3 in the deployment Region
-only, so their `vamsExecute` handlers reject a cross-Region input before submitting the job, from
-inside the `try` that reports `SendTaskFailure`. The seven private-subnet pipelines and the
-Lambda-container pipelines are not gated: their compute has a route to Amazon S3 in the bucket
-Region.
+through the S3 gateway endpoint and in each cross-Region asset bucket's Region through the
+cross-Region S3 interface endpoint the VPC builder creates there (`addCrossRegionS3Endpoints`). The
+CDK names those Regions in `CROSS_REGION_S3_ENDPOINT_REGIONS` on their `vamsExecute` Lambdas, and
+the handlers reject an input in any other Region before submitting the job, from inside the `try`
+that reports `SendTaskFailure`. The seven private-subnet pipelines and the Lambda-container
+pipelines are not gated: their compute has a route to Amazon S3 in the bucket Region.
 
 The fourteen `manifestHelper.py` copies are one file; byte identity is asserted first so an edit
 applied to one copy and not propagated fails here.
@@ -159,18 +161,74 @@ class TestEnforceInputsInRegion:
         helper.enforce_inputs_in_region({"inputFiles": []})
         helper.enforce_inputs_in_region(None)
 
-    def test_a_cross_region_input_raises_naming_both_regions(self, helper):
+    def test_a_cross_region_input_raises_naming_both_regions_and_both_remedies(self, helper):
         with pytest.raises(Exception) as excinfo:
             helper.enforce_inputs_in_region(helper.resolve_inputs({}, _manifest("us-east-1")))
         message = str(excinfo.value)
         assert "us-east-1" in message and "us-west-2" in message
         assert "isolated subnets" in message
         assert "Cross-Region inputs are not supported for this pipeline" in message
+        # The operator has two ways through: the cross-Region endpoint flag, or private subnets.
+        assert "app.useGlobalVpc.addCrossRegionS3Endpoints" in message
+        assert "private subnets" in message
 
     def test_an_explicit_region_overrides_the_environment(self, helper):
         helper.enforce_inputs_in_region(helper.resolve_inputs({}, _manifest("us-east-1")), region="us-east-1")
         with pytest.raises(Exception):
             helper.enforce_inputs_in_region(helper.resolve_inputs({}, _manifest("us-west-2")), region="us-east-1")
+
+
+class TestEndpointServedRegionsPassTheGate:
+    """The VPC builder creates a cross-Region S3 interface endpoint, in the isolated subnets, for every
+    Region that holds an external asset bucket (addCrossRegionS3Endpoints). The CDK names those
+    Regions in CROSS_REGION_S3_ENDPOINT_REGIONS on the isolated-subnet pipelines' vamsExecute Lambdas,
+    and an input in one of them passes the gate; only a Region with no endpoint is rejected."""
+
+    def test_the_variable_is_parsed_as_a_trimmed_comma_separated_list(self, helper, monkeypatch):
+        monkeypatch.delenv("CROSS_REGION_S3_ENDPOINT_REGIONS", raising=False)
+        assert helper.cross_region_s3_endpoint_regions() == ()
+        monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", "")
+        assert helper.cross_region_s3_endpoint_regions() == ()
+        monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", "us-east-1, eu-west-1,")
+        assert helper.cross_region_s3_endpoint_regions() == ("us-east-1", "eu-west-1")
+
+    def test_an_input_in_an_endpoint_served_region_passes(self, helper, monkeypatch):
+        monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", "us-east-1,eu-west-1")
+        helper.enforce_inputs_in_region(helper.resolve_inputs({}, _manifest("us-east-1")))
+        helper.enforce_inputs_in_region(helper.resolve_inputs({}, _manifest("eu-west-1")))
+        helper.enforce_inputs_in_region(helper.resolve_inputs({}, _manifest("us-west-2")))
+
+    def test_an_input_in_a_region_with_no_endpoint_still_raises_naming_the_served_regions(self, helper, monkeypatch):
+        monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", "us-east-1")
+        with pytest.raises(Exception) as excinfo:
+            helper.enforce_inputs_in_region(helper.resolve_inputs({}, _manifest("eu-west-1")))
+        message = str(excinfo.value)
+        assert "eu-west-1" in message and "us-west-2" in message
+        assert "cross-Region S3 endpoints, in us-east-1" in message
+        assert "isolated subnets" in message
+
+    def test_an_empty_variable_preserves_the_deployment_region_only_gate(self, helper, monkeypatch):
+        monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", "")
+        with pytest.raises(Exception) as excinfo:
+            helper.enforce_inputs_in_region(helper.resolve_inputs({}, _manifest("us-east-1")))
+        assert "cross-Region S3 endpoints, in" not in str(excinfo.value)
+
+    def test_an_explicit_reachable_list_overrides_the_environment(self, helper, monkeypatch):
+        monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", "us-east-1")
+        with pytest.raises(Exception):
+            helper.enforce_inputs_in_region(
+                helper.resolve_inputs({}, _manifest("us-east-1")), reachable_regions=())
+        helper.enforce_inputs_in_region(
+            helper.resolve_inputs({}, _manifest("eu-west-1")), reachable_regions=("eu-west-1",))
+
+    def test_remote_input_regions_lists_what_the_gate_would_reject(self, helper):
+        resolved = helper.resolve_inputs({}, _manifest("us-east-1"))
+        resolved["inputFiles"].append(dict(resolved["inputFiles"][0], bucketRegion="eu-west-1"))
+        resolved["inputFiles"].append(dict(resolved["inputFiles"][0], bucketRegion=""))
+        assert helper.remote_input_regions(resolved) == ["eu-west-1", "us-east-1"]
+        assert helper.remote_input_regions(resolved, reachable_regions=("us-east-1",)) == ["eu-west-1"]
+        assert helper.remote_input_regions(resolved, region="us-east-1", reachable_regions=("eu-west-1",)) == []
+        assert helper.remote_input_regions(None) == []
 
 
 class TestIsolatedSubnetHandlersGateCrossRegionInputs:

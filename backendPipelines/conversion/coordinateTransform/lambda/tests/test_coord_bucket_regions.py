@@ -32,7 +32,9 @@ def _container_pipeline_definition():
 
 # This suite runs with AWS_REGION=us-east-1. The input Region is the deployment Region because this
 # pipeline runs in isolated subnets and vamsExecute rejects a cross-Region INPUT before the job is
-# submitted (enforce_inputs_in_region); the output Region is not gated, so it shows a value flowing.
+# submitted (enforce_inputs_in_region) unless that Region is served by one of the VPC's cross-Region
+# S3 endpoints (CROSS_REGION_S3_ENDPOINT_REGIONS, exercised below); the output Region is not gated,
+# so it shows a value flowing.
 INPUT_REGION = "us-east-1"
 OUTPUT_REGION = "eu-west-1"
 
@@ -149,3 +151,52 @@ class TestConstructPipelineMapsBucketsToRegions:
         assert PipelineDefinition(**definition).bucketRegions == {"in-bkt": INPUT_REGION, "out-bkt": OUTPUT_REGION}
         definition.pop("bucketRegions")
         assert PipelineDefinition(**definition).bucketRegions is None
+
+
+@pytest.mark.unit
+class TestVamsExecuteAcceptsEndpointServedRegions:
+    """The isolated-subnet gate admits an input Region the VPC reaches through a cross-Region S3
+    interface endpoint, which the CDK names in CROSS_REGION_S3_ENDPOINT_REGIONS on this Lambda."""
+
+    ENDPOINT_REGION = "eu-west-1"
+    UNSERVED_REGION = "ap-southeast-2"
+
+    def _handle(self, manifest, monkeypatch, endpoint_regions):
+        monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", endpoint_regions)
+        base = refactor.TestVamsExecute()
+        mod = base._load()
+        invoke = MagicMock(return_value={"StatusCode": 200})
+        send_task_failure = MagicMock()
+        with patch.object(mod, "s3_client", _manifest_s3(manifest)), \
+                patch.object(mod.lambda_client, "invoke", invoke), \
+                patch.object(mod.sfn_client, "send_task_failure", send_task_failure):
+            resp = mod.lambda_handler({"body": json.dumps(base._body())}, MagicMock())
+        return resp, invoke, send_task_failure
+
+    def test_an_input_in_an_endpoint_served_region_reaches_the_payload(self, monkeypatch):
+        manifest = refactor.TestVamsExecute()._manifest()
+        manifest["inputFiles"][0]["bucketRegion"] = self.ENDPOINT_REGION
+        # Two Regions in the list: the match must not depend on the value being the whole string.
+        resp, invoke, send_task_failure = self._handle(
+            manifest, monkeypatch, f"eu-north-1,{self.ENDPOINT_REGION}")
+        assert resp["statusCode"] == 200
+        payload = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
+        assert payload["inputBucketRegion"] == self.ENDPOINT_REGION
+        send_task_failure.assert_not_called()
+
+    def test_an_input_in_an_unserved_region_is_rejected_before_the_job_is_submitted(self, monkeypatch):
+        manifest = refactor.TestVamsExecute()._manifest()
+        manifest["inputFiles"][0]["bucketRegion"] = self.UNSERVED_REGION
+        resp, invoke, send_task_failure = self._handle(manifest, monkeypatch, self.ENDPOINT_REGION)
+        assert resp["statusCode"] == 500
+        invoke.assert_not_called()
+        cause = send_task_failure.call_args.kwargs["cause"]
+        assert "isolated subnets" in cause and self.UNSERVED_REGION in cause
+
+    def test_without_the_variable_every_cross_region_input_is_rejected(self, monkeypatch):
+        manifest = refactor.TestVamsExecute()._manifest()
+        manifest["inputFiles"][0]["bucketRegion"] = self.ENDPOINT_REGION
+        resp, invoke, send_task_failure = self._handle(manifest, monkeypatch, "")
+        assert resp["statusCode"] == 500
+        invoke.assert_not_called()
+        send_task_failure.assert_called_once()
