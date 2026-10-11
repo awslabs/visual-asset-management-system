@@ -153,6 +153,8 @@ The rate-based rule aggregates on the IP address AWS WAF observes on the connect
 
 If the file is empty or absent, VAMS applies its baseline rule set: a single AWS Common Rule Set in count-only mode. Populate the file to enable enforced protection.
 
+Independently of the WAF policy, the backend limits every asset file key to 1,024 bytes of UTF-8 — the Amazon S3 object-key limit — in its request validation, and rejects a longer key with a `400` before any Amazon S3 call. The limit is applied to the key the stream, download, and file-operation routes receive, and again to the full object key once the asset prefix has been added to it on the stream and download routes, on upload initialization (where the temporary upload key is checked as well), and on the create-folder, move, and copy file operations.
+
 :::tip[Validate before enabling block mode]
 Managed rule groups can match legitimate traffic (for example, large multipart uploads, presigned-URL flows, or file names with configuration-style extensions). Set a rule group's `block` to `false` to observe its matches in Amazon CloudWatch first, then switch to `true` once you confirm normal VAMS traffic is not caught, adding scoped rule exclusions for any false positives. When only specific rules are the source of false positives, prefer a `ruleActionOverrides` entry that sets each such rule's `action` to `count` over dropping the whole group to count mode — this is how the shipped policy handles the eight Common Rule Set rules listed above, while the rest of the Common Rule Set keeps blocking. The unit test `infra/test/waf/wafCommonRuleSetOverrides.test.ts` pins the shipped override set, so a change to it is a deliberate edit of both the policy and the test.
 :::
