@@ -181,6 +181,10 @@ cdk deploy --all --require-approval never
 
 This command synthesizes all AWS CloudFormation templates and deploys every nested stack. The `--require-approval never` flag auto-approves IAM and security-related changes.
 
+:::warning[There is no dry run]
+`npm run deploy.dev --dry-run` and `npm run deploy.vams --dry-run` run a real deployment: `--dry-run` is consumed by npm and never reaches the AWS CDK CLI, which has no such option. To preview the changes a deployment would make, run `npx cdk diff`.
+:::
+
 ### What happens during deployment
 
 1. CDK synthesizes the core stack and all nested stacks (VPC, storage, auth, API, static web, search, pipelines, addons).

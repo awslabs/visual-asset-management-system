@@ -16,8 +16,8 @@
         "cdk": "cdk",
         "cdk.synth.app": "cdk synth --all --require-approval never",
         "cdk.deploy.app": "cdk deploy --all --require-approval never",
-        "deploy.dev": "npm run cdk.deploy.app -- --context ",
-        "deploy.vams": "cdk deploy --all --require-approval never -c stack-name=vams -c region=us-east-1 --context",
+        "deploy.dev": "npm run cdk.deploy.app --",
+        "deploy.vams": "npm run cdk.deploy.app --",
         "gen": "ts-node ./gen/genEndpoints.ts",
         "check.account": "ts-node ./scripts/assertManifestAccount.ts",
         "check.quotas": "ts-node ./scripts/assertDeployQuotas.ts"
