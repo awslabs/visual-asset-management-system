@@ -1382,6 +1382,9 @@ class AssetUploadTableModel(BaseModel, extra='ignore'):
     isExternalUpload: bool = False  # Flag for external uploads
     temporaryPrefix: Optional[str] = None  # Base temporary prefix for external uploads
     UserId: Optional[str] = None  # User ID for rate limiting (matches DynamoDB GSI field name)
+    # relativeKeys the upload was initialized with. Completion accepts only these; a record
+    # without the attribute predates the binding and is completed without the membership check.
+    files: Optional[List[str]] = None
     
     def to_dict(self):
         """Convert model to dictionary for DynamoDB storage"""
@@ -1403,5 +1406,7 @@ class AssetUploadTableModel(BaseModel, extra='ignore'):
             result["temporaryPrefix"] = self.temporaryPrefix
         if self.UserId:
             result["UserId"] = self.UserId
+        if self.files is not None:
+            result["files"] = self.files
             
         return result
