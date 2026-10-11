@@ -68,6 +68,16 @@ logger = safeLogger(service_name="AssetService")
 # bounds Lambda concurrency and matches the S3 client connection pool
 MAX_PARALLEL_S3_WORKERS = 10
 
+# BatchGetItem accepts at most 100 keys per call.
+BATCH_GET_CHUNK_SIZE = 100
+# Attempts spent re-requesting a BatchGetItem's UnprocessedKeys (throttling / a response that hit the
+# 16 MB size limit) before the remainder falls back to per-item reads. batch_get_item answers a
+# partially throttled request with HTTP 200 and an UnprocessedKeys map, which the botocore retry
+# config does not cover.
+BATCH_GET_MAX_RETRIES = 3
+# Base seconds for the exponential backoff between UnprocessedKeys retries.
+BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
+
 # Global variables for claims and roles
 claims_and_roles = {}
 
@@ -198,6 +208,41 @@ def get_asset_bucket_details(asset):
         raise VAMSGeneralErrorResponse("Asset record is invalid (missing bucket details).")
     return get_default_bucket_details(bucket_id)
 
+def enrich_asset_listing_page(items):
+    """Attach version information and bucketName to one page of listed asset records.
+
+    Version rows are read with BatchGetItem (one call per BATCH_GET_CHUNK_SIZE assets) and bucket
+    details are resolved once per distinct bucketId for the page, so a page costs a handful of reads
+    rather than two per asset. Each returned record is identical to what the per-asset
+    enhance_asset_with_version_info + get_default_bucket_details pair produces. Records without a
+    bucketId are skipped so one malformed item cannot fail the whole listing.
+
+    Args:
+        items: Asset dictionaries for the page, in response order
+
+    Returns:
+        Enriched asset copies, in the same order, minus skipped records
+    """
+    listed_items = []
+    for item in items:
+        if not item.get('bucketId'):
+            logger.error(f"Skipping asset record with missing bucketId: "
+                         f"{item.get('databaseId')}:{item.get('assetId')}")
+            continue
+        listed_items.append(item)
+
+    enhanced_items = enhance_assets_with_version_info(listed_items)
+
+    # Per-request memo: a page typically spans one or two buckets
+    bucket_details_by_id = {}
+    for enhanced_item in enhanced_items:
+        bucket_id = enhanced_item['bucketId']
+        if bucket_id not in bucket_details_by_id:
+            bucket_details_by_id[bucket_id] = get_default_bucket_details(bucket_id)
+        enhanced_item["bucketName"] = bucket_details_by_id[bucket_id]['bucketName']
+
+    return enhanced_items
+
 def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
     try:
@@ -213,6 +258,23 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
+def _current_version_key(asset):
+    """Primary key of the asset's current-version row in the versions table"""
+    return {
+        'databaseId:assetId': f"{asset['databaseId']}:{asset['assetId']}",
+        'assetVersionId': asset['currentVersionId']
+    }
+
+def _current_version_from_row(version_item):
+    """Build the CurrentVersionModel an asset response carries from one versions-table row"""
+    return CurrentVersionModel(
+        Version=version_item.get('assetVersionId', '0'),
+        DateModified=version_item.get('dateCreated', ''),
+        Comment=version_item.get('comment', ''),
+        description=version_item.get('description', ''),
+        createdBy=version_item.get('createdBy', 'SYSTEM_USER')
+    )
+
 def get_current_version_info(asset):
     """Get current version information from asset versions table
     
@@ -226,27 +288,109 @@ def get_current_version_info(asset):
         return None
     
     try:
-        response = versions_table.get_item(
-            Key={
-                'databaseId:assetId': f"{asset['databaseId']}:{asset['assetId']}",
-                'assetVersionId': asset['currentVersionId']
-            }
-        )
+        response = versions_table.get_item(Key=_current_version_key(asset))
         
         if 'Item' in response:
-            version_item = response['Item']
-            # Create CurrentVersionModel instance
-            return CurrentVersionModel(
-                Version=version_item.get('assetVersionId', '0'),
-                DateModified=version_item.get('dateCreated', ''),
-                Comment=version_item.get('comment', ''),
-                description=version_item.get('description', ''),
-                createdBy=version_item.get('createdBy', 'SYSTEM_USER')
-            )
+            return _current_version_from_row(response['Item'])
     except Exception as e:
         logger.exception(f"Error fetching current version from versions table: {e}")
     
     return None
+
+def _batch_get_version_rows(keys):
+    """BatchGetItem `keys` (full primary-key dicts) from the versions table.
+
+    Chunks at the DynamoDB per-call key limit and re-requests UnprocessedKeys with exponential
+    backoff, up to BATCH_GET_MAX_RETRIES. Returns (rows, unresolved_keys): the rows that came back,
+    and the keys whose read did not complete. A key absent from both is a row that does not exist,
+    which is a different answer from a read that failed -- the caller resolves unresolved keys with
+    the per-item read so a throttled batch never blanks version info. Never raises.
+    """
+    rows = []
+    unresolved = []
+    for start in range(0, len(keys), BATCH_GET_CHUNK_SIZE):
+        pending = keys[start:start + BATCH_GET_CHUNK_SIZE]
+        attempt = 0
+        while pending:
+            try:
+                response = dynamodb.batch_get_item(
+                    RequestItems={asset_versions_table_name: {'Keys': pending}}
+                )
+            except Exception as e:
+                logger.warning(f"Batch read of asset versions failed "
+                               f"(falling back to per-item reads): {e}")
+                break
+            rows.extend(response.get('Responses', {}).get(asset_versions_table_name, []))
+            pending = response.get('UnprocessedKeys', {}).get(
+                asset_versions_table_name, {}).get('Keys', [])
+            if not pending:
+                break
+            attempt += 1
+            if attempt > BATCH_GET_MAX_RETRIES:
+                logger.info(f"Batch read of asset versions left {len(pending)} keys unprocessed "
+                            f"after {BATCH_GET_MAX_RETRIES} retries; reading them individually")
+                break
+            # Must be the last comment line before the call -- semgrep attaches `nosemgrep`
+            # to the next line only.
+            # nosemgrep: arbitrary-sleep
+            time.sleep(BATCH_GET_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+        unresolved.extend(pending)
+    return rows, unresolved
+
+def enhance_assets_with_version_info(assets):
+    """Batched counterpart of enhance_asset_with_version_info for one listing page.
+
+    Reads every asset's current-version row with BatchGetItem instead of one get_item per asset.
+    Each enhanced copy is identical to what enhance_asset_with_version_info would return for that
+    asset: a key the batch could not resolve falls back to the per-item read, and an asset without a
+    currentVersionId (or whose version row does not exist) carries no currentVersion.
+
+    Args:
+        assets: Asset dictionaries, in response order
+
+    Returns:
+        List of enhanced asset copies, in the same order as `assets`
+    """
+    # Only a truthy currentVersionId is batched: BatchGetItem rejects the whole chunk when any key
+    # carries an empty or null attribute, so a falsy value takes the per-item read instead
+    keyed = {}
+    for asset in assets:
+        if asset and asset.get('currentVersionId'):
+            key = _current_version_key(asset)
+            keyed.setdefault((key['databaseId:assetId'], key['assetVersionId']), key)
+
+    versions_by_key = {}
+    if keyed and asset_versions_table_name:
+        rows, unresolved = _batch_get_version_rows(list(keyed.values()))
+        for row in rows:
+            row_key = (row.get('databaseId:assetId'), row.get('assetVersionId'))
+            try:
+                versions_by_key[row_key] = _current_version_from_row(row)
+            except Exception as e:
+                # Same outcome as the per-item read: a row that cannot be modelled carries no version
+                logger.exception(f"Error fetching current version from versions table: {e}")
+        unresolved_keys = {(key['databaseId:assetId'], key['assetVersionId']) for key in unresolved}
+    else:
+        unresolved_keys = set(keyed)
+
+    enhanced_assets = []
+    for asset in assets:
+        if not asset:
+            enhanced_assets.append(asset)
+            continue
+        enhanced_asset = asset.copy()
+        if 'currentVersionId' in asset:
+            key = _current_version_key(asset)
+            key_tuple = (key['databaseId:assetId'], key['assetVersionId'])
+            if key_tuple not in keyed or key_tuple in unresolved_keys:
+                # Never batched (falsy id) or left unresolved by the batch: the per-item read
+                current_version = get_current_version_info(asset)
+            else:
+                current_version = versions_by_key.get(key_tuple)
+            if current_version:
+                enhanced_asset['currentVersion'] = current_version
+        enhanced_assets.append(enhanced_asset)
+    return enhanced_assets
 
 def enhance_asset_with_version_info(asset):
     """Enhance asset with version information from versions table
@@ -1937,22 +2081,8 @@ def handle_get_request(event):
             # Get the assets
             assets_result = get_assets(path_parameters['databaseId'], query_params, show_archived)
 
-            # Enhance each asset with version information
-            enhanced_items = []
-            for item in assets_result.get('Items', []):
-                # Skip malformed records so one bad item cannot fail the whole listing
-                if not item.get('bucketId'):
-                    logger.error(f"Skipping asset record with missing bucketId: "
-                                 f"{item.get('databaseId')}:{item.get('assetId')}")
-                    continue
-
-                enhanced_item = enhance_asset_with_version_info(item)
-
-                #Get bucket details for asset
-                bucketDetails = get_default_bucket_details(enhanced_item['bucketId'])
-                enhanced_item["bucketName"] = bucketDetails['bucketName']
-
-                enhanced_items.append(enhanced_item)
+            # Enhance the page with version information and bucket details (batched reads)
+            enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
             
             # Convert enhanced items to AssetResponseModel instances
             formatted_items = []
@@ -2006,22 +2136,8 @@ def handle_get_request(event):
             # Get all assets
             assets_result = get_all_assets(query_params, show_archived)
 
-            # Enhance each asset with version information
-            enhanced_items = []
-            for item in assets_result.get('Items', []):
-                # Skip malformed records so one bad item cannot fail the whole listing
-                if not item.get('bucketId'):
-                    logger.error(f"Skipping asset record with missing bucketId: "
-                                 f"{item.get('databaseId')}:{item.get('assetId')}")
-                    continue
-
-                enhanced_item = enhance_asset_with_version_info(item)
-
-                #Get bucket details for asset
-                bucketDetails = get_default_bucket_details(enhanced_item['bucketId'])
-                enhanced_item["bucketName"] = bucketDetails['bucketName']
-
-                enhanced_items.append(enhanced_item)
+            # Enhance the page with version information and bucket details (batched reads)
+            enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
             
             # Convert enhanced items to AssetResponseModel instances
             formatted_items = []
