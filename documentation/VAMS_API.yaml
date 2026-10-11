@@ -12845,6 +12845,14 @@ components:
                     type: boolean
                     description: "Whether this is the VAMS default asset bucket, which houses pipeline template data and execution-time run I/O under the {baseAssetsPrefix}pipelines/ prefix. Exactly one bucket in a deployment is the default."
                     default: false
+                bucketRegion:
+                    type: string
+                    nullable: true
+                    description: "The AWS Region the bucket is in. Presigned URLs and S3 requests for this bucket are signed for it. Null on a row written without a Region, which readers treat as the deployment Region."
+                bucketAccountId:
+                    type: string
+                    nullable: true
+                    description: "The 12-digit AWS account that owns the bucket when it is not the deployment account; null otherwise."
             required:
                 - bucketId
                 - bucketName

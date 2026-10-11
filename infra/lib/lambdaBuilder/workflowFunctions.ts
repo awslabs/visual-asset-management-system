@@ -486,6 +486,8 @@ export function buildInterimPipelineTrackingFunction(
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadData(fun);
+    // The Region-routing S3 client resolves a bucket name's Region through the buckets table.
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     // Reads original input files + output-files folder, and writes the next pipeline's
     // resolved input manifest into the asset bucket execution input folder.
     grantReadWritePermissionsToAllAssetBuckets(fun);

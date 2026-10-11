@@ -381,6 +381,22 @@ function externalBuckets(cfg: ConfigShape): any[] {
     return Array.isArray(value) ? value.filter((entry) => !!entry) : [];
 }
 
+/** Region-name shape accepted for bucketRegion (config.ts: `AWS_REGION_NAME_PATTERN`, copied verbatim). */
+const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
+
+/**
+ * External asset bucket entries whose bucketRegion is set and differs from env.region (config.ts:
+ * `crossRegionExternalBuckets`). Empty when the deployment Region is unset, since "cross-Region" is
+ * then undefined.
+ */
+function crossRegionExternalBuckets(cfg: ConfigShape): any[] {
+    const region = g(cfg, "env.region");
+    if (isUnset(region)) return [];
+    return externalBuckets(cfg).filter(
+        (b) => !isUnset(b.bucketRegion) && String(b.bucketRegion) !== String(region)
+    );
+}
+
 /**
  * A `baseAssetsPrefix` reduced to a comparable form (config.ts: `normalizePrefix` in
  * validateExternalAssetBuckets). "", "/" and missing all mean the bucket root; anything else gets a
@@ -1173,23 +1189,92 @@ export const RULES: Rule[] = [
     },
 
     // ----- External asset bucket entries (config.ts validateExternalAssetBuckets) -----
-    // Amazon S3 requires an event-notification destination to be in the same region as the
-    // bucket, and VAMS creates its notification topics in the deployment region. A mismatch
-    // otherwise surfaces only as a PutBucketNotificationConfiguration InvalidArgument from a
-    // custom resource, well into the deploy.
+    // config.ts: "is not a valid AWS Region name". A bucket in another Region of the deployment's
+    // partition is supported (its notification topics are created there by a per-Region stack); a
+    // malformed value would otherwise surface only when that stack's environment fails to resolve.
     {
-        id: "externalbucket-region-matches-deployment",
+        id: "externalbucket-region-format",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) =>
+            externalBuckets(c).some(
+                (b) =>
+                    !isUnset(b.bucketRegion) &&
+                    !AWS_REGION_NAME_PATTERN.test(String(b.bucketRegion))
+            ),
+        message:
+            "An app.assetBuckets.externalAssetBuckets bucketRegion is not a valid AWS Region name (for example 'us-east-1').",
+    },
+    // config.ts: "bucketRegion ... is in partition ... which does not match the deployment partition".
+    // Silent when the deployment Region is unset, because the partition is then unknowable here.
+    {
+        id: "externalbucket-region-partition-matches-deployment",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets", "env.region"],
+        appliesWhen: (c) => {
+            const partition = partitionForRegionName(g(c, "env.region"));
+            if (!partition) return false;
+            return externalBuckets(c).some((b) => {
+                if (isUnset(b.bucketRegion)) return false;
+                const bucketPartition = partitionForRegionName(b.bucketRegion);
+                return !!bucketPartition && bucketPartition !== partition;
+            });
+        },
+        message:
+            "Every app.assetBuckets.externalAssetBuckets bucketRegion must be in the same AWS partition as the deployment Region. Cross-Region buckets must be in the deployment's partition.",
+    },
+    // config.ts: "is marked isDefault but is in ... while the deployment is in ... The default asset
+    // bucket (pipeline template data and run I/O) must be in the deployment Region."
+    {
+        id: "external-bucket-default-must-be-deployment-region",
         severity: "error",
         fieldPaths: ["app.assetBuckets.externalAssetBuckets", "env.region"],
         appliesWhen: (c) => {
             const region = g(c, "env.region");
             if (isUnset(region)) return false;
-            return ((g(c, "app.assetBuckets.externalAssetBuckets") || []) as any[]).some(
-                (b) => b && !isUnset(b.bucketRegion) && b.bucketRegion !== region
+            return externalBuckets(c).some(
+                (b) => !!b.isDefault && !isUnset(b.bucketRegion) && b.bucketRegion !== region
             );
         },
         message:
-            "Every app.assetBuckets.externalAssetBuckets bucketRegion must equal env.region. Amazon S3 requires an event-notification destination to be in the same region as the bucket, and VAMS creates its notification topics in the deployment region.",
+            "The app.assetBuckets.externalAssetBuckets entry marked isDefault must be in the deployment Region (env.region). The default asset bucket holds pipeline template data and run I/O, which the deployment reads and writes from its own Region.",
+    },
+    // config.ts: "app.useGlobalVpc.addCrossRegionS3Endpoints is true, but cross-Region AWS PrivateLink to
+    // Amazon S3 is available in the commercial partition only". Keyed on the resolved partition, not
+    // app.govCloud.enabled.
+    {
+        id: "cross-region-s3-endpoints-commercial-only",
+        severity: "error",
+        fieldPaths: [
+            "app.useGlobalVpc.addCrossRegionS3Endpoints",
+            "app.assetBuckets.externalAssetBuckets",
+            "env.region",
+        ],
+        appliesWhen: (c) =>
+            !isCommercialPartition(c) &&
+            !isUnset(g(c, "env.region")) &&
+            crossRegionExternalBuckets(c).length > 0 &&
+            g(c, "app.useGlobalVpc.addCrossRegionS3Endpoints") !== false,
+        message:
+            "app.useGlobalVpc.addCrossRegionS3Endpoints is true, but cross-Region AWS PrivateLink to Amazon S3 is available in the commercial partition only, and an external asset bucket is configured outside the deployment Region. Set app.useGlobalVpc.addCrossRegionS3Endpoints to false and provide your own network path from the VPC to Amazon S3 in the bucket's Region.",
+    },
+    // config.ts: "app.useGlobalVpc.useForAllLambdas is true and app.useGlobalVpc.addCrossRegionS3Endpoints
+    // is false, but external asset buckets are configured in ..." (console.warn).
+    {
+        id: "cross-region-bucket-isolated-lambdas-no-endpoint",
+        severity: "warning",
+        fieldPaths: [
+            "app.useGlobalVpc.useForAllLambdas",
+            "app.useGlobalVpc.addCrossRegionS3Endpoints",
+            "app.assetBuckets.externalAssetBuckets",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.useGlobalVpc.enabled") &&
+            !!g(c, "app.useGlobalVpc.useForAllLambdas") &&
+            g(c, "app.useGlobalVpc.addCrossRegionS3Endpoints") === false &&
+            crossRegionExternalBuckets(c).length > 0,
+        message:
+            "app.useGlobalVpc.useForAllLambdas is true and app.useGlobalVpc.addCrossRegionS3Endpoints is false, but an external asset bucket is configured outside the deployment Region. Lambdas in the VPC's isolated subnets have no route to Amazon S3 in another Region, so uploads, downloads and indexing of that bucket fail unless the VPC provides its own path (interface endpoint, NAT gateway or proxy) to Amazon S3 in that Region.",
     },
     {
         id: "externalbucket-account-id-format",

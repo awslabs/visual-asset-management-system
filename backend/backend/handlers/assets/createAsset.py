@@ -24,6 +24,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.tagScope import GLOBAL_SCOPE
+from common.s3 import region_routing_s3_client, bucket_region_fields
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -38,7 +39,7 @@ retry_config = Config(
 region = os.environ['AWS_REGION']
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 sns_client = boto3.client('sns', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
+s3_client = region_routing_s3_client()
 logger = safeLogger(service_name="CreateAsset")
 
 # Load environment variables
@@ -144,7 +145,8 @@ def get_default_bucket_details(databaseId):
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting database default bucket details: {e}")

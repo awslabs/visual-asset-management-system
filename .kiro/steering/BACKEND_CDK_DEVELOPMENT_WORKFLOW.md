@@ -330,6 +330,19 @@ no central partition helper in the backend — these four rules are the contract
    comes from `os.environ["AWS_REGION"]` — avoid a `"us-east-1"` default, which
    silently points at the wrong partition if the variable is ever missing.
 
+    **Asset buckets may be in another Region, so every S3 call on an asset bucket
+    goes through `common.s3`'s Region-routing client**, never a module-level
+    `boto3.client('s3', ...)` of the handler's own: `s3 = region_routing_s3_client()`
+    (or `region_routing_s3_resource()`) signs each call for the Region of the
+    `Bucket` it names, resolved from the bucket details the handler read
+    (`bucket_region_fields(row)` spreads `bucketRegion`/`bucketAccountId` into every
+    bucket-details dict) or from the buckets table's `bucketNameGSI`.
+    `copy_s3_object()` is the one copy path: a managed copy by the destination-Region
+    client, or a streamed GET→PUT when `VAMS_LAMBDAS_IN_VPC` is `true` and the
+    Regions differ, since an S3 interface endpoint does not serve cross-Region
+    `CopyObject`. Ratchet: `backend/tests/handlers/databases/test_buckets_listing_region.py`;
+    mock parity: `backend/tests/common/test_s3_region_routing.py`.
+
 3. **New ARN/URL validators must accept every partition.** Compose them from
    `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and
    `aws_dns_suffix_group` in `common/validators.py`; never inline `arn:aws:`. A
@@ -971,7 +984,7 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py`.
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.47 MB template and `apiBuilder2` emits 71 in ~0.29 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 71 in ~0.30 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 

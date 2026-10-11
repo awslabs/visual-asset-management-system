@@ -44,6 +44,10 @@ export interface EnvProps {
     // CloudFront-scoped WAF web ACL ARN (us-east-1) — attaches to the CloudFront
     // distribution. Empty string when CloudFront or WAF is disabled.
     ssmWafArnCloudfront: string;
+    // Notification topic ARNs for external asset buckets in other Regions, created by the
+    // per-Region CrossRegionBucketNotificationsStack and keyed by bucket ARN + prefix. Empty
+    // (or omitted) when every asset bucket is in the deployment Region.
+    crossRegionBucketTopics?: s3AssetBuckets.CrossRegionBucketTopics;
     config: Config.Config;
     description: string;
     synthesizer?: cdk.IStackSynthesizer;
@@ -144,7 +148,8 @@ export class CoreVAMSStack extends cdk.Stack {
             lambdaLayers.lambdaCommonBaseLayer,
             this.vpc,
             this.subnetsIsolated,
-            resourceNameRegistry
+            resourceNameRegistry,
+            props.crossRegionBucketTopics || {}
         );
 
         //Deploy Resource Names SSM Parameters (nested stack). Deploys directly after storage

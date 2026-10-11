@@ -261,6 +261,9 @@ def list_buckets(
 ) -> Dict[str, Any]:
     """List asset storage buckets available for creating databases.
 
+    Each item carries `bucketRegion` and, for a bucket in another account, `bucketAccountId`;
+    a bucket in the deployment Region registered without a Region reports neither.
+
     The walk is BOUNDED: `truncated` means rows were not seen, and `NextToken` continues it via
     `starting_token`. Do not report a count from a truncated result."""
     return CLIENT.paginate(

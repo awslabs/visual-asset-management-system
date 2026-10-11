@@ -708,6 +708,8 @@ class TestInterimRunIoHonoursTheBasePrefix:
         _written, _listed, manifest, _result = _run_interim(dict(_PREFIXED_BODY))
         assert manifest["outputs"] == {
             "bucket": "run-bkt",
+            # The run bucket is the default asset bucket, which is in the deployment Region.
+            "bucketRegion": "us-east-1",
             "files": "vams-assets/pipelines/p1/job-1/output/EXEC1/files/",
             "previews": "vams-assets/pipelines/p1/job-1/output/EXEC1/previews/",
             "metadata": "vams-assets/pipelines/p1/job-1/output/EXEC1/metadata/",

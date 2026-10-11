@@ -22,6 +22,7 @@ from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items, batch_get_items
 from common.validators import validate
+from common.s3 import region_routing_s3_client, bucket_region_fields
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -39,9 +40,6 @@ from models.assetExport import (
 # Configure AWS clients with retry configuration
 region = os.environ.get('AWS_REGION', 'us-east-1')
 
-# Set environment variable for S3 client configuration
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional"
-
 # Standardized retry configuration for all AWS clients
 retry_config = Config(
     retries={
@@ -50,8 +48,7 @@ retry_config = Config(
     }
 )
 
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'}, retries={'max_attempts': 5, 'mode': 'adaptive'})
-s3_client = boto3.client('s3', region_name=region, config=s3_config)
+s3_client = region_routing_s3_client()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
@@ -150,7 +147,8 @@ def get_default_bucket_details(bucketId: str) -> Dict:
         bucket_details = {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
         
         # Cache the result
