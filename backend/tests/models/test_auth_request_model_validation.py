@@ -320,27 +320,45 @@ class TestTemplateImportValidation:
                       model=ImportConstraintsTemplateRequestModel)
         assert model.variableValues["DATABASE_ID"] == value
 
-    def test_shipped_permission_templates_still_import(self):
-        """The templates in documentation/permissionsTemplates/ are the reference input."""
-        from models.roleConstraints import ImportConstraintsTemplateRequestModel
-        templates_dir = _templates_dir()
-        paths = sorted(glob.glob(os.path.join(templates_dir, "*.json")))
-        assert paths, f"no permission templates found under {templates_dir}"
+    @pytest.mark.parametrize("path", sorted(glob.glob(os.path.join(_templates_dir(), "*.json"))),
+                             ids=os.path.basename)
+    def test_shipped_permission_template_imports_unmodified(self, path):
+        """A shipped template file is posted as-is plus ``variableValues``.
 
-        variable_values = {
+        The file carries its header under ``metadata``; the parsed model must still know the
+        template's name, otherwise the import message and audit record report 'unknown'.
+        """
+        from models.roleConstraints import ImportConstraintsTemplateRequestModel
+        with open(path, encoding="utf-8") as handle:
+            body = json.load(handle)
+        body["variableValues"] = {
             "ROLE_NAME": "my-role", "DATABASE_ID": "my-db",
             "TAG_VALUE": "locked", "TAG_NAME": "restricted",
         }
-        for path in paths:
-            with open(path, encoding="utf-8") as handle:
-                template = json.load(handle)
-            model = parse({
-                "template": template.get("metadata"),
-                "variables": template.get("variables", []),
-                "variableValues": variable_values,
-                "constraints": template["constraints"],
-            }, model=ImportConstraintsTemplateRequestModel)
-            assert model.constraints, os.path.basename(path)
+        model = parse(body, model=ImportConstraintsTemplateRequestModel)
+        assert model.constraints
+        assert model.resolved_metadata is not None
+        assert model.resolved_metadata.name == body["metadata"]["name"]
+        # The handler forwards ``dict(exclude_unset=True)``; the header must survive it.
+        assert model.dict(exclude_unset=True)["metadata"]["name"] == body["metadata"]["name"]
+
+    def test_template_header_key_is_still_accepted(self):
+        from models.roleConstraints import ImportConstraintsTemplateRequestModel
+        model = parse(_template(template={"name": "Legacy Header"}),
+                      model=ImportConstraintsTemplateRequestModel)
+        assert model.resolved_metadata.name == "Legacy Header"
+        assert model.dict(exclude_unset=True)["template"]["name"] == "Legacy Header"
+
+    def test_metadata_wins_when_both_header_keys_are_present(self):
+        from models.roleConstraints import ImportConstraintsTemplateRequestModel
+        model = parse(_template(metadata={"name": "From Metadata"}, template={"name": "From Template"}),
+                      model=ImportConstraintsTemplateRequestModel)
+        assert model.resolved_metadata.name == "From Metadata"
+
+    def test_no_header_resolves_to_none(self):
+        from models.roleConstraints import ImportConstraintsTemplateRequestModel
+        model = parse(_template(), model=ImportConstraintsTemplateRequestModel)
+        assert model.resolved_metadata is None
 
 
 @pytest.mark.unit

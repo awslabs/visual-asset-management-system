@@ -1017,28 +1017,25 @@ paths:
             summary: "Import a constraint template"
             description: >-
                 Imports one or more authorization constraints from a JSON constraint
-                template, for bulk-provisioning permissions. A criterion whose field is
-                not valid for its object type is rejected.
+                template, for bulk-provisioning permissions. The body is a permission
+                template with a variableValues object added; the templates in
+                documentation/permissionsTemplates/ can be posted unmodified apart from
+                that addition. The template header is read from metadata (template is
+                accepted as an alternative key). A criterion whose field is not valid
+                for its object type is rejected.
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: object
-                            description: >-
-                                The constraint template JSON. See the templates in
-                                documentation/permissionsTemplates/ for examples.
+                            $ref: "#/components/schemas/importConstraintsTemplateRequest"
             responses:
                 "200":
                     description: Template imported successfully
                     content:
                         application/json:
                             schema:
-                                type: object
-                                properties:
-                                    message:
-                                        type: string
-                                        example: "Template imported successfully"
+                                $ref: "#/components/schemas/importConstraintsTemplateResponse"
                 "400":
                     description: Invalid template
                     content:
@@ -9689,6 +9686,160 @@ components:
                 operation: "create"
                 timestamp: "2024-06-15T10:30:00.123456"
                 constraint: "{\"identifier\":\"asset-viewer-constraint\",\"name\":\"Asset Viewer Constraint\",...}"
+        importConstraintsTemplateRequest:
+            type: object
+            description: >-
+                A permission template with a variableValues object added. The header is read
+                from metadata; template is accepted as an alternative key for the same object.
+            properties:
+                metadata:
+                    type: object
+                    description: "Template header; its name appears in the response message and the audit record"
+                    properties:
+                        name:
+                            type: string
+                            maxLength: 256
+                        description:
+                            type: string
+                            maxLength: 1024
+                        version:
+                            type: string
+                            maxLength: 50
+                            default: "1.0"
+                    required:
+                        - name
+                template:
+                    type: object
+                    description: "Alternative key for the template header, same shape as metadata"
+                variables:
+                    type: array
+                    description: "Variable definitions. A required variable without a value in variableValues and without a default rejects the request."
+                    items:
+                        type: object
+                        properties:
+                            name:
+                                type: string
+                                maxLength: 256
+                            required:
+                                type: boolean
+                                default: true
+                            description:
+                                type: string
+                                maxLength: 1024
+                            default:
+                                type: string
+                                maxLength: 256
+                        required:
+                            - name
+                variableValues:
+                    type: object
+                    description: "Values substituted for the {{VARIABLE}} placeholders in the constraints. ROLE_NAME is required and becomes the groupId of every created constraint."
+                    additionalProperties:
+                        oneOf:
+                            - type: string
+                            - type: number
+                            - type: boolean
+                constraints:
+                    type: array
+                    description: "Constraint definitions with {{VARIABLE}} placeholders; at least one is required"
+                    items:
+                        type: object
+                        properties:
+                            name:
+                                type: string
+                                maxLength: 256
+                            description:
+                                type: string
+                                maxLength: 256
+                            objectType:
+                                type: string
+                            criteriaAnd:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/constraintCriteria"
+                            criteriaOr:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/constraintCriteria"
+                            groupPermissions:
+                                type: array
+                                items:
+                                    type: object
+                                    properties:
+                                        action:
+                                            type: string
+                                            description: "HTTP action (GET, PUT, POST, DELETE)"
+                                        type:
+                                            type: string
+                                            enum: [allow, deny]
+                                            default: allow
+                                    required:
+                                        - action
+                        required:
+                            - name
+                            - description
+                            - objectType
+                            - groupPermissions
+            required:
+                - variableValues
+                - constraints
+            example:
+                metadata:
+                    name: "Database Read-Only"
+                    version: "1.0"
+                variables:
+                    - name: "DATABASE_ID"
+                      required: true
+                      description: "The databaseId to scope permissions to"
+                    - name: "ROLE_NAME"
+                      required: true
+                      description: "The existing role to attach these constraints to"
+                variableValues:
+                    DATABASE_ID: "my-db"
+                    ROLE_NAME: "my-db-reader"
+                constraints:
+                    - name: "{{ROLE_NAME}}-database-read"
+                      description: "Read access to {{DATABASE_ID}}"
+                      objectType: "database"
+                      criteriaAnd: []
+                      criteriaOr:
+                          - field: "databaseId"
+                            operator: "equals"
+                            value: "{{DATABASE_ID}}"
+                      groupPermissions:
+                          - action: "GET"
+                            type: "allow"
+        importConstraintsTemplateResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                message:
+                    type: string
+                    description: "Names the template and the role the constraints were imported for"
+                constraintsCreated:
+                    type: integer
+                constraintIds:
+                    type: array
+                    items:
+                        type: string
+                    description: "Server-generated identifiers of the created constraints"
+                timestamp:
+                    type: string
+                    description: "UTC time of the import in ISO 8601 form, without a time zone offset"
+            required:
+                - success
+                - message
+                - constraintsCreated
+                - constraintIds
+                - timestamp
+            example:
+                success: true
+                message: "Successfully imported 1 constraints from template 'Database Read-Only' for role 'my-db-reader'"
+                constraintsCreated: 1
+                constraintIds:
+                    - "8d6c2b1e-6f8a-4a0e-9d2a-3f1b7c5e9a10"
+                timestamp: "2026-03-15T10:30:00.000000"
         database:
             type: object
             properties:

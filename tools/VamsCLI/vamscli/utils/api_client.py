@@ -5280,13 +5280,14 @@ class APIClient:
 
         Args:
             template_data: Template import data matching ImportConstraintsTemplateRequestModel:
-                - template: Optional template metadata (name, description, version)
+                - metadata: Optional template header (name, description, version); this is the
+                  key the shipped template files use. ``template`` is accepted as an alternative.
                 - variables: Optional list of variable definitions
                 - variableValues: Dictionary of variable name -> value mappings (ROLE_NAME required)
                 - constraints: List of constraint definitions
 
         Returns:
-            API response data with import results (constraintsCreated, constraintIds, etc.)
+            API response data: success, message, constraintsCreated, constraintIds, timestamp
 
         Raises:
             InvalidConstraintDataError: When template data is invalid

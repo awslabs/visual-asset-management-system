@@ -10,7 +10,7 @@
             "required": true,
             "description": "The databaseId to scope permissions to"
         },
-        { "name": "ROLE_NAME", "required": true, "description": "The role name to create" }
+        { "name": "ROLE_NAME", "required": true, "description": "The existing role to attach these constraints to" }
     ],
     "constraints": [
         {
