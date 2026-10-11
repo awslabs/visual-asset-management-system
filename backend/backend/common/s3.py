@@ -170,13 +170,21 @@ def list_all_objects(bucket: str, prefix: str, client=None, max_objects: int = N
     return objects
 
 def validateUnallowedFileExtensionAndContentType(keyPath: str, contentType: str):
-    #Check if the content type is in the list of unallowed MIME types
-    if contentType in UNALLOWED_MIME_LIST:
+    #Both comparisons are case-insensitive: file systems preserve ".EXE" and an uploader picks the
+    #case freely, and a media type is case-insensitive by definition (RFC 2045). The blocklists in
+    #common/constants.py are written lower-case, so the inputs are lower-cased to match them.
+
+    #Check if the content type is in the list of unallowed MIME types. Only the media type counts:
+    #S3 can report "application/x-msdownload; charset=binary", and a parameter must not let the
+    #type through.
+    mediaType = (contentType or "").split(";", 1)[0].strip().lower()
+    if mediaType in UNALLOWED_MIME_LIST:
         logger.error(f"Unallowed file content type detected in asset: {keyPath}")
         return False
     
     #check if the file extension of the keyPath is in the list of unallowed file extensions
-    if os.path.splitext(keyPath)[1] and os.path.splitext(keyPath)[1] in UNALLOWED_FILE_EXTENSION_LIST:
+    extension = os.path.splitext(keyPath)[1].lower()
+    if extension and extension in UNALLOWED_FILE_EXTENSION_LIST:
         logger.error(f"Unallowed file extension detected in asset: {keyPath}")
         return False
     return True

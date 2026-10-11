@@ -628,7 +628,7 @@ Each partition entry carries both a standard and a FIPS hostname, so `useFips` r
 
 ## Blocked File Types
 
-VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content:
+VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content. The comparison is case-insensitive on the file extension and on the media-type part of the reported content type (any parameter such as `; charset=binary` is ignored), so `.EXE` and `Application/X-Msdownload` are blocked exactly like their lower-case forms.
 
 ### Blocked Extensions
 
