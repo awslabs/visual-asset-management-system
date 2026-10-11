@@ -24,6 +24,7 @@ applied to one copy and not propagated fails here.
 import hashlib
 import importlib.util
 import os
+import re
 import sys
 import types
 
@@ -55,7 +56,9 @@ ISOLATED_SUBNET_VAMS_EXECUTE = (
     "backendPipelines/conversion/coordinateTransform/lambda/vamsExecuteCoordinateTransformPipeline.py",
 )
 
-PRIVATE_SUBNET_OR_LAMBDA_VAMS_EXECUTE = (
+# Private-subnet pipelines whose VAMS-owned container addresses each asset bucket in its own Region: the
+# handler forwards both manifest Regions to openPipeline, and the chain carries them to the container.
+REGION_CONSUMING_VAMS_EXECUTE = (
     "backendPipelines/3dRecon/splatToolbox/lambda/vamsExecuteSplatToolboxPipeline.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/vamsExecuteCosmos3Pipeline.py",
     "backendPipelines/genAi/nvidia/cosmos/predict/lambda/vamsExecuteCosmosText2WorldPipeline.py",
@@ -63,11 +66,19 @@ PRIVATE_SUBNET_OR_LAMBDA_VAMS_EXECUTE = (
     "backendPipelines/genAi/nvidia/cosmos/reason/lambda/vamsExecuteCosmosReasonPipeline.py",
     "backendPipelines/genAi/nvidia/cosmos/transfer/lambda/vamsExecuteCosmosTransferPipeline.py",
     "backendPipelines/genAi/nvidia/gr00t/lambda/vamsExecuteGr00tFinetunePipeline.py",
+    "backendPipelines/simulation/isaacLabTraining/lambda/vamsExecuteIsaacLabPipeline.py",
+)
+
+# Private-subnet pipelines that hand s3:// locations to a third-party container image whose SDK VAMS
+# does not control: same-Region only, rejected at vamsExecute.
+SAME_REGION_ONLY_VAMS_EXECUTE = (
     "backendPipelines/multi/modelOps/lambda/vamsExecuteModelOps.py",
     "backendPipelines/multi/rapidPipeline/lambda/vamsExecuteRapidPipeline.py",
     "backendPipelines/multi/rapidPipelineEKS/lambda/vamsExecuteRapidPipelineEKS.py",
-    "backendPipelines/simulation/isaacLabTraining/lambda/vamsExecuteIsaacLabPipeline.py",
 )
+
+# The Lambda-container pipelines have no vamsExecute handler: their entry point reads the manifest
+# itself and builds a client for the Region it names.
 
 
 def _read(relative):
@@ -231,9 +242,66 @@ class TestEndpointServedRegionsPassTheGate:
         assert helper.remote_input_regions(None) == []
 
 
-class TestIsolatedSubnetHandlersGateCrossRegionInputs:
+class TestEnforceSameRegionIo:
+    """The gate for a pipeline that hands s3:// locations to a third-party container image."""
+
+    def test_same_region_and_unplaced_buckets_pass(self, helper):
+        helper.enforce_same_region_io(helper.resolve_inputs({}, _manifest("us-west-2", "us-west-2")))
+        helper.enforce_same_region_io(helper.resolve_inputs({}, _manifest("", "")))
+        helper.enforce_same_region_io(helper.resolve_inputs({}, _manifest("", "")), region="us-west-2")
+        helper.enforce_same_region_io({"inputFiles": []})
+        helper.enforce_same_region_io(None)
+
+    def test_a_cross_region_input_raises_naming_the_image_and_both_regions(self, helper):
+        with pytest.raises(Exception) as excinfo:
+            helper.enforce_same_region_io(helper.resolve_inputs({}, _manifest("us-east-1")))
+        message = str(excinfo.value)
+        assert "third-party container image" in message
+        assert "us-east-1" in message and "us-west-2" in message
+        assert "Cross-Region buckets are not supported for this pipeline" in message
+
+    def test_a_cross_region_output_bucket_raises_too(self, helper):
+        with pytest.raises(Exception) as excinfo:
+            helper.enforce_same_region_io(helper.resolve_inputs({}, _manifest("", "eu-west-1")))
+        assert "the output bucket is in eu-west-1" in str(excinfo.value)
+        with pytest.raises(Exception) as excinfo:
+            helper.enforce_same_region_io(helper.resolve_inputs({}, _manifest("us-east-1", "eu-west-1")))
+        message = str(excinfo.value)
+        assert "us-east-1" in message and "the output bucket is in eu-west-1" in message
+
+    def test_the_endpoint_variable_does_not_widen_this_gate(self, helper, monkeypatch):
+        # A cross-Region S3 endpoint lets VAMS code reach the bucket; it says nothing about the
+        # vendor image's SDK, so the same-Region-only rule holds regardless.
+        monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", "us-east-1")
+        with pytest.raises(Exception):
+            helper.enforce_same_region_io(helper.resolve_inputs({}, _manifest("us-east-1")))
+
+
+def _forwards_both_regions(source):
+    """The handler reads both resolved Regions (either quote style) to pass them on."""
+    return all(re.search(r"resolved\[['\"]%sBucketRegion['\"]\]" % kind, source) for kind in ("input", "output"))
+
+
+def _vams_execute_handlers():
+    return sorted(
+        os.path.relpath(os.path.join(root, name), _REPO_ROOT).replace(os.sep, "/")
+        for root, _, names in os.walk(os.path.join(_REPO_ROOT, "backendPipelines"))
+        for name in names
+        if name.startswith("vamsExecute") and name.endswith(".py") and os.path.basename(root) == "lambda")
+
+
+class TestEveryVamsExecuteHandlerConsumesOrGatesTheRegion:
+    """Repo-wide rule: a pipeline either carries the manifest's bucket Regions to compute that signs for
+    them, or rejects a cross-Region bucket at launch. A handler in neither class would start a job that
+    addresses a cross-Region bucket as if it were in the deployment Region."""
+
+    def test_every_handler_is_in_exactly_one_class(self):
+        listed = ISOLATED_SUBNET_VAMS_EXECUTE + REGION_CONSUMING_VAMS_EXECUTE + SAME_REGION_ONLY_VAMS_EXECUTE
+        assert len(set(listed)) == len(listed), "a handler is listed twice"
+        assert _vams_execute_handlers() == sorted(listed)
+
     @pytest.mark.parametrize("relative", ISOLATED_SUBNET_VAMS_EXECUTE)
-    def test_the_gate_runs_after_the_single_file_check_inside_the_reporting_try(self, relative):
+    def test_the_isolated_subnet_gate_runs_after_the_single_file_check_inside_the_reporting_try(self, relative):
         source = _read(relative).decode("utf-8")
         single = source.index("manifestHelper.enforce_single_input_file(resolved)")
         gate = source.index("manifestHelper.enforce_inputs_in_region(resolved)")
@@ -242,9 +310,24 @@ class TestIsolatedSubnetHandlersGateCrossRegionInputs:
         between = source[single:gate]
         assert "except" not in between, f"{relative}: the Region gate is outside the reporting try"
         assert "abort_external_workflow" in source
+        # The isolated-subnet pipelines also carry the Regions onward: their Batch containers sign for them.
+        assert _forwards_both_regions(source), relative
+        assert "enforce_same_region_io" not in source
 
-    @pytest.mark.parametrize("relative", PRIVATE_SUBNET_OR_LAMBDA_VAMS_EXECUTE)
-    def test_private_subnet_pipelines_are_not_gated(self, relative):
-        # Positive control for the list above: the gate is a property of isolated-subnet compute,
-        # not of every pipeline.
-        assert "enforce_inputs_in_region" not in _read(relative).decode("utf-8"), relative
+    @pytest.mark.parametrize("relative", REGION_CONSUMING_VAMS_EXECUTE)
+    def test_a_region_consuming_handler_forwards_both_regions_and_is_not_gated(self, relative):
+        source = _read(relative).decode("utf-8")
+        assert _forwards_both_regions(source), relative
+        assert "enforce_inputs_in_region" not in source, relative
+        assert "enforce_same_region_io" not in source, relative
+
+    @pytest.mark.parametrize("relative", SAME_REGION_ONLY_VAMS_EXECUTE)
+    def test_a_same_region_only_handler_gates_after_the_single_file_check_inside_the_reporting_try(self, relative):
+        source = _read(relative).decode("utf-8")
+        single = source.index("manifestHelper.enforce_single_input_file(resolved)")
+        gate = source.index("manifestHelper.enforce_same_region_io(resolved)")
+        assert gate > single, relative
+        assert "except" not in source[single:gate], relative
+        assert "send_task_failure" in source, relative
+        # Not the isolated-subnet gate: the compute reaches the Region, the vendor image is the limit.
+        assert "enforce_inputs_in_region" not in source, relative

@@ -682,8 +682,26 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     the upstream `main.py`'s process (`VAMS_BUCKET_REGIONS`), where the launcher replaces a bare
     `boto3.client('s3')` with `vams_utils.aws.s3.region_routing_client()`; Isaac Lab carries the map in
     its job config and `openPipeline` reads the asset bucket with `manifestHelper.s3_client_for_region`.
-    A new Batch pipeline copies this chain; its lambda and container tests assert the map end to end
-    (`test_*_bucket_regions.py`, `test_*_s3_region_client.py`).
+    The five NVIDIA containers (Cosmos 3, Predict v2.5, Reason, Transfer, GR00T) run the AWS CLI rather
+    than boto3: their `manifest_io.py` carries the registry (`register_bucket_regions`, `bucket_region`,
+    `s3_region_args`), `__main__.py` registers the definition's map right after loading it, and every
+    `aws s3` / `aws s3api` command that addresses an asset bucket spreads `*manifest_io.s3_region_args(uri)`
+    into its argv; `model_manager.py` addresses the deployment-Region model-cache bucket and carries none.
+    The helper is duplicated per container (each Dockerfile COPYs an explicit file list) and
+    `genAi/nvidia/tests/test_container_s3_region_routing.py` compares the five copies structurally and
+    scans every argv literal, so edit one and propagate. A new Batch pipeline copies one of these chains;
+    its lambda and container tests assert the map end to end (`test_*_bucket_regions.py`,
+    `test_*_s3_region_client.py`).
+    **A pipeline that hands `s3://` locations to a third-party container image** (ModelOps, RapidPipeline
+    ECS and EKS) cannot route that image's S3 calls, and the image's cross-Region behaviour is
+    unverified, so the pipeline is same-Region only: its `vamsExecute` calls
+    `manifestHelper.enforce_same_region_io(resolved)` right after `enforce_single_input_file`, inside the
+    `try` that reports `SendTaskFailure`, rejecting an input OR output bucket outside the deployment
+    Region. Every S3 call VAMS itself makes in those pipelines (manifest, input configuration, the
+    `rp_config` object) addresses the default run bucket or the auxiliary bucket, both in the deployment
+    Region. `backendPipelines/tests/test_pipeline_cross_region_inputs.py` holds the repo-wide rule: every
+    `vamsExecute*.py` is in exactly one of the three classes -- isolated-subnet gate, Region-consuming
+    (forwards both resolved Regions), or same-Region-only -- so a new pipeline must be placed in one.
     `fetch_manifest` RAISES when a referenced manifest cannot be read (it returns `None` only when the
     payload references no manifest at all): the manifest is the sole carrier of asset identity and the
     output paths, so swallowing that error starts a job that fails only after its compute — a GPU

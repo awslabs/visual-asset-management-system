@@ -581,6 +581,30 @@ def enforce_inputs_in_region(resolved, region=None, reachable_regions=None):
             f"with a route to Amazon S3 in {remote_text}.")
 
 
+def enforce_same_region_io(resolved, region=None):
+    """Raise when any resolved input file or the output bucket is outside ``region`` (the deployment
+    Region when None).
+
+    A pipeline that hands ``s3://`` locations to a third-party container image reads and writes
+    Amazon S3 through that image's own SDK, whose cross-Region behaviour VAMS neither controls nor
+    verifies, so the pipeline is same-Region only. Failing here, before the job is submitted, reports
+    the cause through ``SendTaskFailure``."""
+    region = region or os.environ.get("AWS_REGION", "")
+    remote_inputs = remote_input_regions(resolved, region)
+    output_region = ((resolved or {}).get("outputBucketRegion") or "")
+    remote_output = output_region if output_region != region else ""
+    if remote_inputs or remote_output:
+        where = []
+        if remote_inputs:
+            where.append(f"the workflow input is in an asset bucket in {', '.join(remote_inputs)}")
+        if remote_output:
+            where.append(f"the output bucket is in {remote_output}")
+        raise Exception(
+            f"This pipeline runs a third-party container image that reads and writes Amazon S3 in {region} "
+            f"only, but {' and '.join(where)}. Cross-Region buckets are not supported for this pipeline; "
+            f"run it on an asset in a {region} bucket.")
+
+
 def _unambiguous_vams_view(envelope):
     """Project a v2 grouped envelope onto the legacy view WITHOUT a caller-supplied subject.
 
