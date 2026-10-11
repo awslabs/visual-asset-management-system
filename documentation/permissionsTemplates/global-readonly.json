@@ -5,12 +5,16 @@
         "version": "1.0"
     },
     "variables": [
-        { "name": "ROLE_NAME", "required": true, "description": "The existing role to attach these constraints to" }
+        {
+            "name": "ROLE_NAME",
+            "required": true,
+            "description": "The existing role to attach these constraints to"
+        }
     ],
     "constraints": [
         {
             "name": "{{ROLE_NAME}}-user-api-keys",
-            "description": "Allow self-service API key management (own keys only, expiration required)",
+            "description": "Allow viewing the user's own API keys (read-only; keys are issued and revoked by an administrator)",
             "objectType": "api",
             "criteriaAnd": [
                 {
@@ -20,12 +24,7 @@
                 }
             ],
             "criteriaOr": [],
-            "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "POST", "type": "allow" },
-                { "action": "PUT", "type": "allow" },
-                { "action": "DELETE", "type": "allow" }
-            ]
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
         {
             "name": "{{ROLE_NAME}}-web-routes",
