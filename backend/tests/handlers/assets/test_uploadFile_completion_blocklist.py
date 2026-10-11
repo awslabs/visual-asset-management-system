@@ -16,10 +16,19 @@ The blocklist's own rule (which extensions, how case is treated) lives in
 ``common.s3.validateUnallowedFileExtensionAndContentType`` and is pinned by that module's
 tests. Here the helper is stubbed with a small predicate so these tests assert the WIRING:
 completion hands the helper the submitted name and honours its verdict before any object is
-created, whichever branch the file would take.
+created, whichever branch the file would take. ``TestTheRealHelperThroughTheHandler`` is the
+one exception: it runs the real helper, loaded from source, so completion and helper are
+pinned together on the shapes the helper's own suites block.
+
+The membership check has one deliberate gap -- a record without ``files`` is completed without
+it -- so ``complete_upload`` bounds that gap: a record whose ``expiresAt`` has passed is refused
+(the table has no TTL, so nothing else would ever close the window), and an external
+(workflow-output) record, the one class written without ``files`` by design, is refused on this
+route as ``complete_external_upload`` refuses a non-external one.
 """
 
 import os
+import time
 import pytest
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
@@ -42,6 +51,12 @@ CLAIMS = {"tokens": ["alice@corp"]}
 
 BLOCKLIST_ERROR = "File contains a potentially malicious executable type object"
 NOT_INITIALIZED_ERROR = "File was not part of the initialized upload"
+EXPIRED_ERROR = "Upload has expired"
+TYPE_MISMATCH_ERROR = "Upload type mismatch."
+
+# expiresAt is epoch seconds (int(datetime.timestamp()) in both writers).
+FRESH = int(time.time()) + 7 * 24 * 3600
+EXPIRED = int(time.time()) - 60
 
 
 def _blocklist_stub(key, _content_type):
@@ -74,17 +89,54 @@ def _asset():
     }
 
 
-def _upload_record(files, uploadType="assetFile"):
-    """The record get_upload_details returns. files=None models a record saved before the list."""
+def _upload_record(files, uploadType="assetFile", expiresAt=FRESH, isExternalUpload=False):
+    """The record get_upload_details returns. files=None models a record saved before the list.
+
+    Every writer sets expiresAt, so a fresh value is the default; ``expiresAt=None`` models a
+    record without the attribute (none is written, but completion treats it as expired).
+    """
     record = {
         'uploadId': UPLOAD_ID,
         'assetId': ASSET_ID,
         'databaseId': DATABASE_ID,
         'uploadType': uploadType,
+        'isExternalUpload': isExternalUpload,
     }
+    if expiresAt is not None:
+        record['expiresAt'] = expiresAt
     if files is not None:
         record['files'] = list(files)
     return record
+
+
+_S3_MODULE_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "backend", "common", "s3.py")
+
+
+def _load_real_blocklist_helper():
+    """Load the real validateUnallowedFileExtensionAndContentType from common/s3.py.
+
+    tests/conftest.py replaces ``common.s3`` with a stand-in and ``common.constants`` with a
+    MagicMock, so the function is read from source into a private namespace with the real lists
+    (the pattern of tests/common/test_s3_blocklist_ads_suffix.py).
+    """
+    from backend.backend.common.constants import (
+        UNALLOWED_FILE_EXTENSION_LIST,
+        UNALLOWED_MIME_LIST,
+    )
+
+    with open(_S3_MODULE_PATH, encoding="utf-8") as f:
+        source = f.read()
+    start = source.index("def validateUnallowedFileExtensionAndContentType(")
+    end = source.index("\ndef validateS3AssetExtensionsAndContentType(", start)
+    namespace = {
+        "os": os,
+        "logger": MagicMock(),
+        "UNALLOWED_MIME_LIST": UNALLOWED_MIME_LIST,
+        "UNALLOWED_FILE_EXTENSION_LIST": UNALLOWED_FILE_EXTENSION_LIST,
+    }
+    exec(compile(source[start:end], _S3_MODULE_PATH, "exec"), namespace)
+    return namespace["validateUnallowedFileExtensionAndContentType"]
 
 
 def _zero_byte(relativeKey):
@@ -106,17 +158,35 @@ def _request(*files, uploadType="assetFile"):
         assetId=ASSET_ID, databaseId=DATABASE_ID, uploadType=uploadType, files=list(files))
 
 
+def _unvalidated_request(*files, uploadType="assetFile"):
+    """The same request built with Pydantic's ``construct`` -- NO field validation runs.
+
+    Models a request whose relativeKey the model would refuse (a ':' or a trailing dot) so the
+    handler's own checks can be exercised on it: if the model rule were ever loosened, completion
+    must still refuse the name.
+    """
+    from backend.backend.models.assetsV3 import (
+        CompleteUploadRequestModel,
+        UploadFileCompletionModel,
+    )
+    return CompleteUploadRequestModel.construct(
+        assetId=ASSET_ID, databaseId=DATABASE_ID, uploadType=uploadType,
+        files=[UploadFileCompletionModel.construct(**f) for f in files])
+
+
 def _temp_key(relativeKey):
     """The temporary key completion writes a zero-byte object to (baseAssetsPrefix is '')."""
     return f"{uploadFile.TEMPORARY_UPLOAD_PREFIX}asset-1/{relativeKey.lstrip('/')}"
 
 
 @contextmanager
-def _completion_env(upload_record):
+def _completion_env(upload_record, blocklist=_blocklist_stub):
     """Yield (module, s3 mock, copy mock) with everything complete_upload touches stubbed.
 
-    The blocklist helper is replaced by _blocklist_stub; the post-completion content check on
-    the multipart branch is stubbed to pass so a rejection can only come from the name checks.
+    The blocklist helper is replaced by ``blocklist`` (the stub unless a test passes the real
+    function); the post-completion content check on the multipart branch is stubbed to pass so a
+    rejection can only come from the name checks. ``log_file_upload`` is a recording mock, read
+    as ``uf.log_file_upload`` inside the block, so a test can assert the audit denial.
     `to_update_expr` is re-bound to the test-time `common.dynamodb` implementation because the
     handler bound the name at import, before the root conftest registered the mock module (the
     same step `test_uploadFile_asset_record_targeted_update.py` takes).
@@ -133,8 +203,9 @@ def _completion_env(upload_record):
             patch.object(uf, 'asset_table', MagicMock()), \
             patch.object(uf, 'to_update_expr', to_update_expr), \
             patch.object(uf, 'delete_upload_details', MagicMock()), \
+            patch.object(uf, 'log_file_upload', MagicMock()), \
             patch.object(uf, 'validateUnallowedFileExtensionAndContentType',
-                         MagicMock(side_effect=_blocklist_stub)), \
+                         MagicMock(side_effect=blocklist)), \
             patch.object(uf, 'validateS3AssetExtensionsAndContentType', return_value=True), \
             patch.object(uf, 'calculate_total_file_size_from_parts', return_value=(1024, True, None)), \
             patch.object(uf, 'copy_s3_object', return_value=True) as mock_copy, \
@@ -305,6 +376,202 @@ class TestCompletionIsBoundToTheInitializedFiles:
 
         assert keys == {"/empty.txt"}
         mock_logger.warning.assert_not_called()
+
+
+def _denials(uf):
+    """(file_path, reason) of every audit denial recorded inside a _completion_env block."""
+    return [(c.args[3], c.args[5]) for c in uf.log_file_upload.call_args_list if c.args[4] is True]
+
+
+@pytest.mark.unit
+class TestTheRealHelperThroughTheHandler:
+    """Completion and the real blocklist helper, pinned together.
+
+    The rest of this file stubs the helper. These tests load the real function from
+    common/s3.py so the shapes its own suites block (a trailing dot, a case variant, an NTFS
+    stream suffix) are shown to be refused by completion before the zero-byte branch writes.
+    """
+
+    @pytest.mark.parametrize("key", ["/payload.exe", "/Payload.EXE", "/dir/payload.bat", "/archive.txt.exe"])
+    def test_zero_byte_file_is_rejected_by_the_real_helper_and_creates_no_object(self, key):
+        real_helper = _load_real_blocklist_helper()
+        with _completion_env(_upload_record([key]), blocklist=real_helper) as (uf, mock_s3, mock_copy):
+            response = uf.complete_upload(UPLOAD_ID, _request(_zero_byte(key)), _rest_event())
+            uf.validateUnallowedFileExtensionAndContentType.assert_any_call(key, "")
+
+        result = _result(response, key)
+        assert result.success is False
+        assert result.error == BLOCKLIST_ERROR
+        assert response.overallSuccess is False
+        mock_s3.put_object.assert_not_called()
+        mock_copy.assert_not_called()
+
+    @pytest.mark.parametrize("key", ["/payload.exe::$DATA", "/payload.exe.", "/payload.exe ", "/a:b.exe"])
+    def test_a_name_the_model_refuses_is_also_refused_by_completion(self, key):
+        """DEFENCE IN DEPTH: the request model rejects a ':' and a trailing dot on a created key
+        (#420, #423), so these shapes reach the handler only if that rule is bypassed; the request
+        is built without validation to show the handler's own check still refuses them."""
+        real_helper = _load_real_blocklist_helper()
+        with _completion_env(_upload_record([key]), blocklist=real_helper) as (uf, mock_s3, mock_copy):
+            response = uf.complete_upload(UPLOAD_ID, _unvalidated_request(_zero_byte(key)), _rest_event())
+
+        assert _result(response, key).success is False
+        assert _result(response, key).error == BLOCKLIST_ERROR
+        mock_s3.put_object.assert_not_called()
+        mock_copy.assert_not_called()
+
+    def test_zero_byte_allowed_file_passes_the_real_helper_and_is_created(self):
+        """POSITIVE CONTROL with the real helper."""
+        real_helper = _load_real_blocklist_helper()
+        with _completion_env(_upload_record(["/model.glb"]), blocklist=real_helper) as (uf, mock_s3, mock_copy):
+            response = uf.complete_upload(UPLOAD_ID, _request(_zero_byte("/model.glb")), _rest_event())
+
+        assert _result(response, "/model.glb").success is True
+        mock_s3.put_object.assert_called_once()
+        assert mock_s3.put_object.call_args.kwargs['Key'] == _temp_key("/model.glb")
+        mock_copy.assert_called_once()
+
+
+@pytest.mark.unit
+class TestAssetPreviewUploadsGetTheSameNameChecks:
+    """uploadType == "assetPreview" takes the other final_s3_key branch; the checks run before it."""
+
+    def test_a_blocklisted_preview_name_is_rejected_and_creates_no_object(self):
+        response, mock_s3, mock_copy = _complete(
+            _request(_zero_byte("/preview.exe"), uploadType="assetPreview"),
+            _upload_record(["/preview.exe"], uploadType="assetPreview"))
+
+        result = _result(response, "/preview.exe")
+        assert result.success is False
+        assert result.error == BLOCKLIST_ERROR
+        mock_s3.put_object.assert_not_called()
+        mock_copy.assert_not_called()
+
+    def test_a_preview_with_a_non_image_extension_is_rejected(self):
+        response, mock_s3, _ = _complete(
+            _request(_zero_byte("/preview.pdf"), uploadType="assetPreview"),
+            _upload_record(["/preview.pdf"], uploadType="assetPreview"))
+
+        result = _result(response, "/preview.pdf")
+        assert result.success is False
+        assert ".png" in result.error
+        mock_s3.put_object.assert_not_called()
+
+    def test_an_image_preview_is_created_under_its_basename(self):
+        """POSITIVE CONTROL: the preview branch still writes an allowed image."""
+        response, mock_s3, mock_copy = _complete(
+            _request(_zero_byte("/thumbs/preview.png"), uploadType="assetPreview"),
+            _upload_record(["/thumbs/preview.png"], uploadType="assetPreview"))
+
+        assert _result(response, "/thumbs/preview.png").success is True
+        mock_s3.put_object.assert_called_once()
+        assert mock_s3.put_object.call_args.kwargs['Key'].endswith(f"{uploadFile.PREVIEW_PREFIX}asset-1/preview.png")
+        mock_copy.assert_called_once()
+
+
+@pytest.mark.unit
+class TestRejectionsAreAuditLogged:
+    """The audit denial is the operator's only record of a refused attempt."""
+
+    def test_a_blocklisted_name_records_an_upload_denied_audit_entry(self):
+        with _completion_env(_upload_record(["/payload.exe"])) as (uf, _, _):
+            uf.complete_upload(UPLOAD_ID, _request(_zero_byte("/payload.exe")), _rest_event())
+            denials = _denials(uf)
+            extra = uf.log_file_upload.call_args.args[6]
+
+        assert denials == [("/payload.exe", BLOCKLIST_ERROR)]
+        assert extra == {"uploadId": UPLOAD_ID, "uploadType": "assetFile"}
+
+    def test_an_unrecorded_key_records_an_upload_denied_audit_entry(self):
+        with _completion_env(_upload_record(["/empty.txt"])) as (uf, _, _):
+            uf.complete_upload(UPLOAD_ID, _request(_zero_byte("/other.txt")), _rest_event())
+            denials = _denials(uf)
+
+        assert denials == [("/other.txt", NOT_INITIALIZED_ERROR)]
+
+    def test_an_accepted_file_records_no_denial(self):
+        """NEGATIVE CONTROL."""
+        with _completion_env(_upload_record(["/empty.txt"])) as (uf, _, _):
+            uf.complete_upload(UPLOAD_ID, _request(_zero_byte("/empty.txt")), _rest_event())
+            denials = _denials(uf)
+
+        assert denials == []
+
+
+@pytest.mark.unit
+class TestExpiredAndExternalRecordsAreRefused:
+    """The membership gap for a record without ``files`` closes when the record expires, and an
+    external record never reaches the regular route."""
+
+    @pytest.mark.parametrize("expiresAt", [EXPIRED, 0, None, "not-a-number"],
+                             ids=["past", "zero", "missing", "unreadable"])
+    def test_an_expired_record_is_refused_before_anything_is_written(self, expiresAt):
+        with _completion_env(_upload_record(None, expiresAt=expiresAt)) as (uf, mock_s3, mock_copy):
+            with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
+                uf.complete_upload(
+                    UPLOAD_ID, _request(_zero_byte("/empty.txt"), _zero_byte("/other.txt")), _rest_event())
+            denials = _denials(uf)
+            status_updates = uf.asset_upload_table.update_item.call_count
+
+        assert EXPIRED_ERROR in str(err.value)
+        # Every submitted file is in the audit log as denied; S3 and the record are untouched.
+        assert denials == [("/empty.txt", EXPIRED_ERROR), ("/other.txt", EXPIRED_ERROR)]
+        assert status_updates == 0
+        mock_s3.put_object.assert_not_called()
+        mock_copy.assert_not_called()
+
+    def test_an_expired_record_with_the_file_list_is_refused_too(self):
+        """Expiry is not only for the compat case: a complete record also stops being completable."""
+        with _completion_env(_upload_record(["/empty.txt"], expiresAt=EXPIRED)) as (uf, mock_s3, _):
+            with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
+                uf.complete_upload(UPLOAD_ID, _request(_zero_byte("/empty.txt")), _rest_event())
+
+        assert EXPIRED_ERROR in str(err.value)
+        mock_s3.put_object.assert_not_called()
+
+    def test_an_external_record_is_refused_on_the_regular_route(self):
+        """processWorkflowExecutionOutput writes records with isExternalUpload and no ``files``;
+        only complete_external_upload may finish them."""
+        record = _upload_record(None, isExternalUpload=True)
+        record['temporaryPrefix'] = 'temp/up-1/'
+        with _completion_env(record) as (uf, mock_s3, mock_copy):
+            with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
+                uf.complete_upload(UPLOAD_ID, _request(_zero_byte("/payload.exe")), _rest_event())
+            denials = _denials(uf)
+            status_updates = uf.asset_upload_table.update_item.call_count
+
+        assert TYPE_MISMATCH_ERROR in str(err.value)
+        assert denials == [("/payload.exe", TYPE_MISMATCH_ERROR)]
+        assert status_updates == 0
+        mock_s3.put_object.assert_not_called()
+        mock_copy.assert_not_called()
+
+    def test_the_refusal_echoes_no_file_name(self):
+        record = _upload_record(None, isExternalUpload=True)
+        with _completion_env(record) as (uf, _, _):
+            with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
+                uf.complete_upload(UPLOAD_ID, _request(_zero_byte("/secret-name.txt")), _rest_event())
+
+        assert "secret-name" not in str(err.value)
+
+    def test_a_fresh_record_with_the_file_list_completes_as_before(self):
+        """POSITIVE CONTROL: neither guard touches the ordinary case."""
+        response, mock_s3, mock_copy = _complete(
+            _request(_zero_byte("/empty.txt")),
+            _upload_record(["/empty.txt"], expiresAt=int(time.time()) + 60, isExternalUpload=False))
+
+        assert _result(response, "/empty.txt").success is True
+        assert response.overallSuccess is True
+        mock_s3.put_object.assert_called_once()
+        mock_copy.assert_called_once()
+
+    def test_a_fresh_record_without_the_file_list_still_completes_until_it_expires(self):
+        """POSITIVE CONTROL for the bounded compat window: fresh + no list = membership skipped."""
+        response, mock_s3, _ = _complete(
+            _request(_zero_byte("/empty.txt")), _upload_record(None, expiresAt=FRESH))
+
+        assert _result(response, "/empty.txt").success is True
+        mock_s3.put_object.assert_called_once()
 
 
 def _initialize_request(*relativeKeys, uploadType="assetFile"):

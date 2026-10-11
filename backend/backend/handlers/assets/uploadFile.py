@@ -381,14 +381,40 @@ def get_initialized_file_keys(upload_details, uploadId):
 
     Completion accepts a submitted relativeKey only if initialization recorded it. A record saved
     before the list was stored has no 'files' attribute; such an upload is completed without the
-    membership check (the blocklist checks still run) and the gap is logged. Upload records are
-    short-lived, so this covers only uploads in flight across the deploy that introduced the list.
+    membership check (the blocklist checks still run) and the gap is logged. The table has no
+    TTL, so the gap is bounded by complete_upload refusing a record whose expiresAt has passed:
+    a record without the list is completed without the membership check until it expires, seven
+    days after it was initialized. External (workflow-output) records never carry the list and
+    are refused by complete_upload before this helper is consulted.
     """
     initialized_files = upload_details.get('files')
     if initialized_files is None:
         logger.warning(f"Upload record {uploadId} carries no initialized file list; completing without the membership check")
         return None
     return set(initialized_files)
+
+def deny_upload_completion(event, databaseId, assetId, uploadId, uploadType, files, reason):
+    """Audit-log a denied completion for every submitted file, then refuse the request.
+
+    Used for a refusal that applies to the upload record as a whole (expired, wrong route) rather
+    than to one file; the audit log is the operator's record of the attempt and is written per
+    file, as the per-file denials are. `reason` is the generic client message and is raised as
+    the response.
+    """
+    for file in files:
+        log_file_upload(
+            event,
+            databaseId,
+            assetId,
+            file.relativeKey,
+            True,  # Upload denied
+            reason,
+            {
+                "uploadId": uploadId,
+                "uploadType": uploadType
+            }
+        )
+    raise VAMSGeneralErrorResponse(reason)
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
     """Determine if file is archived based on S3 delete markers.
@@ -1784,6 +1810,27 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     # Verify upload type matches
     if upload_details['uploadType'] != uploadType:
         raise VAMSGeneralErrorResponse(f"Upload type mismatch.")
+
+    # Refuse a record past its expiresAt. The table has no TTL, so without this an initialized
+    # record lives until a completion succeeds or the asset is deleted; in particular a record
+    # saved before the initialized file list was stored (no 'files' attribute) would stay
+    # completable without the membership check indefinitely. expiresAt is epoch seconds, set by
+    # every writer (initialize: 7 days; workflow output: 1 day); a missing or unreadable value
+    # counts as expired.
+    try:
+        expires_at = int(upload_details.get('expiresAt', 0))
+    except (TypeError, ValueError):
+        expires_at = 0
+    if expires_at < int(time.time()):
+        deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
+                               request_model.files, "Upload has expired")
+
+    # Refuse an external (workflow-output) record on this route, the mirror of the check
+    # complete_external_upload makes: external records carry no initialized file list by design
+    # and must only be completed by the internal route that reads the staged tempKeys.
+    if upload_details.get('isExternalUpload', False):
+        deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
+                               request_model.files, "Upload type mismatch.")
     
     # Update upload status in DynamoDB
     try:
