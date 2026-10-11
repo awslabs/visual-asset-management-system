@@ -473,19 +473,21 @@ python tools/permissionsSetup/apply_template.py \
 
 **Using the API directly:**
 
+The request body is the template JSON with a `variableValues` object added. The template header is read from `metadata` (the key the shipped template files use); `template` is accepted as an alternative key.
+
 ```bash
 curl -X POST https://your-api/auth/constraintsTemplateImport \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "template": {
+    "metadata": {
       "name": "Database Admin",
       "description": "Administrative access for my-project-db",
       "version": "1.0"
     },
     "variables": [
       {"name": "DATABASE_ID", "required": true, "description": "The databaseId to scope permissions to"},
-      {"name": "ROLE_NAME", "required": true, "description": "The role name to create"}
+      {"name": "ROLE_NAME", "required": true, "description": "The existing role to attach these constraints to"}
     ],
     "variableValues": {
       "DATABASE_ID": "my-project-db",
@@ -531,7 +533,7 @@ Templates are self-describing JSON files containing metadata, variable definitio
         {
             "name": "ROLE_NAME",
             "required": true,
-            "description": "The role name to create"
+            "description": "The existing role to attach these constraints to"
         }
     ],
     "constraints": [
