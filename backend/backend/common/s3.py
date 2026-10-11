@@ -182,8 +182,13 @@ def validateUnallowedFileExtensionAndContentType(keyPath: str, contentType: str)
         logger.error(f"Unallowed file content type detected in asset: {keyPath}")
         return False
     
-    #check if the file extension of the keyPath is in the list of unallowed file extensions
-    extension = os.path.splitext(keyPath)[1].lower()
+    #Check if the file extension of the keyPath is in the list of unallowed file extensions. The
+    #extension is everything from the last dot of the key's final non-empty segment, read after
+    #trailing dots and whitespace are removed: "payload.exe.", "payload.exe/", "..exe" -> ".exe".
+    name = os.path.basename(keyPath.rstrip('/'))
+    while name and (name[-1] == '.' or name[-1].isspace()):
+        name = name[:-1]
+    extension = name[name.rfind('.'):].lower() if '.' in name else ''
     if extension and extension in UNALLOWED_FILE_EXTENSION_LIST:
         logger.error(f"Unallowed file extension detected in asset: {keyPath}")
         return False

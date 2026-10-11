@@ -628,7 +628,7 @@ Each partition entry carries both a standard and a FIPS hostname, so `useFips` r
 
 ## Blocked File Types
 
-VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content. The comparison is case-insensitive on the file extension and on the media-type part of the reported content type (any parameter such as `; charset=binary` is ignored), so `.EXE` and `Application/X-Msdownload` are blocked exactly like their lower-case forms.
+VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content. The comparison is case-insensitive on the file extension and on the media-type part of the reported content type (any parameter such as `; charset=binary` is ignored), so `.EXE` and `Application/X-Msdownload` are blocked exactly like their lower-case forms. The extension is everything from the last dot of the file name, read from the key's last non-empty path segment after any trailing dots and whitespace are removed, so `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are blocked like `payload.exe`; dotfiles such as `.gitignore` are not affected, and a folder whose own name ends in a blocked extension (`builds.exe/`) cannot be downloaded as a prefix. A file path that creates a new object (upload, move or copy destination) is also rejected when its final name ends in a dot or whitespace, because Windows drops that character when the file is written to disk, and an upload path is rejected when it ends in a slash, because a file is never a folder.
 
 ### Blocked Extensions
 

@@ -70,7 +70,8 @@ MAX_S3_BUCKET_NAME_LENGTH = 63
 MAX_S3_UPLOAD_ID_LENGTH = 1024
 
 
-def validate_asset_file_path(field_name: str, value: str) -> str:
+def validate_asset_file_path(field_name: str, value: str, new_object: bool = False,
+                             file_only: bool = False) -> str:
     """Validate one caller-supplied asset file path via the shared validate() dispatcher.
 
     The file-operation APIs accept both the asset-relative form ('/dir/file.txt')
@@ -82,6 +83,14 @@ def validate_asset_file_path(field_name: str, value: str) -> str:
     no control characters, and a length within the S3 key limit. Spaces and
     unicode are legitimate file-name characters and stay accepted, so the charset
     rule here is narrower than the ASCII set bucketExistingKey allows.
+
+    ``new_object`` is set for a path this request creates (an upload's relativeKey,
+    a folder, the destination of a move or copy): its final segment may not end in
+    a dot or whitespace, which Windows drops when writing the file to disk.
+    ``file_only`` is set for a path that names a file, never a folder: it may not
+    end in '/'. The read paths — download key, file info, archive, the source of a
+    move or copy — set neither, so an object already stored under such a key stays
+    reachable.
     """
     (valid, message) = validate({
         field_name: {'value': [value], 'validator': 'DOWNLOAD_KEY_ARRAY'}
@@ -95,6 +104,15 @@ def validate_asset_file_path(field_name: str, value: str) -> str:
         raise ValueError(message)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
         message = f"{field_name} cannot contain control characters"
+        logger.error(message)
+        raise ValueError(message)
+    if file_only and value.endswith('/'):
+        message = f"{field_name} cannot end with a slash"
+        logger.error(message)
+        raise ValueError(message)
+    # The final segment ends in a dot or whitespace exactly when the whole value does.
+    if new_object and (value.endswith('.') or value[-1:].isspace()):
+        message = f"{field_name} cannot end with a dot or whitespace"
         logger.error(message)
         raise ValueError(message)
     return value
@@ -276,7 +294,8 @@ class UploadFileModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
-        return validate_asset_file_path('relativeKey', v)
+        # The file key this upload creates.
+        return validate_asset_file_path('relativeKey', v, new_object=True, file_only=True)
     num_parts: Optional[int] = Field(None, ge=0, le=MAX_PARTS_PER_FILE)  # Allow 0 parts for zero-byte files; S3 max parts per object
     
     @root_validator
@@ -414,7 +433,8 @@ class UploadFileCompletionModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
-        return validate_asset_file_path('relativeKey', v)
+        # complete_upload derives the final S3 key from this value.
+        return validate_asset_file_path('relativeKey', v, new_object=True, file_only=True)
 
 class CompleteUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing a file upload"""
@@ -478,9 +498,14 @@ class ExternalFileModel(BaseModel, extra='ignore'):
     relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
     tempKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)  # Full temporary key in S3
 
-    @validator('relativeKey', 'tempKey')
-    def validate_keys(cls, v, field):
-        return validate_asset_file_path(field.name, v)
+    @validator('relativeKey')
+    def validate_relative_key(cls, v):
+        # The final file key this completion creates; tempKey is an object that already exists.
+        return validate_asset_file_path('relativeKey', v, new_object=True, file_only=True)
+
+    @validator('tempKey')
+    def validate_temp_key(cls, v):
+        return validate_asset_file_path('tempKey', v)
 
 class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing an external file upload"""
@@ -575,7 +600,9 @@ class CreateFolderRequestModel(BaseModel, extra='ignore'):
         """Ensure the relative key ends with a slash (folder prefix)"""
         if not v.endswith('/'):
             raise ValueError("Relative key must end with a slash to represent a folder")
-        return validate_asset_file_path('relativeKey', v)
+        # The prefix this request creates. The trailing-dot/whitespace rule looks at the final
+        # segment, which the slash above leaves empty, so a folder named 'dir.' is not refused.
+        return validate_asset_file_path('relativeKey', v, new_object=True)
 
 class CreateFolderResponseModel(BaseModel, extra='ignore'):
     """Response model for creating a folder in S3"""
@@ -676,7 +703,8 @@ class MoveFileRequestModel(BaseModel, extra='ignore'):
 
     @validator('sourcePath', 'destinationPath')
     def validate_paths(cls, v, field):
-        return validate_asset_file_path(field.name, v)
+        # destinationPath is the key this move creates; sourcePath is an object that already exists.
+        return validate_asset_file_path(field.name, v, new_object=(field.name == 'destinationPath'))
 
 class CopyFileRequestModel(BaseModel, extra='ignore'):
     """Request model for copying files within or across databases"""
@@ -689,7 +717,8 @@ class CopyFileRequestModel(BaseModel, extra='ignore'):
 
     @validator('sourcePath', 'destinationPath')
     def validate_paths(cls, v, field):
-        return validate_asset_file_path(field.name, v)
+        # destinationPath is the key this copy creates; sourcePath is an object that already exists.
+        return validate_asset_file_path(field.name, v, new_object=(field.name == 'destinationPath'))
 
     @root_validator
     def validate_fields(cls, values):
