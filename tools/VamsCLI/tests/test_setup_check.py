@@ -121,6 +121,24 @@ def test_a_named_profile_still_reaches_profile_list(unset_up_env):
     assert rc == 0, combined[:400]
 
 
+def test_a_profile_named_setup_does_not_exempt_the_command_that_follows(unset_up_env):
+    """The exemption is decided by the invoked COMMAND, not by the token `setup` appearing anywhere
+    in argv: `--profile setup auth status` is an `auth status` call against a profile that happens to
+    be named `setup`, and it is gated like any other."""
+    rc, combined = _run(["--profile", "setup", "auth", "status"], unset_up_env)
+    assert rc != 0
+    assert "Setup required for profile 'setup'" in combined, combined[:400]
+
+
+def test_setup_itself_passes_the_gate(unset_up_env):
+    """CONTROL for the test above: `setup` is exempt when it is the command, so the gating of a
+    profile named `setup` comes from reading the command, not from `setup` having lost its exemption.
+    Click then rejects the missing URL argument, which is the behaviour past the gate."""
+    rc, combined = _run(["--profile", "ghost", "setup"], unset_up_env)
+    assert "Setup required" not in combined, combined[:400]
+    assert "Missing argument" in combined, combined[:400]
+
+
 # ---------------------------------------------------------------------------
 # Source scan: every suggested `vamscli --<opt>` is a root-group option
 # ---------------------------------------------------------------------------

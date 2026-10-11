@@ -1457,7 +1457,7 @@ export const RULES: Rule[] = [
         message: "ALB deployment requires both a domain hostname and an ACM certificate ARN.",
     },
 
-    // ----- Stack name (config.ts: "app.baseStackName must be set") -----
+    // ----- Stack name (config.ts: "app.baseStackName is required") -----
     // The builder has no CDK context or STACK_NAME environment to fall back to, so the field itself
     // must carry the value.
     {
@@ -1466,7 +1466,7 @@ export const RULES: Rule[] = [
         fieldPaths: ["app.baseStackName"],
         appliesWhen: (c) => isBlank(g(c, "app.baseStackName")),
         message:
-            "app.baseStackName must be set. It forms part of every stack name (for example vams-core-<baseStackName>-<region>).",
+            "app.baseStackName is required. It forms part of every stack name (for example vams-core-<baseStackName>-<region>).",
     },
 
     // ----- Admin identity

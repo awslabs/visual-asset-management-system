@@ -225,7 +225,7 @@ export const FIELDS: FieldMeta[] = [
         label: "Base stack name",
         input: "text",
         section: "essentials",
-        help: "Stack environment name appended to resource names (e.g. prod).",
+        help: "Stack environment name appended to resource names (e.g. prod). Required.",
     },
     {
         path: "app.adminEmailAddress",

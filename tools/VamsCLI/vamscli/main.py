@@ -68,12 +68,10 @@ def check_setup_required(ctx: click.Context, param: click.Parameter, value: Opti
     # Skip setup check if we're in a test environment
     if 'pytest' in sys.modules:
         return value
-    
-    # Skip setup check for setup command itself
-    if 'setup' in sys.argv:
-        return value
 
-    # Skip setup check for the commands that work without a configured profile
+    # Skip setup check for the commands that work without a configured profile (`setup` itself,
+    # `version`, and the `profile` group). The command is read off argv, so a profile NAMED
+    # `setup` does not exempt the command that follows it.
     if invoked_command(sys.argv) in _SETUP_EXEMPT_COMMANDS:
         return value
     
