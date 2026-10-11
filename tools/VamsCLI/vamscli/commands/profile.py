@@ -5,7 +5,7 @@ import click
 
 from ..utils.profile import ProfileManager
 from ..utils.exceptions import ProfileError, InvalidProfileNameError, ProfileNotFoundError
-from ..utils.json_output import output_status, output_result, output_error, output_info
+from ..utils.json_output import output_status, output_result, output_error, output_info, mask_url_key
 from ..constants import DEFAULT_PROFILE_NAME
 
 
@@ -92,7 +92,7 @@ def list(json_output: bool):
                     # Show locationServiceApiUrl (backward compatible - only if present)
                     location_url = profile_info.get('location_service_api_url')
                     if location_url:
-                        lines.append(f"  Location Service URL: {location_url}")
+                        lines.append(f"  Location Service URL: {mask_url_key(location_url)}")
                 else:
                     lines.append("  Status: Not authenticated")
                 
@@ -402,7 +402,7 @@ def info(profile_name: str, json_output: bool):
                 # Show locationServiceApiUrl (backward compatible - only if present)
                 location_url = info.get('location_service_api_url')
                 if location_url:
-                    lines.append(f"  Location Service URL: {location_url}")
+                    lines.append(f"  Location Service URL: {mask_url_key(location_url)}")
             else:
                 lines.append("  Status: Not authenticated")
             
@@ -489,7 +489,7 @@ def current(json_output: bool):
                 # Show locationServiceApiUrl (backward compatible - only if present)
                 location_url = data['auth_profile'].get('location_service_api_url')
                 if location_url:
-                    lines.append(f"Location Service URL: {location_url}")
+                    lines.append(f"Location Service URL: {mask_url_key(location_url)}")
             else:
                 lines.append("Status: Not authenticated")
             

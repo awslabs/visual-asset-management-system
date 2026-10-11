@@ -7,7 +7,7 @@ import sys
 from ..auth.cognito import CognitoAuthenticator
 from ..utils.decorators import requires_api_access, requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
-from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
+from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info, mask_url_key
 from ..utils.exceptions import AuthenticationError, ConfigurationError, OverrideTokenError, AuthRoutesError
 
 
@@ -981,7 +981,7 @@ def status(ctx: click.Context, json_output: bool):
             
             # Show locationServiceApiUrl (backward compatible - only if present)
             if data.get('location_service_api_url'):
-                lines.append(f"  Location Service URL: {data['location_service_api_url']}")
+                lines.append(f"  Location Service URL: {mask_url_key(data['location_service_api_url'])}")
             
             # Feature switches
             if data.get('feature_switches'):
