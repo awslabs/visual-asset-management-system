@@ -15,7 +15,7 @@ import { region_info } from "aws-cdk-lib";
 import { oidcSettings } from "./oidc-config";
 import { samlSettings } from "./saml-config";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // ============================================================================================
 // Constants that shape the deployment
@@ -450,12 +450,15 @@ export function getConfig(app: cdk.App): Config {
     );
     config.env.partition = region_info.RegionInfo.get(config.env.region).partition!;
 
-    config.app.baseStackName =
-        (app.node.tryGetContext("stack-name") ||
-            config.app.baseStackName ||
-            process.env.STACK_NAME) +
-        "-" +
-        config.env.region;
+    const baseStackName =
+        app.node.tryGetContext("stack-name") || config.app.baseStackName || process.env.STACK_NAME;
+    if (!baseStackName) {
+        throw new Error(
+            "Configuration Error: app.baseStackName must be set (or supplied as CDK context " +
+                "`stack-name` or the STACK_NAME environment variable). It forms part of every stack name."
+        );
+    }
+    config.app.baseStackName = baseStackName + "-" + config.env.region;
 
     config.app.adminEmailAddress = <string>(
         (app.node.tryGetContext("adminEmailAddress") ||
@@ -2116,19 +2119,10 @@ export function getConfig(app: cdk.App): Config {
     // username already exists in the pool: if it does, the create fails with AlreadyExists and the core
     // stack rolls back; if it does not, the new user is created and the previous admin identity is
     // orphaned (the resource carries a retain policy so it is not deleted, but it is no longer managed
-    // and its role assignments do not follow). A warning rather than an error, because an operator who
-    // has read this and accepts the consequence must still be able to deploy — and because synthesis
-    // cannot see the deployed value to know whether it changed.
-    if (config.app.adminUserId !== config.app.adminEmailAddress) {
-        console.warn(
-            `Configuration Warning: app.adminUserId ('${config.app.adminUserId}') and ` +
-                `app.adminEmailAddress ('${config.app.adminEmailAddress}') differ. Both are immutable ` +
-                `after the first deployment: changing either replaces the Amazon Cognito admin user, ` +
-                `which fails the deployment if the new username already exists in the pool and ` +
-                `otherwise orphans the previous admin. Grant additional administrators through roles ` +
-                `instead of by editing these fields.`
-        );
-    }
+    // and its role assignments do not follow). Synthesis cannot see the deployed values, so it cannot
+    // tell a first deployment from a change; the constraint is documented with both fields in the
+    // configuration reference rather than warned about here. The two values legitimately differ --
+    // the shipped templates pair a plain username with an email address.
 
     //Error check when implementing openSearch
     if (
