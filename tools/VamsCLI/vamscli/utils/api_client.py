@@ -207,8 +207,8 @@ class APIClient:
                 expiration_info = self.profile_manager.get_token_expiration_info()
                 raise OverrideTokenError(
                     "Override token has expired. Please provide a new token with "
-                    "'vamscli auth set-override --token <new_token>' or use "
-                    "'vamscli --token-override <new_token> <command>'"
+                    "'vamscli auth set-override -u <user-id> --token-stdin' or "
+                    "'vamscli auth login --user-id <user-id> --token-override-stdin'"
                 )
     
     def _make_request(self, method: str, endpoint: str, include_auth: bool = True,
@@ -309,8 +309,8 @@ class APIClient:
                 if self.profile_manager.is_override_token():
                     raise OverrideTokenError(
                         "Override token authentication failed. The token may be invalid or expired. "
-                        "Please provide a new token with 'vamscli auth set-override --token <new_token>' "
-                        "or use 'vamscli --token-override <new_token> <command>'"
+                        "Please provide a new token with 'vamscli auth set-override -u <user-id> --token-stdin' "
+                        "or 'vamscli auth login --user-id <user-id> --token-override-stdin'"
                     )
                 
                 # Try to refresh token or re-authenticate (for Cognito tokens only)
@@ -329,8 +329,8 @@ class APIClient:
                     if self.profile_manager.is_token_expired():
                         raise TokenExpiredError(
                             "Override token has expired. Please provide a new token with "
-                            "'vamscli auth set-override --token <new_token>' or use "
-                            "'vamscli --token-override <new_token> <command>'"
+                            "'vamscli auth set-override -u <user-id> --token-stdin' or "
+                            "'vamscli auth login --user-id <user-id> --token-override-stdin'"
                         )
                     else:
                         # Token not expired, this is a permission issue

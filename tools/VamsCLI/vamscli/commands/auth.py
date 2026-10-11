@@ -185,7 +185,7 @@ def login(ctx: click.Context, username: str, password: str, password_stdin: bool
         profile_name = profile_manager.profile_name
         error_msg = (
             f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+            f"Please run 'vamscli --profile {profile_name} setup <api-gateway-url>' first."
         )
         output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
         raise click.ClickException(error_msg)
@@ -513,7 +513,7 @@ def change_password(ctx: click.Context, username: str, old_password: str, old_pa
         profile_name = profile_manager.profile_name
         error_msg = (
             f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+            f"Please run 'vamscli --profile {profile_name} setup <api-gateway-url>' first."
         )
         output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
         raise click.ClickException(error_msg)
@@ -685,7 +685,7 @@ def forgot_password(ctx: click.Context, username: str, code: str, new_password: 
         profile_name = profile_manager.profile_name
         error_msg = (
             f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+            f"Please run 'vamscli --profile {profile_name} setup <api-gateway-url>' first."
         )
         output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
         raise click.ClickException(error_msg)

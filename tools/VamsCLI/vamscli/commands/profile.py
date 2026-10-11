@@ -143,7 +143,7 @@ def switch(profile_name: str, json_output: bool):
         if not profile_manager.has_config():
             raise ProfileError(
                 f"Profile '{profile_name}' does not exist or is not configured. "
-                f"Run 'vamscli setup <api-gateway-url> --profile {profile_name}' to create it."
+                f"Run 'vamscli --profile {profile_name} setup <api-gateway-url>' to create it."
             )
         
         # Switch to the profile
