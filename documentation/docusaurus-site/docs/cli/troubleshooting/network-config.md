@@ -277,7 +277,7 @@ The profile's configuration file is missing or corrupted.
 
 **Resolution:**
 
-Re-run setup to rewrite the configuration. Add `--profile <name>` to target a non-default profile:
+Re-run setup to rewrite the configuration. To target a non-default profile, put `--profile <name>` before the command (`vamscli --profile <name> setup <your-api-gateway-url> --force`):
 
 ```bash
 vamscli setup <your-api-gateway-url> --force

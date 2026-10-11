@@ -574,12 +574,12 @@ vamscli --profile production setup https://prod-vams.example.com
 vamscli --profile staging setup https://staging-vams.example.com
 
 # Authenticate to each environment
-vamscli auth login -u user@example.com --profile production
-vamscli auth login -u user@example.com --profile staging
+vamscli --profile production auth login -u user@example.com
+vamscli --profile staging auth login -u user@example.com
 
 # Use different profiles for operations
-vamscli assets list --profile production
-vamscli file upload -d my-db -a my-asset file.gltf --profile staging
+vamscli --profile production assets list
+vamscli --profile staging file upload -d my-db -a my-asset file.gltf
 
 # Manage profiles
 vamscli profile list
