@@ -994,7 +994,17 @@ anything else, and `label` and `stageName` for display.
 The bus accepts the event only from a principal the deployment has allowed. `app.pipelines.externalPipelineBridges`
 lists each bridge's account and the role ARN pattern permitted to publish; the deployment adds one
 `events:PutEvents` statement per entry to the bus resource policy, granted to the bridge account under an
-`aws:PrincipalArn` condition on the pattern. A role outside the pattern is denied at `PutEvents`.
+`aws:PrincipalArn` condition on the pattern. The statement is further conditioned on `events:detail-type`
+(exactly `pipeline.execution.register`) and `events:source` (`<prefix>.execution.*.pipeline.*`), so a
+listed role may only put registration events on an execution's own source -- nothing else on the bus,
+and in particular not the deployment's `asset.file.uploaded` trigger events. A role outside the pattern,
+or an event outside those conditions, is denied at `PutEvents`.
+
+VAMS trusts a listed bridge role to register only resources it owns: the registration handler validates
+the shape of each locator (an ARN, a job id) and that the source names the pipeline execution the detail
+claims, not that the resource belongs to the bridge. A same-account `sageMakerTrainingJob` or
+`sageMakerPipelineExecution` it registers is what VAMS stops on abort, so the role pattern is the
+boundary -- list only roles whose registrations you would act on.
 
 ```json
 "externalPipelineBridges": [
@@ -1013,7 +1023,7 @@ execution is aborted. A bridge's own compute is usually not one of those: VAMS r
 execution view by its label and stage with `abortable: false` and the note that an abort leaves it running,
 and lists it under `notAbortable` in the abort response. Stopping it is the bridge's job, triggered by the
 rejected heartbeat. A bridge that runs a SageMaker job in the VAMS account itself may register it as
-`sageMakerTrainingJob` or `sageMakerPipelineExecution` and let VAMS stop it.
+`sageMakerTrainingJob` or `sageMakerPipelineExecution` and let VAMS stop it. The execution view and the abort response name a registered resource by its id or the final segment of its ARN; the ARN itself stays on the registration row and is used only for the stop and describe calls.
 
 ### Letting the workflow reach the bridge
 

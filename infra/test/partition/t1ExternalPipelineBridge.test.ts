@@ -148,8 +148,35 @@ describe("orchestration bus resource policy", () => {
             );
             // The bus ARN is a GetAtt in the template; flattened it names the bus resource.
             expect(SynthResult.flatten(statement.Resource)).toMatch(/OrchestrationBus.*\.Arn/);
+            // The role pattern is the grant; the detail-type and source conditions bind it to the one
+            // event a bridge may publish, on the per-execution source pipelines register under — the
+            // same bus carries the deployment's asset.file.uploaded trigger events.
             expect(statement.Condition).toEqual({
-                StringLike: { "aws:PrincipalArn": [BRIDGE_ROLE_PATTERN(s.partition)] },
+                StringEquals: { "events:detail-type": ["pipeline.execution.register"] },
+                StringLike: {
+                    "aws:PrincipalArn": [BRIDGE_ROLE_PATTERN(s.partition)],
+                    "events:source": [`vams.t1-${name}.execution.*.pipeline.*`],
+                },
+            });
+        }
+    );
+
+    test.each(ALL_TEMPLATES)(
+        "%s emits no bus statement without the detail-type and source conditions",
+        (name) => {
+            const s = bridgeSynth(name);
+            const statements = s
+                .ofType("AWS::Events::EventBusPolicy")
+                .map((p) => p.properties.Statement)
+                .filter((st) => st !== undefined);
+            const unbound = statements.filter(
+                (st) =>
+                    !st.Condition?.StringEquals?.["events:detail-type"] ||
+                    !st.Condition?.StringLike?.["events:source"]
+            );
+            expectAbsent("bus policy statement without detail-type/source conditions", unbound, {
+                description: "bus policy statements exist",
+                count: statements.length,
             });
         }
     );
