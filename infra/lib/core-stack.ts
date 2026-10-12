@@ -63,19 +63,6 @@ export class CoreVAMSStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props: EnvProps) {
         super(scope, id, { ...props, crossRegionReferences: true });
 
-        const adminUserId = new cdk.CfnParameter(this, "adminUserId", {
-            type: "String",
-            description: "Admin User ID for login",
-            default: props.config.app.adminUserId,
-        });
-
-        const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
-            type: "String",
-            description:
-                "Admin Email address for login and where your password is sent to. You will be sent a temporary password to authenticate to Cognito.",
-            default: props.config.app.adminEmailAddress,
-        });
-
         //Add tags to stack with cdk.json "environment" settings (if defined)
         //Modify roles with cdk.json "aws" settings (if defined)
         const environments = this.node.tryGetContext("environments");

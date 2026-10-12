@@ -693,6 +693,10 @@ Both stream endpoints support two file-delivery modes, selected by the `ALWAYS_R
 -   **Presigned-redirect mode** (`ALWAYS_REDIRECT_TO_PRESIGNED = True`): every request returns a `307 Temporary Redirect` whose `Location` is a short-lived Amazon S3 presigned URL. The client follows the redirect and fetches the bytes directly from the asset (or auxiliary) S3 bucket, which is CORS-enabled and supports native HTTP `Range` requests. This removes the 6&nbsp;MB Lambda response limit and the base64 encoding overhead, and offloads byte transfer from the Lambda to S3.
 -   **Inline mode** (`ALWAYS_REDIRECT_TO_PRESIGNED = False`): files at or under approximately 4.4&nbsp;MB are returned inline as the response body (base64-encoded for binary content), and only larger files fall back to the `307` presigned redirect.
 
+:::warning[Send no `Authorization` header to the presigned URL]
+The redirect target carries its own authorization in the query string, and Amazon S3 rejects a request presenting two authorization mechanisms. Standard clients strip the header automatically on a cross-host redirect; a client that re-adds its VAMS token or API key to the redirected request receives `400 Bad Request` from Amazon S3.
+:::
+
 :::warning[Presigned-redirect mode is required on API Gateway REST APIs]
 Under the API Gateway REST API, inline binary delivery requires the API-wide `binaryMediaTypes` to include `*/*`, which is incompatible with the CORS `OPTIONS` preflight (it breaks the preflight's MOCK integration). Because of this, `ALWAYS_REDIRECT_TO_PRESIGNED` must be `True` so that all files are delivered by presigned redirect. The inline path is retained for potential future use (for example, a different API front-end that does not have this constraint).
 
