@@ -161,6 +161,25 @@ describe("validateExternalPipelineBridges accepts", () => {
         ).not.toThrow();
     });
 
+    test("an entry when the deployment partition is unknown, comparing nothing", () => {
+        // getConfig() derives the partition from the Region; an unrecognized Region yields undefined,
+        // and the restricted-partition rule reports that on its own. This validator must not turn the
+        // same input into a TypeError before that message is reached (D1).
+        expect(() =>
+            Config.validateExternalPipelineBridges(
+                [
+                    {
+                        accountId: ACCOUNT,
+                        roleArnPattern: `arn:aws-us-gov:iam::${ACCOUNT}:role/bridge-*`,
+                        invokeTargets: [`arn:aws-cn:events:cn-north-1:${ACCOUNT}:event-bus/b`],
+                    },
+                ],
+                undefined as unknown as string,
+                DEPLOYMENT_ACCOUNT
+            )
+        ).not.toThrow();
+    });
+
     test("a restricted-partition pattern when the deployment is in that partition", () => {
         expect(() =>
             Config.validateExternalPipelineBridges(

@@ -3083,7 +3083,11 @@ export function validateExternalPipelineBridges(
             "Configuration Error: app.pipelines.externalPipelineBridges must be an array of { accountId, roleArnPattern, invokeTargets? } entries."
         );
     }
-    const partition = deploymentPartition.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // An unrecognized Region resolves to no partition; the restricted-partition check reports that on
+    // its own, so here any partition token is accepted and only a known partition is compared.
+    const partition = deploymentPartition
+        ? deploymentPartition.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        : "aws[a-z-]*";
     const seenPairs = new Set<string>();
     bridges.forEach((bridge, index) => {
         const label = `app.pipelines.externalPipelineBridges[${index}]`;
@@ -3121,7 +3125,7 @@ export function validateExternalPipelineBridges(
         // The pattern's partition is checked on its own first so the message names the mismatch
         // rather than reporting a shape failure.
         const patternPartition = pattern.split(":")[1];
-        if (patternPartition && patternPartition != deploymentPartition) {
+        if (deploymentPartition && patternPartition && patternPartition != deploymentPartition) {
             throw new Error(
                 `Configuration Error: ${label}.roleArnPattern '${pattern}' uses partition '${patternPartition}' which does not match the deployment partition '${deploymentPartition}'.`
             );
@@ -3180,7 +3184,7 @@ export function validateExternalPipelineBridges(
                 );
             }
             const targetPartition = target.split(":")[1];
-            if (targetPartition && targetPartition != deploymentPartition) {
+            if (deploymentPartition && targetPartition && targetPartition != deploymentPartition) {
                 throw new Error(
                     `Configuration Error: ${targetLabel} '${target}' uses partition '${targetPartition}' which does not match the deployment partition '${deploymentPartition}'.`
                 );
