@@ -381,6 +381,75 @@ function externalBuckets(cfg: ConfigShape): any[] {
     return Array.isArray(value) ? value.filter((entry) => !!entry) : [];
 }
 
+/** The configured `app.pipelines.externalPipelineBridges` entries, with null entries dropped. */
+function externalBridges(cfg: ConfigShape): any[] {
+    const value = g(cfg, "app.pipelines.externalPipelineBridges");
+    return Array.isArray(value)
+        ? value.filter((entry) => !!entry && typeof entry === "object")
+        : [];
+}
+
+/**
+ * The partition a bridge ARN must carry, or undefined when env.region is unset (then any partition
+ * token is accepted, so a blank region reports only a genuinely malformed ARN).
+ */
+function bridgePartition(cfg: ConfigShape): string | undefined {
+    return partitionForRegionName(g(cfg, "env.region"));
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Regexes copied from config.ts (validateExternalPipelineBridges / validateExecutionLogReadPrefixes).
+const BRIDGE_ROLE_NAME_CHARS = "[A-Za-z0-9+=,.@_\\-/]+";
+const EXECUTION_LOG_READ_PREFIX_PATTERN =
+    /^\/aws\/[A-Za-z0-9\-._#]+\/[A-Za-z0-9\-._#][A-Za-z0-9\-._/#]*\*?$/;
+
+/**
+ * config.ts: "roleArnPattern ... must be an IAM role ARN in account" — the deployment partition, the
+ * entry's own account, IAM name characters, at most one trailing '*', no '?', and never a bare
+ * 'role/*' or 'role/<path>/*'.
+ */
+function isValidBridgeRoleArnPattern(
+    pattern: string,
+    accountId: string,
+    partition: string | undefined
+): boolean {
+    if (pattern === "" || pattern.includes("?")) return false;
+    const firstStar = pattern.indexOf("*");
+    if (firstStar !== -1 && firstStar !== pattern.length - 1) return false;
+    const roleMarker = pattern.indexOf(":role/");
+    const roleSuffix = roleMarker === -1 ? "" : pattern.substring(roleMarker + ":role/".length);
+    if (roleSuffix === "*" || roleSuffix.endsWith("/*")) return false;
+    const partitionToken = partition ? escapeRegExp(partition) : "aws[a-z-]*";
+    // Built from the partition constant, a 12-digit account already validated, and a fixed character
+    // class; no free-form operator value reaches the pattern.
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    return new RegExp(
+        `^arn:${partitionToken}:iam::${accountId}:role/${BRIDGE_ROLE_NAME_CHARS}\\*?$`
+    ).test(pattern);
+}
+
+/**
+ * config.ts: "invokeTargets ... must be an exact Lambda function, SQS queue or EventBridge event-bus
+ * ARN in account" — any Region, the entry's account, the deployment partition, no wildcard.
+ */
+function isValidBridgeInvokeTarget(
+    target: string,
+    accountId: string,
+    partition: string | undefined
+): boolean {
+    if (target === "" || /[*?]/.test(target)) return false;
+    const partitionToken = partition ? escapeRegExp(partition) : "aws[a-z-]*";
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    return new RegExp(
+        `^arn:${partitionToken}:(lambda:[a-z0-9-]+:${accountId}:function:[A-Za-z0-9_\\-]+(:[A-Za-z0-9_\\-]+)?` +
+            `|sqs:[a-z0-9-]+:${accountId}:[A-Za-z0-9_\\-]+(\\.fifo)?` +
+            `|events:[a-z0-9-]+:${accountId}:event-bus/[A-Za-z0-9._\\-/]+)$`
+    ).test(target);
+}
+
 /**
  * A `baseAssetsPrefix` reduced to a comparable form (config.ts: `normalizePrefix` in
  * validateExternalAssetBuckets). "", "/" and missing all mean the bucket root; anything else gets a
@@ -1278,6 +1347,122 @@ export const RULES: Rule[] = [
         },
         message:
             "An app.assetBuckets.externalAssetBuckets bucketAccountId matches the deployment account, so that bucket is not actually cross-account. Leave bucketAccountId unset for a same-account bucket.",
+    },
+
+    // ----- External pipeline bridges (config.ts: "externalPipelineBridges") -----
+    //
+    // Each entry opens events:PutEvents on the orchestration bus to the roles matching its
+    // roleArnPattern and adds its exact invokeTargets to the shared workflow role, so every value is
+    // checked for shape here exactly as getConfig() checks it: a 12-digit account, a role ARN in that
+    // account with at most one trailing '*' (never a bare 'role/*'), and exact Lambda / SQS /
+    // EventBridge bus ARNs with no wildcard at all. Partition checks stay silent when env.region is
+    // unset, because the deploy-time partition is then unknowable here.
+    {
+        id: "external-bridge-account-id",
+        severity: "error",
+        fieldPaths: ["app.pipelines.externalPipelineBridges"],
+        appliesWhen: (c) =>
+            externalBridges(c).some((b) => !/^\d{12}$/.test(String(b.accountId ?? ""))),
+        message:
+            "Every app.pipelines.externalPipelineBridges accountId must be a 12-digit AWS account ID.",
+    },
+    {
+        id: "external-bridge-role-arn-pattern",
+        severity: "error",
+        fieldPaths: ["app.pipelines.externalPipelineBridges", "env.region"],
+        appliesWhen: (c) =>
+            externalBridges(c).some((b) => {
+                const pattern = String(b.roleArnPattern ?? "");
+                if (!/^\d{12}$/.test(String(b.accountId ?? ""))) return false;
+                return !isValidBridgeRoleArnPattern(pattern, b.accountId, bridgePartition(c));
+            }),
+        message:
+            "Every app.pipelines.externalPipelineBridges roleArnPattern must be an IAM role ARN in the entry's own account and the deployment partition (arn:<partition>:iam::<accountId>:role/<path-or-name>), with at most one trailing '*' and never a bare 'role/*'; '?' is not accepted.",
+    },
+    {
+        id: "external-bridge-duplicate",
+        severity: "error",
+        fieldPaths: ["app.pipelines.externalPipelineBridges"],
+        appliesWhen: (c) => {
+            const seen = new Set<string>();
+            return externalBridges(c).some((b) => {
+                const key = `${b.accountId}|${b.roleArnPattern}`;
+                if (seen.has(key)) return true;
+                seen.add(key);
+                return false;
+            });
+        },
+        message:
+            "app.pipelines.externalPipelineBridges repeats an accountId + roleArnPattern pair; each bridge entry must be unique.",
+    },
+    {
+        id: "external-bridge-invoke-target",
+        severity: "error",
+        fieldPaths: ["app.pipelines.externalPipelineBridges", "env.region"],
+        appliesWhen: (c) =>
+            externalBridges(c).some((b) => {
+                if (b.invokeTargets == null) return false;
+                if (!Array.isArray(b.invokeTargets)) return true;
+                if (!/^\d{12}$/.test(String(b.accountId ?? ""))) return false;
+                const seen = new Set<string>();
+                return b.invokeTargets.some((t: unknown) => {
+                    const target = String(t ?? "");
+                    if (seen.has(target)) return true;
+                    seen.add(target);
+                    return !isValidBridgeInvokeTarget(target, b.accountId, bridgePartition(c));
+                });
+            }),
+        message:
+            "Every app.pipelines.externalPipelineBridges invokeTargets entry must be an exact, distinct Lambda function, SQS queue or EventBridge event-bus ARN in the entry's own account and the deployment partition; wildcards are not accepted.",
+    },
+    {
+        id: "external-bridge-same-account",
+        severity: "warning",
+        fieldPaths: ["app.pipelines.externalPipelineBridges", "env.account"],
+        appliesWhen: (c) => {
+            const account = g(c, "env.account");
+            if (isUnset(account)) return false;
+            return externalBridges(c).some((b) => String(b.accountId) === String(account));
+        },
+        message:
+            "An app.pipelines.externalPipelineBridges accountId matches the deployment account, so that bridge is not actually cross-account.",
+    },
+
+    // ----- Execution log read allow-list (config.ts: "executionLogReadPrefixes") -----
+    //
+    // Each entry is used verbatim as an IAM log-group resource name on the executionService read
+    // grant, so getConfig() rejects '*', '/', '/aws/', '/aws/*', '/aws/<service>/*', anything outside
+    // '/aws/', a '*' anywhere but last, '?', duplicates, an empty list and names over 512 characters.
+    {
+        id: "execution-log-prefix-shape",
+        severity: "error",
+        fieldPaths: ["app.pipelines.executionLogReadPrefixes"],
+        appliesWhen: (c) => {
+            const prefixes = g(c, "app.pipelines.executionLogReadPrefixes");
+            if (prefixes == null) return false;
+            if (!Array.isArray(prefixes) || prefixes.length === 0) return true;
+            return prefixes.some((p: unknown) => {
+                const prefix = String(p ?? "");
+                if (prefix === "" || prefix.length > 512 || prefix.includes("?")) return true;
+                const firstStar = prefix.indexOf("*");
+                if (firstStar !== -1 && firstStar !== prefix.length - 1) return true;
+                return !EXECUTION_LOG_READ_PREFIX_PATTERN.test(prefix);
+            });
+        },
+        message:
+            "app.pipelines.executionLogReadPrefixes must be a non-empty list of log-group names under /aws/<service>/ (for example /aws/vendedlogs/Pipelines/* or /aws/sagemaker/TrainingJobs), each with at most one trailing '*'; '*', '/', '/aws/*' and '/aws/<service>/*' are not accepted. Leave the field out to use the defaults.",
+    },
+    {
+        id: "execution-log-prefix-duplicate",
+        severity: "error",
+        fieldPaths: ["app.pipelines.executionLogReadPrefixes"],
+        appliesWhen: (c) => {
+            const prefixes = g(c, "app.pipelines.executionLogReadPrefixes");
+            if (!Array.isArray(prefixes)) return false;
+            return new Set(prefixes.map((p: unknown) => String(p))).size !== prefixes.length;
+        },
+        message:
+            "app.pipelines.executionLogReadPrefixes lists the same log-group name more than once.",
     },
 
     // ----- Presigned URL network restrictions (config.ts: validatePresignedUrlRestrictions) -----

@@ -794,6 +794,29 @@ export function storageResourcesBuilder(
         new targets.CloudWatchLogGroup(orchestrationBusAuditLogGroup)
     );
 
+    // Externally owned pipeline bridges publish registration events onto this bus. IAM accepts no
+    // wildcard in a Principal and binds an exact role principal to that role's unique id (a bridge role
+    // recreated on its side would be silently denied), so the bridge account root is the principal
+    // carrying an aws:PrincipalArn condition on the operator-declared role ARN pattern — the condition
+    // is the grant. One statement per entry; no entries, no policy resource.
+    const externalPipelineBridges = config.app.pipelines.externalPipelineBridges ?? [];
+    externalPipelineBridges.forEach((bridge, index) => {
+        orchestrationBus.addToResourcePolicy(
+            new iam.PolicyStatement({
+                sid: `ExternalPipelineBridge${index}`,
+                effect: iam.Effect.ALLOW,
+                principals: [
+                    new iam.ArnPrincipal(`arn:${Partition()}:iam::${bridge.accountId}:root`),
+                ],
+                actions: ["events:PutEvents"],
+                resources: [orchestrationBus.eventBusArn],
+                conditions: {
+                    StringLike: { "aws:PrincipalArn": [bridge.roleArnPattern] },
+                },
+            })
+        );
+    });
+
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
         cors: [
@@ -2811,6 +2834,13 @@ export function storageResourcesBuilder(
             storageResources.cloudWatchAuditLogGroups.actions.logGroupName,
         [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditErrors]:
             storageResources.cloudWatchAuditLogGroups.errors.logGroupName,
+        // Integration surface — resolved by externally owned pipeline bridge stacks, not handlers. The
+        // workflow role ARN and import function name of the same surface are published late-bound by
+        // ApiBuilder2, which builds after this registry is materialized.
+        [RESOURCE_PARAM_KEYS.integration.orchestrationBusArn]:
+            storageResources.eventBridge.orchestrationBus.eventBusArn,
+        [RESOURCE_PARAM_KEYS.integration.orchestrationEventSourcePrefix]:
+            storageResources.eventBridge.eventSourcePrefix,
         // Deprecated tables — published for data-migration tooling only
         [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.assetVersionsStorageV1]:
             assetVersionsStorageTableV1.tableName,

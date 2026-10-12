@@ -13,7 +13,6 @@ import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { Service, IAMArn, Partition } from "../helper/service-helper";
-import { BATCH_JOB_LOG_GROUP_NAME } from "../helper/batchJobLogGroup";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
@@ -240,34 +239,28 @@ export function buildExecutionServiceFunction(
             effect: iam.Effect.ALLOW,
             actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
             // Read scope covers the whole-execution and per-pipeline-step log sources the logs API
-            // reads. IAM resource matching is CASE-SENSITIVE, so each real prefix is listed exactly:
+            // reads. Two groups are VAMS's own and always granted:
             //   (1) the shared workflow SFN log group — granted by its actual ARN (name is
             //       '/aws/vendedlogs/vamsPipelineWorkflows<hash>', lowercase 'vams');
-            //   (2) config-name-based groups (the audit/log groups that embed the config name);
-            //   (3) pipeline state-machine groups — BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
-            //       '/aws/vendedlogs/VAMSstateMachine-*' are used across pipelines (case varies);
-            //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*' — the ECS pipelines and
-            //       the five Fargate Batch pipelines (coordinate transform, Blender renderer, 3D
-            //       thumbnail, PDAL, Potree), whose job definitions route container output there
-            //       through the awslogs driver and register that group per stage;
-            //   (5) AWS Batch's default container group '/aws/batch/job' — the GPU Batch pipelines
-            //       (Cosmos, GR00T, Isaac Lab, Splat) set no log configuration, so their container
-            //       streams land there and that is the group they register.
-            // Scoped to these prefixes (not the whole /aws/vendedlogs/* namespace) so it cannot read
-            // unrelated apps' vended log groups. Each is suffixed with ':*' for stream-level reads.
+            //   (2) config-name-based groups (the audit/log groups that embed the config name).
+            // Every other group a pipeline may register as a per-stage log source comes from
+            // app.pipelines.executionLogReadPrefixes, used verbatim as log-group resource names (a
+            // trailing '*' is a prefix). IAM resource matching is CASE-SENSITIVE, which is why the
+            // defaults list BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
+            // '/aws/vendedlogs/VAMSstateMachine-*' (pipeline state machines), the pipeline container
+            // group '/aws/vendedlogs/Pipelines/*', AWS Batch's default container group
+            // '/aws/batch/job' and SageMaker's '/aws/sagemaker/TrainingJobs'. getConfig() rejects
+            // '*', '/' and anything outside '/aws/', so the grant can never widen to the whole
+            // vended-log namespace. Each entry is suffixed with ':*' for stream-level reads.
             resources: [
                 workflowsLogGroup.logGroupArn,
                 workflowsLogGroup.logGroupArn + ":*",
                 IAMArn("*" + config.name + "*").loggroup,
                 IAMArn("*" + config.name + "*").loggroup + ":*",
-                IAMArn("/aws/vendedlogs/VAMSStateMachine-*").loggroup,
-                IAMArn("/aws/vendedlogs/VAMSStateMachine-*").loggroup + ":*",
-                IAMArn("/aws/vendedlogs/VAMSstateMachine-*").loggroup,
-                IAMArn("/aws/vendedlogs/VAMSstateMachine-*").loggroup + ":*",
-                IAMArn("/aws/vendedlogs/Pipelines/*").loggroup,
-                IAMArn("/aws/vendedlogs/Pipelines/*").loggroup + ":*",
-                IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup,
-                IAMArn(BATCH_JOB_LOG_GROUP_NAME).loggroup + ":*",
+                ...(
+                    config.app.pipelines.executionLogReadPrefixes ??
+                    Config.DEFAULT_EXECUTION_LOG_READ_PREFIXES
+                ).flatMap((prefix) => [IAMArn(prefix).loggroup, IAMArn(prefix).loggroup + ":*"]),
             ],
         })
     );
@@ -1100,6 +1093,31 @@ export function buildWorkflowRole(
         );
     }
 
+    // Exact cross-account targets declared on app.pipelines.externalPipelineBridges[].invokeTargets:
+    // one statement per service, each listing the operator's ARNs verbatim. getConfig() has already
+    // rejected any wildcard, so nothing here widens the same-account name patterns above.
+    const bridgeInvokeTargets = (config.app.pipelines.externalPipelineBridges ?? []).flatMap(
+        (bridge) => bridge.invokeTargets ?? []
+    );
+    const bridgeTargetsFor = (service: string): string[] =>
+        bridgeInvokeTargets.filter((arn) => arn.split(":")[2] === service);
+    const bridgeTargetGrants: [string, string[]][] = [
+        ["lambda:InvokeFunction", bridgeTargetsFor("lambda")],
+        ["sqs:SendMessage", bridgeTargetsFor("sqs")],
+        ["events:PutEvents", bridgeTargetsFor("events")],
+    ];
+    for (const [action, resources] of bridgeTargetGrants) {
+        if (resources.length > 0) {
+            runWorkflowPolicy.addStatements(
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: [action],
+                    resources,
+                })
+            );
+        }
+    }
+
     //Add KMS key use if provided
     if (kmsKey) {
         runWorkflowPolicy.addStatements(kmsKeyPolicyStatementGenerator(kmsKey));
@@ -1186,14 +1204,16 @@ export function buildImportGlobalPipelineWorkflowFunction(
  * (referenced-pipeline authorization + save-consistency checks + GLOBAL/scope string checks).
  *
  * Create/update generate the workflow ASL from the referenced pipelines and (re)deploy the Step
- * Functions state machine (common.workflows.workflowAsl.deploy_state_machine), so it builds a
- * dedicated SFN execution role (buildWorkflowRole) and receives the execution-overhaul lambda names
- * + log group + partition as env, plus states:Create/Describe/UpdateStateMachine + iam:PassRole.
+ * Functions state machine (common.workflows.workflowAsl.deploy_state_machine), so it receives the
+ * dedicated SFN execution role (buildWorkflowRole, built by the caller so its ARN can also be published
+ * to SSM) and the execution-overhaul lambda names + log group + partition as env, plus
+ * states:Create/Describe/UpdateStateMachine + iam:PassRole.
  */
 export function buildWorkflowServiceV2Function(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    workflowRole: iam.Role,
     processWorkflowExecutionOutputFunction: lambda.Function,
     interimPipelineTrackingFunction: lambda.Function,
     handleExecutionErrorFunction: lambda.Function,
@@ -1203,13 +1223,6 @@ export function buildWorkflowServiceV2Function(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    // SFN execution role the deployed state machines assume (buildWorkflowRole).
-    const role = buildWorkflowRole(
-        scope,
-        processWorkflowExecutionOutputFunction,
-        config,
-        storageResources.encryption.kmsKey
-    );
     const name = "workflowService";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
@@ -1233,7 +1246,7 @@ export function buildWorkflowServiceV2Function(
                 interimPipelineTrackingFunction.functionName,
             HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME: handleExecutionErrorFunction.functionName,
             VAMS_STACK_NAME: stackName,
-            LAMBDA_ROLE_ARN: role.roleArn,
+            LAMBDA_ROLE_ARN: workflowRole.roleArn,
             LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
             AWS_PARTITION: config.env.partition,
         },

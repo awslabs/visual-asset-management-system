@@ -12,6 +12,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as ssm from "aws-cdk-lib/aws-ssm";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
@@ -38,6 +39,7 @@ import {
     buildInterimPipelineTrackingFunction,
     buildHandleExecutionErrorFunction,
     buildRegisterPipelineExecutionFunction,
+    buildWorkflowRole,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
     buildPipelineServiceV2Function,
@@ -45,6 +47,7 @@ import {
 } from "../../lambdaBuilder/pipelineFunctions";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 import * as Config from "../../../config/config";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 
 /**
  * Properties for the secondary API builder nested stack.
@@ -435,12 +438,23 @@ export class ApiBuilder2NestedStack extends NestedStack {
             });
         }
 
+        // SFN execution role every generated workflow state machine assumes. Built here rather than
+        // inside the workflow service builder so its ARN can be published to SSM below for externally
+        // owned pipeline bridges, which trust it for task-token callbacks.
+        const workflowRole = buildWorkflowRole(
+            this,
+            processWorkflowExecutionOutputFunction,
+            config,
+            storageResources.encryption.kmsKey
+        );
+
         // Workflow V2 resources: create (POST), update (PUT), list/get/delete, and the trigger
         // sub-resources — the whole workflow CRUD surface.
         const workflowServiceV2 = buildWorkflowServiceV2Function(
             this,
             lambdaCommonBaseLayer,
             storageResources,
+            workflowRole,
             processWorkflowExecutionOutputFunction,
             interimPipelineTrackingFunction,
             handleExecutionErrorFunction,
@@ -566,6 +580,18 @@ export class ApiBuilder2NestedStack extends NestedStack {
             subnets
         );
         this.importGlobalPipelineWorkflowV2FunctionName = importGlobalPipelineWorkflow.functionName;
+
+        // Publish the workflow role ARN and the import function name for externally owned pipeline
+        // bridge stacks. Created here rather than through the resource-name registry because this
+        // stack builds after the ResourceNames stack materializes the registry.
+        new ssm.StringParameter(this, "ResourceNameParamWorkflowExecutionRoleArn", {
+            parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.integration.workflowExecutionRoleArn}`,
+            stringValue: workflowRole.roleArn,
+        });
+        new ssm.StringParameter(this, "ResourceNameParamImportGlobalPipelineWorkflow", {
+            parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.importGlobalPipelineWorkflow}`,
+            stringValue: importGlobalPipelineWorkflow.functionName,
+        });
 
         // Deadline Cloud job-callback lambda + its rules on the DEFAULT bus (Deadline
         // publishes job status events there). Resolves workflow task tokens for
