@@ -384,6 +384,10 @@ Nested stack: `infra/lib/nestedStacks/locationService/location-service-nestedSta
 | -------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.useLocationService.enabled` | boolean | `true`  | Enables Amazon Location Service for map visualization of asset metadata with geographic coordinates. Not available in AWS GovCloud. Map views require OpenSearch to be enabled. |
 
+:::warning[Lambda functions in the VPC need a route to Amazon Location Service]
+With `useGlobalVpc.useForAllLambdas` enabled, the `configService` Lambda function reaches Amazon Location Service only through a `com.amazonaws.<region>.geo` interface endpoint, which VAMS does not create; without it `/secure-config` still responds and the map URL is empty, so map views are unavailable. Create the endpoint in the VPC to keep map views on that topology.
+:::
+
 ## Web distribution
 
 :::note[Implemented by]
