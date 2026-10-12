@@ -248,7 +248,7 @@ except Exception:
 ASSET_STORAGE_TABLE_NAME = "vams-asset-storage"  # VIOLATION
 ```
 
-CDK publishes each resource name as an SSM parameter under `VAMS_RESOURCE_PARAM_PREFIX` (see `ResourceNamesBuilder` nested stack; Lambda env is set via `globalLambdaEnvironmentsAndPermissions`). Keys are defined in `infra/common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS.*`) and mirrored in `backend/backend/common/resourceNames.py` (`ResourceKeys`).
+CDK publishes each resource name as an SSM parameter under `VAMS_RESOURCE_PARAM_PREFIX` (see `ResourceNamesBuilder` nested stack; Lambda env is set via `globalLambdaEnvironmentsAndPermissions`). Keys are defined in `infra/common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS.*`) and mirrored in `backend/backend/common/resourceNames.py` (`ResourceKeys`). The `lambdaFunctions/*` and `integration/*` categories (the `vamsSchema` import function name, the orchestration bus ARN and event source prefix, the workflow state-machine role ARN) are read by deployment tooling and by externally owned pipeline bridge stacks at their own deploy time, never by a handler, so only `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` mirrors them.
 
 **Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call → one paginated `GetParametersByPath` fetch of all resource names. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
 
@@ -627,7 +627,7 @@ VAMS uses single-table design with composite keys. Common patterns:
 6. Grant permissions (`grantReadData`, `grantReadWriteData`) in the lambda builder
 7. Resolve table name using `get_table_name(ResourceKeys.*)` at module level in the handler
 
-The same three-way constants update applies to new audit CloudWatch log groups. Deprecated tables retained for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
+The same three-way constants update applies to new audit CloudWatch log groups. Deprecated tables retained for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`). A value that only deployment tooling or an external bridge stack reads goes in `lambdaFunctions` or `integration` and is mirrored in `ssm_resource_lookup.py` only (step 4), not in `resourceNames.py`; a value produced by a stack that builds after `ResourceNamesBuilder` is published late-bound by that stack (`apiBuilder2-nestedStack.ts`, `searchBuilder-nestedStack.ts`) instead of through the registry.
 
 ### **Adding a New Viewer Plugin**
 

@@ -54,7 +54,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 64 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
@@ -382,6 +382,14 @@ export interface ConfigPublic {
         // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
         // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
         // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
+        // pipelines.externalPipelineBridges: [{accountId, roleArnPattern, invokeTargets?}] — one
+        // events:PutEvents statement per entry on the orchestration bus resource policy (bridge account
+        // root + aws:PrincipalArn condition on the pattern) and the exact invokeTargets ARNs on the shared
+        // workflow role; validateExternalPipelineBridges() rejects any other wildcard
+        // pipelines.executionLogReadPrefixes: string[] of /aws/<service>/... log-group names used verbatim
+        // as the executionService log-read resources (trailing * = prefix); default
+        // DEFAULT_EXECUTION_LOG_READ_PREFIXES; validateExecutionLogReadPrefixes() rejects *, / and
+        // anything outside /aws/
     };
 }
 
@@ -3114,7 +3122,7 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 
 7. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
 
-8. **IAM resource matching is case-sensitive.** Log-group grants are explicit allow-lists: the `/aws/vendedlogs/*` prefixes (pipeline constructs are split across `VAMSStateMachine-*` and `VAMSstateMachine-*`, both granted) plus AWS Batch's default container group `/aws/batch/job`, which the executionService reads because the built-in Batch pipelines register it as a per-stage log source (`infra/lib/helper/batchJobLogGroup.ts` names it; no VAMS job definition sets a log configuration). A new pipeline inventing a third casing silently loses log-read access.
+8. **IAM resource matching is case-sensitive, and the log-read grant is config-driven.** The executionService reads registered sub-process logs only from the groups in `app.pipelines.executionLogReadPrefixes`, used verbatim as IAM resource names (`workflowFunctions.ts` `buildExecutionServiceFunction`), plus the shared workflow log group and the `*<name>*` pattern. The default list carries both state-machine casings (`/aws/vendedlogs/VAMSStateMachine-*`, `/aws/vendedlogs/VAMSstateMachine-*`), `/aws/vendedlogs/Pipelines/*`, AWS Batch's default container group `/aws/batch/job` (`infra/lib/helper/batchJobLogGroup.ts` names it) and `/aws/sagemaker/TrainingJobs`. A pipeline writing to a group outside the list still runs but its log source reads `denied` — reuse an existing casing or `/aws/vendedlogs/Pipelines/*`, or add the group to the configured list (templates and `DEFAULT_EXECUTION_LOG_READ_PREFIXES` together). `getConfig()` rejects `*`, `/`, `/aws/*` and anything outside `/aws/`.
 
 ### **Verifying a partition change**
 

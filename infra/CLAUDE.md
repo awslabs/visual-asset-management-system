@@ -56,7 +56,7 @@ infra/
         storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
         customResources/populateS3AssetBucketsTable.ts
       resourceNames/
-        resourceNamesBuilder-nestedStack.ts  # 64 SSM String parameters, one per registry descriptor
+        resourceNamesBuilder-nestedStack.ts  # 66 SSM String parameters, one per registry descriptor
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
       auth/
         authBuilder-nestedStack.ts       # Cognito user pool, identity pool, SAML, external OAuth
@@ -129,7 +129,7 @@ CoreVAMSStack (root)
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch — foundation)
-  |     +-- ResourceNamesBuilder (publishes 64 SSM parameters)
+  |     +-- ResourceNamesBuilder (publishes 66 SSM parameters)
   |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
   |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
@@ -182,7 +182,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu, deployDeferredIndexSchema), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
--   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
+-   `app.pipelines`: deadlineCloudExecutionTypeEnabled, externalPipelineBridges (`[{accountId, roleArnPattern, invokeTargets?}]` — one `events:PutEvents` statement per entry on the orchestration bus resource policy, granted to the bridge account root under an `aws:PrincipalArn` condition on the pattern, plus the exact `invokeTargets` ARNs on the shared workflow role; validated by `validateExternalPipelineBridges()`), executionLogReadPrefixes (`string[]` of `/aws/<service>/...` log-group names, trailing `*` = prefix, used verbatim as the executionService log-read resources; default `DEFAULT_EXECUTION_LOG_READ_PREFIXES`; validated by `validateExecutionLogReadPrefixes()`, which rejects `*`, `/` and anything outside `/aws/`), useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
 -   `app.addons`: useGarnetFramework, usePhysnaSync
 -   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
 -   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE, apiGatewayTimeoutTime default 29 / max 300 — integration timeout in seconds, applied as `timeoutInMillis` on every route integration in `buildOpenApiSpec.ts`; above 29 requires an approved account `L-E5AE38E3` quota increase)
@@ -485,7 +485,7 @@ When writing a partition deny-list, **name every restricted partition explicitly
 
 7. **No internet egress at build time.** A restricted-partition build host generally cannot reach commercial endpoints, so a `curl`/download inside a Docker bundling command hardcoded to a commercial S3 host will fail there.
 
-8. **IAM resource matching is case-sensitive.** Log-group grants are explicit allow-lists: the `/aws/vendedlogs/*` prefixes the pipeline constructs use (split across two casings, `VAMSStateMachine-*` and `VAMSstateMachine-*`, both granted by `workflowFunctions.ts`), plus AWS Batch's default container group `/aws/batch/job`, which the executionService reads because the built-in Batch pipelines register it as a per-stage log source (no VAMS job definition sets a log configuration; `lib/helper/batchJobLogGroup.ts` is the one place that names it). A new pipeline that invents a third casing silently loses log-read access — reuse an existing casing, or the `/aws/vendedlogs/Pipelines/*` prefix.
+8. **IAM resource matching is case-sensitive, and the log-read grant is config-driven.** The executionService reads registered sub-process logs only from the groups in `app.pipelines.executionLogReadPrefixes`, used verbatim as IAM resource names (`workflowFunctions.ts` `buildExecutionServiceFunction`), plus the shared workflow log group and the `*<name>*` pattern, which stay hard-coded. The default list carries both state-machine casings the pipeline constructs use (`/aws/vendedlogs/VAMSStateMachine-*` and `/aws/vendedlogs/VAMSstateMachine-*`), the container group `/aws/vendedlogs/Pipelines/*`, AWS Batch's default container group `/aws/batch/job` (which the built-in Batch pipelines register as a per-stage log source; `lib/helper/batchJobLogGroup.ts` is the one place that names it) and `/aws/sagemaker/TrainingJobs`. A new pipeline that writes to a group outside the list still runs, but the logs API reports that source as `denied` — reuse an existing casing or the `/aws/vendedlogs/Pipelines/*` prefix, or add the group to the configured list (the shipped templates and `DEFAULT_EXECUTION_LOG_READ_PREFIXES` together, so a deployment on the defaults picks it up). `getConfig()` rejects `*`, `/`, `/aws/*` and anything outside `/aws/`, so the grant cannot widen to the whole namespace.
 
 ### How to verify a partition change before shipping
 
@@ -588,7 +588,7 @@ These axes are independent. **Retained + auto-named** resources (asset, auxiliar
 
 **The VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`): `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. **Not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
 
-**SSM String parameters** (64 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables and the 6 pipeline/workflow V2 data-model tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
+**SSM String parameters** (66 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables, the 6 pipeline/workflow V2 data-model tables and the two `integration/` values the storage builder registers; three more — `integration/workflowExecutionRoleArn`, `lambdaFunctions/importGlobalPipelineWorkflow` and `lambdaFunctions/crOsReindexer` — are published late-bound by ApiBuilder2 and the search stack): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
 
 ### 5. Service Helper Usage
 

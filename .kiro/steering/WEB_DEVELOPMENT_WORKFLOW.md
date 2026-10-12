@@ -48,7 +48,8 @@ web/
                             #   WorkflowSystemConfigFields, DagPreview, workflowValidation
       executions/           # ExecutionsBoard, ExecutionDetailPage, ExecutionLogViewer,
                             #   ExecutionQuickView, ExecuteWorkflowModal, SubProcessesSection, StageTimeline,
-                            #   logSearch
+                            #   logSearch, resourceTypeLabels (sub-process type labels; unknown types render
+                            #   raw with a not-abortable note when abortable === false)
       wizard/               # ExecuteWizard (+ExecuteWizardBody), WizardRail, RequirementsStrip, WorkflowPicker,
                             #   pipeline/input/review stages, InputFileSelector, MetadataSourceSelector,
                             #   SelectedInputFilesList, BulkFilePicker, selectedInputFiles (multi-file
