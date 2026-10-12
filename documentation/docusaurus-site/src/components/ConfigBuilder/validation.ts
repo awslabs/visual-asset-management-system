@@ -1358,6 +1358,22 @@ export const RULES: Rule[] = [
     // EventBridge bus ARNs with no wildcard at all. Partition checks stay silent when env.region is
     // unset, because the deploy-time partition is then unknowable here.
     {
+        id: "external-bridge-entry-shape",
+        severity: "error",
+        fieldPaths: ["app.pipelines.externalPipelineBridges"],
+        // config.ts: "must be an array of { accountId, roleArnPattern, invokeTargets? } entries" /
+        // "must be an object with accountId and roleArnPattern". The helpers below drop such entries,
+        // so this is the one rule that reports them.
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.externalPipelineBridges");
+            if (value == null) return false;
+            if (!Array.isArray(value)) return true;
+            return value.some((entry: unknown) => !entry || typeof entry !== "object");
+        },
+        message:
+            "app.pipelines.externalPipelineBridges must be an array of { accountId, roleArnPattern, invokeTargets? } objects.",
+    },
+    {
         id: "external-bridge-account-id",
         severity: "error",
         fieldPaths: ["app.pipelines.externalPipelineBridges"],
