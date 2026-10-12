@@ -110,12 +110,12 @@ VamsCLI supports multiple profiles for different environments or users:
 
 ```bash
 # Setup different environments
-vamscli setup https://prod-api.example.com --profile production
-vamscli setup https://staging-api.example.com --profile staging
+vamscli --profile production setup https://prod-api.example.com
+vamscli --profile staging setup https://staging-api.example.com
 
 # Setup for different users
-vamscli setup https://api.example.com --profile alice
-vamscli setup https://api.example.com --profile bob
+vamscli --profile alice setup https://api.example.com
+vamscli --profile bob setup https://api.example.com
 ```
 
 **Profile Features:**

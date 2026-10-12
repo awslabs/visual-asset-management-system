@@ -1457,9 +1457,21 @@ export const RULES: Rule[] = [
         message: "ALB deployment requires both a domain hostname and an ACM certificate ARN.",
     },
 
+    // ----- Stack name (config.ts: "app.baseStackName is required") -----
+    // The builder has no CDK context or STACK_NAME environment to fall back to, so the field itself
+    // must carry the value.
+    {
+        id: "base-stack-name",
+        severity: "error",
+        fieldPaths: ["app.baseStackName"],
+        appliesWhen: (c) => isBlank(g(c, "app.baseStackName")),
+        message:
+            "app.baseStackName is required. It forms part of every stack name (for example vams-core-<baseStackName>-<region>).",
+    },
+
     // ----- Admin identity
     // (config.ts: "Must specify an initial admin email address", "Only what Amazon Cognito itself
-    // rejects", "The admin user is a CloudFormation-managed resource keyed on its username") -----
+    // rejects") -----
     {
         id: "admin-email",
         severity: "error",
@@ -1494,24 +1506,6 @@ export const RULES: Rule[] = [
         },
         message:
             "app.adminUserId cannot contain whitespace — Amazon Cognito does not accept it in a username.",
-    },
-    {
-        id: "admin-userid-differs-from-email-warn",
-        severity: "warning",
-        fieldPaths: ["app.adminUserId", "app.adminEmailAddress"],
-        // Both fields are immutable after the first deployment: the admin user is a
-        // CloudFormation-managed resource keyed on its username, so changing either replaces it —
-        // failing the deployment if the new username already exists in the pool, and otherwise
-        // orphaning the previous admin. A warning, because an operator who accepts that must still be
-        // able to deploy.
-        appliesWhen: (c) => {
-            const userId = g(c, "app.adminUserId");
-            const email = g(c, "app.adminEmailAddress");
-            if (isUnset(userId) || isUnset(email)) return false;
-            return userId !== email;
-        },
-        message:
-            "app.adminUserId and app.adminEmailAddress differ. Both are immutable after the first deployment: changing either replaces the Amazon Cognito admin user, which fails the deployment if the new username already exists in the pool and otherwise orphans the previous admin. Grant additional administrators through roles instead of by editing these fields.",
     },
 
     // ----- OpenSearch

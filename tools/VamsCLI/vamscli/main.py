@@ -38,14 +38,41 @@ from .version import get_version
 from .utils.logging import initialize_logging, set_context
 
 
+# Root-group options that take a value; the value is skipped when reading the command from argv.
+_ROOT_OPTIONS_WITH_VALUE = ('--profile',)
+
+# Top-level commands that run without a configured profile: configuring one, inspecting the
+# version, and listing or switching profiles (the commands needed to recover from a missing setup).
+_SETUP_EXEMPT_COMMANDS = ('setup', 'version', 'profile')
+
+
+def invoked_command(argv) -> Optional[str]:
+    """The top-level command named on the command line, or None for a bare invocation.
+
+    Root options come before the command, so every leading token that starts with '-' is
+    skipped, together with the value of an option that takes one (``--profile <name>``).
+    """
+    tokens = iter(argv[1:])
+    for token in tokens:
+        if token in _ROOT_OPTIONS_WITH_VALUE:
+            next(tokens, None)
+            continue
+        if token.startswith('-'):
+            continue
+        return token
+    return None
+
+
 def check_setup_required(ctx: click.Context, param: click.Parameter, value: Optional[str]) -> Optional[str]:
     """Check if setup is required before running commands."""
     # Skip setup check if we're in a test environment
     if 'pytest' in sys.modules:
         return value
-    
-    # Skip setup check for setup command itself
-    if 'setup' in sys.argv:
+
+    # Skip setup check for the commands that work without a configured profile (`setup` itself,
+    # `version`, and the `profile` group). The command is read off argv, so a profile NAMED
+    # `setup` does not exempt the command that follows it.
+    if invoked_command(sys.argv) in _SETUP_EXEMPT_COMMANDS:
         return value
     
     # Allow help commands and version commands without setup check
@@ -75,7 +102,7 @@ def check_setup_required(ctx: click.Context, param: click.Parameter, value: Opti
     profile_manager = ProfileManager(profile_name)
     if not profile_manager.has_config():
         raise SetupRequiredError(
-            f"Setup required for profile '{profile_name}'. Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+            f"Setup required for profile '{profile_name}'. Please run 'vamscli --profile {profile_name} setup <api-gateway-url>' first."
         )
     
     return value

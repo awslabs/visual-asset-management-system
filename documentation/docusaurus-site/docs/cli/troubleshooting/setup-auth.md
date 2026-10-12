@@ -255,7 +255,7 @@ Profile names must be 3 to 50 characters using only letters, numbers, hyphens, a
 Choose a name that satisfies these rules.
 
 ```bash
-vamscli setup https://prod-vams.example.com --profile production
+vamscli --profile production setup https://prod-vams.example.com
 ```
 
 ### Profile Does Not Exist
@@ -267,7 +267,7 @@ vamscli setup https://prod-vams.example.com --profile production
 **Resolution:**
 
 1. List configured profiles: `vamscli profile list`.
-2. Create the profile by running setup for it: `vamscli setup <base-url> --profile <name>`.
+2. Create the profile by running setup for it: `vamscli --profile <name> setup <base-url>`.
 3. Switch to an existing profile: `vamscli profile switch <name>`.
 
 ### Cannot Delete the Default Profile
@@ -307,7 +307,7 @@ Each profile stores `config.json`, `auth_profile.json`, and an optional `credent
 **Resolution:**
 
 1. Re-run setup with `--force` to rewrite the configuration: `vamscli setup <base-url> --force`.
-2. For a specific profile, include `--profile`: `vamscli setup <base-url> --profile <name> --force`.
+2. For a specific profile, put `--profile` before the command: `vamscli --profile <name> setup <base-url> --force`.
 
 ### Resetting VamsCLI Configuration
 

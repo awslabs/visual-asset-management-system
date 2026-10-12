@@ -277,7 +277,7 @@ namespace VamsDatabaseExplorer.Services
                 // profile that exists but cannot be read.
                 throw new InvalidOperationException(
                     $"The vamscli profile '{_profileName}' does not exist.\n\n" +
-                    $"Create it with:\n  vamscli setup <api-gateway-url> --profile {_profileName}\n\n" +
+                    $"Create it with:\n  vamscli --profile {_profileName} setup <api-gateway-url>\n\n" +
                     $"Or set the {ProfileEnvironmentVariable} environment variable to a profile that " +
                     "does exist. Run 'vamscli profile list' to see which are configured.", ex);
             }
@@ -292,8 +292,8 @@ namespace VamsDatabaseExplorer.Services
             {
                 throw new InvalidOperationException(
                     $"The vamscli profile '{_profileName}' is not fully set up.\n\n" +
-                    "Please run 'vamscli setup <api-gateway-url>' in a terminal to configure it " +
-                    "before using this tool.");
+                    $"Please run 'vamscli --profile {_profileName} setup <api-gateway-url>' in a terminal " +
+                    "to configure it before using this tool.");
             }
 
             _cachedAuthType = profileInfo.ProfileInfo.AuthType ?? "Cognito"; // Default to Cognito

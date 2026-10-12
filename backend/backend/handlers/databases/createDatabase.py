@@ -97,6 +97,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Get HTTP method and path
         http_method = event['requestContext']['http']['method']
         path = event['requestContext']['http']['path']
+
+        # Tier 1: route authorization, before the request body is read.
+        method_allowed_on_api = False
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Check if this is the correct API route for database creation
         if http_method == 'POST' and API_DATABASE.matches(path):
@@ -119,7 +128,6 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 logger.error("Request body is not a string")
                 return validation_error(body={'message': "Request body must be a string"}, event=event)
             
-            
             # Validate required fields in the request body
             required_fields = ['databaseId', 'description', 'defaultBucketId']
             for field in required_fields:
@@ -129,19 +137,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Parse request model
             request_model = parse(body, model=CreateDatabaseRequestModel)
             
-            # Check authorization
+            # Tier 2: object-level authorization on the database being created
             database = {
                 "object__type": "database",
                 "databaseId": request_model.databaseId
             }
-            
-            # Fail closed: with no authenticated identity no authorization can be
-            # evaluated, so deny rather than fall through to the mutation.
-            if len(claims_and_roles["tokens"]) == 0:
-                return authorization_error()
-
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(database, "POST") and casbin_enforcer.enforceAPI(event)):
+            if not casbin_enforcer.enforce(database, "POST"):
                 return authorization_error()
 
             # Process request

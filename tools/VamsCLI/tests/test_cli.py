@@ -622,7 +622,7 @@ class TestAuthCommands:
             
             assert result.exit_code == 1
             assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            assert "vamscli --profile default setup <api-gateway-url>" in result.output
     
     def test_auth_login_authentication_error(self, cli_runner, auth_command_mocks):
         """Test auth login with authentication error."""

@@ -354,8 +354,8 @@ or the second template silently inherits the first one's state.
 
 #### **Step 8: Validation**
 
--   [ ] **CDK Synth**: Ensure `cdk synth` completes without errors
--   [ ] **CDK Diff**: Review changes with `cdk diff` before deployment
+-   [ ] **CDK Synth**: Ensure `npx cdk synth` completes without errors
+-   [ ] **CDK Diff**: Review changes with `npx cdk diff` before deployment
 -   [ ] **Security Review**: Complete security review of new resources
 -   [ ] **Performance Impact**: Assess performance impact of changes
 
@@ -3148,9 +3148,9 @@ npm install
 npm run build
 
 # CDK commands
-cdk synth --all                    # Synthesize all stacks
-cdk diff --all                     # Show differences
-cdk deploy --all --require-approval never  # Deploy all stacks
+npx cdk synth --all                    # Synthesize all stacks
+npx cdk diff --all                     # Show differences
+npx cdk deploy --all --require-approval never  # Deploy all stacks
 
 # Testing
 npm test                           # Run unit tests

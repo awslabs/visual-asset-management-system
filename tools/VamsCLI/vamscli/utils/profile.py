@@ -200,7 +200,7 @@ class ProfileManager:
         if not self.config_file.exists():
             raise ProfileNotFoundError(
                 f"Configuration not found for profile '{self.profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {self.profile_name}' first."
+                f"Please run 'vamscli --profile {self.profile_name} setup <api-gateway-url>' first."
             )
         
         try:

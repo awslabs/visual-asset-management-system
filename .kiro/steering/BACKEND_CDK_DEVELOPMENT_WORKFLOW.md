@@ -2661,10 +2661,10 @@ cd infra
 npm install
 
 # CDK commands
-cdk diff                         # Show changes
-cdk synth                        # Synthesize CloudFormation
-cdk deploy --all                 # Deploy all stacks
-cdk destroy --all                # Destroy all stacks
+npx cdk diff                         # Show changes
+npx cdk synth                        # Synthesize CloudFormation
+npx cdk deploy --all                 # Deploy all stacks
+npx cdk destroy --all                # Destroy all stacks
 
 # Code quality checks
 npm run lint                     # Lint TypeScript code

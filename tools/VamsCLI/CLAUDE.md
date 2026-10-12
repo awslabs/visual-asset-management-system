@@ -323,6 +323,18 @@ and it is best-effort (any read failure degrades to the default) because it runs
    `tests/test_active_profile_resolution.py`.
 4. A bare `ProfileManager()` / `APIClient(url)` targets the **default** profile. Pass the resolved
    profile (`ProfileManager(read_active_profile_name())`) when no manager is supplied.
+5. **A hint names a command Click accepts.** `--profile`, `--verbose` and `--version` are
+   root-group options and go **before** the subcommand: `vamscli --profile <name> setup <url>`;
+   placed after the subcommand, Click rejects them with "No such option". Token-override guidance names
+   `auth set-override -u <user-id> --token-stdin` or
+   `auth login --user-id <user-id> --token-override-stdin`; there is no root `--token-override`.
+   `tests/test_setup_check.py` scans the CLI, MCP and connector sources for any
+   `vamscli --<opt>` that is not a root option.
+6. **The setup gate exempts the recovery commands.** `check_setup_required` (`main.py`) reads the
+   invoked top-level command off `sys.argv` (skipping root options and the value of `--profile`)
+   and lets `setup`, `version` and the `profile` group run without a configured profile — those
+   are the commands its own hint sends the user to. Any new command that must work before setup
+   is added to `_SETUP_EXEMPT_COMMANDS`, not special-cased in the callback.
 
 ### 7. Constants and Endpoints
 

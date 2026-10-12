@@ -288,6 +288,16 @@ is absent, so the callback cannot tell "omitted" from "explicitly asked for the 
 default profile points at, while still reporting success. A bare `ProfileManager()` or
 `APIClient(url)` has the same effect. Guarded by `tests/test_active_profile_resolution.py`.
 
+A hint printed to the user names a command Click accepts. `--profile`, `--verbose` and `--version`
+are root-group options and go **before** the subcommand (`vamscli --profile <name> setup <url>`);
+token-override guidance names `auth set-override -u <user-id> --token-stdin` or
+`auth login --user-id <user-id> --token-override-stdin` — there is no root `--token-override`.
+`tests/test_setup_check.py` scans the CLI, MCP and connector sources for any `vamscli --<opt>` that
+is not a root option. The setup gate (`check_setup_required` in `main.py`) reads the invoked
+top-level command off `sys.argv`, skipping root options and the value of `--profile`, and exempts
+`setup`, `version` and the `profile` group — the commands its own hint sends the user to. A new
+command that must run before setup is added to `_SETUP_EXEMPT_COMMANDS`.
+
 ```python
 # ✅ CORRECT
 from ..utils.profile import read_active_profile_name

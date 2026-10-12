@@ -912,6 +912,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     claims_and_roles = request_to_claims(event)
     
     try:
+        # Tier 1: route authorization, before the request body is read.
+        method_allowed_on_api = False
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
+
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
@@ -939,21 +948,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Parse request model
         request_model = parse(body, model=CreateAssetRequestModel)
         
-        # Check authorization
+        # Tier 2: object-level authorization on the asset being created
         asset = {
             "object__type": "asset",
             "databaseId": request_model.databaseId,
             "assetName": request_model.assetName,
             "tags": request_model.tags
         }
-        
-        # Fail closed: with no authenticated identity no authorization can be
-        # evaluated, so deny rather than fall through to the mutation.
-        if len(claims_and_roles["tokens"]) == 0:
-            return authorization_error()
-
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not (casbin_enforcer.enforce(asset, "PUT") and casbin_enforcer.enforceAPI(event)):
+        if not casbin_enforcer.enforce(asset, "PUT"):
             return authorization_error()
 
         # Process request

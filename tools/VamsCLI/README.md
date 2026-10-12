@@ -59,10 +59,11 @@ vamscli assets unarchive my-asset -d my-database
 vamscli asset-version create -d my-database -a my-asset --comment "Release v1"
 
 # Execute a workflow
-vamscli workflow execute -d my-database -a my-asset -w my-workflow
+vamscli workflow execute --workflow-database-id my-database -w my-workflow --input-file my-database:my-asset:/model.glb
 
-# Use API key authentication
-vamscli --token-override "your-api-key" database list
+# Use API key authentication (the key is read from stdin, so it never appears in the process table)
+echo "$VAMS_API_KEY" | vamscli auth set-override -u service-user --token-stdin
+vamscli database list
 
 # JSON output for scripting
 vamscli assets list --json-output
@@ -100,12 +101,15 @@ vamscli assets --help
 
 ## Global Options
 
-| Option                   | Description                                       |
-| ------------------------ | ------------------------------------------------- |
-| `--version`              | Show version                                      |
-| `--verbose`              | Detailed output with API request/response logging |
-| `--profile NAME`         | Use a specific profile                            |
-| `--token-override TOKEN` | Authenticate with API key or external token       |
+Global options belong to the root `vamscli` group and go **before** the command (`vamscli --profile staging assets list`). Placed after the command they are rejected with "No such option".
+
+| Option           | Description                                       |
+| ---------------- | ------------------------------------------------- |
+| `--version`      | Show version                                      |
+| `--verbose`      | Detailed output with API request/response logging |
+| `--profile NAME` | Use a specific profile                            |
+
+API keys and external tokens are supplied through `vamscli auth set-override -u <user> --token-stdin` or `vamscli auth login --user-id <user> --token-override-stdin`, not through a global option.
 
 ## Documentation
 
