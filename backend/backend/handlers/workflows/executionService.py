@@ -85,6 +85,10 @@ _batch_job_describe_cache = {}
 _deadline_job_cache = {}
 _deadline_sessions_cache = {}
 
+# Per-request memo of SageMaker DescribeTrainingJob / DescribePipelineExecution results keyed by the
+# registered ARN, reset with the memos above. Only the summary fields are kept.
+_sagemaker_describe_cache = {}
+
 # Memo of Casbin decisions, held per ENFORCER rather than in one module-level dict. A list request
 # evaluates the same rule over the same few entities once per ROW, so the memo collapses that to one
 # evaluation per distinct entity.
@@ -177,6 +181,14 @@ try:
 except Exception as e:
     logger.info(f"Deadline Cloud client unavailable in this partition: {e}")
     deadline_client = None
+# Used to stop a registered SageMaker training job or pipeline execution on abort and to describe
+# either for the details view. Built the same way for the same reason; a None client reports the job
+# as left running, or its status as unavailable, rather than silently doing nothing.
+try:
+    sagemaker_client = boto3.client('sagemaker', config=retry_config)
+except Exception as e:
+    logger.info(f"SageMaker client unavailable in this partition: {e}")
+    sagemaker_client = None
 
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
@@ -1398,16 +1410,22 @@ def _cancel_deadline_job_reporting(farm_id, queue_id, job_id):
                                             deadline_client=deadline_client)
 
 
-# Sub-process resource types the abort path can stop today (mirrors registerPipelineExecution).
-# Other registered types are tracked but not yet abortable.
-RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = "stepFunctionsExecution"
+# Sub-process resource types the abort path can stop (mirrors registerPipelineExecution). The set and
+# the per-type constants are shared with the failure path in common.workflows.executionOutputs so the
+# two cannot diverge on what is abortable; other registered types are tracked and displayed but left
+# running, and the abort response names them under `notAbortable`.
+RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = eo.RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
 # An AWS Batch job a pipeline submitted ITSELF. A job submitted by a nested state machine through the
 # Step Functions `.sync` integration needs no entry here: Step Functions owns that job's lifecycle, so
 # stopping the sub-execution already terminates it.
-RESOURCE_TYPE_BATCH_JOB = "batchJob"
+RESOURCE_TYPE_BATCH_JOB = eo.RESOURCE_TYPE_BATCH_JOB
 # A Deadline Cloud farm job the workflow submitted through createJob.waitForTaskToken. Step Functions
 # owns the token, not the job, so stopping the execution leaves the job running on the farm.
-RESOURCE_TYPE_DEADLINE_CLOUD_JOB = "deadlineCloudJob"
+RESOURCE_TYPE_DEADLINE_CLOUD_JOB = eo.RESOURCE_TYPE_DEADLINE_CLOUD_JOB
+# A SageMaker training job / pipeline execution a pipeline registered in the deployment account.
+RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB = eo.RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB
+RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION = eo.RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION
+ABORTABLE_RESOURCE_TYPES = eo.ABORTABLE_RESOURCE_TYPES
 
 # The discovery constants and helpers are shared with the failure path in
 # common.workflows.executionOutputs, so the two cannot diverge on which jobs they find. Re-exported
@@ -1444,9 +1462,10 @@ def _discover_deadline_job_id(farm_id, queue_id, pipeline_execution_id):
 def _abort_registered_sub_process(sub):
     """Best-effort abort of one registered sub-process. Dispatches on the entry's resourceType.
 
-    Returns a non-fatal warning string when the sub-process could not be stopped (a real
-    StopExecution failure, or a resource type not yet abortable), or "" when nothing needs to be
-    surfaced (stopped cleanly, or no actionable locator). Never raises."""
+    Returns a non-fatal warning string when the sub-process could not be stopped (a real stop failure,
+    or a resource type VAMS cannot stop), or "" when nothing needs to be surfaced (stopped cleanly, or
+    no actionable locator). The structured record of a type VAMS cannot stop is `_not_abortable_entry`,
+    kept separate so this return stays a plain string. Never raises."""
     resource_type = sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
     if resource_type == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
         execution_arn = sub.get("executionArn", "")
@@ -1489,12 +1508,32 @@ def _abort_registered_sub_process(sub):
             return (f"Sub-process abort failed for Deadline Cloud job {job_id}: {err}; it may still "
                     f"be running on the farm.")
         return ""
-    # Not yet abortable (e.g. ecsTask). Surface what was left running.
-    locator = (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
-               or sub.get("taskArn") or sub.get("arn") or resource_type)
-    logger.info(f"Registered sub-process of type '{resource_type}' is not yet abortable: {locator}")
+    if resource_type in (RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB,
+                         RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION):
+        # Shared with the failure path so the two cannot diverge on how a SageMaker job is stopped or
+        # which stop errors are the normal already-finished race. The abort path's client is the one
+        # used; a None client is reported as left running.
+        return eo.stop_registered_sub_process(sub, sagemaker_client=sagemaker_client)
+    # A type VAMS cannot stop (an external bridge's own compute, say). Surface what was left running.
+    locator = eo.sub_process_locator(sub)
+    logger.info(f"Registered sub-process of type '{resource_type}' cannot be aborted by VAMS: {locator}")
     return (f"Sub-process of type '{resource_type}' ({locator}) could not be aborted: "
-            f"abort for this resource type is not yet supported; it may still be running.")
+            f"VAMS cannot stop this resource type; it may still be running.")
+
+
+def _not_abortable_entry(sub):
+    """The structured record of a registered sub-process VAMS cannot stop, for the abort response's
+    `notAbortable` list: {resourceType, label, stageName, locator}; None for an abortable type."""
+    sub = sub or {}
+    resource_type = sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
+    if resource_type in ABORTABLE_RESOURCE_TYPES:
+        return None
+    return {
+        "resourceType": str(resource_type),
+        "label": str(sub.get("label", "") or ""),
+        "stageName": str(sub.get("stageName", "") or ""),
+        "locator": str(eo.sub_process_locator(sub)),
+    }
 
 
 def _metadata_source_entities(config_row):
@@ -1731,8 +1770,9 @@ def abort_execution(event, execution_id):
       3. Stop the main (outer) Step Functions execution FIRST, so it schedules no further
          pipeline task while the sub-processes below are being stopped.
       4. Stop each still-running pipeline's registered sub-processes (Step Functions executions,
-         Batch jobs and Deadline Cloud jobs are stopped; other resource types warn) and mark
-         every non-terminal pipeline row ABORTED (with a stop date).
+         Batch jobs, Deadline Cloud jobs and SageMaker training jobs / pipeline executions are
+         stopped; other resource types warn and are listed under `notAbortable`) and mark every
+         non-terminal pipeline row ABORTED (with a stop date).
       5. Re-read the pipeline rows and stop anything registered since step 4's read.
       6. Mark the main row ABORTED (with a stop date).
 
@@ -1750,8 +1790,12 @@ def abort_execution(event, execution_id):
 
     now = er.iso_now()
     main_table = dynamodb.Table(workflow_execution_database_v2)
-    # Non-fatal warnings surfaced to the caller alongside the success response.
+    # Non-fatal warnings surfaced to the caller alongside the success response, and the registered
+    # sub-processes of a type VAMS cannot stop, listed once per locator so the caller can name what was
+    # left running.
     warnings = []
+    not_abortable_subs = []
+    not_abortable_locators = set()
 
     # 1) Stop the main (outer) Step Functions execution FIRST. A running parent is what schedules the
     # next pipeline task, so stopping it before reading the pipeline rows closes the window in which a
@@ -1785,12 +1829,17 @@ def abort_execution(event, execution_id):
             if identity in attempted_subs:
                 continue
             attempted_subs.add(identity)
-            # Step Functions executions, self-submitted Batch jobs and Deadline Cloud farm jobs are
-            # stopped; a resource type with no stop API surfaces a warning naming what was left
-            # running, so the caller is not told the abort was complete when it was not.
+            # Step Functions executions, self-submitted Batch jobs, Deadline Cloud farm jobs and
+            # SageMaker training jobs / pipeline executions are stopped; a resource type with no stop
+            # API surfaces a warning naming what was left running AND a structured notAbortable entry,
+            # so the caller is not told the abort was complete when it was not.
             warning = _abort_registered_sub_process(sub)
             if warning:
                 warnings.append(warning)
+            not_abortable = _not_abortable_entry(sub)
+            if not_abortable and not_abortable["locator"] not in not_abortable_locators:
+                not_abortable_locators.add(not_abortable["locator"])
+                not_abortable_subs.append(not_abortable)
 
         # A DeadlineCloud step whose job was never REGISTERED still has a live job on the farm.
         # Registration is driven by Deadline's job-status events, and a job that is submitted but not
@@ -1883,10 +1932,13 @@ def abort_execution(event, execution_id):
         "workflowDatabaseId": main_item.get('workflowDatabaseId', ''),
         "operation": "abort",
     })
-    # Include a "warnings" list only when a best-effort sub-process abort failed.
+    # Include a "warnings" list only when a best-effort sub-process abort failed, and a "notAbortable"
+    # list only when a registered sub-process is of a type VAMS cannot stop.
     body = {'message': "Execution aborted"}
     if warnings:
         body['warnings'] = warnings
+    if not_abortable_subs:
+        body['notAbortable'] = not_abortable_subs
     return success(body=body)
 
 
@@ -3807,6 +3859,36 @@ def _list_deadline_sessions_cached(farm_id, queue_id, job_id):
     return result
 
 
+SAGEMAKER_CLIENT_UNAVAILABLE = "SageMaker client unavailable"
+
+
+def _describe_sagemaker_cached(key, describe, fields):
+    """One SageMaker Describe* call per invocation per registered ARN: (described, errorCode).
+    `describe(client)` performs the call; only `fields` of the response are kept, so a training job's
+    hyperparameters and a pipeline execution's parameters never reach the memo or the response.
+    `described` is None when the call failed or the client is unavailable in this partition, in which
+    case `errorCode` names the failure and is "" otherwise. Best-effort: never raises; a failure is
+    memoised too."""
+    cached = _sagemaker_describe_cache.get(key)
+    if cached is not None:
+        return cached
+    if sagemaker_client is None:
+        result = (None, SAGEMAKER_CLIENT_UNAVAILABLE)
+        _sagemaker_describe_cache[key] = result
+        return result
+    try:
+        resp = describe(sagemaker_client)
+    except Exception as e:
+        logger.info(f"SageMaker describe failed for {key} (non-critical): {e}")
+        result = (None, _error_code(e))
+        _sagemaker_describe_cache[key] = result
+        return result
+    resp = resp if isinstance(resp, dict) else {}
+    result = ({field: resp.get(field) for field in fields}, "")
+    _sagemaker_describe_cache[key] = result
+    return result
+
+
 def _resolve_sfn_log_group_arn(state_machine_arn):
     """Resolve a Step Functions state machine's CloudWatch log group ARN from its logging
     configuration, so a registered sub-SFN's logs can be read even when the pipeline reported only
@@ -3829,8 +3911,10 @@ def _sub_execution_summary(sub):
     the per-request batch:DescribeJobs memo, its status folded onto the execution vocabulary and its
     container log stream kept; a Deadline Cloud job is described through the per-request
     deadline:GetJob memo, its task-run and lifecycle statuses folded onto the vocabulary and its farm,
-    queue and job ids kept (ids only — never the job's parameters, which carry the task token); any
-    other type is reported UNKNOWN. Dates are ISO strings at capture — the detail view's byte budget
+    queue and job ids kept (ids only — never the job's parameters, which carry the task token); a
+    SageMaker training job or pipeline execution is described through the per-request SageMaker memo,
+    its status folded onto the vocabulary and its name or ARN kept (never its hyperparameters or
+    pipeline parameters); any other type is reported UNKNOWN with `abortable` false. Dates are ISO strings at capture — the detail view's byte budget
     serialises this block before the response encoder runs, and that encoder handles only Decimal.
     Every AWS failure becomes a warning string; nothing here raises. `stages` and the stage
     bookkeeping start empty; _sub_execution_stages fills them for Step Functions executions."""
@@ -3840,6 +3924,9 @@ def _sub_execution_summary(sub):
         "resourceType": resource_type,
         "label": sub.get("label", "") or "",
         "stageName": sub.get("stageName", "") or "",
+        # Whether VAMS can stop this type on abort. Rendered as a note on the sub-process card and
+        # mirrored by the abort response's `notAbortable` list.
+        "abortable": resource_type in ABORTABLE_RESOURCE_TYPES,
         "resourceName": "",
         "status": ses.STATUS_UNKNOWN,
         "startDate": "",
@@ -3917,6 +4004,55 @@ def _sub_execution_summary(sub):
         summary["startDate"] = ses.iso_utc(job.get("startedAt"))
         summary["stopDate"] = ses.iso_utc(job.get("endedAt"))
         summary["cause"] = redact_log_text(job.get("lifecycleStatusMessage") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        return summary, warnings
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB:
+        training_job_arn = str(sub.get("trainingJobArn", "") or "")
+        job_name = ses.sagemaker_training_job_name_from_arn(training_job_arn)
+        summary["resourceName"] = job_name or training_job_arn
+        if not training_job_arn:
+            return summary, warnings
+        summary["sageMaker"] = {"trainingJobName": job_name, "trainingJobArn": training_job_arn}
+        if not job_name:
+            warnings.append(f"SageMaker training job status unavailable for {training_job_arn}: its "
+                            f"registration is not a training-job ARN")
+            return summary, warnings
+        job, error_code = _describe_sagemaker_cached(
+            training_job_arn, lambda client: client.describe_training_job(TrainingJobName=job_name),
+            ("TrainingJobName", "TrainingJobStatus", "TrainingStartTime", "TrainingEndTime",
+             "FailureReason"))
+        if error_code or job is None:
+            warnings.append(f"SageMaker training job status unavailable for {job_name}: "
+                            f"{error_code or 'no job described'}")
+            return summary, warnings
+        summary["status"] = ses.map_sagemaker_training_status(job.get("TrainingJobStatus", ""))
+        summary["resourceName"] = job.get("TrainingJobName") or job_name
+        summary["startDate"] = ses.iso_utc(job.get("TrainingStartTime"))
+        summary["stopDate"] = ses.iso_utc(job.get("TrainingEndTime"))
+        summary["cause"] = redact_log_text(job.get("FailureReason") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        return summary, warnings
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION:
+        pipeline_execution_arn = str(sub.get("pipelineExecutionArn", "") or "")
+        summary["resourceName"] = pipeline_execution_arn.split("/")[-1] if pipeline_execution_arn else ""
+        if not pipeline_execution_arn:
+            return summary, warnings
+        summary["sageMaker"] = {"pipelineExecutionArn": pipeline_execution_arn}
+        execution, error_code = _describe_sagemaker_cached(
+            pipeline_execution_arn,
+            lambda client: client.describe_pipeline_execution(
+                PipelineExecutionArn=pipeline_execution_arn),
+            ("PipelineExecutionDisplayName", "PipelineExecutionStatus", "CreationTime",
+             "LastModifiedTime", "FailureReason"))
+        if error_code or execution is None:
+            warnings.append(f"SageMaker pipeline execution status unavailable for "
+                            f"{summary['resourceName']}: {error_code or 'no execution described'}")
+            return summary, warnings
+        summary["status"] = ses.map_sagemaker_pipeline_status(
+            execution.get("PipelineExecutionStatus", ""))
+        summary["resourceName"] = execution.get("PipelineExecutionDisplayName") or summary["resourceName"]
+        summary["startDate"] = ses.iso_utc(execution.get("CreationTime"))
+        if summary["status"] in (ses.STATUS_SUCCEEDED, ses.STATUS_FAILED, ses.STATUS_ABORTED):
+            summary["stopDate"] = ses.iso_utc(execution.get("LastModifiedTime"))
+        summary["cause"] = redact_log_text(execution.get("FailureReason") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
         return summary, warnings
     return summary, warnings
 
@@ -5466,6 +5602,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     _batch_job_describe_cache.clear()
     _deadline_job_cache.clear()
     _deadline_sessions_cache.clear()
+    _sagemaker_describe_cache.clear()
     _disarm_authz_entity_budget()
 
     try:

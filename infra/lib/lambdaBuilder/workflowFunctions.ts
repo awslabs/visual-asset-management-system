@@ -52,6 +52,15 @@ const BACKEND_GENERATED_NAME_PATTERN = "vams-*";
 // log-read scope for sub-executions is account/region-wide on Step Functions executions.
 const PIPELINE_SUB_STATE_MACHINE_PATTERN = "*";
 
+// One sentence, shared by the abort and failure paths: cdk-nag stamps a reason onto every resource it
+// applies to, so its length is a template-body cost (see infra/CLAUDE.md, API stack ceilings).
+const SAGEMAKER_SUB_PROCESS_NAG_REASON =
+    "SageMaker job and pipeline-execution names are recorded on execution registration rows at run " +
+    "time rather than known at deploy time, so the Stop (and Describe) actions are scoped to this " +
+    "account and Region's training-job and pipeline-execution namespaces and the handler only ever " +
+    "passes an ARN read from a registration row on the execution being aborted or read (ARCC BSC6 " +
+    "cnt_aYRj0iNeXVuaiu).";
+
 export function buildExecutionServiceFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -234,6 +243,41 @@ export function buildExecutionServiceFunction(
             true
         );
     }
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Stop a SageMaker training job or pipeline execution a pipeline registered as an abortable
+            // sub-process, and describe either for the execution details view. Job and pipeline
+            // execution names are recorded on registration rows at run time, so the resources are this
+            // account and Region's training-job and pipeline-execution namespaces; the handler only
+            // ever passes an ARN read from a registration row on the execution being aborted or read.
+            actions: [
+                "sagemaker:StopTrainingJob",
+                "sagemaker:StopPipelineExecution",
+                "sagemaker:DescribeTrainingJob",
+                "sagemaker:DescribePipelineExecution",
+            ],
+            resources: [
+                `arn:${Partition()}:sagemaker:${config.env.region}:${
+                    config.env.account
+                }:training-job/*`,
+                `arn:${Partition()}:sagemaker:${config.env.region}:${
+                    config.env.account
+                }:pipeline/*/execution/*`,
+            ],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: SAGEMAKER_SUB_PROCESS_NAG_REASON,
+                appliesTo: [{ regex: "/^Resource::arn:.*:sagemaker:.*$/g" }],
+            },
+        ],
+        true
+    );
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -569,6 +613,34 @@ export function buildHandleExecutionErrorFunction(
             actions: ["batch:TerminateJob"],
             resources: ["*"],
         })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Stop a SageMaker training job or pipeline execution a pipeline this failure is about to
+            // stamp terminal registered as its sub-process. Scoped exactly as the abort path's grant is:
+            // the two share the stop implementation and act on the same registration rows.
+            actions: ["sagemaker:StopTrainingJob", "sagemaker:StopPipelineExecution"],
+            resources: [
+                `arn:${Partition()}:sagemaker:${config.env.region}:${
+                    config.env.account
+                }:training-job/*`,
+                `arn:${Partition()}:sagemaker:${config.env.region}:${
+                    config.env.account
+                }:pipeline/*/execution/*`,
+            ],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: SAGEMAKER_SUB_PROCESS_NAG_REASON,
+                appliesTo: [{ regex: "/^Resource::arn:.*:sagemaker:.*$/g" }],
+            },
+        ],
+        true
     );
     // Gated the same way the abort path's grant is: with the execution type disabled no pipeline can
     // be registered as DeadlineCloud, so no failing execution can hold a job to cancel.

@@ -283,6 +283,38 @@ class TestRegistrationInputValidation:
             }), MagicMock())
         table.update_item.assert_not_called()
 
+    def _registered_sub(self, sub_execution):
+        row = {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "e1000000000000000000000000000001",
+               "registeredSubExecutions": [], "registeredLogs": []}
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        with patch.object(reg, "validate", _REAL_VALIDATE), \
+             patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(self._event({
+                "pipelineExecutionId": "Pvalid123", "subExecution": sub_execution}), MagicMock())
+        return table.update_item.call_args.kwargs["ExpressionAttributeValues"][":s"][0]
+
+    def test_sagemaker_locators_are_stored(self):
+        # The two SageMaker types are located by an ARN each; the abort path stops a training job by
+        # the name parsed from its ARN, so the ARN itself is what has to survive registration.
+        training = self._registered_sub({
+            "resourceType": "sageMakerTrainingJob", "stageName": "Train", "label": "Mock training",
+            "trainingJobArn": "arn:aws:sagemaker:us-east-1:123456789012:training-job/mock-0001"})
+        assert training["trainingJobArn"].endswith(":training-job/mock-0001")
+        assert training["stageName"] == "Train" and training["label"] == "Mock training"
+        pipeline = self._registered_sub({
+            "resourceType": "sageMakerPipelineExecution",
+            "pipelineExecutionArn":
+                "arn:aws:sagemaker:us-east-1:123456789012:pipeline/mock/execution/a1b2c3"})
+        assert pipeline["pipelineExecutionArn"].endswith(":pipeline/mock/execution/a1b2c3")
+
+    def test_a_foreign_resource_type_keeps_its_locator_label_and_stage(self):
+        # A type VAMS cannot stop (an external bridge's own compute) is stored as reported, so the
+        # detail view can name it by label and stage and the abort response can list it.
+        sub = self._registered_sub({"resourceType": "slurmJob", "jobId": "slurm-00001",
+                                    "label": "Mock Slurm job", "stageName": "MockTrain"})
+        assert sub == {"resourceType": "slurmJob", "jobId": "slurm-00001",
+                       "label": "Mock Slurm job", "stageName": "MockTrain"}
+
     def test_invalid_pipeline_execution_id_ignored(self):
         # A malformed pipelineExecutionId (DynamoDB key) is rejected before any query/write.
         table = MagicMock()

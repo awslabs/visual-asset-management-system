@@ -284,6 +284,56 @@ describe("executionService log read grant", () => {
 });
 
 /* ------------------------------------------------------------------------------------------------ *
+ * Enabler 7 — SageMaker sub-process grants
+ * ------------------------------------------------------------------------------------------------ */
+
+describe("SageMaker sub-process grants", () => {
+    const STOPS = ["sagemaker:StopTrainingJob", "sagemaker:StopPipelineExecution"];
+    const DESCRIBES = ["sagemaker:DescribeTrainingJob", "sagemaker:DescribePipelineExecution"];
+    const expected = (s: SynthResult) =>
+        [
+            `arn:${s.partition}:sagemaker:${s.region}:123456789012:training-job/*`,
+            `arn:${s.partition}:sagemaker:${s.region}:123456789012:pipeline/*/execution/*`,
+        ].sort();
+
+    test.each(ALL_TEMPLATES)(
+        "%s executionService stops and describes in its own partition",
+        (name) => {
+            const s = synth(name);
+            const statements = lambdaRoleStatements(s, "executionService");
+            for (const action of [...STOPS, ...DESCRIBES]) {
+                expect(resourcesFor(statements, action).sort()).toEqual(expected(s));
+            }
+        }
+    );
+
+    test.each(ALL_TEMPLATES)("%s handleExecutionError stops only", (name) => {
+        const s = synth(name);
+        const statements = lambdaRoleStatements(s, "handleExecutionError");
+        for (const action of STOPS) {
+            expect(resourcesFor(statements, action).sort()).toEqual(expected(s));
+        }
+        for (const action of DESCRIBES) {
+            expect(resourcesFor(statements, action)).toEqual([]);
+        }
+    });
+
+    test.each(ALL_TEMPLATES)("%s grants no bare wildcard on any SageMaker action", (name) => {
+        const s = synth(name);
+        const all = ["executionService", "handleExecutionError"].flatMap((id) =>
+            [...STOPS, ...DESCRIBES].flatMap((action) =>
+                resourcesFor(lambdaRoleStatements(s, id), action)
+            )
+        );
+        expectAbsent(
+            "bare * on a SageMaker action",
+            all.filter((r) => r === "*"),
+            { description: "SageMaker grants exist", count: all.length }
+        );
+    });
+});
+
+/* ------------------------------------------------------------------------------------------------ *
  * Enabler 1 — SSM integration surface
  * ------------------------------------------------------------------------------------------------ */
 

@@ -33,6 +33,7 @@ import json
 from customLogging.logger import safeLogger
 
 from common.workflows import executionRecords as er
+from common.workflows import subExecutionStages as ses
 
 logger = safeLogger(service_name="ExecutionOutputs")
 
@@ -49,6 +50,17 @@ RESOURCE_TYPE_BATCH_JOB = "batchJob"
 # A Deadline Cloud farm job the workflow submitted through createJob.waitForTaskToken. Step Functions
 # owns the token and not the job, so stopping the execution leaves the job running on the farm.
 RESOURCE_TYPE_DEADLINE_CLOUD_JOB = "deadlineCloudJob"
+# A SageMaker training job and a SageMaker pipeline execution a pipeline registered in the deployment
+# account. Both are stopped by name/ARN through the SageMaker API; a bridge that owns them in another
+# account registers them for display and stops them itself.
+RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB = "sageMakerTrainingJob"
+RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION = "sageMakerPipelineExecution"
+
+# Resource types the abort and failure paths can stop. A registered sub-process of any other type is
+# tracked and displayed but left running when its execution is aborted, and the abort response names it.
+ABORTABLE_RESOURCE_TYPES = frozenset((
+    RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION, RESOURCE_TYPE_BATCH_JOB, RESOURCE_TYPE_DEADLINE_CLOUD_JOB,
+    RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB, RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION))
 
 # The reserved job parameter DeadlineCloudTaskBuilder injects that names the VAMS pipeline execution a
 # farm job belongs to. Deadline stores every job parameter as {"string": "<value>"}.
@@ -428,7 +440,8 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
                     f"the {status} finalization write was skipped")
 
 
-def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadline_client=None):
+def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadline_client=None,
+                                sagemaker_client=None):
     """Best-effort stop of one registered sub-process. Dispatches on the entry's resourceType and
     returns a message describing what could NOT be stopped, or "" when nothing needs surfacing
     (stopped cleanly, already finished, no actionable locator, or no client for that type).
@@ -495,8 +508,46 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadlin
                 return ""
             return (f"Sub-process stop failed for Deadline Cloud job {job_id}: "
                     f"{_error_code(e) or e}; it may still be running on the farm.")
-    locator = (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
-               or sub.get("taskArn") or sub.get("arn") or resource_type)
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB:
+        # StopTrainingJob takes the job NAME; the registration records the ARN. A job the pipeline
+        # registered keeps its instance running after the parent state machine stops, so it is stopped
+        # explicitly. No client (a deployment without the grant) is named rather than passed over.
+        training_job_arn = sub.get("trainingJobArn", "")
+        if not training_job_arn:
+            return ""
+        job_name = ses.sagemaker_training_job_name_from_arn(training_job_arn)
+        if not job_name:
+            return (f"Sub-process stop failed for SageMaker training job {training_job_arn}: its "
+                    "registration is not a training-job ARN, so it could not be stopped; it may still "
+                    "be running.")
+        if sagemaker_client is None:
+            return (f"Sub-process stop failed for SageMaker training job {job_name}: SageMaker is not "
+                    "available in this deployment, so it could not be stopped; it may still be running.")
+        try:
+            sagemaker_client.stop_training_job(TrainingJobName=job_name)
+            return ""
+        except Exception as e:
+            if _is_benign_sagemaker_stop_error(e):
+                return ""
+            return (f"Sub-process stop failed for SageMaker training job {job_name}: "
+                    f"{_error_code(e) or e}; it may still be running.")
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION:
+        pipeline_execution_arn = sub.get("pipelineExecutionArn", "")
+        if not pipeline_execution_arn:
+            return ""
+        if sagemaker_client is None:
+            return (f"Sub-process stop failed for SageMaker pipeline execution {pipeline_execution_arn}: "
+                    "SageMaker is not available in this deployment, so it could not be stopped; it may "
+                    "still be running.")
+        try:
+            sagemaker_client.stop_pipeline_execution(PipelineExecutionArn=pipeline_execution_arn)
+            return ""
+        except Exception as e:
+            if _is_benign_sagemaker_stop_error(e):
+                return ""
+            return (f"Sub-process stop failed for SageMaker pipeline execution {pipeline_execution_arn}: "
+                    f"{_error_code(e) or e}; it may still be running.")
+    locator = sub_process_locator(sub)
     return (f"Sub-process of type '{resource_type}' ({locator}) could not be stopped: stopping this "
             "resource type is not supported; it may still be running.")
 
@@ -521,6 +572,39 @@ def _is_benign_cancel_error(error):
     when a run completes as it is being cancelled, which leaves nothing running to report."""
     code = _error_code(error) or type(error).__name__
     return code in ("ConflictException", "ResourceNotFoundException")
+
+
+# The phrases SageMaker puts in a ValidationException / ConflictException message when a Stop* call
+# meets a job or pipeline execution that has already finished or is already stopping — the normal race
+# when a run completes as it is being stopped. Any other message is a real failure and is reported.
+_SAGEMAKER_ALREADY_STOPPED_PHRASES = ("is not in progress", "is not in a stoppable state",
+                                      "already stopped", "is already in status stopping",
+                                      "already stopping", "status is stopping", "has already completed",
+                                      "is in terminal status")
+
+
+def _is_benign_sagemaker_stop_error(error):
+    """Whether a StopTrainingJob / StopPipelineExecution failure means the resource is already gone or
+    already stopped or stopping: ResourceNotFound, or a ValidationException / ConflictException whose
+    message says so. Anything else — a denied permission above all — is a real failure."""
+    code = _error_code(error) or type(error).__name__
+    if code in ("ResourceNotFound", "ResourceNotFoundException"):
+        return True
+    if code not in ("ValidationException", "ConflictException"):
+        return False
+    message = str(((getattr(error, "response", None) or {}).get("Error") or {}).get("Message", "")
+                  or error).lower()
+    return any(phrase in message for phrase in _SAGEMAKER_ALREADY_STOPPED_PHRASES)
+
+
+def sub_process_locator(sub):
+    """The identifier a registered sub-process is best named by in a message or a response: the first
+    locator key the registration carries, else its resourceType."""
+    sub = sub or {}
+    return (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
+            or sub.get("trainingJobArn") or sub.get("pipelineExecutionArn")
+            or sub.get("taskArn") or sub.get("arn")
+            or sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION)
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +753,8 @@ def _unregistered_deadline_job_warning(prow, deadline_client, get_pipeline_defin
 
 
 def stop_registered_sub_processes(pipeline_rows, sfn_client=None, batch_client=None,
-                                  deadline_client=None, get_pipeline_definition=None):
+                                  deadline_client=None, get_pipeline_definition=None,
+                                  sagemaker_client=None):
     """Stop every sub-process registered by a non-terminal pipeline row. Returns the list of messages
     for the ones that could not be stopped, so the caller can record what was left running.
 
@@ -685,7 +770,7 @@ def stop_registered_sub_processes(pipeline_rows, sfn_client=None, batch_client=N
         for sub in prow.get("registeredSubExecutions", []) or []:
             message = stop_registered_sub_process(
                 sub or {}, sfn_client=sfn_client, batch_client=batch_client,
-                deadline_client=deadline_client)
+                deadline_client=deadline_client, sagemaker_client=sagemaker_client)
             if message:
                 warnings.append(message)
         message = _unregistered_deadline_job_warning(
@@ -697,7 +782,8 @@ def stop_registered_sub_processes(pipeline_rows, sfn_client=None, batch_client=N
 
 def mark_inflight_pipelines_terminal(dynamo, pipeline_executions_table, pipeline_rows,
                                      status, stop_date, sfn_client=None, batch_client=None,
-                                     deadline_client=None, get_pipeline_definition=None):
+                                     deadline_client=None, get_pipeline_definition=None,
+                                     sagemaker_client=None):
     """Set every non-terminal pipeline row to `status` + stop_date (used by the error handler to fail
     in-flight pipelines), stopping each row's registered sub-processes FIRST.
 
@@ -707,7 +793,8 @@ def mark_inflight_pipelines_terminal(dynamo, pipeline_executions_table, pipeline
     caller with no stop permissions still reconciles the rows."""
     warnings = stop_registered_sub_processes(
         pipeline_rows, sfn_client=sfn_client, batch_client=batch_client,
-        deadline_client=deadline_client, get_pipeline_definition=get_pipeline_definition)
+        deadline_client=deadline_client, get_pipeline_definition=get_pipeline_definition,
+        sagemaker_client=sagemaker_client)
     for prow in pipeline_rows:
         if prow.get("executionStatus", "") in TERMINAL_STATUSES:
             continue
