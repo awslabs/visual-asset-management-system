@@ -171,6 +171,21 @@ def sagemaker_training_job_name_from_arn(arn):
     return name if name and "/" not in name else ""
 
 
+def sagemaker_pipeline_execution_ids_from_arn(arn):
+    """arn:p:sagemaker:r:a:pipeline/<name>/execution/<id> -> (<name>, <id>); ("", "") when the value is
+    not a pipeline-execution ARN. The summary names an execution by these two tails and never by the
+    ARN, which carries the account id and Region."""
+    marker = ":pipeline/"
+    value = str(arn or "")
+    index = value.find(marker)
+    if index == -1:
+        return "", ""
+    parts = value[index + len(marker):].split("/")
+    if len(parts) != 3 or parts[1] != "execution" or not parts[0] or not parts[2]:
+        return "", ""
+    return parts[0], parts[2]
+
+
 MAX_SUB_STAGES_REPORTED_DEFAULT = 50
 MAX_SUB_STAGE_DEPTH_DEFAULT = 3
 

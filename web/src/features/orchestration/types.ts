@@ -302,16 +302,14 @@ export interface SubExecution {
     /** The registered AWS Deadline Cloud job's farm, queue, and job ids, when resourceType is
      *  `deadlineCloudJob`. */
     deadline?: { farmId?: string; queueId?: string; jobId?: string };
-    /** The registered SageMaker training job's name and ARN, or pipeline execution's ARN, when
-     *  resourceType is `sageMakerTrainingJob` or `sageMakerPipelineExecution`. */
-    sageMaker?: {
-        trainingJobName?: string;
-        trainingJobArn?: string;
-        pipelineExecutionArn?: string;
-    };
+    /** The registered SageMaker training job's name, or pipeline execution's pipeline name and
+     *  execution id, when resourceType is `sageMakerTrainingJob` or `sageMakerPipelineExecution`.
+     *  Names and ids only, never an ARN. */
+    sageMaker?: { trainingJobName?: string; pipelineName?: string; pipelineExecutionId?: string };
 }
 
-/** A registered sub-process of a type VAMS cannot stop, as the abort response lists it. */
+/** A registered sub-process of a type VAMS cannot stop, as the abort response lists it. `locator` is
+ *  the registered id, or the final segment of a registered ARN — never the ARN itself. */
 export interface NotAbortableSubExecution {
     resourceType: string;
     label?: string;

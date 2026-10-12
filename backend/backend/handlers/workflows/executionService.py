@@ -1532,7 +1532,7 @@ def _not_abortable_entry(sub):
         "resourceType": str(resource_type),
         "label": str(sub.get("label", "") or ""),
         "stageName": str(sub.get("stageName", "") or ""),
-        "locator": str(eo.sub_process_locator(sub)),
+        "locator": str(eo.sub_process_display_locator(sub)),
     }
 
 
@@ -1837,8 +1837,10 @@ def abort_execution(event, execution_id):
             if warning:
                 warnings.append(warning)
             not_abortable = _not_abortable_entry(sub)
-            if not_abortable and not_abortable["locator"] not in not_abortable_locators:
-                not_abortable_locators.add(not_abortable["locator"])
+            # Deduplicated on the registered locator itself, not the display tail the entry carries.
+            registered_locator = str(eo.sub_process_locator(sub))
+            if not_abortable and registered_locator not in not_abortable_locators:
+                not_abortable_locators.add(registered_locator)
                 not_abortable_subs.append(not_abortable)
 
         # A DeadlineCloud step whose job was never REGISTERED still has a live job on the farm.
@@ -3913,9 +3915,10 @@ def _sub_execution_summary(sub):
     deadline:GetJob memo, its task-run and lifecycle statuses folded onto the vocabulary and its farm,
     queue and job ids kept (ids only — never the job's parameters, which carry the task token); a
     SageMaker training job or pipeline execution is described through the per-request SageMaker memo,
-    its status folded onto the vocabulary and its name or ARN kept (never its hyperparameters or
-    pipeline parameters); any other type is reported UNKNOWN with `abortable` false. Dates are ISO strings at capture — the detail view's byte budget
-    serialises this block before the response encoder runs, and that encoder handles only Decimal.
+    its status folded onto the vocabulary and its name or id tails kept (never the ARN, which carries the
+    account id and Region, and never its hyperparameters or pipeline parameters); any other type is
+    reported UNKNOWN with `abortable` false. Dates are ISO strings at capture — the detail view's byte
+    budget serialises this block before the response encoder runs, and that encoder handles only Decimal.
     Every AWS failure becomes a warning string; nothing here raises. `stages` and the stage
     bookkeeping start empty; _sub_execution_stages fills them for Step Functions executions."""
     sub = sub or {}
@@ -4008,13 +4011,14 @@ def _sub_execution_summary(sub):
     if resource_type == RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB:
         training_job_arn = str(sub.get("trainingJobArn", "") or "")
         job_name = ses.sagemaker_training_job_name_from_arn(training_job_arn)
-        summary["resourceName"] = job_name or training_job_arn
+        summary["resourceName"] = job_name
         if not training_job_arn:
             return summary, warnings
-        summary["sageMaker"] = {"trainingJobName": job_name, "trainingJobArn": training_job_arn}
+        # The name only: the ARN carries the account id and Region, which no sub-process summary exposes.
+        summary["sageMaker"] = {"trainingJobName": job_name}
         if not job_name:
-            warnings.append(f"SageMaker training job status unavailable for {training_job_arn}: its "
-                            f"registration is not a training-job ARN")
+            warnings.append("SageMaker training job status unavailable: its registration is not a "
+                            "training-job ARN")
             return summary, warnings
         job, error_code = _describe_sagemaker_cached(
             training_job_arn, lambda client: client.describe_training_job(TrainingJobName=job_name),
@@ -4032,10 +4036,16 @@ def _sub_execution_summary(sub):
         return summary, warnings
     if resource_type == RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION:
         pipeline_execution_arn = str(sub.get("pipelineExecutionArn", "") or "")
-        summary["resourceName"] = pipeline_execution_arn.split("/")[-1] if pipeline_execution_arn else ""
+        pipeline_name, execution_id = ses.sagemaker_pipeline_execution_ids_from_arn(pipeline_execution_arn)
+        summary["resourceName"] = execution_id
         if not pipeline_execution_arn:
             return summary, warnings
-        summary["sageMaker"] = {"pipelineExecutionArn": pipeline_execution_arn}
+        # Pipeline name and execution id tails only; the ARN stays on the registration row.
+        summary["sageMaker"] = {"pipelineName": pipeline_name, "pipelineExecutionId": execution_id}
+        if not execution_id:
+            warnings.append("SageMaker pipeline execution status unavailable: its registration is not a "
+                            "pipeline-execution ARN")
+            return summary, warnings
         execution, error_code = _describe_sagemaker_cached(
             pipeline_execution_arn,
             lambda client: client.describe_pipeline_execution(
@@ -4043,12 +4053,12 @@ def _sub_execution_summary(sub):
             ("PipelineExecutionDisplayName", "PipelineExecutionStatus", "CreationTime",
              "LastModifiedTime", "FailureReason"))
         if error_code or execution is None:
-            warnings.append(f"SageMaker pipeline execution status unavailable for "
-                            f"{summary['resourceName']}: {error_code or 'no execution described'}")
+            warnings.append(f"SageMaker pipeline execution status unavailable for {execution_id}: "
+                            f"{error_code or 'no execution described'}")
             return summary, warnings
         summary["status"] = ses.map_sagemaker_pipeline_status(
             execution.get("PipelineExecutionStatus", ""))
-        summary["resourceName"] = execution.get("PipelineExecutionDisplayName") or summary["resourceName"]
+        summary["resourceName"] = execution.get("PipelineExecutionDisplayName") or execution_id
         summary["startDate"] = ses.iso_utc(execution.get("CreationTime"))
         if summary["status"] in (ses.STATUS_SUCCEEDED, ses.STATUS_FAILED, ses.STATUS_ABORTED):
             summary["stopDate"] = ses.iso_utc(execution.get("LastModifiedTime"))

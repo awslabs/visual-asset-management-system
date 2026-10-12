@@ -598,13 +598,24 @@ def _is_benign_sagemaker_stop_error(error):
 
 
 def sub_process_locator(sub):
-    """The identifier a registered sub-process is best named by in a message or a response: the first
-    locator key the registration carries, else its resourceType."""
+    """The identifier a registered sub-process is best named by in a log line or a stop message: the
+    first locator key the registration carries, else its resourceType."""
     sub = sub or {}
     return (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
             or sub.get("trainingJobArn") or sub.get("pipelineExecutionArn")
             or sub.get("taskArn") or sub.get("arn")
             or sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION)
+
+
+def sub_process_display_locator(sub):
+    """The identifier a registered sub-process is named by in an API response: the same as
+    `sub_process_locator`, except that an ARN is reduced to its final path or colon segment so the
+    account id and Region it carries never reach a client."""
+    locator = str(sub_process_locator(sub))
+    if not locator.startswith("arn:"):
+        return locator
+    tail = locator.split("/")[-1]
+    return tail.split(":")[-1] if tail == locator else tail
 
 
 # ---------------------------------------------------------------------------

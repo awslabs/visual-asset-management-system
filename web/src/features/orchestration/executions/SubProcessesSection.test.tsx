@@ -247,11 +247,7 @@ describe("SubProcessesSection", () => {
                         abortable: true,
                         stageSource: "none",
                         stages: undefined,
-                        sageMaker: {
-                            trainingJobName: "mock-train-0001",
-                            trainingJobArn:
-                                "arn:aws:sagemaker:us-east-1:123456789012:training-job/mock-train-0001",
-                        },
+                        sageMaker: { trainingJobName: "mock-train-0001" },
                     }),
                     sub({
                         resourceType: "sageMakerPipelineExecution",
@@ -261,10 +257,7 @@ describe("SubProcessesSection", () => {
                         abortable: true,
                         stageSource: "none",
                         stages: undefined,
-                        sageMaker: {
-                            pipelineExecutionArn:
-                                "arn:aws:sagemaker:us-east-1:123456789012:pipeline/mock/execution/a1b2",
-                        },
+                        sageMaker: { pipelineName: "mock", pipelineExecutionId: "a1b2" },
                     }),
                 ]}
             />
@@ -276,8 +269,10 @@ describe("SubProcessesSection", () => {
         ).toBeInTheDocument();
         expect(within(pipeline).getByText(/^SageMaker pipeline execution ·/)).toBeInTheDocument();
         expect(
-            within(pipeline).getByText(/^SageMaker pipeline execution arn:aws:sagemaker/)
+            within(pipeline).getByText("SageMaker pipeline execution a1b2 · pipeline mock")
         ).toBeInTheDocument();
+        // Names and ids only — no ARN (and so no account id or Region) reaches the card.
+        expect(screen.queryByText(/arn:/)).toBeNull();
         expect(screen.queryByText(/VAMS cannot stop this type of sub-process/)).toBeNull();
     });
 });

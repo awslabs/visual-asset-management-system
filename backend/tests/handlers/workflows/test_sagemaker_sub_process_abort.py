@@ -242,9 +242,20 @@ class TestTheAbortPathStopsSageMaker:
             "locator": "slurm-00001"}
 
     def test_an_unknown_type_with_only_a_generic_arn_or_nothing_still_has_a_locator(self):
-        assert es._not_abortable_entry({"resourceType": "ecsTask", "arn": "arn:x"})["locator"] == "arn:x"
+        # An ARN locator is reduced to its final segment for the response: the account id and Region
+        # it carries never reach a client (D3). A non-ARN locator is returned as registered.
+        assert es._not_abortable_entry({"resourceType": "ecsTask", "arn": "arn:x"})["locator"] == "x"
+        assert es._not_abortable_entry({
+            "resourceType": "ecsTask",
+            "taskArn": f"arn:aws:ecs:us-east-1:{ACCOUNT}:task/cluster/0123abcd"})["locator"] == "0123abcd"
+        assert es._not_abortable_entry({
+            "resourceType": "kubernetesJob",
+            "arn": f"arn:aws:eks:us-east-1:{ACCOUNT}:cluster/c1"})["locator"] == "c1"
         assert es._not_abortable_entry({"resourceType": "ecsTask"})["locator"] == "ecsTask"
         assert es._not_abortable_entry({"resourceType": "ecsTask"})["label"] == ""
+        # The display helper itself, on the shapes the stop helper names in its messages.
+        assert eo.sub_process_display_locator({"executionArn": "arn:aws:states:us-east-1:1:execution:m:run-1"}) == "run-1"
+        assert eo.sub_process_display_locator({"jobId": "slurm-00001"}) == "slurm-00001"
 
 
 def _abort(rows, stopped_subs=None):
@@ -349,12 +360,13 @@ class TestTheSummaryCarriesAbortableAndSageMakerStatus:
         sagemaker.describe_training_job.assert_called_once_with(TrainingJobName=TRAINING_JOB_NAME)
         assert summary["status"] == mapped and warnings == []
         assert summary["resourceName"] == TRAINING_JOB_NAME
-        assert summary["sageMaker"] == {"trainingJobName": TRAINING_JOB_NAME,
-                                        "trainingJobArn": TRAINING_JOB_ARN}
+        assert summary["sageMaker"] == {"trainingJobName": TRAINING_JOB_NAME}
         assert summary["startDate"].startswith("2023-11-14")
-        # Hyperparameters never reach the summary or the memo.
+        # Hyperparameters never reach the summary or the memo, and neither does the ARN: it carries the
+        # account id and Region, which no sub-process summary exposes (D3).
         assert "HyperParameters" not in json.dumps(summary)
         assert "HyperParameters" not in json.dumps(es._sagemaker_describe_cache)
+        assert ACCOUNT not in json.dumps(summary) and "arn:" not in json.dumps(summary)
 
     @pytest.mark.parametrize("raw,mapped", [
         ("Executing", "RUNNING"), ("Stopping", "RUNNING"), ("Succeeded", "SUCCEEDED"),
@@ -370,9 +382,11 @@ class TestTheSummaryCarriesAbortableAndSageMakerStatus:
             PipelineExecutionArn=PIPELINE_EXECUTION_ARN)
         assert summary["status"] == mapped and warnings == []
         assert summary["resourceName"] == "nightly"
-        assert summary["sageMaker"] == {"pipelineExecutionArn": PIPELINE_EXECUTION_ARN}
+        assert summary["sageMaker"] == {"pipelineName": "mock-bridge",
+                                        "pipelineExecutionId": "a1b2c3d4e5f6"}
         assert (summary["stopDate"] != "") is (mapped in ("SUCCEEDED", "FAILED", "ABORTED"))
         assert "PipelineParameters" not in json.dumps(es._sagemaker_describe_cache)
+        assert ACCOUNT not in json.dumps(summary) and "arn:" not in json.dumps(summary)
 
     def test_a_describe_failure_is_a_warning_not_an_error(self):
         sagemaker = MagicMock(describe_training_job=MagicMock(
@@ -400,3 +414,20 @@ class TestTheSummaryCarriesAbortableAndSageMakerStatus:
             f"arn:aws:sagemaker:us-east-1:{ACCOUNT}:model/x") == ""
         assert ses.sagemaker_training_job_name_from_arn(
             f"arn:aws:sagemaker:us-east-1:{ACCOUNT}:training-job/") == ""
+
+    def test_the_pipeline_execution_parser(self):
+        assert ses.sagemaker_pipeline_execution_ids_from_arn(PIPELINE_EXECUTION_ARN) == (
+            "mock-bridge", "a1b2c3d4e5f6")
+        assert ses.sagemaker_pipeline_execution_ids_from_arn("") == ("", "")
+        assert ses.sagemaker_pipeline_execution_ids_from_arn(TRAINING_JOB_ARN) == ("", "")
+        assert ses.sagemaker_pipeline_execution_ids_from_arn(
+            f"arn:aws:sagemaker:us-east-1:{ACCOUNT}:pipeline/mock-bridge") == ("", "")
+
+    def test_a_registration_that_is_not_a_pipeline_execution_arn_is_a_warning(self):
+        bad = dict(PIPELINE_SUB, pipelineExecutionArn=f"arn:aws:sagemaker:us-east-1:{ACCOUNT}:pipeline/x")
+        with patch.object(es, "sagemaker_client", MagicMock()):
+            summary, warnings = es._sub_execution_summary(bad)
+        assert summary["status"] == ses.STATUS_UNKNOWN
+        assert warnings == ["SageMaker pipeline execution status unavailable: its registration is not a "
+                            "pipeline-execution ARN"]
+        assert ACCOUNT not in json.dumps(summary) and ACCOUNT not in json.dumps(warnings)

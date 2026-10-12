@@ -87,18 +87,19 @@ const SubProcessesSection: React.FC<SubProcessesSectionProps> = ({
                                     {sub.deadline.farmId} · queue {sub.deadline.queueId}
                                 </p>
                             )}
-                            {sub.sageMaker &&
-                                (sub.sageMaker.trainingJobArn ||
-                                    sub.sageMaker.pipelineExecutionArn) && (
-                                    <p className="font-mono text-xs text-text-secondary break-all mb-2">
-                                        {sub.sageMaker.trainingJobArn
-                                            ? `SageMaker training job ${
-                                                  sub.sageMaker.trainingJobName ||
-                                                  sub.sageMaker.trainingJobArn
-                                              }`
-                                            : `SageMaker pipeline execution ${sub.sageMaker.pipelineExecutionArn}`}
-                                    </p>
-                                )}
+                            {sub.sageMaker?.trainingJobName && (
+                                <p className="font-mono text-xs text-text-secondary break-all mb-2">
+                                    SageMaker training job {sub.sageMaker.trainingJobName}
+                                </p>
+                            )}
+                            {sub.sageMaker?.pipelineExecutionId && (
+                                <p className="font-mono text-xs text-text-secondary break-all mb-2">
+                                    SageMaker pipeline execution {sub.sageMaker.pipelineExecutionId}
+                                    {sub.sageMaker.pipelineName
+                                        ? ` · pipeline ${sub.sageMaker.pipelineName}`
+                                        : ""}
+                                </p>
+                            )}
                             {sub.abortable === false && (
                                 <Note>
                                     VAMS cannot stop this type of sub-process. Aborting the
