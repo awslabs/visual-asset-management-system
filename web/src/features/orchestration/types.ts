@@ -282,6 +282,8 @@ export interface SubExecution {
     resourceType: string;
     label?: string;
     stageName?: string;
+    /** Whether VAMS can stop this type on abort; `false` for a type it only tracks and displays. */
+    abortable?: boolean;
     /** Name tail of the state machine or job, never its ARN. */
     resourceName?: string;
     status: SubExecutionStatus;
@@ -300,6 +302,21 @@ export interface SubExecution {
     /** The registered AWS Deadline Cloud job's farm, queue, and job ids, when resourceType is
      *  `deadlineCloudJob`. */
     deadline?: { farmId?: string; queueId?: string; jobId?: string };
+    /** The registered SageMaker training job's name and ARN, or pipeline execution's ARN, when
+     *  resourceType is `sageMakerTrainingJob` or `sageMakerPipelineExecution`. */
+    sageMaker?: {
+        trainingJobName?: string;
+        trainingJobArn?: string;
+        pipelineExecutionArn?: string;
+    };
+}
+
+/** A registered sub-process of a type VAMS cannot stop, as the abort response lists it. */
+export interface NotAbortableSubExecution {
+    resourceType: string;
+    label?: string;
+    stageName?: string;
+    locator?: string;
 }
 
 /** One log a pipeline step's logs can be read from; `logId` is what the logs API takes to select it. */

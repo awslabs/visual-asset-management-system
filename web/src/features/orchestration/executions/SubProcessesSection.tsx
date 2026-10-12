@@ -5,6 +5,7 @@
 
 import React from "react";
 import StageTimeline, { StageStatusBadge, durationBetween } from "./StageTimeline";
+import { resourceTypeLabel } from "./resourceTypeLabels";
 import type { SubExecution } from "../types";
 
 interface SubProcessesSectionProps {
@@ -25,9 +26,11 @@ const Note: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 
 /**
  * The sub-processes a pipeline step registered while it ran — its state machine, container jobs, a
- * Deadline Cloud farm job — each with the status resolved for it and, for a state machine, the stage
- * timeline derived from its execution history. Registration is best-effort and the resolution is
- * bounded, so every way the list can be incomplete is stated next to what it qualifies.
+ * Deadline Cloud farm job, a SageMaker job, an external pipeline's own compute — each with the status
+ * resolved for it and, for a state machine, the stage timeline derived from its execution history. A
+ * type VAMS cannot stop is still listed by its label and stage, with a note saying an abort leaves it
+ * running. Registration is best-effort and the resolution is bounded, so every way the list can be
+ * incomplete is stated next to what it qualifies.
  */
 const SubProcessesSection: React.FC<SubProcessesSectionProps> = ({
     subExecutions,
@@ -74,8 +77,8 @@ const SubProcessesSection: React.FC<SubProcessesSectionProps> = ({
                                 <StageStatusBadge status={sub.status} />
                             </div>
                             <p className="text-xs text-text-secondary mb-2">
-                                {sub.resourceType} · {formatDate(sub.startDate)} →{" "}
-                                {formatDate(sub.stopDate)}
+                                {resourceTypeLabel(sub.resourceType)} · {formatDate(sub.startDate)}{" "}
+                                → {formatDate(sub.stopDate)}
                                 {duration ? ` · ${duration}` : ""}
                             </p>
                             {sub.resourceType === "deadlineCloudJob" && sub.deadline && (
@@ -83,6 +86,25 @@ const SubProcessesSection: React.FC<SubProcessesSectionProps> = ({
                                     Deadline Cloud job {sub.deadline.jobId} · farm{" "}
                                     {sub.deadline.farmId} · queue {sub.deadline.queueId}
                                 </p>
+                            )}
+                            {sub.sageMaker &&
+                                (sub.sageMaker.trainingJobArn ||
+                                    sub.sageMaker.pipelineExecutionArn) && (
+                                    <p className="font-mono text-xs text-text-secondary break-all mb-2">
+                                        {sub.sageMaker.trainingJobArn
+                                            ? `SageMaker training job ${
+                                                  sub.sageMaker.trainingJobName ||
+                                                  sub.sageMaker.trainingJobArn
+                                              }`
+                                            : `SageMaker pipeline execution ${sub.sageMaker.pipelineExecutionArn}`}
+                                    </p>
+                                )}
+                            {sub.abortable === false && (
+                                <Note>
+                                    VAMS cannot stop this type of sub-process. Aborting the
+                                    execution leaves it running until its own heartbeat or timeout
+                                    ends it.
+                                </Note>
                             )}
                             {errorText && (
                                 <p className="text-sm text-vams-error whitespace-pre-wrap break-words mb-2">

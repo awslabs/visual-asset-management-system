@@ -1037,6 +1037,37 @@ describe("ExecutionsBoard abort feedback", () => {
         expect(screen.queryByRole("status")).toBeNull();
     });
 
+    it("names the sub-processes VAMS cannot stop ahead of the free-text warnings", async () => {
+        // `notAbortable` is the structured half of the same answer: a registered sub-process whose
+        // type VAMS has no stop API for. It is summarised into one leading line so the operator sees
+        // what was left running by name and stage, not only as a sentence buried in `warnings`.
+        setup(
+            jest.fn().mockResolvedValue({
+                message: "Execution aborted",
+                warnings: [SUBPROCESS_WARNING],
+                notAbortable: [
+                    {
+                        resourceType: "slurmJob",
+                        label: "Mock Slurm job",
+                        stageName: "MockTrain",
+                        locator: "slurm-00001",
+                    },
+                ],
+            })
+        );
+        await clickAbort();
+        const notice = await screen.findByRole("status");
+        expect(notice).toHaveTextContent(
+            "1 sub-process was left running because VAMS cannot stop their type: Mock Slurm job (slurmJob, in MockTrain)."
+        );
+        // The summary leads; the server's own sentence still follows it.
+        expect(notice.textContent!.indexOf("1 sub-process was")).toBeLessThan(
+            notice.textContent!.indexOf("Batch job 1234")
+        );
+        await waitFor(() => expect(mockToast.warning).toHaveBeenCalled());
+        expect(mockToast.warning.mock.calls[0][1].description).toContain("Mock Slurm job");
+    });
+
     it("still reports a failed abort as an error", async () => {
         setup(jest.fn().mockRejectedValue(new Error("execution already terminal")));
         await clickAbort();
