@@ -1250,19 +1250,19 @@ def test_unwrap_message_with_warnings_handles_a_string_message(sibling_warning_c
     assert server._unwrap_message_with_warnings(abort) == abort
 
 
-@pytest.mark.parametrize("tool", ["create_pipeline", "update_pipeline", "unarchive_pipeline"])
-def test_pipeline_saves_preserve_sibling_warnings(tool):
+@pytest.mark.parametrize("tool", ["create_pipeline", "update_pipeline", "unarchive_pipeline", "abort_execution"])
+def test_mutating_tools_preserve_sibling_warnings(tool):
     source = _source_of(tool)
     assert "_unwrap_message_with_warnings" in source, (
-        f"{tool} drops the sibling `warnings` array, so a broken save reports a clean success"
+        f"{tool} drops the sibling `warnings` array, so an incomplete operation reports clean success"
     )
 
 
 @pytest.mark.parametrize(
     "tool",
     # These either nest warnings inside the response model or answer with a string `message`, so
-    # plain unwrapping loses nothing.
-    ["create_workflow", "update_workflow", "execute_workflow", "rerun_execution", "abort_execution"],
+    # plain unwrapping loses nothing. Group abort is excluded: it now has sibling warnings.
+    ["create_workflow", "update_workflow", "execute_workflow", "rerun_execution"],
 )
 def test_non_pipeline_saves_stay_on_plain_unwrap(tool):
     source = _source_of(tool)

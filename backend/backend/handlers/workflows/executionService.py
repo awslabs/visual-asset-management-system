@@ -5364,6 +5364,7 @@ def abort_group(event, group_id):
         return validation_error(status_code=404, body={"message": "No executions found for group"}, event=event)
 
     results = []
+    warnings = []
     skipped_inaccessible = 0
     aborted_this_pass = 0
     more_remaining = False
@@ -5388,6 +5389,9 @@ def abort_group(event, group_id):
             break
         resp = abort_execution(event, execution_id)
         aborted_this_pass += 1
+        if resp.get("statusCode") == 200 and resp.get("body"):
+            member_body = json.loads(resp["body"])
+            warnings.extend(f"{execution_id}: {warning}" for warning in member_body.get("warnings", []))
         results.append({"executionId": execution_id,
                         "status": "aborted" if resp.get("statusCode") == 200 else "error"})
     message = {"groupId": group_id, "results": results}
@@ -5406,7 +5410,8 @@ def abort_group(event, group_id):
         "moreRemaining": bool(more_remaining),
         "operation": "abortGroup",
     })
-    return success(body={"message": message})
+    body = {"message": message, "warnings": warnings} if warnings else {"message": message}
+    return success(body=body)
 
 
 # ---------------------------------------------------------------------------
