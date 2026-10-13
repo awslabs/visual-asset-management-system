@@ -277,6 +277,12 @@ compute and, with `group_id`, fans out across every active execution in that gro
 Keep all three out of `autoApprove`, and confirm a group abort with the user first.
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
 execution's group membership rather than selecting a group to re-run.
+`abort_execution` returns `warnings` and `notAbortable` beside `message` when a
+registered sub-process could not be stopped: each `notAbortable` entry
+(`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no
+stop API for — an externally owned pipeline's own job, say — that keeps running
+after the execution reads ABORTED. Treat a non-empty list as "not everything
+stopped", not as a failed abort.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template

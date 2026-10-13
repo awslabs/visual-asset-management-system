@@ -44,18 +44,48 @@ def _warnings(result: Dict[str, Any]) -> Any:
     return result.get('warnings') if isinstance(result, dict) else None
 
 
+def _not_abortable(result: Dict[str, Any]) -> Any:
+    """The top-level `notAbortable` array an abort returns as a sibling of `message`: the registered
+    sub-processes of a type VAMS cannot stop, each {resourceType, label, stageName, locator}."""
+    return result.get('notAbortable') if isinstance(result, dict) else None
+
+
+def _message_siblings(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Every non-empty top-level key a handler returns BESIDE `message` (`warnings`, `notAbortable`,
+    ...). The envelope is the handler's only copy of these, so unwrapping must carry them all; a
+    field added upstream reaches `--json-output` without a CLI change."""
+    if not isinstance(result, dict):
+        return {}
+    return {key: value for key, value in result.items()
+            if key != 'message' and value not in (None, "", [], {})}
+
+
 def _payload_with_warnings(result: Dict[str, Any]) -> Any:
-    """Unwrap the `message` envelope, carrying any top-level `warnings` into the payload."""
+    """Unwrap the `message` envelope, carrying every top-level sibling of `message` (`warnings`,
+    `notAbortable`, and any later addition) into the payload. Siblings override a same-named key
+    inside `message`, since the envelope is the handler's authoritative copy."""
     message = _message(result)
-    warnings = _warnings(result)
-    if not warnings:
+    siblings = _message_siblings(result)
+    if not siblings:
         return message
     if isinstance(message, dict):
         payload = dict(message)
     else:
         payload = {'message': message}
-    payload['warnings'] = warnings
+    payload.update(siblings)
     return payload
+
+
+def _left_running_line(not_abortable: Any) -> str:
+    """One human-readable line naming what an abort left running because VAMS cannot stop its type:
+    'Left running (VAMS cannot stop these sub-process types): Mock Slurm job (slurmJob, in MockTrain); ...'."""
+    named = []
+    for entry in not_abortable or []:
+        entry = entry if isinstance(entry, dict) else {}
+        name = entry.get('label') or entry.get('locator') or entry.get('resourceType') or '?'
+        stage = f", in {entry['stageName']}" if entry.get('stageName') else ""
+        named.append(f"{name} ({entry.get('resourceType', '?')}{stage})")
+    return "Left running (VAMS cannot stop these sub-process types): " + "; ".join(named)
 
 
 @click.group()
@@ -795,6 +825,9 @@ def abort(ctx: click.Context, execution_id: Optional[str], group_id: Optional[st
             if warnings:
                 out.append("Warnings:")
                 out.extend(f"  - {w}" for w in warnings)
+            not_abortable = _not_abortable(result)
+            if not_abortable:
+                out.append(_left_running_line(not_abortable))
             return '\n'.join(out)
 
         output_result(_payload_with_warnings(result), json_output,

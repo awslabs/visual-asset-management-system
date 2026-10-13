@@ -1750,6 +1750,14 @@ if CONFIG.enable_writes:
         alongside execute_workflow and rerun_execution. Confirm a group abort with the user first.
 
         Pass group_id to abort every active execution in that group.
+
+        A single abort answers `message` plus, when something could not be stopped, two sibling
+        arrays: `warnings` (free text) and `notAbortable` — one {resourceType, label, stageName,
+        locator} per registered sub-process of a type VAMS has no stop API for (an externally owned
+        pipeline's own compute, for example). The execution still reads ABORTED, so do NOT conclude
+        that everything stopped: a non-empty `notAbortable` means that compute is still running until
+        the bridge's own heartbeat or timeout ends it, and the entry names what and where. Both arrays
+        are absent from a clean abort. A group abort reports per-member status only.
         """
         return CLIENT.unwrap_message(CLIENT.api.abort_execution(execution_id, group_id=group_id))
 

@@ -250,6 +250,34 @@ def test_abort_execution_aborts_a_single_run(gated):
     client.api.abort_execution.assert_called_once_with("e1", group_id=None)
 
 
+def test_abort_execution_forwards_warnings_and_not_abortable(gated):
+    """D5 (Pattern 7). An abort that left a sub-process running answers `message` with two sibling
+    arrays, `warnings` and `notAbortable`. A string `message` is not an envelope, so plain unwrapping
+    returns the whole dict — and the agent sees what was left running. Pinned so a later switch to a
+    projection that keeps only `message` cannot silently re-open the gap the CLI had."""
+    server, client = gated
+    not_abortable = [{"resourceType": "slurmJob", "label": "Mock Slurm job",
+                      "stageName": "MockTrain", "locator": "slurm-00001"}]
+    client.api.abort_execution.return_value = {
+        "message": "Execution aborted",
+        "warnings": ["Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"],
+        "notAbortable": not_abortable,
+    }
+    result = server.abort_execution("e1")
+    assert result["message"] == "Execution aborted"
+    assert result["notAbortable"] == not_abortable
+    assert result["warnings"] == ["Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"]
+
+
+def test_abort_execution_docstring_tells_the_agent_what_not_abortable_means(gated):
+    """Rule 8: the tool description is the only place an agent learns not to trust the ABORTED
+    status when `notAbortable` is non-empty."""
+    server, _client = gated
+    doc = server.abort_execution.__doc__ or ""
+    assert "notAbortable" in doc
+    assert "still running" in doc
+
+
 def test_abort_execution_forwards_the_group_id_by_keyword(gated):
     """The group form fans out across every active run in the group. `APIClient.abort_execution`
     takes `group_id` as a keyword; passing it positionally would land in the wrong parameter."""

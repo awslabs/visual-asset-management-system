@@ -51,7 +51,7 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
--   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
+-   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`; `--json-output` carries every top-level sibling of the handler's `message` — `warnings`, `notAbortable` — through `_payload_with_warnings`, so a field added upstream reaches scripts, the MCP server and the connectors without a CLI change), `execution rerun`, `execution permanent-delete`
 
 Comment and subscription cover the comments and subscriptions APIs:
 
