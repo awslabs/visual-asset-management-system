@@ -40,14 +40,17 @@ const OPEN_ENDED_RANGE_START = "1970-01-01T00:00:00Z";
 /**
  * One line naming the registered sub-processes an abort left running because VAMS cannot stop their
  * type: "2 sub-processes were left running because VAMS cannot stop their type: Mock Slurm job
- * (slurmJob, in MockTrain); ...". Rendered ahead of the server's free-text warnings.
+ * (slurmJob, in MockTrain); ...". A group abort's entries carry the member `executionId`, which
+ * prefixes the entry the way the group's warnings are prefixed: "<executionId>: Mock Slurm job
+ * (slurmJob, in MockTrain)". Rendered ahead of the server's free-text warnings.
  */
 export const notAbortableSummary = (entries: NotAbortableSubExecution[]): string => {
     const named = entries.map((e) => {
+        const member = e.executionId ? `${e.executionId}: ` : "";
         const name = e.label || e.locator || e.resourceType;
         const type = resourceTypeLabel(e.resourceType);
         const stage = e.stageName ? `, in ${e.stageName}` : "";
-        return `${name} (${type}${stage})`;
+        return `${member}${name} (${type}${stage})`;
     });
     const count =
         entries.length === 1 ? "1 sub-process was" : `${entries.length} sub-processes were`;
