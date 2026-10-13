@@ -78,13 +78,16 @@ def _payload_with_warnings(result: Dict[str, Any]) -> Any:
 
 def _left_running_line(not_abortable: Any) -> str:
     """One human-readable line naming what an abort left running because VAMS cannot stop its type:
-    'Left running (VAMS cannot stop these sub-process types): Mock Slurm job (slurmJob, in MockTrain); ...'."""
+    'Left running (VAMS cannot stop these sub-process types): Mock Slurm job (slurmJob, in MockTrain); ...'.
+    A group abort's entries carry the member `executionId`, which prefixes each name the way the
+    group's warnings are prefixed: 'e1: Mock Slurm job (slurmJob, in MockTrain)'."""
     named = []
     for entry in not_abortable or []:
         entry = entry if isinstance(entry, dict) else {}
         name = entry.get('label') or entry.get('locator') or entry.get('resourceType') or '?'
         stage = f", in {entry['stageName']}" if entry.get('stageName') else ""
-        named.append(f"{name} ({entry.get('resourceType', '?')}{stage})")
+        member = f"{entry['executionId']}: " if entry.get('executionId') else ""
+        named.append(f"{member}{name} ({entry.get('resourceType', '?')}{stage})")
     return "Left running (VAMS cannot stop these sub-process types): " + "; ".join(named)
 
 

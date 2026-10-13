@@ -282,7 +282,10 @@ registered sub-process could not be stopped: each `notAbortable` entry
 (`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no
 stop API for — an externally owned pipeline's own job, say — that keeps running
 after the execution reads ABORTED. Treat a non-empty list as "not everything
-stopped", not as a failed abort.
+stopped", not as a failed abort. A group abort returns the group's results with
+both arrays beside them, gathered from its members: each warning is prefixed with
+its member's execution id and each `notAbortable` entry carries its member's
+`executionId`.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template

@@ -299,6 +299,31 @@ def test_abort_execution_forwards_group_warnings(gated):
     }
 
 
+def test_abort_execution_forwards_group_warnings_and_not_abortable(gated):
+    """A group abort nests its results under `message` and reports BOTH arrays beside it, each
+    attributed to its member; unwrapping must keep both or the agent reads a clean group abort."""
+    server, client = gated
+    not_abortable = [{"executionId": "e2", "resourceType": "slurmJob", "label": "Mock Slurm job",
+                      "stageName": "MockTrain", "locator": "slurm-00001"}]
+    results = [{"executionId": "e1", "status": "aborted"}, {"executionId": "e2", "status": "aborted"}]
+    client.api.abort_execution.return_value = {
+        "message": {"groupId": "grp-7", "results": results},
+        "warnings": ["e1: Sub-process may still be running"],
+        "notAbortable": not_abortable,
+    }
+    assert server.abort_execution("e1", group_id="grp-7") == {
+        "groupId": "grp-7", "results": results,
+        "warnings": ["e1: Sub-process may still be running"],
+        "notAbortable": not_abortable,
+    }
+
+
+def test_abort_execution_docstring_describes_the_group_arrays(gated):
+    server, _client = gated
+    doc = server.abort_execution.__doc__ or ""
+    assert "group abort" in doc and "`executionId`" in doc
+
+
 def test_rerun_execution_forwards_the_group_id_by_keyword(gated):
     server, client = gated
     client.api.rerun_execution.return_value = {"message": {"executionId": "e2"}}

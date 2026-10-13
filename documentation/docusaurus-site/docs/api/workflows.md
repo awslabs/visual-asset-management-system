@@ -1247,7 +1247,7 @@ A single-execution abort may include a `warnings` array when a best-effort inner
 }
 ```
 
-When `groupId` is supplied, every active execution in the group is aborted and the response reports each member's outcome. If a member's sub-process abort is incomplete, the group abort response also includes a top-level `warnings` array; each warning is prefixed with that member's execution id (issue #445):
+When `groupId` is supplied, every active execution in the group is aborted and the response reports each member's outcome. If a member's sub-process abort is incomplete, the group abort response also includes a top-level `warnings` array; each warning is prefixed with that member's execution id (issue #445). When a member registered a sub-process of a type VAMS cannot stop, the response also includes a top-level `notAbortable` array: that member's own `notAbortable` entries, each with an added `executionId` naming the member. Both arrays are absent when every member stopped cleanly:
 
 ```json
 {
@@ -1260,7 +1260,18 @@ When `groupId` is supplied, every active execution in the group is aborted and t
         "skippedInaccessibleCount": 1,
         "moreRemaining": true
     },
-    "warnings": ["a1b2c3d4e5f60718293a4b5c6d7e8f90: Sub-process may still be running"]
+    "warnings": [
+        "a1b2c3d4e5f60718293a4b5c6d7e8f90: Sub-process of type 'slurmJob' (slurm-00042) could not be aborted: VAMS cannot stop this resource type; it may still be running."
+    ],
+    "notAbortable": [
+        {
+            "executionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "resourceType": "slurmJob",
+            "label": "Cluster training job",
+            "stageName": "Train",
+            "locator": "slurm-00042"
+        }
+    ]
 }
 ```
 

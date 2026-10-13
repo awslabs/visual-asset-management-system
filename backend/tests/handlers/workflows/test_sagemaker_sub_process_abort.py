@@ -417,6 +417,40 @@ class TestTheAbortResponseListsWhatVamsCannotStop:
         body = _abort([_row(SLURM_SUB, status="SUCCEEDED")])
         assert body == {"message": "Execution aborted"}
 
+    def test_a_group_abort_lists_each_members_not_abortable_entry_with_its_execution_id(self):
+        """The group path runs each member's real abort, so the entry is classified once, by the same
+        code the single abort uses, and only annotated with the member it came from."""
+        rows_by_member = {"EXEC1": [_row(SLURM_SUB)],
+                          "EXEC2": [_row(TRAINING_SUB, pipeline_execution_id="P2")]}
+        members = [{"workflowExecutionId": eid, "executionStatus": "RUNNING"} for eid in rows_by_member]
+
+        def _main_row(execution_id):
+            return {"workflowExecutionId": execution_id, "workflow_execution_arn": "arn:x",
+                    "executionStatus": "RUNNING"}
+
+        with contextlib.ExitStack() as patches:
+            for context in (
+                patch.object(es, "_executions_in_group", return_value=members),
+                patch.object(es, "get_execution_main_row", side_effect=_main_row),
+                patch.object(es, "authorize_abort", return_value=(True, "")),
+                patch.object(es, "_stop_sfn_execution", MagicMock()),
+                patch.object(es, "get_pipeline_execution_rows", side_effect=lambda eid: rows_by_member[eid]),
+                patch.object(es.eo, "set_pipeline_status", MagicMock()),
+                patch.object(es, "_persist_reconciled_main_row", MagicMock()),
+                patch.object(es, "log_actions", MagicMock()),
+                patch.object(es.dynamodb, "Table", MagicMock()),
+                patch.object(es, "sagemaker_client", MagicMock()),
+            ):
+                patches.enter_context(context)
+            response = es.abort_group({"requestContext": {}}, "G1")
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["notAbortable"] == [{
+            "executionId": "EXEC1", "resourceType": "slurmJob", "label": "Mock Slurm job",
+            "stageName": "MockTrain", "locator": "slurm-00001"}]
+        assert body["warnings"] and all(w.startswith("EXEC1: ") for w in body["warnings"])
+        assert [r["status"] for r in body["message"]["results"]] == ["aborted", "aborted"]
+
 
 # ---------------------------------------------------------------------------
 # The detail view

@@ -5477,13 +5477,19 @@ def abort_group(event, group_id):
     """Abort every active execution in a group. A group is enumerated via the ByGroupGSI (all members
     regardless of the caller's access), so authorization is checked FIRST on each member: members the
     caller cannot access are NOT reported by id (that would leak the existence/ids/count of other
-    users' executions) — they are counted opaquely. Only authorized members appear in `results`."""
+    users' executions) — they are counted opaquely. Only authorized members appear in `results`.
+
+    Each aborted member's `warnings` (prefixed with its execution id) and `notAbortable` entries
+    (annotated with its `executionId`) are collected into top-level arrays of the same names, each
+    present only when non-empty, so a group abort reports what it left running exactly as a single
+    abort does."""
     executions = _executions_in_group(group_id)
     if not executions:
         return validation_error(status_code=404, body={"message": "No executions found for group"}, event=event)
 
     results = []
     warnings = []
+    not_abortable = []
     skipped_inaccessible = 0
     aborted_this_pass = 0
     more_remaining = False
@@ -5511,6 +5517,8 @@ def abort_group(event, group_id):
         if resp.get("statusCode") == 200 and resp.get("body"):
             member_body = json.loads(resp["body"])
             warnings.extend(f"{execution_id}: {warning}" for warning in member_body.get("warnings", []))
+            not_abortable.extend({"executionId": execution_id, **entry}
+                                 for entry in member_body.get("notAbortable", []) if isinstance(entry, dict))
         results.append({"executionId": execution_id,
                         "status": "aborted" if resp.get("statusCode") == 200 else "error"})
     message = {"groupId": group_id, "results": results}
@@ -5529,7 +5537,11 @@ def abort_group(event, group_id):
         "moreRemaining": bool(more_remaining),
         "operation": "abortGroup",
     })
-    body = {"message": message, "warnings": warnings} if warnings else {"message": message}
+    body = {"message": message}
+    if warnings:
+        body["warnings"] = warnings
+    if not_abortable:
+        body["notAbortable"] = not_abortable
     return success(body=body)
 
 

@@ -280,8 +280,11 @@ summarised on one `Left running` line; `--json-output` carries every field the A
 ```
 
 A group abort reports `groupId`, a per-member `results` list (`aborted`, `skipped-terminal`, or
-`error`), `skippedInaccessibleCount`, and `moreRemaining`; it does not carry the members' `warnings`
-or `notAbortable`.
+`error`), `skippedInaccessibleCount`, and `moreRemaining`, plus the same two arrays gathered from its
+members: each warning is prefixed with its member's execution ID, and each `notAbortable` entry
+carries the member's `executionId`. In CLI mode the warnings follow a `Warnings:` heading and the
+`Left running` line names each sub-process after its member (`e1: Mock Slurm job (slurmJob, in
+MockTrain)`); `--json-output` returns the group fields with both arrays beside them.
 
 ---
 
