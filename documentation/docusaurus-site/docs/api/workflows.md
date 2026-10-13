@@ -1228,7 +1228,7 @@ Aborting a single execution returns:
 }
 ```
 
-A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed, and a `notAbortable` array when a registered sub-process is of a type VAMS cannot stop (an externally owned pipeline's own compute, say). Each `notAbortable` entry is \{`resourceType`, `label`, `stageName`, `locator`\}, listed once per registered locator; `locator` is the registered id, or the final segment of a registered ARN (never the ARN itself). The sub-process is left running and its `warnings` sentence says so as well. Both arrays are absent from a clean abort.
+A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed, and a `notAbortable` array when a registered sub-process is of a type VAMS cannot stop (an externally owned pipeline's own compute, say). Each `notAbortable` entry is \{`resourceType`, `label`, `stageName`, `locator`\}, listed once per registered locator; `locator` is the registered id, or the final segment of a registered ARN (never the ARN itself). The sub-process is left running and its `warnings` sentence says so as well. Every `warnings` sentence names a sub-process the same way, by its registered id or the final segment of its registered ARN. Both arrays are absent from a clean abort.
 
 ```json
 {

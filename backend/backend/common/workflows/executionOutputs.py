@@ -449,7 +449,8 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadlin
 
     Never raises: this runs on the failure/abort paths, where a stop failure must not mask the
     original outcome. A resource type with no stop API surfaces its locator so the caller can report
-    what was left running."""
+    what was left running. Every returned message names the sub-process by `display_identifier`
+    (never a full ARN); the full ARN is logged."""
     resource_type = sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
     if resource_type == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
         execution_arn = sub.get("executionArn", "")
@@ -461,7 +462,9 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadlin
         except Exception as e:
             if _is_benign_stop_error(e):
                 return ""
-            return f"Sub-process stop failed for {execution_arn}: {_error_code(e) or e}"
+            logger.warning(f"Could not stop registered sub-execution {execution_arn}: {e}")
+            return (f"Sub-process stop failed for {display_identifier(execution_arn)}: "
+                    f"{_error_code(e) or e}")
     if resource_type == RESOURCE_TYPE_BATCH_JOB:
         # Only pipelines that submit their Batch job THEMSELVES register it: when a nested state
         # machine submits through the Step Functions `.sync` integration, Step Functions owns the job
@@ -474,7 +477,9 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadlin
             batch_client.terminate_job(jobId=job_id, reason="Stopped by VAMS execution failure")
             return ""
         except Exception as e:
-            return f"Sub-process stop failed for Batch job {job_id}: {_error_code(e) or e}"
+            logger.warning(f"Could not terminate registered Batch job {job_id}: {e}")
+            return (f"Sub-process stop failed for Batch job {display_identifier(job_id)}: "
+                    f"{_error_code(e) or e}")
     if resource_type == RESOURCE_TYPE_DEADLINE_CLOUD_JOB:
         # The Deadline task runs through `createJob.waitForTaskToken`, so Step Functions holds the
         # token and NOT the job: stopping the state machine abandons the token and leaves the farm
@@ -518,9 +523,10 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadlin
             return ""
         job_name = ses.sagemaker_training_job_name_from_arn(training_job_arn)
         if not job_name:
-            return (f"Sub-process stop failed for SageMaker training job {training_job_arn}: its "
-                    "registration is not a training-job ARN, so it could not be stopped; it may still "
-                    "be running.")
+            logger.warning(f"Registered SageMaker training job {training_job_arn} is not a training-job ARN")
+            return (f"Sub-process stop failed for SageMaker training job "
+                    f"{display_identifier(training_job_arn)}: its registration is not a training-job "
+                    "ARN, so it could not be stopped; it may still be running.")
         if sagemaker_client is None:
             return (f"Sub-process stop failed for SageMaker training job {job_name}: SageMaker is not "
                     "available in this deployment, so it could not be stopped; it may still be running.")
@@ -562,8 +568,9 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadlin
             return (f"Sub-process stop failed for SageMaker pipeline execution {display}: {reason}; it "
                     "may still be running.")
     locator = sub_process_locator(sub)
-    return (f"Sub-process of type '{resource_type}' ({locator}) could not be stopped: stopping this "
-            "resource type is not supported; it may still be running.")
+    logger.info(f"Registered sub-process of type '{resource_type}' cannot be stopped by VAMS: {locator}")
+    return (f"Sub-process of type '{resource_type}' ({display_identifier(locator)}) could not be "
+            "stopped: stopping this resource type is not supported; it may still be running.")
 
 
 def _error_code(error):
@@ -673,14 +680,20 @@ def sub_process_locator(sub):
 
 
 def sub_process_display_locator(sub):
-    """The identifier a registered sub-process is named by in an API response: the same as
-    `sub_process_locator`, except that an ARN is reduced to its final path or colon segment so the
-    account id and Region it carries never reach a client."""
-    locator = str(sub_process_locator(sub))
-    if not locator.startswith("arn:"):
-        return locator
-    tail = locator.split("/")[-1]
-    return tail.split(":")[-1] if tail == locator else tail
+    """The identifier a registered sub-process is named by in an API response or a client-facing
+    message: the same as `sub_process_locator`, reduced by `display_identifier`."""
+    return display_identifier(sub_process_locator(sub))
+
+
+def display_identifier(value):
+    """`value` as a client may see it: an ARN is reduced to its final path or colon segment (the
+    execution name, job id or task id) so the account id and Region it carries never reach a client;
+    any other value is returned unchanged. The full ARN belongs in server log lines only."""
+    value = str(value or "")
+    if not value.startswith("arn:"):
+        return value
+    tail = value.split("/")[-1]
+    return tail.split(":")[-1] if tail == value else tail
 
 
 # ---------------------------------------------------------------------------

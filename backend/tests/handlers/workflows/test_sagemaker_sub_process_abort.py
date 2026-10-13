@@ -120,7 +120,8 @@ class TestTheSharedStopHelperStopsSageMaker:
         sagemaker = MagicMock()
         bad = dict(TRAINING_SUB, trainingJobArn=f"arn:aws:sagemaker:us-east-1:{ACCOUNT}:model/x")
         message = eo.stop_registered_sub_process(bad, sagemaker_client=sagemaker)
-        assert "not a training-job ARN" in message and "model/x" in message
+        assert "not a training-job ARN" in message and "training job x:" in message
+        assert "arn:" not in message and ACCOUNT not in message
         sagemaker.stop_training_job.assert_not_called()
 
     def test_an_entry_with_no_locator_is_silently_skipped(self):
@@ -352,6 +353,84 @@ class TestTheAbortPathStopsSageMaker:
         # The display helper itself, on the shapes the stop helper names in its messages.
         assert eo.sub_process_display_locator({"executionArn": "arn:aws:states:us-east-1:1:execution:m:run-1"}) == "run-1"
         assert eo.sub_process_display_locator({"jobId": "slurm-00001"}) == "slurm-00001"
+
+
+SFN_SUB_ARN = "arn:aws:states:us-east-1:" + ACCOUNT + ":execution:mock-sub:run-0001"
+BATCH_JOB_ARN = "arn:aws:batch:us-east-1:" + ACCOUNT + ":job/abc-123"
+ECS_TASK_ARN = "arn:aws:ecs:us-east-1:" + ACCOUNT + ":task/cluster/0123abcd"
+
+
+def _assert_no_arn(message):
+    assert "arn:" not in message and ACCOUNT not in message, message
+
+
+@pytest.mark.unit
+class TestClientFacingMessagesNameTheDisplayIdentifier:
+    """Issue #449: every warning the abort and failure paths return names an ARN-located sub-process
+    by its final ARN segment, so the account id and Region never reach a client; the stop call and
+    the server log line keep the full ARN."""
+
+    def test_the_display_identifier_reduces_only_arns(self):
+        assert eo.display_identifier(SFN_SUB_ARN) == "run-0001"
+        assert eo.display_identifier(BATCH_JOB_ARN) == "abc-123"
+        assert eo.display_identifier(ECS_TASK_ARN) == "0123abcd"
+        assert eo.display_identifier("job-1") == "job-1"
+        assert eo.display_identifier("") == ""
+
+    def test_an_abort_that_could_not_stop_a_sub_execution_names_its_execution_name(self):
+        with patch.object(es, "_stop_sfn_execution_reporting",
+                          return_value=(False, "AccessDeniedException")) as stop:
+            warning = es._abort_registered_sub_process(
+                {"resourceType": "stepFunctionsExecution", "executionArn": SFN_SUB_ARN})
+        assert warning == "Sub-process abort failed for run-0001: AccessDeniedException"
+        stop.assert_called_once_with(SFN_SUB_ARN)
+
+    def test_an_abort_that_could_not_terminate_a_batch_job_names_its_job_id(self):
+        with patch.object(es, "_terminate_batch_job_reporting",
+                          return_value=(False, "AccessDeniedException")) as terminate:
+            warning = es._abort_registered_sub_process({"resourceType": "batchJob", "jobArn": BATCH_JOB_ARN})
+        assert warning == "Sub-process abort failed for Batch job abc-123: AccessDeniedException"
+        terminate.assert_called_once_with(BATCH_JOB_ARN)
+
+    def test_an_abort_of_a_type_vams_cannot_stop_names_the_final_segment(self):
+        warning = es._abort_registered_sub_process({"resourceType": "ecsTask", "taskArn": ECS_TASK_ARN})
+        assert warning.startswith("Sub-process of type 'ecsTask' (0123abcd) could not be aborted")
+        _assert_no_arn(warning)
+
+    def test_the_failure_path_names_a_sub_execution_by_name_and_logs_the_arn(self):
+        sfn = MagicMock(stop_execution=MagicMock(
+            side_effect=_client_error("AccessDeniedException", operation="StopExecution")))
+        with patch.object(eo, "logger") as log:
+            message = eo.stop_registered_sub_process(
+                {"resourceType": "stepFunctionsExecution", "executionArn": SFN_SUB_ARN}, sfn_client=sfn)
+        assert message == "Sub-process stop failed for run-0001: AccessDeniedException"
+        sfn.stop_execution.assert_called_once_with(executionArn=SFN_SUB_ARN)
+        assert SFN_SUB_ARN in log.warning.call_args.args[0]
+
+    def test_the_failure_path_names_a_batch_job_by_id_and_logs_the_arn(self):
+        batch = MagicMock(terminate_job=MagicMock(
+            side_effect=_client_error("AccessDeniedException", operation="TerminateJob")))
+        with patch.object(eo, "logger") as log:
+            message = eo.stop_registered_sub_process(
+                {"resourceType": "batchJob", "jobArn": BATCH_JOB_ARN}, batch_client=batch)
+        assert message == "Sub-process stop failed for Batch job abc-123: AccessDeniedException"
+        assert batch.terminate_job.call_args.kwargs["jobId"] == BATCH_JOB_ARN
+        assert BATCH_JOB_ARN in log.warning.call_args.args[0]
+
+    def test_the_failure_path_names_an_unsupported_type_by_its_final_segment(self):
+        message = eo.stop_registered_sub_process({"resourceType": "ecsTask", "taskArn": ECS_TASK_ARN})
+        assert message.startswith("Sub-process of type 'ecsTask' (0123abcd) could not be stopped")
+        _assert_no_arn(message)
+
+    def test_the_raw_locator_still_deduplicates_not_abortable_entries(self):
+        """Two registrations whose ARNs share a final segment are two sub-processes: the response
+        lists both, because the dedup key is the registered locator, not its display form."""
+        other = "arn:aws:ecs:us-east-1:" + ACCOUNT + ":task/other-cluster/0123abcd"
+        body = _abort([_row({"resourceType": "ecsTask", "taskArn": ECS_TASK_ARN},
+                            {"resourceType": "ecsTask", "taskArn": other})])
+        assert [e["locator"] for e in body["notAbortable"]] == ["0123abcd", "0123abcd"]
+        for warning in body["warnings"]:
+            _assert_no_arn(warning)
 
 
 def _abort(rows, stopped_subs=None):

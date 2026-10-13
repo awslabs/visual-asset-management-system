@@ -7981,7 +7981,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     description: >
                         OK. A single abort carries a warnings array only when a registered sub-process
                         could not be stopped; the sub-process is then left running and the warning names
-                        it. It additionally carries a notAbortable array when a registered sub-process is
+                        it by its registered id or the final segment of its registered ARN, never the
+                        ARN. It additionally carries a notAbortable array when a registered sub-process is
                         of a type VAMS cannot stop — one {resourceType, label, stageName, locator} entry
                         per registered locator, where locator is the registered id or the final segment
                         of a registered ARN, never the ARN — so a caller can name what was left running

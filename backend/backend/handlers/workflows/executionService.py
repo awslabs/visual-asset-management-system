@@ -1465,7 +1465,8 @@ def _abort_registered_sub_process(sub):
     Returns a non-fatal warning string when the sub-process could not be stopped (a real stop failure,
     or a resource type VAMS cannot stop), or "" when nothing needs to be surfaced (stopped cleanly, or
     no actionable locator). The structured record of a type VAMS cannot stop is `_not_abortable_entry`,
-    kept separate so this return stays a plain string. Never raises."""
+    kept separate so this return stays a plain string. The returned message names the sub-process by
+    its display identifier (never a full ARN); the full ARN is logged. Never raises."""
     resource_type = sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
     if resource_type == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
         execution_arn = sub.get("executionArn", "")
@@ -1473,7 +1474,7 @@ def _abort_registered_sub_process(sub):
             return ""
         ok, err = _stop_sfn_execution_reporting(execution_arn)
         if not ok:
-            return f"Sub-process abort failed for {execution_arn}: {err}"
+            return f"Sub-process abort failed for {eo.display_identifier(execution_arn)}: {err}"
         return ""
     if resource_type == RESOURCE_TYPE_BATCH_JOB:
         # Only pipelines that submit their Batch job THEMSELVES register it: when a nested state
@@ -1485,7 +1486,7 @@ def _abort_registered_sub_process(sub):
             return ""
         ok, err = _terminate_batch_job_reporting(job_id)
         if not ok:
-            return f"Sub-process abort failed for Batch job {job_id}: {err}"
+            return f"Sub-process abort failed for Batch job {eo.display_identifier(job_id)}: {err}"
         return ""
     if resource_type == RESOURCE_TYPE_DEADLINE_CLOUD_JOB:
         farm_id = sub.get("farmId", "")
@@ -1517,8 +1518,8 @@ def _abort_registered_sub_process(sub):
     # A type VAMS cannot stop (an external bridge's own compute, say). Surface what was left running.
     locator = eo.sub_process_locator(sub)
     logger.info(f"Registered sub-process of type '{resource_type}' cannot be aborted by VAMS: {locator}")
-    return (f"Sub-process of type '{resource_type}' ({locator}) could not be aborted: "
-            f"VAMS cannot stop this resource type; it may still be running.")
+    return (f"Sub-process of type '{resource_type}' ({eo.display_identifier(locator)}) could not be "
+            f"aborted: VAMS cannot stop this resource type; it may still be running.")
 
 
 def _not_abortable_entry(sub):
