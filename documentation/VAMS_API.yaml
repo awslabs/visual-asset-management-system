@@ -7985,7 +7985,9 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         it. A group abort carries the group id and a per-member result for every member
                         the caller is authorized on, skippedInaccessibleCount when members were withheld
                         for access, and moreRemaining when active members remain beyond the request's
-                        cap of 200 — re-invoke to continue.
+                        cap of 200 — re-invoke to continue. If a member's sub-process abort is
+                        incomplete, the group response also carries a top-level warnings array,
+                        each entry prefixed with that member's execution id (issue #445).
                 "400":
                     description: Invalid or missing executionId.
                     content:
