@@ -309,12 +309,14 @@ export interface SubExecution {
 }
 
 /** A registered sub-process of a type VAMS cannot stop, as the abort response lists it. `locator` is
- *  the registered id, or the final segment of a registered ARN — never the ARN itself. */
+ *  the registered id, or the final segment of a registered ARN — never the ARN itself. A group
+ *  abort's entries also carry `executionId`, the member execution the sub-process belongs to. */
 export interface NotAbortableSubExecution {
     resourceType: string;
     label?: string;
     stageName?: string;
     locator?: string;
+    executionId?: string;
 }
 
 /** One log a pipeline step's logs can be read from; `logId` is what the logs API takes to select it. */
