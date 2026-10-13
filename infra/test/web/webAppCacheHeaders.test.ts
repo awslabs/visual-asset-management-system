@@ -6,14 +6,16 @@
 /**
  * T1 tier — how the web bundle is cached and compressed on its way to the browser.
  *
- * `deployWebAppBundle` (lib/helper/webAppDeployment.ts) uploads the bundle as three BucketDeployments,
+ * `deployWebAppBundle` (lib/helper/webAppDeployment.ts) uploads the bundle as four BucketDeployments,
  * because one deployment applies a single Content-Type and Cache-Control to every object it writes. This
  * suite pins, for BOTH web shapes (CloudFront and ALB):
  *
  * - the key-set split — content-hashed `assets/*`, `*.mjs`, everything else — and that each deployment's
- *   filters keep its upload and its prune away from the other two;
+ *   filters keep its upload and its prune away from the others;
  * - the Cache-Control each set carries (immutable for hashed files, revalidate for stable names);
- * - the order the three run in, which puts `index.html` and the CloudFront invalidation last;
+ * - the order the four run in: new hashed assets first, `index.html` and the CloudFront invalidation
+ *   after them, and the previous release's hashed assets pruned last, so a page served mid-deployment
+ *   never references a deleted chunk;
  * - gzip and Brotli on the CloudFront web cache policy, which `compress: true` needs before CloudFront
  *   compresses anything;
  * - that the built bundle has no `.mjs` under `assets/`, the condition the split depends on.
@@ -54,6 +56,7 @@ interface WebDeployments {
     hashedAssets: Resource;
     esModules: Resource;
     main: Resource;
+    prune: Resource;
 }
 
 /** The three web-bundle deployments of a shape, located by their construct ids. */
@@ -73,6 +76,7 @@ function webDeployments(s: SynthResult): WebDeployments {
         hashedAssets: byId("DeployHashedAssets"),
         esModules: byId("DeployEsModules"),
         main: byId("DeployWithInvalidation"),
+        prune: byId("PruneHashedAssets"),
     };
 }
 
@@ -89,14 +93,24 @@ const dependsOnDeployment = (r: Resource, on: Resource): boolean =>
     dependsOn(r).some((id) => id === on.logicalId || id.startsWith(on.logicalId.slice(0, 20)));
 
 describe.each(SHAPES)("%s web bundle upload", (_name, synth) => {
-    test("hashed assets are uploaded alone, as immutable, and pruned within assets/", () => {
+    test("hashed assets are uploaded alone, as immutable, without pruning", () => {
         const { hashedAssets } = webDeployments(synth());
         expect(hashedAssets.properties.Exclude).toEqual(["*"]);
         expect(hashedAssets.properties.Include).toEqual(["assets/*"]);
         expect(metadata(hashedAssets)["cache-control"]).toBe(IMMUTABLE);
         expect(metadata(hashedAssets)["content-type"]).toBeUndefined();
+        expect(hashedAssets.properties.Prune).toBe(false);
+    });
+
+    test("a final pass prunes assets/ only, with the same filters and metadata", () => {
+        const { hashedAssets, prune } = webDeployments(synth());
+        expect(prune.properties.Exclude).toEqual(["*"]);
+        expect(prune.properties.Include).toEqual(["assets/*"]);
+        // Same metadata as the upload, so the re-sync changes no stored object.
+        expect(metadata(prune)).toEqual(metadata(hashedAssets));
         // Prune is the BucketDeployment default; CDK emits Prune only when it is false.
-        expect(hashedAssets.properties.Prune).not.toBe(false);
+        expect(prune.properties.Prune).not.toBe(false);
+        expect(prune.properties.DistributionId).toBeUndefined();
     });
 
     test("*.mjs keeps its own text/javascript upload, revalidated and never pruned", () => {
@@ -117,11 +131,13 @@ describe.each(SHAPES)("%s web bundle upload", (_name, synth) => {
         expect(main.properties.Prune).not.toBe(false);
     });
 
-    test("assets upload first and index.html last", () => {
-        const { hashedAssets, esModules, main } = webDeployments(synth());
+    test("new assets upload first, then index.html, then the old assets are pruned", () => {
+        const { hashedAssets, esModules, main, prune } = webDeployments(synth());
         expect(dependsOnDeployment(esModules, hashedAssets)).toBe(true);
         expect(dependsOnDeployment(main, esModules)).toBe(true);
+        expect(dependsOnDeployment(prune, main)).toBe(true);
         expect(dependsOnDeployment(hashedAssets, main)).toBe(false);
+        expect(dependsOnDeployment(main, prune)).toBe(false);
     });
 });
 
@@ -129,7 +145,8 @@ describe("CloudFront delivery", () => {
     const s = () => synthTemplate("commercial");
 
     test("only the last upload invalidates the distribution", () => {
-        const { hashedAssets, esModules, main } = webDeployments(s());
+        const { hashedAssets, esModules, main, prune } = webDeployments(s());
+        expect(prune.properties.DistributionId).toBeUndefined();
         expect(main.properties.DistributionId).toBeDefined();
         expect(main.properties.DistributionPaths).toEqual(["/*"]);
         expect(hashedAssets.properties.DistributionId).toBeUndefined();

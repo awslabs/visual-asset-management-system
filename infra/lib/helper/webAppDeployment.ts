@@ -71,22 +71,26 @@ export interface WebAppBundleDeployments {
     readonly hashedAssets: s3deployment.BucketDeployment;
     readonly esModules: s3deployment.BucketDeployment;
     readonly main: s3deployment.BucketDeployment;
+    readonly hashedAssetsPrune: s3deployment.BucketDeployment;
 }
 
 /**
- * Uploads the built web bundle to the web app bucket as three deployments with disjoint key sets, because
- * a BucketDeployment applies one Content-Type and one Cache-Control to every object it writes:
+ * Uploads the built web bundle to the web app bucket. A BucketDeployment applies one Content-Type and one
+ * Cache-Control to every object it writes, so the bundle is split into disjoint key sets, run in order:
  *
- * 1. `DeployHashedAssets` — `assets/*` with {@link WEB_HASHED_ASSET_CACHE_CONTROL}; prunes stale hashes.
+ * 1. `DeployHashedAssets` — `assets/*` with {@link WEB_HASHED_ASSET_CACHE_CONTROL}, without pruning, so
+ *    the previous release's chunks stay readable.
  * 2. `DeployEsModules` — `*.mjs` (the viewer bundles' stable module paths) with
  *    {@link ES_MODULE_CONTENT_TYPE}; never prunes. The web build emits no `.mjs` under `assets/`.
- * 3. `DeployWithInvalidation` — everything else with {@link WEB_REVALIDATE_CACHE_CONTROL}; prunes, then
- *    invalidates the distribution when one is given.
+ * 3. `DeployWithInvalidation` — everything else, including `index.html`, with
+ *    {@link WEB_REVALIDATE_CACHE_CONTROL}; prunes within its own key set, then invalidates the
+ *    distribution when one is given.
+ * 4. `PruneHashedAssets` — re-syncs `assets/*` with pruning, deleting the previous release's chunks once
+ *    the new `index.html` is stored and the edge no longer serves the old one.
  *
  * Each deployment's include/exclude filters scope both its upload and its prune (`aws s3 sync --delete`
- * only deletes keys the filters match), so none removes another's files. They run in that order, which
- * puts `index.html` last: a page served mid-deployment never references an asset that is not yet stored,
- * and the invalidation follows every upload.
+ * only deletes keys the filters match), so none removes another's files. The order means a page served at
+ * any point during a deployment references only assets that are still stored.
  */
 export function deployWebAppBundle(
     scope: Construct,
@@ -97,13 +101,17 @@ export function deployWebAppBundle(
         memoryLimit: Config.LAMBDA_MEMORY_SIZE,
         ephemeralStorageSize: WEB_DEPLOYMENT_EPHEMERAL_STORAGE,
     };
-
-    const hashedAssets = new s3deployment.BucketDeployment(scope, "DeployHashedAssets", {
-        ...common,
-        sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
+    const hashedAssetsOnly = {
         exclude: ["*"],
         include: [`${WEB_HASHED_ASSETS_PREFIX}*`],
         cacheControl: WEB_HASHED_ASSET_CACHE_CONTROL,
+    };
+
+    const hashedAssets = new s3deployment.BucketDeployment(scope, "DeployHashedAssets", {
+        ...common,
+        ...hashedAssetsOnly,
+        sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
+        prune: false,
     });
 
     const esModules = new s3deployment.BucketDeployment(scope, "DeployEsModules", {
@@ -121,13 +129,21 @@ export function deployWebAppBundle(
         sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
         exclude: [`${WEB_HASHED_ASSETS_PREFIX}*`, "*.mjs"],
         cacheControl: WEB_REVALIDATE_CACHE_CONTROL,
-        // On redeploy this invalidates the CloudFront cache once every object is in place.
+        // On redeploy this invalidates the CloudFront cache once every new object is in place.
         distribution: props.distribution,
         distributionPaths: props.distribution ? ["/*"] : undefined,
     });
 
+    // Files already uploaded by DeployHashedAssets are unchanged, so this pass only deletes.
+    const hashedAssetsPrune = new s3deployment.BucketDeployment(scope, "PruneHashedAssets", {
+        ...common,
+        ...hashedAssetsOnly,
+        sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
+    });
+
     esModules.node.addDependency(hashedAssets);
     main.node.addDependency(esModules);
+    hashedAssetsPrune.node.addDependency(main);
 
-    return { hashedAssets, esModules, main };
+    return { hashedAssets, esModules, main, hashedAssetsPrune };
 }
