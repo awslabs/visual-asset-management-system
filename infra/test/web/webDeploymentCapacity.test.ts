@@ -116,16 +116,17 @@ function webDeployments(s: SynthResult): Deployment[] {
 /**
  * How many web-bundle deployments each shape emits.
  *
- * TWO, not one. Both constructs upload the built bundle twice: the main deployment excludes `*.mjs`, and a
- * second one uploads only `*.mjs` with an explicit `text/javascript` Content-Type. `BucketDeployment`
- * applies `contentType` to every object in a deployment, so an extension needing its own type can only be
- * handled by a deployment of its own — left to the uploader's own guess, `.mjs` becomes `text/plain` and a
- * browser refuses it as a module script, which is what broke the PDF viewer's worker.
+ * THREE, not one. Both constructs upload the built bundle through `deployWebAppBundle`, which splits it by
+ * key set because `BucketDeployment` applies one Content-Type and one Cache-Control to every object it
+ * writes: the content-hashed `assets/*` (cached as immutable), the `*.mjs` modules (typed
+ * `text/javascript` — left to the uploader's own guess `.mjs` becomes `text/plain` and a browser refuses
+ * it as a module script, which is what broke the PDF viewer's worker), and everything else (revalidated
+ * on every load). `webAppCacheHeaders.test.ts` asserts the split itself.
  *
- * Both expand the SAME asset, so both need the raised /tmp budget this file is about, and the assertions
- * below check every one rather than a representative.
+ * All three expand the SAME asset, so all need the raised /tmp budget this file is about, and the
+ * assertions below check every one rather than a representative.
  */
-const WEB_DEPLOYMENTS_PER_SHAPE = 2;
+const WEB_DEPLOYMENTS_PER_SHAPE = 3;
 
 /**
  * Every web-bundle deployment in a synth, with the count asserted.
@@ -140,7 +141,7 @@ function webBundleDeployments(s: SynthResult): Deployment[] {
         const total = s.countOfType(BUCKET_DEPLOYMENT);
         throw new Error(
             `expected exactly ${WEB_DEPLOYMENTS_PER_SHAPE} web-bundle BucketDeployments in the ` +
-                `StaticWeb stack (the bundle, and the ES-module pass that types *.mjs), found ` +
+                `StaticWeb stack (hashed assets, the ES-module pass that types *.mjs, and the rest), found ` +
                 `${found.length} (${total} bucket deployments across the whole assembly). An ` +
                 `assertion on their /tmp budget would prove nothing.`
         );

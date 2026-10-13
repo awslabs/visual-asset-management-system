@@ -36,7 +36,8 @@ infra/
 │   ├── helper/               # Service helpers and utility functions
 │   │   ├── const.ts          # Partition-aware service endpoints
 │   │   ├── s3AssetBuckets.ts # Global asset bucket registry
-│   │   └── security.ts       # KMS, CDK Nag, CSP, TLS enforcement, presigned URL bucket policy restrictions
+│   │   ├── security.ts       # KMS, CDK Nag, CSP, TLS enforcement, presigned URL bucket policy restrictions
+│   │   └── webAppDeployment.ts # Web bundle upload (hashed assets / *.mjs / rest) with per-set Cache-Control
 │   ├── aspects/              # CDK aspects for cross-cutting concerns
 │   └── artefacts/            # Build artifacts and templates
 ├── test/                     # CDK unit and integration tests

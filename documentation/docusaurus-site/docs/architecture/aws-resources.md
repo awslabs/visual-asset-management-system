@@ -557,6 +557,17 @@ Deployed when `addStackCloudTrailLogs = true`:
 | **Target Group**   | Amazon S3 web bucket as target             |
 | **HTTPS Listener** | TLS termination with ACM certificate       |
 
+### Web Bundle Caching and Compression
+
+The built web application is uploaded to the web app bucket with a `Cache-Control` header chosen by path. Both distributions serve the stored header unchanged.
+
+| Objects                                                                               | `Cache-Control`                                     | Effect                                                                                                                                       |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assets/*` (content-hashed build output)                                              | `public, max-age=31536000, immutable`               | Browsers reuse a downloaded file without revalidating it; a changed file gets a new name                                                     |
+| Everything else (`index.html`, the service worker, icons, `viewers/*` viewer bundles) | `public, max-age=0, must-revalidate, s-maxage=3600` | Browsers revalidate on every load (a `304` when unchanged), so a new release is picked up immediately; CloudFront keeps its copy for an hour |
+
+Amazon CloudFront compresses text responses (JavaScript, CSS, HTML, JSON, SVG and WebAssembly) with Brotli or gzip, as the browser accepts. Each web deployment invalidates `/*` once every file is uploaded, and uploads `index.html` last, so a page served mid-deployment does not reference a file that is not yet stored. The ALB distribution serves files uncompressed, because Elastic Load Balancing does not compress responses.
+
 ## Next Steps
 
 -   [Security Architecture](security.md) -- How these resources are secured

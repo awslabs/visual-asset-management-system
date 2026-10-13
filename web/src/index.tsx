@@ -15,19 +15,21 @@ import "./styles/tailwind.css";
 import reportWebVitals from "./reportWebVitals";
 import Auth from "./FedAuth/Auth";
 import config from "./config";
+import LoadingScreen from "./components/loading/LoadingScreen";
+import { APP_LOAD_SLOW_NOTICE_MS, lazyWithRetry } from "./utils/chunkLoadRecovery";
 
 (window as any).LOG_LEVEL = "INFO";
 
 // Set browser tab title from config
 document.title = config.APP_TITLE;
 
-const App = React.lazy(() => import("./App"));
+const App = lazyWithRetry(() => import("./App"));
 const container = document.getElementById("root");
 const root = createRoot(container!);
 root.render(
     <React.StrictMode>
         <Auth>
-            <Suspense fallback={<div />}>
+            <Suspense fallback={<LoadingScreen slowNoticeAfterMs={APP_LOAD_SLOW_NOTICE_MS} />}>
                 <App />
             </Suspense>
         </Auth>
