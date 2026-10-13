@@ -71,6 +71,32 @@ def _client_error(code, message=None, operation="StopTrainingJob"):
         {"Error": {"Code": code, "Message": message or code}}, operation)
 
 
+# SageMaker's ValidationException wording for a Stop* on a resource that is not running, captured live
+# (D6). The classifier consults it only when Describe* is unavailable, so these pin the fallback: a
+# rewording by the service fails here rather than silently turning every re-abort into a false warning.
+SM_STOP_TRAINING_STOPPED = "The request was rejected because the training job is in status Stopped."
+SM_STOP_TRAINING_COMPLETED = "The request was rejected because the training job is in status Completed."
+SM_STOP_PIPELINE_FAILED = (f"Pipeline execution with ARN {PIPELINE_EXECUTION_ARN} status 'Failed'. "
+                           "Only pipelines with 'Executing' status can be stopped.")
+# A permission denial on the Describe* that follows a refused stop — the failure path's role
+# (handleExecutionError) holds the Stop grants only.
+DESCRIBE_DENIED = _client_error("AccessDeniedException", "not authorized", "DescribeTrainingJob")
+
+
+def _sagemaker(stop_error, training_status=None, pipeline_status=None, describe_error=None):
+    """A SageMaker client whose Stop* raise `stop_error` and whose Describe* answer the given status
+    (or raise `describe_error`)."""
+    client = MagicMock(stop_training_job=MagicMock(side_effect=stop_error),
+                       stop_pipeline_execution=MagicMock(side_effect=stop_error))
+    if describe_error is not None:
+        client.describe_training_job.side_effect = describe_error
+        client.describe_pipeline_execution.side_effect = describe_error
+    else:
+        client.describe_training_job.return_value = {"TrainingJobStatus": training_status}
+        client.describe_pipeline_execution.return_value = {"PipelineExecutionStatus": pipeline_status}
+    return client
+
+
 # ---------------------------------------------------------------------------
 # The shared stop helper (failure path)
 # ---------------------------------------------------------------------------
@@ -111,37 +137,107 @@ class TestTheSharedStopHelperStopsSageMaker:
         message = eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=None)
         assert TRAINING_JOB_NAME in message and "may still be running" in message
         message = eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=None)
-        assert PIPELINE_EXECUTION_ARN in message and "may still be running" in message
+        # Named by the execution id tail; the ARN (account id, Region) never reaches a message.
+        assert "a1b2c3d4e5f6" in message and "may still be running" in message
+        assert PIPELINE_EXECUTION_ARN not in message
 
-    @pytest.mark.parametrize("error", [
-        _client_error("ResourceNotFound"),
-        _client_error("ValidationException",
-                      f"The request was rejected because the training job {TRAINING_JOB_NAME} is not "
-                      "in progress."),
-        _client_error("ValidationException", "Training job is already in status Stopping."),
-        _client_error("ConflictException", "Pipeline execution is not in a stoppable state",
-                      "StopPipelineExecution"),
-    ])
-    def test_a_job_that_already_finished_or_is_stopping_is_not_reported(self, error):
-        sagemaker = MagicMock(stop_training_job=MagicMock(side_effect=error),
-                              stop_pipeline_execution=MagicMock(side_effect=error))
+    def test_a_resource_that_is_gone_is_not_reported_and_not_described(self):
+        sagemaker = _sagemaker(_client_error("ResourceNotFound"))
+        assert eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=sagemaker) == ""
+        assert eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=sagemaker) == ""
+        sagemaker.describe_training_job.assert_not_called()
+        sagemaker.describe_pipeline_execution.assert_not_called()
+
+    @pytest.mark.parametrize("training_status", ["Stopped", "Stopping", "Completed", "Failed"])
+    @pytest.mark.parametrize("pipeline_status", ["Stopped", "Stopping", "Succeeded", "Failed"])
+    def test_a_refused_stop_on_a_settled_resource_is_classified_by_describe_as_benign(
+            self, training_status, pipeline_status):
+        """D6. The normal race — the run finishes as it is being stopped — and every re-abort: Stop* is
+        refused with a ValidationException, Describe* says the resource has settled, nothing is
+        running, nothing is reported. The service message is deliberately NOT the captured wording,
+        so this passes on the Describe classification alone."""
+        sagemaker = _sagemaker(_client_error("ValidationException", "some wording we do not match"),
+                               training_status=training_status, pipeline_status=pipeline_status)
+        assert eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=sagemaker) == ""
+        assert eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=sagemaker) == ""
+        sagemaker.describe_training_job.assert_called_once_with(TrainingJobName=TRAINING_JOB_NAME)
+        sagemaker.describe_pipeline_execution.assert_called_once_with(
+            PipelineExecutionArn=PIPELINE_EXECUTION_ARN)
+
+    def test_a_conflict_is_classified_the_same_way(self):
+        sagemaker = _sagemaker(_client_error("ConflictException", "conflict", "StopPipelineExecution"),
+                               training_status="Completed", pipeline_status="Succeeded")
         assert eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=sagemaker) == ""
         assert eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=sagemaker) == ""
 
-    @pytest.mark.parametrize("error", [
-        _client_error("AccessDeniedException"),
-        _client_error("ValidationException", "Requested resource not found: some other wording"),
-        _client_error("ThrottlingException"),
-        RuntimeError("boom"),
-    ])
-    def test_a_real_stop_failure_names_the_job_and_its_cause(self, error):
-        sagemaker = MagicMock(stop_training_job=MagicMock(side_effect=error),
-                              stop_pipeline_execution=MagicMock(side_effect=error))
+    def test_a_refused_stop_on_a_running_resource_is_a_genuine_warning_naming_the_status(self):
+        sagemaker = _sagemaker(_client_error("ValidationException", SM_STOP_TRAINING_STOPPED),
+                               training_status="InProgress", pipeline_status="Executing")
         message = eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=sagemaker)
         assert TRAINING_JOB_NAME in message and "may still be running" in message
-        assert (eo._error_code(error) or "boom") in message
+        assert "ValidationException while the job is InProgress" in message
         message = eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=sagemaker)
-        assert PIPELINE_EXECUTION_ARN in message and "may still be running" in message
+        assert "a1b2c3d4e5f6" in message and "while the job is Executing" in message
+        # Rule 11: the service message, the ARN and the account never reach the warning.
+        assert "request was rejected" not in message and PIPELINE_EXECUTION_ARN not in message
+        assert ACCOUNT not in message
+
+    @pytest.mark.parametrize("stop_message", [SM_STOP_TRAINING_STOPPED, SM_STOP_TRAINING_COMPLETED])
+    def test_when_describe_is_denied_the_captured_training_wording_is_benign(self, stop_message):
+        """The failure path's role holds no Describe grant, so there the classification rests on
+        SageMaker's own wording — pinned here verbatim as captured live."""
+        sagemaker = _sagemaker(_client_error("ValidationException", stop_message),
+                               describe_error=DESCRIBE_DENIED)
+        assert eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=sagemaker) == ""
+        sagemaker.describe_training_job.assert_called_once()
+
+    def test_when_describe_is_denied_the_captured_pipeline_wording_is_benign(self):
+        sagemaker = _sagemaker(
+            _client_error("ValidationException", SM_STOP_PIPELINE_FAILED, "StopPipelineExecution"),
+            describe_error=DESCRIBE_DENIED)
+        assert eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=sagemaker) == ""
+        sagemaker.describe_pipeline_execution.assert_called_once()
+
+    def test_the_captured_wording_is_what_the_fallback_patterns_match(self):
+        """Pins the fixtures to the patterns directly, so a change to either side is visible."""
+        assert eo._SAGEMAKER_TRAINING_NOT_RUNNING_RE.search(SM_STOP_TRAINING_STOPPED)
+        assert eo._SAGEMAKER_TRAINING_NOT_RUNNING_RE.search(SM_STOP_TRAINING_COMPLETED)
+        assert eo._SAGEMAKER_PIPELINE_NOT_RUNNING_RE.search(SM_STOP_PIPELINE_FAILED)
+        # The former guessed phrases are not SageMaker's wording and must not be matched.
+        assert not eo._SAGEMAKER_TRAINING_NOT_RUNNING_RE.search("training job is not in progress")
+        assert not eo._SAGEMAKER_PIPELINE_NOT_RUNNING_RE.search("is not in a stoppable state")
+
+    def test_when_describe_is_denied_and_the_wording_is_unknown_the_refusal_is_reported(self):
+        sagemaker = _sagemaker(_client_error("ValidationException", "some wording we do not match"),
+                               describe_error=DESCRIBE_DENIED)
+        message = eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=sagemaker)
+        assert TRAINING_JOB_NAME in message and "ValidationException" in message
+        assert "may still be running" in message and "some wording" not in message
+
+    def test_describe_is_never_called_on_a_stop_that_succeeded(self):
+        sagemaker = MagicMock()
+        assert eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=sagemaker) == ""
+        assert eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=sagemaker) == ""
+        sagemaker.describe_training_job.assert_not_called()
+        sagemaker.describe_pipeline_execution.assert_not_called()
+
+    @pytest.mark.parametrize("error,code", [
+        (_client_error("AccessDeniedException"), "AccessDeniedException"),
+        (_client_error("ThrottlingException"), "ThrottlingException"),
+        (RuntimeError("boom"), "RuntimeError"),
+    ])
+    def test_a_real_stop_failure_names_the_job_and_its_code_without_describing(self, error, code):
+        """Any code other than a state refusal is a real failure: reported by code (never by the
+        exception text), and Describe is not consulted."""
+        sagemaker = _sagemaker(error, training_status="Completed", pipeline_status="Succeeded")
+        message = eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=sagemaker)
+        assert TRAINING_JOB_NAME in message and "may still be running" in message
+        assert code in message and "boom" not in message
+        message = eo.stop_registered_sub_process(dict(PIPELINE_SUB), sagemaker_client=sagemaker)
+        assert "a1b2c3d4e5f6" in message and "may still be running" in message
+        assert PIPELINE_EXECUTION_ARN not in message
+        sagemaker.describe_training_job.assert_not_called()
+        sagemaker.describe_pipeline_execution.assert_not_called()
 
     def test_the_abortable_set_names_exactly_the_five_types(self):
         assert eo.ABORTABLE_RESOURCE_TYPES == frozenset({

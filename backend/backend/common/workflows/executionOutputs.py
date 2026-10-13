@@ -29,6 +29,7 @@ resolves the Powertools log level from the environment at import.
 """
 
 import json
+import re
 
 from customLogging.logger import safeLogger
 
@@ -527,26 +528,39 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadlin
             sagemaker_client.stop_training_job(TrainingJobName=job_name)
             return ""
         except Exception as e:
-            if _is_benign_sagemaker_stop_error(e):
+            benign, reason = _classify_sagemaker_stop_error(
+                e, f"training job {job_name}",
+                lambda: sagemaker_client.describe_training_job(
+                    TrainingJobName=job_name).get("TrainingJobStatus", ""),
+                _SAGEMAKER_TRAINING_SETTLED_STATUSES, _SAGEMAKER_TRAINING_NOT_RUNNING_RE)
+            if benign:
                 return ""
-            return (f"Sub-process stop failed for SageMaker training job {job_name}: "
-                    f"{_error_code(e) or e}; it may still be running.")
+            return (f"Sub-process stop failed for SageMaker training job {job_name}: {reason}; it may "
+                    "still be running.")
     if resource_type == RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION:
         pipeline_execution_arn = sub.get("pipelineExecutionArn", "")
         if not pipeline_execution_arn:
             return ""
+        # Named by the execution id tail in every message: the ARN carries the account id and Region.
+        _pipeline_name, execution_id = ses.sagemaker_pipeline_execution_ids_from_arn(pipeline_execution_arn)
+        display = execution_id or "(unparseable ARN)"
         if sagemaker_client is None:
-            return (f"Sub-process stop failed for SageMaker pipeline execution {pipeline_execution_arn}: "
-                    "SageMaker is not available in this deployment, so it could not be stopped; it may "
-                    "still be running.")
+            return (f"Sub-process stop failed for SageMaker pipeline execution {display}: SageMaker is "
+                    "not available in this deployment, so it could not be stopped; it may still be "
+                    "running.")
         try:
             sagemaker_client.stop_pipeline_execution(PipelineExecutionArn=pipeline_execution_arn)
             return ""
         except Exception as e:
-            if _is_benign_sagemaker_stop_error(e):
+            benign, reason = _classify_sagemaker_stop_error(
+                e, f"pipeline execution {display}",
+                lambda: sagemaker_client.describe_pipeline_execution(
+                    PipelineExecutionArn=pipeline_execution_arn).get("PipelineExecutionStatus", ""),
+                _SAGEMAKER_PIPELINE_SETTLED_STATUSES, _SAGEMAKER_PIPELINE_NOT_RUNNING_RE)
+            if benign:
                 return ""
-            return (f"Sub-process stop failed for SageMaker pipeline execution {pipeline_execution_arn}: "
-                    f"{_error_code(e) or e}; it may still be running.")
+            return (f"Sub-process stop failed for SageMaker pipeline execution {display}: {reason}; it "
+                    "may still be running.")
     locator = sub_process_locator(sub)
     return (f"Sub-process of type '{resource_type}' ({locator}) could not be stopped: stopping this "
             "resource type is not supported; it may still be running.")
@@ -574,27 +588,78 @@ def _is_benign_cancel_error(error):
     return code in ("ConflictException", "ResourceNotFoundException")
 
 
-# The phrases SageMaker puts in a ValidationException / ConflictException message when a Stop* call
-# meets a job or pipeline execution that has already finished or is already stopping — the normal race
-# when a run completes as it is being stopped. Any other message is a real failure and is reported.
-_SAGEMAKER_ALREADY_STOPPED_PHRASES = ("is not in progress", "is not in a stoppable state",
-                                      "already stopped", "is already in status stopping",
-                                      "already stopping", "status is stopping", "has already completed",
-                                      "is in terminal status")
+# Statuses in which a SageMaker Stop* is refused because there is nothing left to stop: the resource
+# has finished, or a stop is already under way. A Stop* refused for one of these is the normal race
+# when a run completes as it is being stopped (or a re-abort), and leaves nothing running to report.
+_SAGEMAKER_TRAINING_SETTLED_STATUSES = frozenset(("Stopped", "Stopping", "Completed", "Failed"))
+_SAGEMAKER_PIPELINE_SETTLED_STATUSES = frozenset(("Stopped", "Stopping", "Succeeded", "Failed"))
+
+# SageMaker's own ValidationException wording for a Stop* on a job or pipeline execution that is not
+# running, as the service returns it (StopTrainingJob: "The request was rejected because the training
+# job is in status Stopped." / "... Completed."; StopPipelineExecution: "Pipeline execution with ARN
+# ... status 'Failed'. Only pipelines with 'Executing' status can be stopped."). Consulted only when the
+# Describe* call that normally classifies the refusal is itself unavailable (the failure path's role
+# holds the Stop grants alone), so a rewording degrades to a false "may still be running" warning there
+# rather than to a wrong classification. The unit tests pin these strings verbatim.
+_SAGEMAKER_TRAINING_NOT_RUNNING_RE = re.compile(
+    r"training job is in status (Stopped|Stopping|Completed|Failed)\b", re.IGNORECASE)
+_SAGEMAKER_PIPELINE_NOT_RUNNING_RE = re.compile(
+    r"status '(Stopped|Stopping|Succeeded|Failed)'|Only pipelines with 'Executing' status can be stopped",
+    re.IGNORECASE)
+# Error codes a Stop* answers with when the resource is not in a stoppable state. Any other code (a
+# denied permission above all) is a real failure and is never classified further.
+_SAGEMAKER_STATE_REFUSAL_CODES = frozenset(("ValidationException", "ConflictException"))
 
 
-def _is_benign_sagemaker_stop_error(error):
-    """Whether a StopTrainingJob / StopPipelineExecution failure means the resource is already gone or
-    already stopped or stopping: ResourceNotFound, or a ValidationException / ConflictException whose
-    message says so. Anything else — a denied permission above all — is a real failure."""
+def _sagemaker_error_message(error):
+    """The service message of a botocore ClientError, or '' when the error carries none."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        return str((response.get("Error") or {}).get("Message", "") or "")
+    return ""
+
+
+def _classify_sagemaker_stop_error(error, what, describe_status, settled_statuses, not_running_re):
+    """Whether a StopTrainingJob / StopPipelineExecution failure left nothing running: (benign, reason).
+
+    Rule, in order: ResourceNotFound → benign (the resource is gone). Any code other than a
+    state-refusal code (ValidationException / ConflictException) → a real failure, reported by its
+    code. For a state refusal the resource's live status is read through `describe_status` — on this
+    exception path only, never on a stop that succeeded — and a status in `settled_statuses` is
+    benign while any other status (a job still InProgress / Executing whose stop was refused) is
+    reported with that status. When Describe itself fails (the failure path's role holds no Describe
+    grant), the refusal is classified by SageMaker's own message against `not_running_re`, and a
+    message outside that wording is reported as the refusal code.
+
+    The returned `reason` carries only an AWS error code or a SageMaker status word, never the service
+    message, the ARN or the account; the specifics are logged here instead."""
     code = _error_code(error) or type(error).__name__
     if code in ("ResourceNotFound", "ResourceNotFoundException"):
-        return True
-    if code not in ("ValidationException", "ConflictException"):
-        return False
-    message = str(((getattr(error, "response", None) or {}).get("Error") or {}).get("Message", "")
-                  or error).lower()
-    return any(phrase in message for phrase in _SAGEMAKER_ALREADY_STOPPED_PHRASES)
+        logger.info(f"SageMaker {what} is no longer described by SageMaker; nothing to stop")
+        return True, ""
+    if code not in _SAGEMAKER_STATE_REFUSAL_CODES:
+        logger.warning(f"SageMaker stop refused for {what}: {code}: {_sagemaker_error_message(error) or error}")
+        return False, code
+    service_message = _sagemaker_error_message(error)
+    try:
+        status = str(describe_status() or "")
+    except Exception as describe_error:
+        status = ""
+        logger.info(f"SageMaker {what}: stop refused ({code}: {service_message}) and the status could "
+                    f"not be described ({_error_code(describe_error) or describe_error}); classifying "
+                    "by the service message")
+    if status:
+        if status in settled_statuses:
+            logger.info(f"SageMaker {what} is already {status}; the refused stop left nothing running")
+            return True, ""
+        logger.warning(f"SageMaker {what} is {status} but its stop was refused ({code}: {service_message})")
+        return False, f"{code} while the job is {status}"
+    if not_running_re.search(service_message):
+        logger.info(f"SageMaker {what} is already finished or stopping per the service message; the "
+                    "refused stop left nothing running")
+        return True, ""
+    logger.warning(f"SageMaker stop refused for {what}: {code}: {service_message or error}")
+    return False, code
 
 
 def sub_process_locator(sub):
