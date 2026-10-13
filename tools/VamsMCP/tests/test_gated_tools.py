@@ -287,6 +287,18 @@ def test_abort_execution_forwards_the_group_id_by_keyword(gated):
     client.api.abort_execution.assert_called_once_with("e1", group_id="grp-7")
 
 
+def test_abort_execution_forwards_group_warnings(gated):
+    server, client = gated
+    client.api.abort_execution.return_value = {
+        "message": {"groupId": "grp-7", "results": [{"executionId": "e1", "status": "aborted"}]},
+        "warnings": ["e1: Sub-process may still be running"],
+    }
+    assert server.abort_execution("e1", group_id="grp-7") == {
+        "groupId": "grp-7", "results": [{"executionId": "e1", "status": "aborted"}],
+        "warnings": ["e1: Sub-process may still be running"],
+    }
+
+
 def test_rerun_execution_forwards_the_group_id_by_keyword(gated):
     server, client = gated
     client.api.rerun_execution.return_value = {"message": {"executionId": "e2"}}

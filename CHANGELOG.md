@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Group abort returns each member's non-fatal sub-process abort warnings, prefixed with the member execution id, in a top-level `warnings` array; the MCP `abort_execution` tool preserves them. ([#445](https://github.com/awslabs/visual-asset-management-system/issues/445))
 -   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
 -   **Pipelines** The Potree point cloud viewer container job role holds `states:SendTaskHeartbeat` alongside `SendTaskSuccess`/`SendTaskFailure` (scoped to the deployment account and region), so the PDAL/Potree container's workflow task-token heartbeat is delivered instead of logging an `AccessDeniedException` on every job.
 -   **Documentation** The `/generate-permissions` agent skill's deny-tagged overlay guidance and example use `is_one_of` on the list-valued `tags` field (previously `contains`, which the constraint API rejects), and its operator table states that `tags` accepts only `is_one_of` / `is_not_one_of`. (issue #391)
@@ -40,6 +41,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin.
 -   **Backend** The DynamoDB BatchGetItem chunk + `UnprocessedKeys` retry loop is a single shared helper, `common.dynamodb.batch_get_items`, returning `(rows, unresolved_keys)` so a missing row and an incomplete read stay distinguishable; the execution, asset-links, asset-export, workflow and asset listing services read through it instead of carrying their own copy. (issue #395)
     -   Note: the asset export previously read only the first response of each batch, so an asset DynamoDB deferred into `UnprocessedKeys` (a partial throttle, or a response at the 16 MB cap) was silently missing from the export. Those keys are now retried and, if still unresolved, read individually.
+-   **Backend** The assetLinks batch_get helper test asserts the recorded `sleep` call count before iterating over its contents, so a test double that recorded no retry sleep fails instead of passing vacuously and the `tests/_assertion_shapes` guard passes on development. ([#414](https://github.com/awslabs/visual-asset-management-system/issues/414))
 
 ### Known Outstanding Issues
 

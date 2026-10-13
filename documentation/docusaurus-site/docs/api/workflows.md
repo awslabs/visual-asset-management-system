@@ -1247,7 +1247,7 @@ A single-execution abort may include a `warnings` array when a best-effort inner
 }
 ```
 
-When `groupId` is supplied, every active execution in the group is aborted and the response reports each member's outcome:
+When `groupId` is supplied, every active execution in the group is aborted and the response reports each member's outcome. If a member's sub-process abort is incomplete, the group abort response also includes a top-level `warnings` array; each warning is prefixed with that member's execution id (issue #445):
 
 ```json
 {
@@ -1259,7 +1259,8 @@ When `groupId` is supplied, every active execution in the group is aborted and t
         ],
         "skippedInaccessibleCount": 1,
         "moreRemaining": true
-    }
+    },
+    "warnings": ["a1b2c3d4e5f60718293a4b5c6d7e8f90: Sub-process may still be running"]
 }
 ```
 
