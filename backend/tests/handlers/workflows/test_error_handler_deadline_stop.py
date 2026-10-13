@@ -180,10 +180,12 @@ class TestUnaddressableAndUnsupportedJobs:
         """Positive control: adding the Deadline arm must not swallow the fallback that reports the
         resource types which genuinely have no stop API."""
         logs_table, _ = _reconcile(
-            [_row({"resourceType": "ecsTask", "taskArn": "arn:task:9"})], MagicMock())
+            [_row({"resourceType": "ecsTask",
+                   "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/cluster/0123abcd"})], MagicMock())
         error_log = _error_log(logs_table)
-        assert "arn:task:9" in error_log
+        assert "(0123abcd)" in error_log
         assert "not supported" in error_log
+        assert "arn:" not in error_log and "123456789012" not in error_log
 
 
 DEFINITION = {"executionConfig": {"executionType": "DeadlineCloud",

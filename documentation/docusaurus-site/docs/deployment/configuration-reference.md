@@ -943,6 +943,50 @@ Lambda builder: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildDeadlineCl
 | ------------------------------------------------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
 | `app.pipelines.deadlineCloudExecutionTypeEnabled` | boolean | `false` | Deploys the Deadline Cloud job-callback Lambda + default-bus rule and grants the Deadline Cloud actions listed above. |
 
+### External pipeline bridges (`app.pipelines.externalPipelineBridges`)
+
+Accounts and roles that own a pipeline outside the VAMS deployment and report into it. Each entry does two things. It adds one statement to the orchestration bus resource policy allowing `events:PutEvents` from the bridge account, carrying an `aws:PrincipalArn` condition on `roleArnPattern`, so only roles matching that pattern can publish `pipeline.execution.register` events. The statement also conditions on `events:detail-type` (exactly `pipeline.execution.register`) and `events:source` (the per-execution registration source, `<name>.<baseStackName>.execution.*.pipeline.*`), so a listed role may only register sub-processes and log sources onto its own executions -- it cannot publish the deployment's own `asset.file.uploaded` trigger events or any other event on the bus. And it adds its `invokeTargets` -- exact AWS Lambda function, Amazon SQS queue, and Amazon EventBridge event-bus ARNs in that account -- to the shared workflow state-machine role as `lambda:InvokeFunction`, `sqs:SendMessage`, and `events:PutEvents` grants, so a pipeline whose `executionConfig` names one of them is reachable. An empty list grants nothing, and the list is empty in every shipped template.
+
+Configuration validation requires a 12-digit `accountId`, a `roleArnPattern` that is an IAM role ARN in that account and in the deployment partition with at most one trailing `*` (a bare `role/*` or `role/<path>/*` is rejected), and `invokeTargets` that are exact ARNs in that account with no wildcard character at all. The same `accountId` + `roleArnPattern` pair may appear once. An entry naming the deployment account itself is accepted with a warning, because such a bridge is not actually cross-account. The bridge's own identity policy must also allow the call -- the bus resource policy and the role grants are the VAMS half of the trust, not the whole of it. See [Externally owned pipelines](../pipelines/custom-pipelines.md#externally-owned-pipelines-bridge-pattern) for the full pattern.
+
+:::note[Implemented by]
+Bus policy: `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts` (one `AWS::Events::EventBusPolicy` per entry). Workflow role grants: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildWorkflowRole`). Validation: `validateExternalPipelineBridges()` in `infra/config/config.ts`.
+:::
+
+| Field                                                    | Type     | Default | Description                                                                                                                                       |
+| -------------------------------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.externalPipelineBridges`                  | array    | `[]`    | One entry per externally owned pipeline bridge.                                                                                                   |
+| `app.pipelines.externalPipelineBridges[].accountId`      | string   | --      | 12-digit AWS account id of the bridge.                                                                                                            |
+| `app.pipelines.externalPipelineBridges[].roleArnPattern` | string   | --      | `arn:<partition>:iam::<accountId>:role/<path-or-name>`, optionally ending in `*`. The `aws:PrincipalArn` condition on the bus policy statement.   |
+| `app.pipelines.externalPipelineBridges[].invokeTargets`  | string[] | --      | Optional. Exact Lambda function, SQS queue, or EventBridge event-bus ARNs in `accountId` (any Region) the workflow role may invoke. No wildcards. |
+
+```json
+"externalPipelineBridges": [
+    {
+        "accountId": "<ACCOUNT_ID>",
+        "roleArnPattern": "arn:aws:iam::<ACCOUNT_ID>:role/my-bridge-*",
+        "invokeTargets": [
+            "arn:aws:events:us-east-1:<ACCOUNT_ID>:event-bus/my-bridge",
+            "arn:aws:lambda:us-east-1:<ACCOUNT_ID>:function:my-bridge-adapter"
+        ]
+    }
+]
+```
+
+### Execution log read allow-list (`app.pipelines.executionLogReadPrefixes`)
+
+The CloudWatch Logs groups the execution logs API may read a registered sub-process log from. Each entry is used verbatim as an IAM log-group resource name on the execution service's `logs:FilterLogEvents`, `logs:GetLogEvents`, and `logs:DescribeLogStreams` grant (with a `:*` companion for stream-level reads); a trailing `*` matches every group under that prefix, and an entry without one matches that group exactly. The shared workflow log group and the groups whose names embed the deployment's `name` are always readable and are not listed here. IAM resource matching is case-sensitive, which is why the default lists both state-machine casings the built-in pipelines use.
+
+A pipeline that writes its logs to a group outside the list still runs and still registers the log; the logs API then reports that source as `denied`. Adding the group's name (or a prefix covering it) and redeploying is what makes it readable. Configuration validation requires a non-empty list of distinct names under `/aws/<service>/`, each at most 512 characters, with at most one trailing `*`; `*`, `/`, `/aws/`, `/aws/*`, `/aws/<service>/*`, a `*` anywhere but last, `?`, and any name outside `/aws/` are rejected, so the grant can never widen to every log group in the account. Omitting the field uses the default list below.
+
+:::note[Implemented by]
+Grant: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildExecutionServiceFunction`). Validation and default: `validateExecutionLogReadPrefixes()` and `DEFAULT_EXECUTION_LOG_READ_PREFIXES` in `infra/config/config.ts`.
+:::
+
+| Field                                    | Type     | Default                                                                                                                                                        | Description                                                                              |
+| ---------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `app.pipelines.executionLogReadPrefixes` | string[] | `["/aws/vendedlogs/VAMSStateMachine-*", "/aws/vendedlogs/VAMSstateMachine-*", "/aws/vendedlogs/Pipelines/*", "/aws/batch/job", "/aws/sagemaker/TrainingJobs"]` | Log-group names under `/aws/` the execution logs API may read; trailing `*` is a prefix. |
+
 ## Addons (`app.addons`)
 
 ### Garnet Framework (`app.addons.useGarnetFramework`)

@@ -487,7 +487,8 @@ class TestHandleExecutionError:
         body = {"workflowExecutionId": "EXEC1", "workflowDatabaseId": "wdb", "workflowId": "wf"}
         pipeline_rows = [
             {"pipelineExecutionId": "P1", "workflowExecutionId": "EXEC1", "executionStatus": "RUNNING",
-             "registeredSubExecutions": [{"resourceType": "ecsTask", "taskArn": "arn:task:9"}]},
+             "registeredSubExecutions": [
+                 {"resourceType": "ecsTask", "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/cluster/0123abcd"}]},
         ]
         logs_table = MagicMock()
         main_table = MagicMock(query=MagicMock(return_value={"Items": []}))
@@ -503,7 +504,8 @@ class TestHandleExecutionError:
             heh.lambda_handler({"body": body, "errorInfo": {"Error": "States.Timeout"}}, MagicMock())
 
         error_log = logs_table.put_item.call_args.kwargs["Item"]["errorLog"]
-        assert "arn:task:9" in error_log
+        assert "(0123abcd)" in error_log
+        assert "arn:" not in error_log and "123456789012" not in error_log
 
 
 @pytest.mark.unit
@@ -535,13 +537,18 @@ class TestStopRegisteredSubProcesses:
         sfn = MagicMock()
         sfn.stop_execution.side_effect = _client_error("AccessDeniedException")
         message = eo.stop_registered_sub_process(
-            {"resourceType": "stepFunctionsExecution", "executionArn": "arn:sub:1"},
+            {"resourceType": "stepFunctionsExecution",
+             "executionArn": "arn:aws:states:us-east-1:123456789012:execution:sub:run-1"},
             sfn_client=sfn)
-        assert "arn:sub:1" in message and "AccessDeniedException" in message
+        assert message == "Sub-process stop failed for run-1: AccessDeniedException"
+        sfn.stop_execution.assert_called_once_with(
+            executionArn="arn:aws:states:us-east-1:123456789012:execution:sub:run-1")
 
     def test_unsupported_resource_type_names_its_locator(self):
-        message = eo.stop_registered_sub_process({"resourceType": "ecsTask", "taskArn": "arn:task:1"})
-        assert "arn:task:1" in message
+        message = eo.stop_registered_sub_process(
+            {"resourceType": "ecsTask", "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/cluster/0123abcd"})
+        assert "Sub-process of type 'ecsTask' (0123abcd) could not be stopped" in message
+        assert "arn:" not in message and "123456789012" not in message
 
     def test_no_client_is_a_silent_no_op(self):
         # A caller without stop permissions still reconciles the rows rather than reporting noise.

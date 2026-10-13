@@ -476,6 +476,7 @@ class TestADeadlineCloudJobIsCancellable:
         client = MagicMock()
         with patch.object(le, "deadline_client", client):
             warning = le._abort_registered_sub_process(
-                {"resourceType": "ecsTask", "taskArn": "arn:task:1"})
-        assert "arn:task:1" in warning
+                {"resourceType": "ecsTask", "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/cluster/0123abcd"})
+        assert "Sub-process of type 'ecsTask' (0123abcd) could not be aborted" in warning
+        assert "arn:" not in warning and "123456789012" not in warning
         client.update_job.assert_not_called()

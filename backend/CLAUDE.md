@@ -46,7 +46,10 @@ backend/
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
-│   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
+│   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build; the shared
+│   │       │                                       #   sub-process stop helper + ABORTABLE_RESOURCE_TYPES (SFN,
+│   │       │                                       #   Batch, Deadline Cloud, SageMaker training job / pipeline
+│   │       │                                       #   execution) used by both the abort API and the failure path
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)

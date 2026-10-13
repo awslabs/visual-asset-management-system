@@ -422,6 +422,28 @@ describe("executionService sub-execution read grants", () => {
         // The abort grant it sits beside is unchanged.
         expect(resourceEntries(template, "executionService", "batch:TerminateJob")).toEqual(["*"]);
     });
+
+    // A SageMaker training job or pipeline execution a pipeline registered is stopped on abort and
+    // described for the details view. Both carry a run-time name, so the scope is the account and
+    // Region's training-job and pipeline-execution namespaces — never a bare `*`, and never another
+    // account or Region.
+    const SAGEMAKER_RESOURCES = [
+        "arn:aws:sagemaker:us-east-1:123456789012:training-job/*",
+        "arn:aws:sagemaker:us-east-1:123456789012:pipeline/*/execution/*",
+    ].sort();
+    test("grants the two SageMaker Stop and two Describe actions on this account's namespaces", () => {
+        const { template } = synthed();
+        for (const action of [
+            "sagemaker:StopTrainingJob",
+            "sagemaker:StopPipelineExecution",
+            "sagemaker:DescribeTrainingJob",
+            "sagemaker:DescribePipelineExecution",
+        ]) {
+            expect(resourceEntries(template, "executionService", action).sort()).toEqual(
+                SAGEMAKER_RESOURCES
+            );
+        }
+    });
 });
 
 /**
@@ -485,6 +507,24 @@ describe("handleExecutionError sub-process stop grants", () => {
         expect(
             resourceEntries(synthed().template, "handleExecutionError", "batch:TerminateJob")
         ).toEqual(["*"]);
+    });
+
+    // The failure path shares the stop implementation with the abort path, so it holds the same two
+    // SageMaker Stop actions on the same namespaces — and only those: it never describes a job.
+    test("grants the two SageMaker Stop actions and no Describe", () => {
+        const { template } = synthed();
+        const expected = [
+            "arn:aws:sagemaker:us-east-1:123456789012:training-job/*",
+            "arn:aws:sagemaker:us-east-1:123456789012:pipeline/*/execution/*",
+        ].sort();
+        for (const action of ["sagemaker:StopTrainingJob", "sagemaker:StopPipelineExecution"]) {
+            expect(resourceEntries(template, "handleExecutionError", action).sort()).toEqual(
+                expected
+            );
+        }
+        const actions = actionsOnRole(template, "handleExecutionError");
+        expect(actions).not.toContain("sagemaker:DescribeTrainingJob");
+        expect(actions).not.toContain("sagemaker:DescribePipelineExecution");
     });
 });
 

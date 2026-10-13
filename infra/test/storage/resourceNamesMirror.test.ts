@@ -84,7 +84,10 @@ function canonicalKeys(): string[] {
  * ssm_resource_lookup.py instead.
  *
  *   * the whole `lambdaFunctions` category -- taken from the registry, so a new entry needs no
- *     edit here; and
+ *     edit here;
+ *   * the whole `integration` category -- the orchestration bus ARN, event source prefix and
+ *     workflow state-machine role ARN that an externally owned pipeline bridge stack resolves at
+ *     its own deploy time; no handler reads them; and
  *   * the five deprecated-table keys under `dynamoTables/legacy/` whose only consumer is a
  *     migration script. Each is named through the registry object rather than as a string, so a
  *     rename fails compilation instead of drifting into a stale allow-list entry.
@@ -99,6 +102,7 @@ function toolingOnlyKeys(): string[] {
     const legacy = RESOURCE_PARAM_KEYS.dynamoTablesLegacy;
     return [
         ...Object.values(RESOURCE_PARAM_KEYS.lambdaFunctions),
+        ...Object.values(RESOURCE_PARAM_KEYS.integration),
         legacy.assetVersionsStorageV1,
         legacy.assetFileVersionsStorageV1,
         legacy.assetLinksStorage,
@@ -170,7 +174,7 @@ describe("backend mirror matches the canonical registry", () => {
             expect(canonical.has(key)).toBe(true);
             expect(mirror.has(key)).toBe(false);
             // Bounds what may be omitted: no live table, bucket, or log group can be hidden here.
-            expect(key).toMatch(/^(lambdaFunctions\/|dynamoTables\/legacy\/)/);
+            expect(key).toMatch(/^(lambdaFunctions\/|integration\/|dynamoTables\/legacy\/)/);
         }
     });
 

@@ -1280,6 +1280,23 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         help: "Workflow support for the DeadlineCloud pipeline execution type (OpenJD job submission to an operator-owned farm/queue). Available only in the commercial AWS partition — not available in GovCloud or EU Sovereign Cloud.",
     },
+    // Externally owned pipeline bridges
+    {
+        path: "app.pipelines.externalPipelineBridges",
+        label: "External pipeline bridges",
+        input: "external-bridges",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Accounts and role ARN patterns allowed to publish pipeline registration events onto the orchestration bus, plus the exact Lambda / SQS / EventBridge ARNs the workflow role may invoke there. Empty grants nothing.",
+    },
+    {
+        path: "app.pipelines.executionLogReadPrefixes",
+        label: "Execution log read allow-list",
+        input: "string-array",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "CloudWatch log-group names under /aws/ the execution logs API may read (trailing * = prefix). Used verbatim as IAM resource names; '*', '/' and anything outside /aws/ are rejected.",
+    },
     // NVIDIA Cosmos shared settings + models
     {
         path: `${COSMOS}.enabled`,
