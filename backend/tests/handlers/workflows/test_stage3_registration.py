@@ -629,7 +629,8 @@ class TestAbortRegisteredSubExecutions:
                     {"resourceType": "stepFunctionsExecution",
                      "stateMachineArn": "arn:sm:ok", "executionArn": "arn:ex:ok"},
                     {"resourceType": "stepFunctionsExecution",
-                     "stateMachineArn": "arn:sm:denied", "executionArn": "arn:ex:denied"}]}
+                     "stateMachineArn": "arn:sm:denied",
+                     "executionArn": "arn:aws:states:us-east-1:123456789012:execution:sm:denied"}]}
         pexec_table = MagicMock()
         main_table = MagicMock()
 
@@ -637,7 +638,7 @@ class TestAbortRegisteredSubExecutions:
             return pexec_table if name == le.pipeline_executions_table else main_table
 
         def _stop(executionArn):
-            if executionArn == "arn:ex:denied":
+            if executionArn == "arn:aws:states:us-east-1:123456789012:execution:sm:denied":
                 raise le.botocore.exceptions.ClientError(
                     {"Error": {"Code": "AccessDeniedException"}}, "StopExecution")
             return {}
@@ -659,10 +660,14 @@ class TestAbortRegisteredSubExecutions:
         assert body["message"] == "Execution aborted"
         # Both registered sub-executions + the main execution were attempted.
         stopped = {c.kwargs.get("executionArn") for c in mock_stop.call_args_list}
-        assert "arn:ex:ok" in stopped and "arn:ex:denied" in stopped and "arn:ex:main" in stopped
+        assert {"arn:ex:ok", "arn:aws:states:us-east-1:123456789012:execution:sm:denied",
+                "arn:ex:main"} <= stopped
         # The denied sub-execution surfaces a non-fatal warning; the abort still succeeds.
         assert "warnings" in body
-        assert any("arn:ex:denied" in w for w in body["warnings"])
+        # The warning names the execution by its final ARN segment; the account id and Region in the
+        # ARN never reach the caller.
+        assert any("Sub-process abort failed for denied: AccessDeniedException" in w for w in body["warnings"])
+        assert not any("arn:" in w or "123456789012" in w for w in body["warnings"]), body["warnings"]
 
     def test_abort_terminates_a_registered_batch_job(self):
         # A pipeline that submits its OWN Batch job registers it as resourceType batchJob.

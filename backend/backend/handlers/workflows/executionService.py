@@ -1473,7 +1473,8 @@ def _abort_registered_sub_process(sub):
 
     Returns a non-fatal warning string when the sub-process could not be stopped (a real
     StopExecution failure, or a resource type not yet abortable), or "" when nothing needs to be
-    surfaced (stopped cleanly, or no actionable locator). Never raises."""
+    surfaced (stopped cleanly, or no actionable locator). The returned message names the sub-process
+    by its display identifier (never a full ARN); the full ARN is logged. Never raises."""
     resource_type = sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
     if resource_type == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
         execution_arn = sub.get("executionArn", "")
@@ -1481,7 +1482,7 @@ def _abort_registered_sub_process(sub):
             return ""
         ok, err = _stop_sfn_execution_reporting(execution_arn)
         if not ok:
-            return f"Sub-process abort failed for {execution_arn}: {err}"
+            return f"Sub-process abort failed for {eo.display_identifier(execution_arn)}: {err}"
         return ""
     if resource_type == RESOURCE_TYPE_BATCH_JOB:
         # Only pipelines that submit their Batch job THEMSELVES register it: when a nested state
@@ -1493,7 +1494,7 @@ def _abort_registered_sub_process(sub):
             return ""
         ok, err = _terminate_batch_job_reporting(job_id)
         if not ok:
-            return f"Sub-process abort failed for Batch job {job_id}: {err}"
+            return f"Sub-process abort failed for Batch job {eo.display_identifier(job_id)}: {err}"
         return ""
     if resource_type == RESOURCE_TYPE_DEADLINE_CLOUD_JOB:
         farm_id = sub.get("farmId", "")
@@ -1520,8 +1521,8 @@ def _abort_registered_sub_process(sub):
     locator = (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
                or sub.get("taskArn") or sub.get("arn") or resource_type)
     logger.info(f"Registered sub-process of type '{resource_type}' is not yet abortable: {locator}")
-    return (f"Sub-process of type '{resource_type}' ({locator}) could not be aborted: "
-            f"abort for this resource type is not yet supported; it may still be running.")
+    return (f"Sub-process of type '{resource_type}' ({eo.display_identifier(locator)}) could not be "
+            f"aborted: abort for this resource type is not yet supported; it may still be running.")
 
 
 def _metadata_source_entities(config_row):

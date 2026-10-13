@@ -67,6 +67,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **`/secure-config` responds when Amazon Location Service is unreachable** — The Location Service API key lookup is bounded (2 s connect, 5 s read, 3 attempts), so a deployment with all Lambda functions in the VPC and no `com.amazonaws.<region>.geo` interface endpoint receives `200` with an empty map URL and a warning naming the missing endpoint, instead of a `504` from API Gateway. (issue #440)
 -   **GR00T container containment test** — The `datasetPath` containment test exercises the realpath-containment refusal with a relative traversal to an existing directory, and a sibling test pins the absolute-path refusal, so the container test suite is green and both refusal routes are asserted. (issue #429)
 -   **Group abort warnings** — A group abort returns each member's non-fatal sub-process abort warnings, prefixed with the member execution id, in a top-level `warnings` array; the MCP `abort_execution` tool preserves them. (issue #445)
+-   **Sub-process warnings name no ARN** — Execution abort and failure-path warnings name a registered sub-process by its registered id or the final segment of its registered ARN (execution name, job id, task id), so the account id and Region in the ARN reach neither the API `warnings` array nor the pipeline log row; the full ARN stays in the server log. (issue #449)
 
 **Dependencies:**
 
