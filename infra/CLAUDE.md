@@ -47,6 +47,7 @@ infra/
       s3AssetBuckets.ts         # Global asset bucket registry
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
       service-helper.ts         # ServiceFormatter: ARN(), Endpoint, Principal
+      webAppDeployment.ts       # Web bundle upload (hashed assets / *.mjs / rest) with per-set Cache-Control
     lambdaBuilder/              # 17 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
                                 # config, pipeline, workflow, role, userRole, tag, tagType, subscription, sendEmail,
                                 # metadataSchema, assetsLink, searchIndexBucketSync)

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import loginBgImageSrc from "../resources/img/login_bg.png";
+import loginBgImageSrc from "../resources/img/login_bg.webp";
 
 export function Header() {
     return (

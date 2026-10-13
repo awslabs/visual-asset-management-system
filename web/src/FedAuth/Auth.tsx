@@ -36,11 +36,12 @@ import {
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import loginBgImageSrc from "../resources/img/login_bg.png";
+import loginBgImageSrc from "../resources/img/login_bg.webp";
 import logoDarkImageSrc from "../../logo_dark.png";
 
 import LoadingScreen from "../components/loading/LoadingScreen";
 import { ErrorBoundary } from "../components/common/ErrorBoundary";
+import { APP_LOAD_SLOW_NOTICE_MS } from "../utils/chunkLoadRecovery";
 import { Alert } from "@cloudscape-design/components";
 import styles from "./loginbox.module.css";
 import "@aws-amplify/ui-react/styles.css";
@@ -1190,7 +1191,11 @@ const Auth: React.FC<AuthProps> = (props) => {
                 {/* Guards the shell itself (top navigation, router, footer). routes.tsx has a
                     second boundary around each page, so a page error stays inside the layout. */}
                 <ErrorBoundary componentName="The application">
-                    <Suspense fallback={<LoadingScreen />}>{props.children}</Suspense>
+                    <Suspense
+                        fallback={<LoadingScreen slowNoticeAfterMs={APP_LOAD_SLOW_NOTICE_MS} />}
+                    >
+                        {props.children}
+                    </Suspense>
                 </ErrorBoundary>
             </>
         );
