@@ -489,6 +489,7 @@ class TestAbortGroup:
             {"workflowExecutionId": "e2000000000000000000000000000002", "executionStatus": "RUNNING", "executionStopDate": ""},
             {"workflowExecutionId": "e3000000000000000000000000000003", "executionStatus": "RUNNING", "executionStopDate": ""},
         ]
+
         def _authz(execution_id, main_item):
             return (execution_id != "e3000000000000000000000000000003", "")
         with patch(f"{MOD}._executions_in_group", return_value=executions), \
@@ -509,6 +510,7 @@ class TestAbortGroup:
             {"workflowExecutionId": "e2", "executionStatus": "RUNNING"},
             {"workflowExecutionId": "secret", "executionStatus": "RUNNING"},
         ]
+
         def _abort(_event, execution_id):
             body = ({"message": "Execution aborted", "warnings": ["Sub-process may still be running"]}
                     if execution_id == "e1" else {"message": "Execution aborted"})
