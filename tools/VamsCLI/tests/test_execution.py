@@ -995,6 +995,16 @@ class TestExecutionAbort:
             assert result.exit_code == 0
             assert mocks['api_client'].abort_execution.call_args.kwargs['group_id'] == 'grp1'
 
+    def test_abort_group_displays_member_warnings(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': {'groupId': 'grp1', 'results': [{'executionId': 'e1', 'status': 'aborted'}]},
+                'warnings': ['e1: Sub-process may still be running']}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1', '--yes'])
+            assert result.exit_code == 0, result.output
+            assert 'Warnings:' in result.output
+            assert 'e1: Sub-process may still be running' in result.output
+
     def test_abort_group_requires_confirmation(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
             result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1'],

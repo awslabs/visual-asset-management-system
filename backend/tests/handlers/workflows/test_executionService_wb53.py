@@ -503,6 +503,28 @@ class TestAbortGroup:
         assert "e3000000000000000000000000000003" not in results  # inaccessible member's id is not leaked
         assert message["skippedInaccessibleCount"] == 1
 
+    def test_member_abort_warnings_are_visible_without_leaking_inaccessible_members(self):
+        members = [
+            {"workflowExecutionId": "e1", "executionStatus": "RUNNING"},
+            {"workflowExecutionId": "e2", "executionStatus": "RUNNING"},
+            {"workflowExecutionId": "secret", "executionStatus": "RUNNING"},
+        ]
+        def _abort(_event, execution_id):
+            body = ({"message": "Execution aborted", "warnings": ["Sub-process may still be running"]}
+                    if execution_id == "e1" else {"message": "Execution aborted"})
+            return {"statusCode": 200, "body": json.dumps(body)}
+
+        with patch(f"{MOD}._executions_in_group", return_value=members), \
+             patch(f"{MOD}.authorize_abort", side_effect=lambda eid, _: (eid != "secret", "")), \
+             patch(f"{MOD}.abort_execution", side_effect=_abort):
+            resp = le.abort_group({}, "g1")
+
+        payload = json.loads(resp["body"])
+        assert payload["warnings"] == ["e1: Sub-process may still be running"]
+        assert "secret" not in resp["body"]
+        assert payload["message"]["skippedInaccessibleCount"] == 1
+        assert [r["status"] for r in payload["message"]["results"]] == ["aborted", "aborted"]
+
     def test_empty_group_404(self):
         with patch(f"{MOD}._executions_in_group", return_value=[]):
             resp = le.abort_group({}, "nope")

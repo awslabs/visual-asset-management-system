@@ -1749,9 +1749,10 @@ if CONFIG.enable_writes:
         fans out across every active execution in that group — so keep it out of `autoApprove`
         alongside execute_workflow and rerun_execution. Confirm a group abort with the user first.
 
-        Pass group_id to abort every active execution in that group.
+        Pass group_id to abort every active execution in that group. Any returned warnings
+        identify a member whose sub-process may still be running after the abort.
         """
-        return CLIENT.unwrap_message(CLIENT.api.abort_execution(execution_id, group_id=group_id))
+        return _unwrap_message_with_warnings(CLIENT.api.abort_execution(execution_id, group_id=group_id))
 
     # ---------------------------------------------------------------------
     # Comment / subscription / metadata-schema writes
