@@ -131,10 +131,10 @@ def _trimesh_to_pyvista_textured(mesh: trimesh.Trimesh) -> pv.PolyData:
             if tex_image is not None:
                 # Set UV coordinates on mesh
                 pv_mesh.active_texture_coordinates = np.array(mesh.visual.uv)
-                # Create PyVista texture from the base color image
-                pv_mesh._preview_texture = pv.Texture(np.array(tex_image))
+                # Create PyVista texture from the base color image, as RGB
+                pv_mesh._preview_texture = pv.Texture(texture_rgb_array(tex_image))
                 logger.info(f"Loaded textured mesh: {len(vertices)} vertices, {n_faces} faces, "
-                            f"texture={tex_image.size}")
+                            f"texture={tex_image.size}, mode={getattr(tex_image, 'mode', None)}")
                 return pv_mesh
             else:
                 logger.info("No texture image found on material, falling back to vertex color baking")
@@ -171,6 +171,30 @@ def _trimesh_to_pyvista_textured(mesh: trimesh.Trimesh) -> pv.PolyData:
 
     logger.info(f"Loaded mesh: {len(vertices)} vertices, {n_faces} faces")
     return pv_mesh
+
+
+def texture_rgb_array(image) -> np.ndarray:
+    """A texture image as a contiguous HxWx3 uint8 RGB array.
+
+    PIL keeps an image in its stored mode, and ``np.array`` of it keeps that layout: a palette PNG
+    (mode ``P``) becomes a 2-D array of palette indices, a greyscale one a single channel and a 16-bit
+    one values up to 65535. VTK reads a 2-D array as intensity, so a palette texture rendered as its
+    small index values, nearly black (#476: the Khronos Duck's ``DuckCM.png`` holds indices 0..53).
+    Every mode is converted to RGB here; alpha is dropped, as the USD loader does.
+    """
+    from PIL import Image
+
+    if not isinstance(image, Image.Image):
+        array = np.asarray(image)
+        if array.dtype != np.uint8:
+            peak = 65535.0 if array.max(initial=0) > 255 else 255.0
+            array = np.clip(array.astype(np.float64) / peak * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        image = Image.fromarray(array)
+    if image.mode.startswith("I"):  # 16- or 32-bit integer greyscale
+        values = np.asarray(image, dtype=np.float64)
+        peak = 65535.0 if values.max(initial=0) > 255 else 255.0
+        image = Image.fromarray(np.clip(values / peak * 255.0 + 0.5, 0, 255).astype(np.uint8), "L")
+    return np.ascontiguousarray(np.asarray(image.convert("RGB"), dtype=np.uint8))
 
 
 def _bake_texture_to_vertex_colors(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
