@@ -106,7 +106,7 @@ describe.each(SHAPES)("%s web bundle upload", (_name, synth) => {
         const { hashedAssets, prune } = webDeployments(synth());
         expect(prune.properties.Exclude).toEqual(["*"]);
         expect(prune.properties.Include).toEqual(["assets/*"]);
-        // Same metadata as the upload, so the re-sync changes no stored object.
+        // Same metadata as the upload, so the objects this pass writes again match the stored ones.
         expect(metadata(prune)).toEqual(metadata(hashedAssets));
         // Prune is the BucketDeployment default; CDK emits Prune only when it is false.
         expect(prune.properties.Prune).not.toBe(false);
