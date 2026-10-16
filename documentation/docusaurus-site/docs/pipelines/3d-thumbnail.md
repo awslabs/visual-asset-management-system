@@ -23,10 +23,10 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 | LAS    | `.las`    | laspy          |
 | LAZ    | `.laz`    | laspy + laszip |
 | E57    | `.e57`    | pye57          |
-| PTX    | `.ptx`    | Open3D         |
+| PTX    | `.ptx`    | built-in       |
 | PCD    | `.pcd`    | Open3D         |
-| FLS    | `.fls`    | Open3D         |
-| FWS    | `.fws`    | Open3D         |
+
+FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
 
 ### CAD Formats
 
@@ -162,15 +162,18 @@ Parameters reach the pipeline through the template selected for the run. Deploym
 
 ## Limits and Constraints
 
-| Constraint                         | Value                       |
-| ---------------------------------- | --------------------------- |
-| Maximum input file size            | 100 GB                      |
-| Container ephemeral storage        | 200 GiB                     |
-| Point cloud downsampling threshold | 20 million points           |
-| Rendering method                   | CPU-based (no GPU required) |
+| Constraint                  | Value                                                                |
+| --------------------------- | -------------------------------------------------------------------- |
+| Maximum input file size     | The free space of the work volume, less 1 GiB kept for the output    |
+| Container ephemeral storage | 200 GiB                                                              |
+| Point budget                | 5 million per vCPU, at most 20 million (and 35% of the memory limit) |
+| Triangle budget             | 5 million per vCPU, at most 30 million (and 35% of the memory limit) |
+| Rendering method            | CPU-based (Mesa llvmpipe, one rasteriser thread per vCPU; no GPU)    |
+
+The container reads its memory limit and vCPU count from its cgroup and derives the budgets from them, so it stays within whichever task size runs it. A point cloud above the point budget is sampled while it is read (E57 scan by scan, PTX streamed from Amazon S3 with no local copy); a mesh above the triangle budget is decimated with VTK quadric clustering. An input larger than the free disk fails before the download with a message naming both sizes. The execution log records the input size, the budgets and each phase's duration (download, fetch, load, render, encode, upload).
 
 :::tip[Large Point Clouds]
-Point clouds exceeding 20 million points are automatically downsampled for rendering performance. The original file is not modified; only the rendering input is reduced.
+The original file is never modified; only the rendering input is reduced. Every scan of a multi-scan E57 or PTX file is read and placed by its pose or transform.
 :::
 
 ## Prerequisites
@@ -187,7 +190,7 @@ The container image is built during CDK deployment from `backendPipelines/previe
 -   **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, FBX, DRC (MIT license)
 -   **laspy** -- LAS/LAZ point cloud reading (BSD license)
 -   **pye57** -- E57 point cloud reading (MIT license)
--   **Open3D** -- Additional point cloud formats: PTX, PCD, FLS, FWS (MIT license)
+-   **Open3D** -- PCD point clouds and the FBX fallback (MIT license)
 -   **CadQuery** -- STEP/STP CAD file support (LGPL license)
 -   **OpenUSD (pxr)** -- USD format support (Modified Apache 2.0 license)
 -   **Xvfb** -- Virtual framebuffer for headless rendering

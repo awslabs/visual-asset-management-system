@@ -406,7 +406,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
 
         //Build Lambda Pipeline Resources to Open the Pipeline
         const allowedInputFileExtensions =
-            ".ply,.stl,.obj,.glb,.gltf,.fbx,.las,.laz,.e57,.ptx,.fls,.fws,.pcd,.drc,.stp,.step,.usd,.usda,.usdc,.usdz";
+            ".ply,.stl,.obj,.glb,.gltf,.fbx,.las,.laz,.e57,.ptx,.pcd,.drc,.stp,.step,.usd,.usda,.usdc,.usdz";
         const openPipelineFunction = buildOpenPipelineFunction(
             this,
             props.lambdaCommonBaseLayer,

@@ -7,6 +7,7 @@ import os
 import sys
 import traceback
 from .core import run, hello
+from . import resources
 from .utils.pipeline.objects import PipelineStatus
 from .utils.logging import set_log_level
 from botocore.config import Config
@@ -22,6 +23,15 @@ set_log_level(logging.INFO)
 
 def main():
     hello()
+
+    # Run the CPU rasteriser on the task's CPUs (the cgroup quota, not the host's CPU count). Set
+    # before any GL context exists.
+    cpus = resources.cpu_count()
+    resources.configure_rasteriser_threads(cpus)
+    logging.getLogger().info(
+        "rasteriser LP_NUM_THREADS=%s GALLIUM_DRIVER=%s (cpus=%s)",
+        os.environ.get("LP_NUM_THREADS"), os.environ.get("GALLIUM_DRIVER"), cpus,
+    )
 
     # The uid the work actually runs under. The image declares a non-root USER and the Batch job
     # definition sets no `user` override, and neither is readable from a run's outcome: a job that

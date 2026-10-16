@@ -2,20 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Point cloud format handler for .las, .laz, .e57, .ptx, .fls, .fws, .pcd files.
-Loads point cloud data and converts to PyVista for rendering.
+Point cloud format handler for .las, .laz, .e57, .ptx, .pcd files.
+Loads point cloud data, bounded to a point budget, and converts it to PyVista for rendering.
+
+FARO scans (.fls, .fws) are not supported: reading them needs the proprietary FARO SDK, and Open3D,
+which the handler used to pass them to, has no FARO reader, so every such run failed.
 """
 
 import os
 import numpy as np
 import pyvista as pv
 from ..utils.logging import get_logger
+from . import point_streams
 
 logger = get_logger()
 
-SUPPORTED_EXTENSIONS = {".las", ".laz", ".e57", ".ptx", ".pcd", ".fls", ".fws"}
+SUPPORTED_EXTENSIONS = {".las", ".laz", ".e57", ".ptx", ".pcd"}
 
-# Maximum points to render for performance (downsample if exceeded)
+# Line-oriented formats read as a byte stream: in S3 mode straight from the object, with no local copy.
+STREAMED_EXTENSIONS = {".ptx"}
+
+# Default point budget (the run passes the budget derived from its task's resources).
 MAX_POINTS_FOR_RENDER = 20_000_000
 
 # Points decoded per streaming iteration for LAS/LAZ. This is the memory floor of the read: one
@@ -27,41 +34,53 @@ def can_handle(extension: str) -> bool:
     return extension.lower() in SUPPORTED_EXTENSIONS
 
 
-def load(file_path: str) -> pv.PolyData:
+def is_streamed(extension: str) -> bool:
+    return extension.lower() in STREAMED_EXTENSIONS
+
+
+def load(file_path: str, max_points: int = MAX_POINTS_FOR_RENDER) -> pv.PolyData:
     """
-    Load a point cloud file and return a PyVista PolyData object for rendering.
-    Supports: .las, .laz, .e57, .ptx, .pcd, .fls, .fws
+    Load a point cloud file and return a PyVista PolyData object of at most ``max_points`` points.
+    Supports: .las, .laz, .e57, .ptx, .pcd
     """
     ext = os.path.splitext(file_path)[1].lower()
-    logger.info(f"Loading point cloud file: {file_path} (format: {ext})")
+    logger.info(f"Loading point cloud file: {file_path} (format: {ext}, budget {max_points:,} points)")
 
+    if ext in STREAMED_EXTENSIONS:
+        return load_stream(point_streams.iter_file_bytes(file_path), ext, max_points)
     if ext in (".las", ".laz"):
-        points, colors = _load_las(file_path)
+        points, colors = _load_las(file_path, max_points=max_points)
     elif ext == ".e57":
-        points, colors = _load_e57(file_path)
-    elif ext == ".ptx":
-        points, colors = _load_ptx(file_path)
+        points, colors = point_streams.read_e57(file_path, max_points)
     elif ext == ".pcd":
         points, colors = _load_pcd(file_path)
-    elif ext in (".fls", ".fws"):
-        points, colors = _load_faro(file_path)
     else:
         raise ValueError(f"Unsupported point cloud format: {ext}")
+    return _to_pyvista(points, colors, max_points)
 
-    # Downsample if needed
-    if len(points) > MAX_POINTS_FOR_RENDER:
-        logger.info(f"Downsampling from {len(points)} to {MAX_POINTS_FOR_RENDER} points")
-        indices = np.random.default_rng(42).choice(
-            len(points), size=MAX_POINTS_FOR_RENDER, replace=False
-        )
+
+def load_stream(chunks, ext: str, max_points: int = MAX_POINTS_FOR_RENDER) -> pv.PolyData:
+    """Load a line-oriented point cloud from an iterator of byte chunks (a local file or an S3 stream)."""
+    ext = ext.lower()
+    if ext == ".ptx":
+        points, colors = point_streams.read_ptx(chunks, max_points)
+    else:
+        raise ValueError(f"Unsupported streamed point cloud format: {ext}")
+    return _to_pyvista(points, colors, max_points)
+
+
+def _to_pyvista(points, colors, max_points: int) -> pv.PolyData:
+    if len(points) > max_points:
+        logger.info(f"Downsampling from {len(points)} to {max_points} points")
+        indices = np.random.default_rng(42).choice(len(points), size=max_points, replace=False)
         points = points[indices]
         if colors is not None:
             colors = colors[indices]
 
-    pv_cloud = pv.PolyData(points)
+    pv_cloud = pv.PolyData(np.ascontiguousarray(points, dtype=np.float64))
 
     if colors is not None and len(colors) > 0:
-        pv_cloud.point_data["RGB"] = colors
+        pv_cloud.point_data["RGB"] = np.ascontiguousarray(colors, dtype=np.uint8)
 
     logger.info(f"Loaded point cloud: {len(points)} points")
     return pv_cloud
@@ -145,85 +164,6 @@ def _load_las(file_path: str, max_points: int = MAX_POINTS_FOR_RENDER):
     return points, colors
 
 
-def _load_e57(file_path: str):
-    """Load E57 files using pye57."""
-    import pye57
-
-    e57 = pye57.E57(file_path)
-    header = e57.get_header(0)
-    raw_data = e57.read_scan_raw(0)
-
-    x = np.array(raw_data["cartesianX"], dtype=np.float64)
-    y = np.array(raw_data["cartesianY"], dtype=np.float64)
-    z = np.array(raw_data["cartesianZ"], dtype=np.float64)
-    points = np.column_stack([x, y, z])
-
-    colors = None
-    try:
-        if "colorRed" in raw_data and "colorGreen" in raw_data and "colorBlue" in raw_data:
-            r = np.array(raw_data["colorRed"], dtype=np.uint8)
-            g = np.array(raw_data["colorGreen"], dtype=np.uint8)
-            b = np.array(raw_data["colorBlue"], dtype=np.uint8)
-            colors = np.column_stack([r, g, b])
-    except Exception as e:
-        logger.warning(f"Could not extract colors from E57: {e}")
-
-    return points, colors
-
-
-def _load_ptx(file_path: str):
-    """
-    Load PTX files (Leica structured text format).
-    PTX is a simple text-based point cloud format with optional intensity and color.
-    """
-    points_list = []
-    colors_list = []
-
-    with open(file_path, 'r') as f:
-        # PTX header format (10 lines total):
-        #   Line 1: number of columns
-        #   Line 2: number of rows
-        #   Line 3: scanner origin (x y z)
-        #   Lines 4-6: scanner axis vectors (3 lines of x y z)
-        #   Lines 7-10: 4x4 transformation matrix (4 lines of 4 values)
-        try:
-            cols = int(f.readline().strip())
-            rows = int(f.readline().strip())
-        except ValueError:
-            raise ValueError("Invalid PTX header")
-
-        # Skip remaining 8 header lines (scanner origin, 3 axis vectors, 4x4 matrix)
-        for _ in range(8):
-            f.readline()
-
-        # Read point data
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) < 3:
-                continue
-            try:
-                x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
-                # Skip invalid points (some PTX files use 0 0 0 for invalid)
-                if x == 0.0 and y == 0.0 and z == 0.0:
-                    continue
-                points_list.append([x, y, z])
-
-                # Colors may be in columns 4-6 (after intensity) or 5-7
-                if len(parts) >= 7:
-                    r, g, b = int(parts[4]), int(parts[5]), int(parts[6])
-                    colors_list.append([r, g, b])
-            except (ValueError, IndexError):
-                continue
-
-    if not points_list:
-        raise ValueError("No valid points found in PTX file")
-
-    points = np.array(points_list, dtype=np.float64)
-    colors = np.array(colors_list, dtype=np.uint8) if len(colors_list) == len(points_list) else None
-
-    return points, colors
-
-
 def _load_pcd(file_path: str):
     """Load PCD files using Open3D."""
     try:
@@ -240,35 +180,3 @@ def _load_pcd(file_path: str):
         colors = (np.asarray(pcd.colors) * 255).astype(np.uint8)
 
     return points, colors
-
-
-def _load_faro(file_path: str):
-    """
-    Load FARO scanner formats (.fls, .fws).
-    Attempts to use Open3D. If unsupported, raises a descriptive error.
-    """
-    try:
-        import open3d as o3d
-    except ImportError:
-        raise ImportError("Open3D is required for FARO format support")
-
-    ext = os.path.splitext(file_path)[1].lower()
-    logger.info(f"Attempting to load FARO format {ext} via Open3D...")
-
-    try:
-        pcd = o3d.io.read_point_cloud(file_path)
-        points = np.asarray(pcd.points, dtype=np.float64)
-
-        if len(points) == 0:
-            raise ValueError(f"No points loaded from FARO file: {file_path}")
-
-        colors = None
-        if pcd.has_colors():
-            colors = (np.asarray(pcd.colors) * 255).astype(np.uint8)
-
-        return points, colors
-    except Exception as e:
-        raise ValueError(
-            f"Unable to load FARO {ext} format. "
-            f"This format may require proprietary conversion. Error: {e}"
-        )

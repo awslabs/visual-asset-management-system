@@ -26,12 +26,12 @@ from .utils import manifest_io
 from .utils import image_utils
 from .format_handlers import mesh_handler, pointcloud_handler, cad_handler, usd_handler
 from . import dependencies
+from . import geometry_budget
 from . import renderer
+from . import resources
+from .utils.timing import PhaseTimer
 
 logger = get_logger()
-
-# Maximum input file size: 100 GB
-MAX_INPUT_FILE_SIZE = 100 * 1024 * 1024 * 1024
 
 # Thumbnail formats the pipeline emits. auto animates when the renderer produced several frames and
 # writes a still otherwise; a named format applies to every input.
@@ -153,10 +153,34 @@ def _run_preview_pipeline(
     assetId: str = "",
 ) -> PipelineStage:
     """
-    Run the preview generation pipeline for a single stage.
+    Run the preview generation pipeline for a single stage, logging the run's compute resources,
+    render budgets and per-phase timings.
+    """
+    budgets = resources.compute_budgets()
+    tier = resources.compute_tier()
+    if tier:
+        logger.info(f"{resources.COMPUTE_TIER_ENV}={tier}")
+    logger.info(f"Render budgets: {budgets.describe()}")
+    timer = PhaseTimer()
+    try:
+        return _run_preview_stage(stage, inputMetadata, inputParameters, localTest, assetId,
+                                  budgets, timer)
+    finally:
+        logger.info(timer.summary())
 
-    1. Download input file from S3
-    2. Detect format and load with appropriate handler
+
+def _run_preview_stage(
+    stage: PipelineStage,
+    inputMetadata: dict,
+    inputParameters: dict,
+    localTest: bool,
+    assetId: str,
+    budgets: "resources.Budgets",
+    timer: PhaseTimer,
+) -> PipelineStage:
+    """
+    1. Download input file from S3 (a line-oriented point cloud is streamed instead)
+    2. Detect format and load with appropriate handler, within the render budgets
     3. Render rotating preview frames
     4. Save as GIF (with size optimization / JPEG fallback)
     5. Upload to S3 output directory
@@ -210,7 +234,12 @@ def _run_preview_pipeline(
                 f"Existing preview found ({existing_preview}), overwriting as requested."
             )
 
+    # Detect format from the stage's declared extension, else the key.
+    declared_ext = ("." + stage_input.fileExtension.lower().lstrip(".")) if stage_input.fileExtension else ""
+    key_ext = os.path.splitext(stage_input.objectKey or "")[1].lower()
+
     # Download file from S3
+    streamed = False
     if localTest:
         # localTest mode: use file from /data/input/ volume mount
         if stage_input.objectKey and stage_input.objectKey != "":
@@ -220,84 +249,97 @@ def _run_preview_pipeline(
             # Find first supported file in /data/input/
             local_filepath = _find_local_test_file("/data/input")
         logger.info(f"Using local test file: {local_filepath}")
-
-        # Check file size in localTest mode
         if local_filepath and os.path.isfile(local_filepath):
-            file_size = os.path.getsize(local_filepath)
-            if file_size > MAX_INPUT_FILE_SIZE:
-                return _error_response(
-                    stage,
-                    f"Input file size ({file_size / (1024**3):.2f} GB) exceeds "
-                    f"maximum allowed size ({MAX_INPUT_FILE_SIZE / (1024**3):.0f} GB).",
-                )
+            logger.info(f"Input size: {os.path.getsize(local_filepath) / 1024 ** 3:.3f} GiB")
     else:
         # Check file size in S3 before downloading
         file_size = s3.get_object_size(stage_input.bucketName, stage_input.objectKey)
         if file_size is None:
             logger.warning(
                 "Unable to determine file size via HEAD request. "
-                "Proceeding with download — size limit will not be enforced."
+                "Proceeding with download; the free-disk check cannot run before it."
             )
-        elif file_size > MAX_INPUT_FILE_SIZE:
-            return _error_response(
-                stage,
-                f"Input file size ({file_size / (1024**3):.2f} GB) exceeds "
-                f"maximum allowed size ({MAX_INPUT_FILE_SIZE / (1024**3):.0f} GB).",
-            )
+        else:
+            logger.info(f"Input size: {file_size / 1024 ** 3:.3f} GiB ({file_size:,} bytes)")
 
-        logger.info(f"Downloading file from S3: {stage_input.bucketName}/{stage_input.objectKey}")
-        # The input lands at its path relative to its asset's root, so the files it references are
-        # fetched beside it at their own relative paths and resolve locally as they do in the asset.
-        reference_root_key = dependencies.asset_root_key(
-            stage_input.objectKey,
-            assetId,
-            stage_output.objectDir or "",
-            same_bucket_output=bool(stage_output.bucketName)
-            and stage_input.bucketName == stage_output.bucketName,
-        )
-        reference_local_root = os.path.join(local_input_dir, "asset")
-        input_target = dependencies.local_path_for(
-            reference_local_root,
-            dependencies.relative_to_root(stage_input.objectKey, reference_root_key),
-        ) or os.path.join(local_input_dir, os.path.basename(stage_input.objectKey))
-        os.makedirs(os.path.dirname(input_target), exist_ok=True)
-        local_filepath = s3.download(stage_input.bucketName, stage_input.objectKey, input_target)
+        # A line-oriented point cloud is read straight from S3 and sampled as it streams, so it needs
+        # no local copy and is not limited by the work volume.
+        streamed = pointcloud_handler.is_streamed(declared_ext or key_ext)
+        if streamed:
+            local_filepath = None
+        else:
+            if file_size is not None:
+                try:
+                    resources.ensure_disk_space(local_input_dir, file_size)
+                except resources.InsufficientDiskError as e:
+                    return _error_response(stage, str(e))
+
+            logger.info(f"Downloading file from S3: {stage_input.bucketName}/{stage_input.objectKey}")
+            # The input lands at its path relative to its asset's root, so the files it references are
+            # fetched beside it at their own relative paths and resolve locally as they do in the asset.
+            reference_root_key = dependencies.asset_root_key(
+                stage_input.objectKey,
+                assetId,
+                stage_output.objectDir or "",
+                same_bucket_output=bool(stage_output.bucketName)
+                and stage_input.bucketName == stage_output.bucketName,
+            )
+            reference_local_root = os.path.join(local_input_dir, "asset")
+            input_target = dependencies.local_path_for(
+                reference_local_root,
+                dependencies.relative_to_root(stage_input.objectKey, reference_root_key),
+            ) or os.path.join(local_input_dir, os.path.basename(stage_input.objectKey))
+            os.makedirs(os.path.dirname(input_target), exist_ok=True)
+            with timer.phase("download"):
+                local_filepath = s3.download(stage_input.bucketName, stage_input.objectKey, input_target)
 
     # Verify download
-    if local_filepath is None or not os.path.isfile(local_filepath):
+    if not streamed and (local_filepath is None or not os.path.isfile(local_filepath)):
         return _error_response(
             stage,
             "Unable to download file from S3 and/or no input file provided. "
             "Check bucket name, object key, and local input parameters.",
         )
 
-    # Detect format
-    ext = os.path.splitext(local_filepath)[1].lower()
-    if stage_input.fileExtension:
-        ext = "." + stage_input.fileExtension.lower().lstrip(".")
+    ext = declared_ext or (key_ext if streamed else os.path.splitext(local_filepath)[1].lower())
 
     logger.info(f"Detected file extension: {ext}")
 
     # In S3 mode, fetch the files the input references (glTF buffers/images, USD layers and textures,
     # OBJ materials and textures, FBX textures) from the input's own asset. A rejected or missing
     # reference is skipped; the input still renders.
-    if not localTest and dependencies.has_references(ext):
+    if not localTest and not streamed and dependencies.has_references(ext):
         try:
-            dependencies.fetch_referenced_files(
-                stage_input.bucketName,
-                stage_input.objectKey,
-                local_filepath,
-                reference_local_root,
-                reference_root_key,
-                ext,
-            )
+            with timer.phase("fetch"):
+                dependencies.fetch_referenced_files(
+                    stage_input.bucketName,
+                    stage_input.objectKey,
+                    local_filepath,
+                    reference_local_root,
+                    reference_root_key,
+                    ext,
+                )
         except Exception as e:
             logger.warning(f"Failed to fetch some referenced files: {e}")
 
-    # Load with appropriate handler
+    # Load with appropriate handler, then bring the geometry within the render budgets
     try:
-        pv_data = _load_file(local_filepath, ext,
-                             asset_root=None if localTest else reference_local_root)
+        with timer.phase("load"):
+            if streamed:
+                pv_data = pointcloud_handler.load_stream(
+                    s3.iter_object_bytes(stage_input.bucketName, stage_input.objectKey), ext,
+                    max_points=budgets.points)
+            else:
+                pv_data = _load_file(local_filepath, ext,
+                                     asset_root=None if localTest else reference_local_root,
+                                     budgets=budgets)
+            pv_data = geometry_budget.apply_budgets(pv_data, budgets)
+    except MemoryError:
+        logger.exception("Out of memory while loading the input")
+        return _error_response(
+            stage,
+            f"Out of memory loading the 3D file ({ext}) within the task's "
+            f"{budgets.memory_bytes / 1024 ** 3:.1f} GiB memory limit. Run the large compute tier.")
     except Exception as e:
         logger.exception(f"Failed to load file: {e}")
         return _error_response(stage, f"Failed to load 3D file ({ext}): {str(e)}")
@@ -313,10 +355,11 @@ def _run_preview_pipeline(
     # mesh on its full bounds and a point cloud on its percentile bounds (stray points ignored).
     still_requested = output_type in ("jpg", "png")
     try:
-        if still_requested:
-            frames = [renderer.generate_static_frame(pv_data)]
-        else:
-            frames = renderer.generate_rotating_frames(pv_data)
+        with timer.phase("render"):
+            if still_requested:
+                frames = [renderer.generate_static_frame(pv_data)]
+            else:
+                frames = renderer.generate_rotating_frames(pv_data)
     except Exception as e:
         logger.exception(f"Failed to render frames: {e}")
         if still_requested:
@@ -324,7 +367,8 @@ def _run_preview_pipeline(
         # Fall back to static frame
         try:
             logger.info("Attempting static frame fallback...")
-            static_img = renderer.generate_static_frame(pv_data)
+            with timer.phase("render"):
+                static_img = renderer.generate_static_frame(pv_data)
             frames = [static_img]
         except Exception as e2:
             logger.exception(f"Static frame fallback also failed: {e2}")
@@ -332,8 +376,9 @@ def _run_preview_pipeline(
 
     # Save and optimize output
     try:
-        # Use actual file basename (from local_filepath for localTest, objectKey for S3)
-        input_basename = os.path.basename(local_filepath)
+        # Use actual file basename (from local_filepath for localTest, objectKey for S3; a streamed
+        # input has no local copy)
+        input_basename = os.path.basename(local_filepath or stage_input.objectKey)
         # auto animates whenever the renderer produced more than one frame; a named format applies
         # whatever the frame count. A still is the front three-quarter view: the rendered still, or
         # the orbit frame nearest that angle when only an orbit exists.
@@ -345,14 +390,16 @@ def _run_preview_pipeline(
         output_path = os.path.join(local_output_dir, output_filename)
         still_frame = frames[renderer.still_view_frame_index(len(frames))]
 
-        if animate:
-            final_path = image_utils.ensure_under_size_limit(frames, output_path, still_frame=still_frame)
-        else:
-            if still_extension == "png":
-                image_utils.save_png(still_frame, output_path)
+        with timer.phase("encode"):
+            if animate:
+                final_path = image_utils.ensure_under_size_limit(frames, output_path,
+                                                                 still_frame=still_frame)
             else:
-                image_utils.save_jpeg(still_frame, output_path)
-            final_path = output_path
+                if still_extension == "png":
+                    image_utils.save_png(still_frame, output_path)
+                else:
+                    image_utils.save_jpeg(still_frame, output_path)
+                final_path = output_path
 
         logger.info(f"Preview file generated: {final_path} "
                      f"({os.path.getsize(final_path) / 1024:.1f} KB)")
@@ -382,7 +429,8 @@ def _run_preview_pipeline(
             else:
                 s3_object_key = stage_output.objectDir + final_filename
             logger.info(f"Uploading preview to S3: {stage_output.bucketName}/{s3_object_key}")
-            upload_result = s3.upload(stage_output.bucketName, s3_object_key, final_path)
+            with timer.phase("upload"):
+                upload_result = s3.upload(stage_output.bucketName, s3_object_key, final_path)
             if upload_result is None:
                 return _error_response(
                     stage,
@@ -453,16 +501,19 @@ def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId
     return "/".join(input_parts[asset_id_idx + 1:-1])
 
 
-def _load_file(file_path: str, ext: str, asset_root: str = None):
+def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
     """
     Load a 3D file with the appropriate format handler.
     Returns a PyVista PolyData object. ``asset_root`` is the local directory the input's referenced
-    files were fetched into (USD reads textures only from inside it).
+    files were fetched into (USD reads textures only from inside it). ``budgets`` bounds the points
+    a point-cloud reader keeps.
     """
     if mesh_handler.can_handle(ext):
         return mesh_handler.load(file_path)
     elif pointcloud_handler.can_handle(ext):
-        return pointcloud_handler.load(file_path)
+        if budgets is None:
+            return pointcloud_handler.load(file_path)
+        return pointcloud_handler.load(file_path, max_points=budgets.points)
     elif cad_handler.can_handle(ext):
         return cad_handler.load(file_path)
     elif usd_handler.can_handle(ext):
@@ -498,7 +549,7 @@ def _find_local_test_file(input_dir: str) -> str:
 
 # Format-based up-axis conventions
 # Z-up: surveying/point cloud standards (LAS spec, E57 spec)
-_Z_UP_FORMATS = {".las", ".laz", ".e57", ".ptx", ".pcd", ".fls", ".fws", ".stl"}
+_Z_UP_FORMATS = {".las", ".laz", ".e57", ".ptx", ".pcd", ".stl"}
 # Y-up: glTF 2.0 spec mandates Y-up; STEP/STP files are treated as Y-up because
 # cadquery tessellation preserves original model coordinates which render correctly as-is;
 # USD files handle up-axis internally via stage metadata (UsdGeom.GetStageUpAxis)

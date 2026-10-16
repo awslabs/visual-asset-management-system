@@ -107,6 +107,16 @@ A container job role usually reads every asset bucket, so a path written inside 
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
 -   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
 
+## Sizing a Container's Work to Its Task
+
+A Batch/Fargate container reads its limits from its own cgroup rather than from a tier name or a constant, so it stays inside whichever job size started it. `preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
+
+-   Memory from `/sys/fs/cgroup/memory.max` (v1 `memory/memory.limit_in_bytes` fallback; "max" or a near-2^63 value means unlimited); CPUs from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
+-   Derive work budgets (points, triangles) from both, and set `LP_NUM_THREADS` (Mesa llvmpipe) to the CPU count before the first GL context exists.
+-   Check the input size plus output headroom against `shutil.disk_usage` before downloading, and fail with a message naming both sizes; do not keep a fixed maximum-size constant.
+-   Download with a `TransferConfig` (parallel ranged GETs); stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
+-   Log a compute-tier environment variable when the orchestration sets one, but never branch on it; log each phase's duration (`utils/timing.py`).
+
 ## Reporting Failure on a Task-Token Pipeline
 
 A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the

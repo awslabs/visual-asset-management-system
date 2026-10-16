@@ -181,7 +181,8 @@ def generate_static_frame(
 def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
     """Add a mesh to the plotter with appropriate styling."""
     texture = getattr(pv_data, '_preview_texture', None)
-    has_colors = "RGB" in pv_data.point_data
+    # Per-point colours, or per-cell colours on a mesh decimated to the triangle budget.
+    has_colors = "RGB" in pv_data.point_data or "RGB" in pv_data.cell_data
 
     if texture is not None:
         logger.info("Rendering with UV texture mapping")

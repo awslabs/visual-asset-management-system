@@ -21,9 +21,11 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 | Category    | Extensions                                | Handler              |
 | :---------- | :---------------------------------------- | :------------------- |
 | Mesh        | .ply, .stl, .obj, .glb, .gltf, .fbx, .drc | trimesh              |
-| Point Cloud | .las, .laz, .e57, .ptx, .pcd, .fls, .fws  | laspy, pye57, open3d |
+| Point Cloud | .las, .laz, .e57, .ptx, .pcd              | laspy, pye57, open3d |
 | CAD         | .stp, .step                               | cadquery             |
 | USD         | .usd, .usda, .usdc, .usdz                 | usd-core (pxr)       |
+
+FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
 
 ## Architecture
 
@@ -174,14 +176,21 @@ Every reference is untrusted input. It is accepted only as a relative path that,
 
 All data is normalized to Y-up before rendering:
 
--   **Known Z-up formats** (LAS, LAZ, E57, PTX, PCD, FLS, FWS, STL): Rotated to Y-up automatically
+-   **Known Z-up formats** (LAS, LAZ, E57, PTX, PCD, STL): Rotated to Y-up automatically
 -   **Known Y-up formats** (GLB, GLTF, STP, STEP, USD): No rotation
 -   **Variable formats** (OBJ, FBX, PLY, DRC): Bounding-box heuristic determines up-axis
 -   **USD files**: Up-axis read from stage metadata via `UsdGeom.GetStageUpAxis()`
 
 ### Point Cloud Handling
 
-Point clouds are downsampled to a maximum of 20 million points for rendering performance. Downsampling uses random subsampling with a fixed seed for reproducibility. Points are rendered as colored spheres using per-point RGB colors when available, or colored by elevation (Y-axis) using the viridis colormap.
+Every point cloud reader keeps at most the run's point budget (see [Compute and Limits](#compute-and-limits)), sampled uniformly at random with a fixed seed while it reads, so peak memory is one read chunk plus the sample whatever the file's size:
+
+-   **LAS/LAZ**: read in 2-million-point chunks and sampled with a uniform stride.
+-   **E57**: every scan is read through the libe57 reader in 1-million-point buffers, its pose (rotation and translation) is applied so all scans share the file's frame, points flagged invalid are dropped, and colours are scaled from the scan's declared colour limits to 8 bits.
+-   **PTX**: every scan's ten header lines are parsed and its 4x4 transform is applied to its points; `0 0 0` (no return) is dropped. In S3 mode a PTX file is streamed from Amazon S3 and parsed in blocks of one million lines, with no local copy.
+-   **PCD**: read with Open3D, then sampled.
+
+Points are rendered as colored spheres using per-point RGB colors when available, or colored by elevation (Y-axis) using the viridis colormap.
 
 ### USD Stage Handling
 
@@ -198,9 +207,21 @@ Each prim's colour comes from, in order: the diffuse texture of the `UsdUVTextur
 
 MaterialX materials are not read (the `usd-core` build has no MaterialX plugin); their prims render in the default colour.
 
-### File Size Limits
+### Compute and Limits
 
-The maximum input file size is 100 GB. Files exceeding this limit are rejected before download with a descriptive error message. The Fargate container has 200 GiB of ephemeral storage to accommodate large input files plus working space.
+The container sizes its work to the task it runs in, read from its cgroup (memory limit; CPU quota and affinity), so it stays within whichever job size started it. When the state machine sets `VAMS_COMPUTE_TIER`, the value is logged; budgets never depend on it.
+
+| Budget    | Per vCPU  | Memory cap (35% of the limit) | Floor     | Ceiling    |
+| :-------- | :-------- | :---------------------------- | :-------- | :--------- |
+| Points    | 5 million | 120 bytes per point           | 1 million | 20 million |
+| Triangles | 5 million | 200 bytes per triangle        | 1 million | 30 million |
+
+On 4 vCPU and 16 GiB that is 20 million points or triangles. A point cloud above its budget is sampled; a mesh above its budget is decimated with VTK quadric clustering (a texture is baked to colours first). The rasteriser (Mesa llvmpipe) runs `LP_NUM_THREADS` = the task's vCPU count; on 4 vCPU a 36-frame 800x600 orbit of 20 million triangles renders in about 100 seconds.
+
+-   **Download**: parallel ranged GETs (64 MiB parts, four per vCPU, at most 32).
+-   **Disk**: before the download, the input's size plus 1 GiB of output headroom is checked against the work volume's free space; an input that does not fit fails at once with a message naming both. Referenced files are checked the same way as they are fetched. A streamed PTX needs no disk.
+-   **Memory**: a `MemoryError` while loading fails the run with a message naming the task's memory limit.
+-   **Timings**: the log records the input size, the budgets and the seconds spent in each phase (`download`, `fetch`, `load`, `render`, `encode`, `upload`).
 
 ## References
 
