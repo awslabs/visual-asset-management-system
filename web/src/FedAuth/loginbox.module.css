@@ -4,6 +4,19 @@
 .loginPage {
     isolation: isolate;
 }
+/* Decorative login background. The artwork turns into a solid band at 69% of its height; the mask
+   fades the mesh out before that point so the image blends into the page background in either
+   theme instead of ending on a hard edge. */
+.loginBackground {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    z-index: -100;
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(to bottom, #000 45%, transparent 68%);
+    mask-image: linear-gradient(to bottom, #000 45%, transparent 68%);
+}
 .container {
     display: flex;
     justify-content: center;
