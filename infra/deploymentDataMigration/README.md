@@ -40,7 +40,7 @@ Perform the following steps to conduct an A/B deployment and data migration betw
 
 When migrating DynamoDB tables between stacks:
 
-1. Ensure the target tables in Stack B are empty to prevent key collisions
+1. Confirm which Stack B tables its own deployment has already written (see [A/B Deployment Data Copy](#ab-deployment-data-copy)); every other target table is empty, so no key collides there
 2. Copy each table with AWS tooling as described in [A/B Deployment Data Copy](#ab-deployment-data-copy); if Stack B is a newer VAMS version, run the [Version Upgrade Scripts](#version-upgrade-scripts) for each version step afterwards (see the [Version Upgrade Script Index](#version-upgrade-script-index))
 3. Verify that all data has been successfully migrated before proceeding
 4. If the migration fails, clear the target tables and retry
@@ -156,7 +156,7 @@ VAMS provides two kinds of migration tooling:
 
 ### A/B Deployment Data Copy
 
-VAMS does not ship a Stack A to Stack B table copy script. Copy each DynamoDB table from Stack A into the matching empty table in Stack B with the tooling of your choice -- an AWS Glue job, an AWS Database Migration Service task, or a scan-and-batch-write script built on the AWS SDK -- and sync the S3 buckets as described in [S3 Bucket Migration](#s3-bucket-migration).
+VAMS does not ship a Stack A to Stack B table copy script. Copy each DynamoDB table from Stack A into the matching table in Stack B with the tooling of your choice -- an AWS Glue job, an AWS Database Migration Service task, or a scan-and-batch-write script built on the AWS SDK -- and sync the S3 buckets as described in [S3 Bucket Migration](#s3-bucket-migration).
 
 1. Deploy Stack B and leave its data tier idle (no uploads, no pipeline runs) until the copy is verified.
 
@@ -172,7 +172,7 @@ VAMS does not ship a Stack A to Stack B table copy script. Copy each DynamoDB ta
 
 3. Ensure the credentials the copy runs under have read access to the Stack A tables and buckets and write access to the Stack B tables and buckets, including both stacks' KMS keys when `useKmsCmkEncryption` is enabled.
 
-4. Copy each table into the Stack B table with the same `dynamoTables/<key>` parameter name. The destination tables must be empty to prevent key collisions; if a copy fails, clear the destination table and retry.
+4. Copy each table into the Stack B table with the same `dynamoTables/<key>` parameter name, with two exceptions that Stack B's own deployment writes before any copy and rewrites on every deploy. Skip `dynamoTables/appFeatureEnabledStorage` entirely: it holds Stack B's feature switches, derived from Stack B's configuration, and a copy would replace them with Stack A's until the next deploy. Copy `rolesStorage` (the `admin` and `basicReadOnly` roles), `constraintsStorage` (the `initial_admin_*` and `initial_basicro_*` constraints), `userStorage` and `userRolesStorage` (the `SYSTEM_USER` and `app.adminUserId` records and their `admin` role assignments) and `metadataSchemaStorageV2` (the default schemas, when an `app.metadataSchema.autoLoad*` flag is on) with a writer that overwrites or skips an existing key. Every other destination table is empty until the copy writes it; if a copy of one of those fails, clear that destination table and retry.
 
 5. Sync the S3 buckets ([S3 Bucket Migration](#s3-bucket-migration)).
 
@@ -210,6 +210,6 @@ Deployments older than v2.1 have no in-repository upgrade path; deploy a new sta
 
 ### Script Notes
 
--   Destination tables for an A/B copy should be empty to prevent possible key collisions. If a copy or an upgrade script fails, clear the affected table data first before re-running.
+-   Destination tables for an A/B copy are empty except the ones Stack B's deployment seeds (listed in [A/B Deployment Data Copy](#ab-deployment-data-copy)); on those, overwrite or skip existing keys and never copy `appFeatureEnabledStorage`. If a copy or an upgrade script fails on an unseeded table, clear that table's data first before re-running.
 -   Always test migrations on a small subset of data before running on production data.
 -   Always back up your data before running any migration scripts.
