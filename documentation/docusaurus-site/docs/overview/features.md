@@ -282,7 +282,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 -   **Metadata schema auto-loading** -- Control which default metadata schemas are loaded on deployment
 -   **External asset buckets** -- Register existing Amazon S3 buckets with VAMS for asset management
 -   **Custom Amazon S3 bucket policies** -- Additional bucket policy statements via `s3AdditionalBucketPolicyConfig.json`
--   **Addon framework** -- Garnet Framework integration for NGSI-LD digital twin data synchronization; Physna Sync add-on for one-way synchronization of supported 3D/CAD files and metadata to a Physna for geometric and semantic 3D search
+-   **Add-ons** -- Optional, upstream-maintained integrations with external solutions and stand-alone components, enabled by configuration ([Add-ons Overview](../developer/addons-overview.md)): Garnet Framework integration for NGSI-LD digital twin data synchronization; Physna Sync add-on for one-way synchronization of supported 3D/CAD files and metadata to a Physna for geometric and semantic 3D search; the licensed VNTANA and VEERUM viewers
 
 ### Fork Extension Points
 

@@ -79,7 +79,7 @@ If you enable Garnet Framework integration on an existing VAMS deployment, use t
 
 ### Physna Sync
 
-The Physna Sync add-on performs a one-way synchronization of supported VAMS files, file attributes, file metadata, and asset metadata into a Physna tenant. It is intended for customers who want Physna's geometric and semantic 3D search to index their VAMS asset corpus.
+The Physna Sync [add-on](../developer/addons-overview.md) performs a one-way synchronization of supported VAMS files, file attributes, file metadata, and asset metadata into a Physna tenant. It is intended for customers who want Physna's geometric and semantic 3D search to index their VAMS asset corpus.
 
 Phase 1 implements VAMS-to-Physna sync only. Future phases will add bidirectional sync and additional in-VAMS UI surfaces.
 

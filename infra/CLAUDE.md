@@ -582,6 +582,8 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 
 ### Fork Extension Points (core + add-on + custom)
 
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
 Every aggregated list in the CDK app is composed from a core part, an add-on part kept beside it (`lib/nestedStacks/addon/`: `addonCsp.ts`, `addonDefaultRoutes.ts`, `addonStackHelpers.ts`; `common/addonAppFeatures.ts`; `common/addonResourceParamKeys.ts`), and a fork-owned custom part that upstream ships empty and never edits. Core files name no add-on (`test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts`, which `CustomBuilderNestedStack` calls with `CustomResourcesProps` (`config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets`, `registry`):
 
 -   Lambdas follow the [Lambda Builder Pattern](#lambda-builder-pattern) with all five security calls; handlers live in `backend/backend/handlers/custom/`.

@@ -109,9 +109,13 @@ const sidebars: SidebarsConfig = {
                 },
                 {
                     type: "category",
-                    label: "Addons",
+                    label: "Add-ons",
                     collapsed: true,
-                    items: ["developer/garnet-framework", "developer/physna-integration"],
+                    items: [
+                        "developer/addons-overview",
+                        "developer/garnet-framework",
+                        "developer/physna-integration",
+                    ],
                 },
                 {
                     type: "category",

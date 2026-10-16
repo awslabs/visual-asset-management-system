@@ -8,11 +8,11 @@ The extension points cover **additions**. Changing the behavior of an existing p
 
 Each aggregated list has three parts, merged in the order core, add-on, custom:
 
-| Part   | Owner    | Holds                                                                                          |
-| ------ | -------- | ---------------------------------------------------------------------------------------------- |
-| Core   | upstream | the core entries, edited every release                                                         |
-| Add-on | upstream | the optional add-ons (Physna, Garnet) and the licensed viewers (VNTANA, VEERUM), one file each |
-| Custom | the fork | the fork's entries; shipped empty                                                              |
+| Part   | Owner    | Holds                                                                                                                                                                               |
+| ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Core   | upstream | the core entries, edited every release                                                                                                                                              |
+| Add-on | upstream | optional, upstream-maintained parts that integrate VAMS with an external solution or add a stand-alone component, enabled by configuration ([Add-ons Overview](addons-overview.md)) |
+| Custom | the fork | the fork's entries; shipped empty                                                                                                                                                   |
 
 The files, list by list:
 
@@ -37,7 +37,7 @@ The files, list by list:
 | CLI commands                                                  | `tools/VamsCLI/vamscli/commands/`                           | none                                                 | `tools/VamsCLI/vamscli/commands/custom/`           |
 | MCP tools                                                     | `tools/VamsMCP/vams_mcp/server.py`                          | none                                                 | `tools/VamsMCP/vams_mcp/custom_tools.py`           |
 
-The add-on files hold upstream code that most deployments do not run, so it is kept off the path of every core change. The licensed VNTANA and VEERUM viewers are add-on viewers: they ship disabled in `addonViewerConfig.json`, and a deployment with a license enables one by setting `"enabled": true` on its entry there. Their plugin directories (`viewers/VntanaViewerPlugin/`, `viewers/VeerumViewerPlugin/`), their install scripts in `web/customInstalls/vntana/` and `web/customInstalls/veerum/`, and their `postinstall` entries are unchanged.
+The add-on files hold upstream code that most deployments do not run, so it is kept off the path of every core change; [Add-ons Overview](addons-overview.md) defines an add-on and lists the current ones. The licensed VNTANA and VEERUM viewers are add-on viewers: they ship disabled in `addonViewerConfig.json`, and a deployment with a license enables one by setting `"enabled": true` on its entry there. Their plugin directories (`viewers/VntanaViewerPlugin/`, `viewers/VeerumViewerPlugin/`), their install scripts in `web/customInstalls/vntana/` and `web/customInstalls/veerum/`, and their `postinstall` entries are unchanged.
 
 The core file splices the custom part in with a single line that does not change between releases. Every custom file opens with the same header:
 

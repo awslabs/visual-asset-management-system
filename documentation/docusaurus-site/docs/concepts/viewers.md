@@ -4,7 +4,7 @@ VAMS includes a plugin-based viewer system that enables browser-based visualizat
 
 VAMS ships **20 built-in viewer plugins** across five categories. Fourteen are available in every deployment. The remaining six are conditional:
 
--   **Two licensed viewers** — VNTANA and VEERUM — ship disabled and require both a vendor license and enabling them in the viewer configuration.
+-   **Two licensed viewers** — VNTANA and VEERUM, both [add-ons](../developer/addons-overview.md) — ship disabled and require both a vendor license and enabling them in the viewer configuration.
 -   **Three viewers require `app.webUi.allowUnsafeEvalFeatures`** — Needle USD, the SuperSplat Editor, and ThatOpen IFC BIM. Their loaders use `eval`, so VAMS does not offer them at all when a deployment has not enabled that setting.
 -   **The Physna Viewer** appears only when the Physna Sync add-on is enabled.
 

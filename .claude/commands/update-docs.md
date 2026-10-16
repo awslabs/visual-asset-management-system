@@ -33,7 +33,9 @@ Update VAMS documentation based on recent code changes.
 -   `infra/config/config.ts` → `docs/deployment/configuration-reference.md`
 -   `infra/lib/lambdaBuilder/` → `docs/architecture/aws-resources.md`
 -   `infra/lib/nestedStacks/storage/` → `docs/architecture/data-model.md`
--   `web/src/visualizerPlugin/config/viewerConfig.json` → `docs/additional/viewer-plugins.md`, `docs/developer/viewer-plugins.md`
+-   `web/src/visualizerPlugin/config/viewerConfig.json`, `addonViewerConfig.json` → `docs/additional/viewer-plugins.md`, `docs/developer/viewer-plugins.md`, `docs/concepts/viewers.md`
+-   Add-on and custom lane files (`backend/backend/common/addon*.py`, `backend/backend/custom/`, `backend/backend/models/addon/`, `infra/common/addon*.ts`, `infra/common/custom*.ts`, `infra/lib/nestedStacks/addon/`, `infra/lib/nestedStacks/custom/`, `web/src/addons/`, `web/src/custom/`, `tools/VamsCLI/vamscli/addon_constants.py`, `custom_constants.py`) → `docs/developer/customizing-vams.md` (the lane table) and `docs/developer/addons-overview.md` (the add-on definition and table)
+-   `backend/backend/common/constants.py` object types and constraint fields → `docs/concepts/permissions-model.md`, `docs/api/auth.md` and the `objectType` schemas in `documentation/VAMS_API.yaml`
 -   `tools/VamsCLI/vamscli/commands/` → `docs/cli/commands/<group>.md`, `docs/cli/command-reference.md`
 -   `CHANGELOG.md` → `docs/additional/revisions.md`
 -   `backendPipelines/`, `infra/lib/nestedStacks/pipelines/` → `docs/pipelines/` pages (+ `docs/deployment/configuration-reference.md` for pipeline config options)

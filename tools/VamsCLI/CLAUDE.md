@@ -814,6 +814,8 @@ Follow this checklist:
 
 ### Adding Commands in a Fork
 
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
 A fork adds commands without editing `main.py`, `constants.py` or `utils/api_client.py`; each splices in a fork-owned file that upstream ships empty and never edits:
 
 | What                     | Fork-owned file                                                                                   | Spliced in by                                                                                                                 |

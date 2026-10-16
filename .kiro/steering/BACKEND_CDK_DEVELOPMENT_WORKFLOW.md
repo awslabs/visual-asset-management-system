@@ -81,6 +81,8 @@ One folder per domain. The current domains:
 
 #### **Fork Extension Points (backend + CDK)**
 
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
 Every list VAMS aggregates is `core + add-on + custom`. The custom part is fork-owned: upstream ships it empty and never edits it, so a fork adds net-new endpoints and resources without conflicting on upgrade. Each such file opens with the "Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 | Layer                                       | Add-on file (upstream-owned)                                                              | Custom file (fork-owned, shipped empty)                                                     |
@@ -168,9 +170,11 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Mock AWS Services**: Use proper mocking for DynamoDB, S3, SNS
 -   [ ] **Run All Tests**: Ensure `pytest` passes with coverage
 
+The add-on and custom lane modules (`common/addonConstants.py`, `common/addonResourceNames.py`, `custom/`) are pure data and need no mock under `tests/mocks/`. `common` is a `MagicMock` in `tests/conftest.py`, so the conftests register `common.addonConstants` in `sys.modules` by path before `constants.py` loads. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules (`tests/common/test_constants_extension_lanes.py`). Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes.
+
 #### **Step 6: Frontend Integration**
 
--   [ ] **Update API Service**: Add methods to `web/src/services/APIService.js` (or update existing API Paths that may not be always in this file)
+-   [ ] **Update API Service**: Add methods to `web/src/services/APIService.ts` (or update existing API Paths that may not be always in this file)
 -   [ ] **Follow Frontend Patterns**: Use boolean/message return patterns
 -   [ ] **Handle Response Formats**: Support both legacy and new response formats
 -   [ ] **Add Error Handling**: Include proper error message extraction
@@ -1030,10 +1034,10 @@ attachFunctionToApi(this, [domain]Service, {
 });
 ```
 
-### **Rule 7: Frontend Integration MUST Follow APIService.js Patterns**
+### **Rule 7: Frontend Integration MUST Follow APIService.ts Patterns**
 
 ```javascript
-// ✅ CORRECT - Add to web/src/services/APIService.js
+// ✅ CORRECT - Add to web/src/services/APIService.ts
 /**
  * [Operation description]
  * @param {Object} params - Parameters object
@@ -2615,7 +2619,7 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 
 ### **Integration Compliance**
 
--   [ ] Frontend service methods follow `APIService.js` patterns
+-   [ ] Frontend service methods follow `APIService.ts` patterns
 -   [ ] CLI API client methods follow `api_client.py` patterns
 -   [ ] Constants added to appropriate files
 -   [ ] Exceptions added to exception hierarchy
@@ -2817,7 +2821,7 @@ required_table = dynamodb.Table(required_table_name)
 #### **Step 6: Add Frontend Integration**
 
 ```javascript
-// web/src/services/APIService.js
+// web/src/services/APIService.ts
 // Add service methods following existing patterns. Check for other files that may already implement the API route but aren't in APIService.
 ```
 

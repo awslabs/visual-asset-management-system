@@ -915,6 +915,8 @@ endpoints writes only here and merges upstream releases without conflicts. Each 
 | Models                                             | `models/custom/<name>.py`                                             | imported by the fork's handlers                     |
 | Object types, constraint fields, deny-list entries | `custom/customConstants.py`                                           | `common/constants.py` (merged at import)            |
 
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
 The add-on lane sits beside each core list and is upstream-owned: `common/addonApiRoutes.py`,
 `common/addonResourceNames.py` (`AddonResourceKeys`), `common/addonConstants.py`, `handlers/addon/`
 and `models/addon/` (the Physna viewer model). Every list merges in the order core, add-on, custom.

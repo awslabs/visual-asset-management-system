@@ -989,6 +989,8 @@ Grant: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildExecutionServiceFun
 
 ## Addons (`app.addons`)
 
+Settings for the [add-ons](../developer/addons-overview.md) that integrate VAMS with an external solution. Each is off by default. The licensed VNTANA and VEERUM viewers are add-ons as well, but they are enabled in `web/src/visualizerPlugin/config/addonViewerConfig.json` rather than here.
+
 ### Garnet Framework (`app.addons.useGarnetFramework`)
 
 Integration with the Garnet Framework external knowledge graph for NGSI-LD data synchronization.
