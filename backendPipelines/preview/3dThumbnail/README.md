@@ -164,6 +164,12 @@ A mesh (glTF, OBJ, FBX, STL, PLY mesh, STEP, USD) is framed on its full bounding
 
 A still preview (`outputType` `jpg` or `png`, the static fallback, and the size-limit fallback of an animated preview) shows the front three-quarter view: 45° around the orbit and 25° above it.
 
+### Referenced Files
+
+Before loading, `preview_pipeline/dependencies.py` fetches the files the input references from the input's own asset (glTF buffers and images; USD sublayers, references, payloads and asset-valued attributes, followed through each fetched layer; OBJ `mtllib` files and their `map_*`/`bump`/`disp` textures; FBX texture file names). The input and every fetched file land at their asset-relative paths under one local root, so relative references resolve locally as they do in the asset.
+
+Every reference is untrusted input. It is accepted only as a relative path that, normalised against the referring file's directory, stays inside the asset prefix (the key up to the asset id, the run's output files folder for a file an earlier step wrote, else the input's own directory); absolute paths, `..` escapes, URI schemes, control characters and over-long values are rejected. The fetch is bounded: 2,000 files, 50 GiB (HeadObject before each download, checked against free disk with 1 GiB headroom) and a recursion depth of 32. A rejected, missing or over-budget reference is logged and skipped.
+
 ### Up-Axis Normalization
 
 All data is normalized to Y-up before rendering:

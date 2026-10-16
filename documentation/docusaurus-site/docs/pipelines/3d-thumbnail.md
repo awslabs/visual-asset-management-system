@@ -6,15 +6,15 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 
 ### Mesh Formats
 
-| Format      | Extension | Library                                     |
-| ----------- | --------- | ------------------------------------------- |
-| PLY         | `.ply`    | Trimesh                                     |
-| STL         | `.stl`    | Trimesh                                     |
-| OBJ         | `.obj`    | Trimesh                                     |
-| GLB         | `.glb`    | Trimesh                                     |
-| GLTF        | `.gltf`   | Trimesh (with external dependency download) |
-| FBX         | `.fbx`    | Trimesh                                     |
-| DRC (Draco) | `.drc`    | Trimesh                                     |
+| Format      | Extension | Library                                          |
+| ----------- | --------- | ------------------------------------------------ |
+| PLY         | `.ply`    | Trimesh                                          |
+| STL         | `.stl`    | Trimesh                                          |
+| OBJ         | `.obj`    | Trimesh                                          |
+| GLB         | `.glb`    | Trimesh                                          |
+| GLTF        | `.gltf`   | Trimesh (with its referenced buffers and images) |
+| FBX         | `.fbx`    | Trimesh                                          |
+| DRC (Draco) | `.drc`    | Trimesh                                          |
 
 ### Point Cloud Formats
 
@@ -77,7 +77,7 @@ flowchart LR
 
 ### Processing Steps
 
-1. **Download** -- The container downloads the input file from the asset Amazon S3 bucket. For GLTF files, external dependencies (buffers, textures) are also downloaded.
+1. **Download** -- The container downloads the input file from the asset Amazon S3 bucket, then the files it references from the same asset: a glTF file's buffers and images, a USD layer's sublayers, references, payloads and asset-valued attributes such as texture paths (followed through each fetched layer), an OBJ file's material libraries and the texture maps they name, and an FBX file's texture files. A reference is fetched only when it is a relative path that stays inside the input's own asset; absolute paths, `..` segments that leave the asset, and URIs (`s3://`, `http(s)://`, `file:`) are skipped. At most 2,000 referenced files and 50 GiB are fetched, each checked against free disk space first. A skipped or missing reference is logged and does not fail the run.
 2. **Load** -- A format-specific handler loads the file into a PyVista PolyData object. The handler is selected based on file extension: mesh, point cloud, CAD, or USD.
 3. **Normalize** -- The pipeline detects and normalizes the coordinate up-axis to Y-up for consistent rendering. Z-up formats (LAS, LAZ, E57, STL, etc.) are rotated automatically. Variable formats use a bounding-box heuristic.
 4. **Render** -- PyVista renders with headless off-screen rendering via Xvfb: a 36-frame orbit for an animated or `auto` output, or one front three-quarter view for a `jpg` or `png` output. A mesh is framed on its full bounds and a point cloud on its 2nd-98th percentile bounds, which ignores stray points. If the orbit fails, the pipeline falls back to the single still view.

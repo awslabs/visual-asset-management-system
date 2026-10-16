@@ -7,11 +7,8 @@ Follows the pcPotreeViewer pipeline pattern: parse input, dispatch to handler, u
 """
 
 import os
-import json
-import posixpath
 import numpy as np
 from pathlib import Path
-from urllib.parse import unquote
 
 from .utils.pipeline.objects import (
     PipelineDefinition,
@@ -28,6 +25,7 @@ from .utils import s3_utils as s3
 from .utils import manifest_io
 from .utils import image_utils
 from .format_handlers import mesh_handler, pointcloud_handler, cad_handler, usd_handler
+from . import dependencies
 from . import renderer
 
 logger = get_logger()
@@ -248,11 +246,22 @@ def _run_preview_pipeline(
             )
 
         logger.info(f"Downloading file from S3: {stage_input.bucketName}/{stage_input.objectKey}")
-        local_filepath = s3.download(
-            stage_input.bucketName,
+        # The input lands at its path relative to its asset's root, so the files it references are
+        # fetched beside it at their own relative paths and resolve locally as they do in the asset.
+        reference_root_key = dependencies.asset_root_key(
             stage_input.objectKey,
-            os.path.join(local_input_dir, os.path.basename(stage_input.objectKey)),
+            assetId,
+            stage_output.objectDir or "",
+            same_bucket_output=bool(stage_output.bucketName)
+            and stage_input.bucketName == stage_output.bucketName,
         )
+        reference_local_root = os.path.join(local_input_dir, "asset")
+        input_target = dependencies.local_path_for(
+            reference_local_root,
+            dependencies.relative_to_root(stage_input.objectKey, reference_root_key),
+        ) or os.path.join(local_input_dir, os.path.basename(stage_input.objectKey))
+        os.makedirs(os.path.dirname(input_target), exist_ok=True)
+        local_filepath = s3.download(stage_input.bucketName, stage_input.objectKey, input_target)
 
     # Verify download
     if local_filepath is None or not os.path.isfile(local_filepath):
@@ -269,16 +278,21 @@ def _run_preview_pipeline(
 
     logger.info(f"Detected file extension: {ext}")
 
-    # For GLTF files in S3 mode, download external dependencies (buffers, textures)
-    if not localTest and ext == ".gltf":
+    # In S3 mode, fetch the files the input references (glTF buffers/images, USD layers and textures,
+    # OBJ materials and textures, FBX textures) from the input's own asset. A rejected or missing
+    # reference is skipped; the input still renders.
+    if not localTest and dependencies.has_references(ext):
         try:
-            _download_gltf_dependencies(
+            dependencies.fetch_referenced_files(
                 stage_input.bucketName,
                 stage_input.objectKey,
-                local_input_dir,
+                local_filepath,
+                reference_local_root,
+                reference_root_key,
+                ext,
             )
         except Exception as e:
-            logger.warning(f"Failed to download some GLTF dependencies: {e}")
+            logger.warning(f"Failed to fetch some referenced files: {e}")
 
     # Load with appropriate handler
     try:
@@ -549,75 +563,6 @@ def _heuristic_up_axis(pv_data, ext: str):
         f"assuming Y-up (no rotation)"
     )
     return pv_data
-
-
-def _download_gltf_dependencies(bucket_name: str, object_key: str, local_dir: str):
-    """
-    Parse a .gltf file and download external resources (buffers, images/textures)
-    from the same S3 directory so trimesh can resolve them at load time.
-    """
-    local_gltf = os.path.join(local_dir, os.path.basename(object_key))
-
-    with open(local_gltf, "r") as f:
-        gltf = json.load(f)
-
-    # S3 directory containing the .gltf file
-    s3_dir = os.path.dirname(object_key)
-
-    # Collect all external URIs (skip embedded data URIs)
-    uris = set()
-    for buf in gltf.get("buffers", []):
-        uri = buf.get("uri", "")
-        if uri and not uri.startswith("data:"):
-            uris.add(uri)
-    for img in gltf.get("images", []):
-        uri = img.get("uri", "")
-        if uri and not uri.startswith("data:"):
-            uris.add(uri)
-
-    if not uris:
-        logger.info("GLTF file has no external dependencies")
-        return
-
-    logger.info(f"Downloading {len(uris)} GLTF dependencies from S3")
-    for uri in sorted(uris):
-        resolved = _resolve_gltf_dependency(uri, local_dir)
-        if resolved is None:
-            logger.warning(f"  Skipping GLTF resource, URI is not a path within the input file's "
-                           f"directory: {uri}")
-            continue
-        relative_path, local_path = resolved
-        s3_key = f"{s3_dir}/{relative_path}" if s3_dir else relative_path
-        # Create subdirectories if the URI has path components
-        parent = os.path.dirname(local_path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        logger.info(f"  Downloading: {s3_key}")
-        s3.download(bucket_name, s3_key, local_path)
-
-
-def _resolve_gltf_dependency(uri: str, local_dir: str):
-    """The (relative path, local path) a GLTF resource URI resolves to, or None when it does not
-    resolve to a path inside local_dir.
-
-    A .gltf file is ordinary asset content, so its buffer and image URIs carry whatever the uploader
-    wrote. The GLTF spec percent-encodes a URI and requires it to be relative to the .gltf file, so
-    the value is decoded first — validating the encoded spelling while downloading the decoded one
-    would check a different string than it uses — and then rejected when it is absolute, names a
-    parent directory, or resolves outside the download directory. The same relative path keys the S3
-    object, so a rejected URI is also one that would read outside the input file's own S3 prefix.
-    """
-    decoded = unquote(uri or "").strip()
-    if not decoded or "://" in decoded or "\\" in decoded:
-        return None
-    relative_path = posixpath.normpath(decoded)
-    if relative_path in (".", "..") or relative_path.startswith(("/", "../")):
-        return None
-    local_base = os.path.realpath(local_dir)
-    local_path = os.path.realpath(os.path.join(local_base, relative_path))
-    if local_path != local_base and not local_path.startswith(local_base + os.sep):
-        return None
-    return relative_path, local_path
 
 
 def _check_existing_preview(stage_input: StageInput, input_basename: str, localTest: bool) -> str:

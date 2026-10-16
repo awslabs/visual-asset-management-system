@@ -82,6 +82,20 @@ def get_object_size(bucket_name, object_key):
         return None
 
 
+def head_object_size(bucket_name, object_key):
+    """The size in bytes of an object, or None when it does not exist or cannot be read.
+
+    For optional objects (files an input references): a missing one is expected, so it is logged as
+    a warning without a traceback.
+    """
+    try:
+        return int(client.head_object(Bucket=bucket_name, Key=object_key)["ContentLength"])
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        logger.warning(f"HeadObject {bucket_name}/{object_key} failed: {code or e}")
+        return None
+
+
 def list_objects_with_prefix(bucket_name, prefix):
     """
     List S3 object keys matching a prefix.
