@@ -100,6 +100,18 @@ export default defineConfig({
             // @aws-amplify/ui-react v5's maplibre-gl-js-amplify that
             // doesn't exist in Amplify v6. VAMS doesn't use Amplify Geo.
             external: ["@aws-amplify/geo"],
+            output: {
+                // Every file under `assets/` is content-hashed and is uploaded as immutable, while
+                // `.mjs` files need an upload of their own to carry a JavaScript Content-Type (see
+                // ES_MODULE_CONTENT_TYPE in infra/lib/helper/webAppDeployment.ts). Emitting `.mjs`
+                // assets — the pdf.js worker — as `.js` keeps the two upload sets disjoint.
+                assetFileNames: (assetInfo) => {
+                    const name = assetInfo.names?.[0] ?? assetInfo.name ?? "";
+                    return name.endsWith(".mjs")
+                        ? "assets/[name]-[hash].js"
+                        : "assets/[name]-[hash][extname]";
+                },
+            },
         },
     },
     define: {
