@@ -4,7 +4,10 @@
  */
 
 import React, { Component, ErrorInfo, ReactNode } from "react";
-import { Alert, Button, SpaceBetween } from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
+import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import { isChunkLoadError, reloadPage } from "../../utils/chunkLoadRecovery";
 
 interface Props {
     children: ReactNode;
@@ -52,17 +55,31 @@ export class ErrorBoundary extends Component<Props, State> {
             }
 
             const componentName = this.props.componentName || "Component";
+            // A lazy component whose chunk failed to download re-throws the same cached rejection on
+            // every render, so resetting this boundary cannot recover it; only a page reload can.
+            const chunkError = isChunkLoadError(this.state.error);
 
             return (
                 <Alert
                     type="error"
-                    header={`${componentName} failed to load`}
-                    action={<Button onClick={this.handleReset}>Retry</Button>}
+                    header={
+                        chunkError
+                            ? `${componentName} could not be downloaded`
+                            : `${componentName} failed to load`
+                    }
+                    action={
+                        chunkError ? (
+                            <Button onClick={() => reloadPage()}>Reload</Button>
+                        ) : (
+                            <Button onClick={this.handleReset}>Retry</Button>
+                        )
+                    }
                 >
                     <SpaceBetween direction="vertical" size="s">
                         <div>
-                            There was an error loading this component. Please try again or contact
-                            your administrator if the problem persists.
+                            {chunkError
+                                ? "Part of the application could not be downloaded, usually because the network connection was interrupted or the application was updated. Reload the page to try again."
+                                : "There was an error loading this component. Please try again or contact your administrator if the problem persists."}
                         </div>
                         {this.state.error && (
                             <div>

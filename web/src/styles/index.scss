@@ -24,10 +24,15 @@ body {
     padding: 0;
 }
 
-/* Reserve the vertical scrollbar's space at all times so opening a modal/drawer (which locks body
-   scroll) does not remove the scrollbar and shift the fixed header, leaving a gap on the right. */
-html {
-    scrollbar-gutter: stable;
+/* Dialogs built on Radix (the orchestration pages) lock scrolling with react-remove-scroll, which
+   compensates for a scrollbar it expects to hide by adding its width to body as `margin-right`. Here
+   `html` is the scroll container and keeps its scrollbar, so that margin only moves the page and its
+   header left while a dialog is open. The library still blocks wheel and touch scrolling outside the
+   dialog, so the page behind stays put, as it does under a Cloudscape modal. The library injects its
+   rule after this stylesheet with the same `!important`, so this selector carries `html` to win on
+   specificity rather than on source order. */
+html body[data-scroll-locked] {
+    margin-right: 0 !important;
 }
 
 /* The 3D, point-cloud and splat viewers interpret drag and pinch inside their own canvas, so the
