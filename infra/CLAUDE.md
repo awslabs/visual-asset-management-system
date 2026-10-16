@@ -104,6 +104,9 @@ infra/
                                  # env value is the joined name), gr00t, isaacLabTraining
     pipelines/containerLogRegistrationEnvEcs.test.ts  # Same for rapidPipeline, modelOps
                                  # (/aws/vendedlogs/Pipelines/* container group)
+    pipelines/preview3dThumbnailComputeTiers.test.ts  # 3D thumbnail tiers: one job definition, the
+                                 # Choice, per-tier vCPU/memory overrides, VAMS_COMPUTE_TIER, timeouts
+    config/preview3dThumbnailComputeTierValidation.test.ts  # getConfig() Fargate-size + threshold checks
     support/asl.ts               # parseAsl + lambda-env / job-definition-name / declared-stage-name helpers
                                  # joining a producer's *_STATE_NAME literals to the synthesized ASL
     support/pipelineConstructHarness.ts  # One-pipeline synth harness (stack, VPC, storage stubs, EFS/ECR imports)
