@@ -205,6 +205,12 @@ def setup_mock_imports():
 
     # apiRoutes is pure constants with no AWS dependencies, so load the
     # real module (single source of truth) rather than a duplicate mock copy.
+    # The route type module and the add-on route list it imports load first.
+    for api_routes_dep in ('apiRouteTypes', 'addonApiRoutes'):
+        sys.modules[f'common.{api_routes_dep}'] = import_module_from_path(
+            f'common.{api_routes_dep}',
+            os.path.join(os.path.dirname(__file__), 'backend', 'common', f'{api_routes_dep}.py')
+        )
     api_routes_module = import_module_from_path(
         'common.apiRoutes',
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'apiRoutes.py')

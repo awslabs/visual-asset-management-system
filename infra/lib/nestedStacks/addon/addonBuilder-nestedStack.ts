@@ -20,6 +20,7 @@ import { LAMBDA_NODE_RUNTIME } from "../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { NagSuppressions } from "cdk-nag";
 import { suppressCdkNagLambda } from "../../helper/security";
+import { VAMS_APP_FEATURES } from "../../../common/vamsAppFeatures";
 
 export interface AddonBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -38,6 +39,8 @@ const defaultProps: Partial<AddonBuilderNestedStackProps> = {};
 
 export class AddonBuilderNestedStack extends NestedStack {
     public pipelineVamsLambdaFunctionNames: string[] = [];
+    /** Feature switches for the enabled add-ons, pushed by the core stack. */
+    public readonly enabledFeatures: string[] = [];
 
     constructor(parent: Construct, name: string, props: AddonBuilderNestedStackProps) {
         super(parent, name);
@@ -75,6 +78,11 @@ export class AddonBuilderNestedStack extends NestedStack {
                     registry: props.registry,
                 }
             );
+
+            // The Physna add-on frontend features (viewer today, more planned)
+            // are gated by a single feature flag so the web UI only surfaces
+            // them when the add-on is deployed.
+            this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
         }
 
         ////////////////////////////////////////////////////////////////////////////////////

@@ -5,6 +5,7 @@
 
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
 import viewerConfig from "../config/viewerConfig.json";
+import addonViewerConfig from "../config/addonViewerConfig.json";
 import { CompareContext } from "./compareShape";
 import {
     admitsCompareSelection,
@@ -13,9 +14,22 @@ import {
     ViewerModeAvailability,
 } from "./viewerSelection";
 import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
+import { ADDON_VIEWER_COMPONENTS, ADDON_DEPENDENCY_MANAGERS } from "../viewers/addonManifest";
 import { appCache } from "../../services/appCache";
 import { StylesheetManager } from "./StylesheetManager";
 import React from "react";
+
+/** Component paths of the core and add-on viewers (manifest.ts + addonManifest.ts). */
+const ALL_VIEWER_COMPONENTS: Record<string, string> = {
+    ...VIEWER_COMPONENTS,
+    ...ADDON_VIEWER_COMPONENTS,
+};
+
+/** Dependency-manager paths of the core and add-on viewers. */
+const ALL_DEPENDENCY_MANAGERS: Record<string, string> = {
+    ...DEPENDENCY_MANAGERS,
+    ...ADDON_DEPENDENCY_MANAGERS,
+};
 
 // Compare classification lives in ./compareShape and the per-viewer admission predicates for both
 // selection paths in ./viewerSelection (pure, unit-testable); re-exported here so existing callers
@@ -83,7 +97,7 @@ export class PluginRegistry {
     private async loadViewerComponent(
         componentPath: string
     ): Promise<React.ComponentType<ViewerPluginProps>> {
-        const relativePath = VIEWER_COMPONENTS[componentPath as keyof typeof VIEWER_COMPONENTS];
+        const relativePath = ALL_VIEWER_COMPONENTS[componentPath];
 
         if (!relativePath) {
             throw new Error(
@@ -117,8 +131,7 @@ export class PluginRegistry {
 
     // Dynamic dependency manager loader using manifest constants
     private async loadDependencyManager(dependencyPath: string): Promise<any> {
-        const relativePath =
-            DEPENDENCY_MANAGERS[dependencyPath as keyof typeof DEPENDENCY_MANAGERS];
+        const relativePath = ALL_DEPENDENCY_MANAGERS[dependencyPath];
 
         if (!relativePath) {
             console.warn(
@@ -149,8 +162,13 @@ export class PluginRegistry {
         if (this.initialized) return;
 
         try {
-            // Load configuration
-            this.config = viewerConfig as ViewerConfig;
+            // Load configuration: core viewers, then the add-on viewers
+            this.config = {
+                viewers: [
+                    ...(viewerConfig as ViewerConfig).viewers,
+                    ...(addonViewerConfig as ViewerConfig).viewers,
+                ],
+            };
 
             // Register plugin metadata only (no component loading)
             for (const viewerConfig of this.config.viewers) {

@@ -15,13 +15,18 @@
 import fs from "fs";
 import path from "path";
 import viewerConfig from "./viewerConfig.json";
+import addonViewerConfig from "./addonViewerConfig.json";
 import { OCCT_FORMATS } from "../viewers/ThreeJSViewerPlugin/utils/fileLoaders";
 import { admitsCompareSelection, admitsVisualizeSelection } from "../core/viewerSelection";
+import { VIEWER_COMPONENTS } from "../viewers/manifest";
+import { ADDON_VIEWER_COMPONENTS } from "../viewers/addonManifest";
 
-const viewers: any[] = (viewerConfig as any).viewers;
+// The upstream-shipped viewers: core (viewerConfig.json) plus add-on (addonViewerConfig.json).
+const viewers: any[] = [...(viewerConfig as any).viewers, ...(addonViewerConfig as any).viewers];
 const byId = (id: string) => {
     const found = viewers.find((viewer) => viewer.id === id);
-    if (!found) throw new Error(`No viewer with id ${id} in viewerConfig.json`);
+    if (!found)
+        throw new Error(`No viewer with id ${id} in viewerConfig.json or addonViewerConfig.json`);
     return found;
 };
 
@@ -109,6 +114,27 @@ describe("viewerConfig vs the browser's media element", () => {
             )
             .map((viewer) => viewer.id);
         expect(offering).toEqual([]);
+    });
+});
+
+describe("viewer manifests", () => {
+    // PluginRegistry resolves a viewer's componentPath through the manifest of the same tier, so
+    // an entry configured in one file and listed in the other manifest still loads but places a
+    // viewer on the wrong side of the core/add-on boundary.
+    it("lists every core viewer's component in manifest.ts", () => {
+        const missing = (viewerConfig as any).viewers
+            .map((viewer: any) => viewer.componentPath)
+            .filter((componentPath: string) => !(componentPath in VIEWER_COMPONENTS));
+        expect(missing).toEqual([]);
+    });
+
+    it("lists every add-on viewer's component in addonManifest.ts", () => {
+        const addonViewers = (addonViewerConfig as any).viewers;
+        expect(addonViewers.length).toBeGreaterThan(0);
+        const missing = addonViewers
+            .map((viewer: any) => viewer.componentPath)
+            .filter((componentPath: string) => !(componentPath in ADDON_VIEWER_COMPONENTS));
+        expect(missing).toEqual([]);
     });
 });
 

@@ -36,8 +36,6 @@ export const VIEWER_COMPONENTS = {
         "NeedleUSDViewerPlugin/NeedleUSDViewerComponent",
     "./viewers/ThreeJSViewerPlugin/ThreeJSViewerComponent":
         "ThreeJSViewerPlugin/ThreeJSViewerComponent",
-    "./viewers/PhysnaViewerPlugin/PhysnaViewerComponent":
-        "PhysnaViewerPlugin/PhysnaViewerComponent",
     "./viewers/ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent":
         "ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent",
     "./viewers/SuperSplatViewerPlugin/SuperSplatViewerComponent":
@@ -69,3 +67,4 @@ export const DEPENDENCY_MANAGERS = {
 // 3. Add entry to DEPENDENCY_MANAGERS above (if needed)
 // 4. Add configuration to viewerConfig.json
 // 5. No changes needed to PluginRegistry.ts!
+// An add-on's viewer is registered in addonManifest.ts and config/addonViewerConfig.json instead.

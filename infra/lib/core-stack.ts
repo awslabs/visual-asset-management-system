@@ -306,12 +306,7 @@ export class CoreVAMSStack extends cdk.Stack {
             addonBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             addonBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
 
-            // The Physna add-on frontend features (viewer today, more planned)
-            // are gated by a single feature flag so the web UI only surfaces
-            // them when the add-on is deployed.
-            if (props.config.app.addons.usePhysnaSync.enabled) {
-                this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
-            }
+            this.enabledFeatures.push(...addonBuilderNestedStack.enabledFeatures);
 
             // Deadline Cloud pipeline execution-type support (createJob workflow task
             // states + the job-callback lambda deployed in the API builder stack).

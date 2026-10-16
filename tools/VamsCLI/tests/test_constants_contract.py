@@ -17,6 +17,10 @@ from vamscli.utils.api_client import APIClient
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VAMS_APP_FEATURES_TS = REPO_ROOT / "infra/common/vamsAppFeatures.ts"
 BACKEND_API_ROUTES = REPO_ROOT / "backend/backend/common/apiRoutes.py"
+# The route lists apiRoutes.py splices into ALL_API_ROUTES from other files.
+BACKEND_SPLICED_ROUTE_LISTS = (
+    REPO_ROOT / "backend/backend/common/addonApiRoutes.py",
+)
 
 
 def _enum_members(source: str) -> set:
@@ -116,9 +120,12 @@ class TestMetadataSchemaEndpointExists:
 
 
 def _registry_routes() -> set:
-    """Every route path declared in the backend's master registry."""
-    source = BACKEND_API_ROUTES.read_text(encoding="utf-8")
-    return set(re.findall(r'ApiRoute\(\s*"([^"]+)"', source))
+    """Every route path declared in the backend's master registry and the lists it splices in."""
+    routes = set()
+    for source_file in (BACKEND_API_ROUTES, *BACKEND_SPLICED_ROUTE_LISTS):
+        source = source_file.read_text(encoding="utf-8")
+        routes |= set(re.findall(r'ApiRoute\(\s*"([^"]+)"', source))
+    return routes
 
 
 def _cli_path_constants() -> dict:
@@ -172,9 +179,11 @@ class TestEveryEndpointConstantMatchesARegisteredRoute:
             f"parsed only {len(routes)} routes out of the master registry; the ApiRoute declaration "
             "shape has changed and this check is no longer reading it"
         )
-        # Positive control on the parse itself: two routes of different shapes must be present.
+        # Positive control on the parse itself: two routes of different shapes must be present,
+        # and one from the spliced add-on list.
         assert "/database" in routes
         assert "/database/{databaseId}/assets/{assetId}" in routes
+        assert "/addon/physna/viewer" in routes
 
     def test_every_cli_path_constant_is_a_registered_route(self):
         routes = _registry_routes()

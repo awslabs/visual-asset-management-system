@@ -1,0 +1,40 @@
+{
+    "viewers": [
+        {
+            "id": "physna-viewer",
+            "name": "Physna Viewer",
+            "description": "View 3D/CAD files via the Physna platform. Requires the file to be synced and finished indexing in Physna.",
+            "componentPath": "./viewers/PhysnaViewerPlugin/PhysnaViewerComponent",
+            "supportedExtensions": [
+                ".3ds",
+                ".asm",
+                ".catpart",
+                ".catproduct",
+                ".glb",
+                ".iam",
+                ".iges",
+                ".igs",
+                ".ipt",
+                ".jt",
+                ".obj",
+                ".par",
+                ".prt",
+                ".sldasm",
+                ".sldprt",
+                ".stl",
+                ".step",
+                ".stp",
+                ".x_b",
+                ".x_t"
+            ],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 5,
+            "dependencies": [],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "featuresEnabledRestriction": ["PHYSNA_ADDON"],
+            "enabled": true
+        }
+    ]
+}
