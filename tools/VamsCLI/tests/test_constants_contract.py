@@ -11,22 +11,25 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from vamscli import constants
+from vamscli import custom_constants
 from vamscli.utils.api_client import APIClient
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VAMS_APP_FEATURES_TS = REPO_ROOT / "infra/common/vamsAppFeatures.ts"
+CUSTOM_APP_FEATURES_TS = REPO_ROOT / "infra/common/customAppFeatures.ts"
 BACKEND_API_ROUTES = REPO_ROOT / "backend/backend/common/apiRoutes.py"
 # The route lists apiRoutes.py splices into ALL_API_ROUTES from other files.
 BACKEND_SPLICED_ROUTE_LISTS = (
     REPO_ROOT / "backend/backend/common/addonApiRoutes.py",
+    REPO_ROOT / "backend/backend/custom/customApiRoutes.py",
 )
 
 
-def _enum_members(source: str) -> set:
-    """The string values of the VAMS_APP_FEATURES enum members."""
-    body = re.search(r"export enum VAMS_APP_FEATURES\s*\{(.*?)\}", source, re.S)
-    assert body, "VAMS_APP_FEATURES enum not found in vamsAppFeatures.ts"
+def _enum_members(source: str, enum_name: str = "VAMS_APP_FEATURES") -> set:
+    """The string values of the members of the named feature enum."""
+    body = re.search(rf"export enum {enum_name}\s*\{{(.*?)\}}", source, re.S)
+    assert body, f"{enum_name} enum not found"
     return set(re.findall(r'=\s*"([A-Z0-9_]+)"', body.group(1)))
 
 
@@ -215,3 +218,61 @@ class TestEveryEndpointConstantMatchesARegisteredRoute:
                 f"{name} = {value!r} is exempted as a path prefix, but no registered route starts "
                 "with it — it is a dead path, not a prefix"
             )
+
+
+class TestCustomConstantsContract:
+    """`custom_constants.py` (fork-owned, shipped empty) is held to the same contract as `constants.py`.
+
+    Every endpoint path a fork declares there must be a route the backend declares (core, add-on or
+    `custom/customApiRoutes.py`), and its `FEATURE_*` names must mirror
+    `infra/common/customAppFeatures.ts` in both directions. The assertions hold for any content, so
+    they keep holding once a fork fills the files in.
+    """
+
+    def _custom_path_constants(self) -> dict:
+        return {
+            name: value for name, value in vars(custom_constants).items()
+            if name.startswith("API_") and isinstance(value, str)
+        }
+
+    def _custom_feature_constants(self) -> set:
+        return {
+            value for name, value in vars(custom_constants).items()
+            if name.startswith("FEATURE_") and isinstance(value, str)
+        }
+
+    def test_the_custom_sources_are_present(self):
+        # Without these the comparisons below would run against empty sets for the wrong reason.
+        assert CUSTOM_APP_FEATURES_TS.is_file(), f"custom feature enum not found at {CUSTOM_APP_FEATURES_TS}"
+        _enum_members(CUSTOM_APP_FEATURES_TS.read_text(encoding="utf-8"), "CUSTOM_APP_FEATURES")
+        for source_file in BACKEND_SPLICED_ROUTE_LISTS:
+            assert source_file.is_file(), f"spliced route list not found at {source_file}"
+
+    def test_every_custom_path_constant_is_a_path(self):
+        offenders = {n: v for n, v in self._custom_path_constants().items() if not v.startswith("/")}
+        assert offenders == {}, f"custom API path constants that are not paths: {offenders}"
+
+    def test_every_custom_path_constant_is_a_registered_route(self):
+        routes = _registry_routes()
+        unmatched = {n: v for n, v in self._custom_path_constants().items() if v not in routes}
+        assert unmatched == {}, (
+            "custom CLI endpoint constants naming a path the backend does not declare (add the "
+            f"route to backend/backend/custom/customApiRoutes.py): {unmatched}"
+        )
+
+    def test_custom_feature_constants_mirror_the_custom_enum(self):
+        declared = _enum_members(
+            CUSTOM_APP_FEATURES_TS.read_text(encoding="utf-8"), "CUSTOM_APP_FEATURES"
+        )
+        mirrored = self._custom_feature_constants()
+        assert declared - mirrored == set(), (
+            f"custom feature switches the CLI cannot name: {sorted(declared - mirrored)}"
+        )
+        assert mirrored - declared == set(), (
+            f"custom CLI feature constants naming no published switch: {sorted(mirrored - declared)}"
+        )
+
+    def test_the_enum_parser_reads_members(self):
+        # Control: the parser used above returns members for a populated enum of the same shape.
+        sample = 'export enum CUSTOM_APP_FEATURES {\n    CUSTOM_WIDGETS = "CUSTOM_WIDGETS",\n}\n'
+        assert _enum_members(sample, "CUSTOM_APP_FEATURES") == {"CUSTOM_WIDGETS"}

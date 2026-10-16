@@ -16,6 +16,7 @@ import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
+import { customRouteTable } from "./custom/customRoutes";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
@@ -43,13 +44,13 @@ const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
 const AssetIngestion = React.lazy(() => import("./components/single/AssetIngestion"));
 const AssetDownloadsPage = React.lazy(() => import("./pages/AssetDownload"));
 
-interface RouteOption {
+export interface RouteOption {
     path: string;
     Page: React.FC;
     active: string;
 }
 
-export const routeTable: RouteOption[] = [
+const coreRouteTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "/" },
     { path: "/search", Page: SearchPage, active: "/" },
     { path: "/search/:databaseId/assets", Page: SearchPage, active: "/" },
@@ -217,6 +218,9 @@ export const routeTable: RouteOption[] = [
         active: "/",
     },
 ];
+
+/** Core routes plus the routes a fork adds (custom/customRoutes.tsx, shipped empty). */
+export const routeTable: RouteOption[] = [...coreRouteTable, ...customRouteTable];
 
 interface AppRoutesProps {
     navigationOpen: boolean;

@@ -45,6 +45,7 @@ const API_ROUTES_PY = path.resolve(__dirname, "..", "../../backend/backend/commo
 // The route lists apiRoutes.py splices into ALL_API_ROUTES from other files.
 const SPLICED_ROUTE_LISTS_PY = [
     path.resolve(__dirname, "..", "../../backend/backend/common/addonApiRoutes.py"),
+    path.resolve(__dirname, "..", "../../backend/backend/custom/customApiRoutes.py"),
 ];
 
 interface DeclaredRoute {

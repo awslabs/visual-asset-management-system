@@ -35,9 +35,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
+import { CUSTOM_RESOURCE_PARAM_KEYS } from "../../common/customResourceParamKeys";
 
 const REPO_ROOT = path.join(__dirname, "..", "../..");
 const BACKEND_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/common/resourceNames.py");
+const CUSTOM_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/custom/customResourceNames.py");
 const SELF = path.join(__dirname, path.basename(__filename).replace(/\.js$/, ".ts"));
 const MIGRATION_ROOT = path.join(REPO_ROOT, "infra/deploymentDataMigration");
 const MIGRATION_LOOKUP_PY = path.join(MIGRATION_ROOT, "tools/ssm_resource_lookup.py");
@@ -203,6 +205,35 @@ describe("backend mirror matches the canonical registry", () => {
         );
         expect(orphaned.unknownInMirror).toEqual(["dynamoTables/syntheticOrphanTable"]);
         expect(orphaned.missingFromMirror).toEqual([]);
+    });
+});
+
+describe("custom resource-name mirror matches customResourceParamKeys.ts", () => {
+    // The fork-owned pair (both ship empty) follows the same two-way contract as the core pair, so a
+    // fork that declares a key on one side only fails here rather than with a KeyError at handler
+    // import. Comments are stripped first so an example in prose is not read as a declaration.
+    const customSource = fs
+        .readFileSync(CUSTOM_MIRROR_PY, "utf8")
+        .replace(/"""[\s\S]*?"""/g, "")
+        .replace(/#.*$/gm, "");
+    const customMirrorKeys = parseBackendMirrorKeys(customSource);
+    const customCanonical = Object.values(CUSTOM_RESOURCE_PARAM_KEYS).flatMap((category) =>
+        Object.values(category)
+    );
+
+    it("declares exactly the keys the custom registry publishes", () => {
+        expect(fs.existsSync(CUSTOM_MIRROR_PY)).toBe(true);
+        expect(customSource).toContain("class CustomResourceKeys");
+        const { missingFromMirror, unknownInMirror } = diffKeys(customMirrorKeys, customCanonical);
+        // Add the ResourceParamKey to backend/backend/custom/customResourceNames.py.
+        expect(missingFromMirror).toEqual([]);
+        // Remove it from the custom mirror, or declare it in infra/common/customResourceParamKeys.ts.
+        expect(unknownInMirror).toEqual([]);
+    });
+
+    it("declares no custom key that is also a core key", () => {
+        const core = new Set(canonicalKeys());
+        expect(customCanonical.filter((key) => core.has(key))).toEqual([]);
     });
 });
 

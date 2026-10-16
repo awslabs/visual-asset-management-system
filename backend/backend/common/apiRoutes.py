@@ -22,7 +22,8 @@ The route templates MUST match the routes registered with API Gateway in the
 CDK api builder stacks (``infra/lib/nestedStacks/apiLambda/``).
 
 Add-on routes are declared in ``common/addonApiRoutes.py`` and spliced into
-ALL_API_ROUTES as ``ADDON_ROUTES``.
+ALL_API_ROUTES as ``ADDON_ROUTES``; routes a fork adds are declared in
+``custom/customApiRoutes.py`` and spliced in as ``CUSTOM_ROUTES``.
 
 Adding or changing a route checklist:
   1. Update the ApiRoute constant here (or in ``common/addonApiRoutes.py`` for
@@ -35,13 +36,16 @@ Adding or changing a route checklist:
 
 from typing import Tuple
 
-# The route type and method constants are defined in common/apiRouteTypes.py so the add-on route
-# list can import them without importing this module; re-exported here.
+# The route type and method constants are defined in common/apiRouteTypes.py so the add-on and
+# fork-owned route lists can import them without importing this module; re-exported here.
 from common.apiRouteTypes import DELETE, GET, HEAD, POST, PUT, ApiRoute, _route_regex  # noqa: F401
 
 # Add-on routes are declared in common/addonApiRoutes.py; every name there is re-exported here.
 from common.addonApiRoutes import *  # noqa: F401,F403
 from common.addonApiRoutes import ADDON_ROUTES
+
+# Routes a fork adds are declared in custom/customApiRoutes.py (fork-owned, shipped empty).
+from custom.customApiRoutes import CUSTOM_ROUTES
 
 
 # ---------------------------------------------------------------------------
@@ -528,6 +532,7 @@ ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
     + USER_ROUTES
     + SEARCH_ROUTES
     + ADDON_ROUTES
+    + CUSTOM_ROUTES
 )
 
 

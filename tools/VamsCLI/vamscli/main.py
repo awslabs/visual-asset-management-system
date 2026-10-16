@@ -30,6 +30,7 @@ from .commands.industry import industry
 from .commands.user import user
 from .commands.roleUserConstraints import role
 from .commands.apiKey import api_key
+from .commands.custom import CUSTOM_COMMANDS
 from .utils.profile import ProfileManager
 from .utils.exceptions import SetupRequiredError
 from .utils.global_exceptions import handle_global_exceptions
@@ -219,6 +220,10 @@ cli.add_command(industry)
 cli.add_command(user)
 cli.add_command(role)
 cli.add_command(api_key)
+
+# Commands a fork adds (commands/custom/__init__.py, shipped empty)
+for custom_command in CUSTOM_COMMANDS:
+    cli.add_command(custom_command)
 
 
 @cli.command()
