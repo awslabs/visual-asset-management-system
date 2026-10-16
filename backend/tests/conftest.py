@@ -251,6 +251,17 @@ _apir_spec = _s3mk_importlib_util.spec_from_file_location(
 _apir_module = _s3mk_importlib_util.module_from_spec(_apir_spec)
 _apir_spec.loader.exec_module(_apir_module)
 sys.modules['common.apiRoutes'] = _apir_module
+# common.constants is a MagicMock here, but the per-directory conftests and the tests that need the
+# real Casbin field list load constants.py by path, and it imports the add-on constants lane
+# (common/addonConstants.py, pure data). `common` is a MagicMock, not a package, so register the real
+# lane module up front, as for the route modules above.
+_addon_constants_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.addonConstants',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'addonConstants.py')
+)
+_addon_constants_module = _s3mk_importlib_util.module_from_spec(_addon_constants_spec)
+_addon_constants_spec.loader.exec_module(_addon_constants_module)
+sys.modules['common.addonConstants'] = _addon_constants_module
 # The execution/pipeline/workflow helpers live in the common.workflows subpackage.
 # `common` is a MagicMock, so register a REAL package object for `common.workflows`
 # (and bind it as an attribute on the mock `common`) before loading its submodules,

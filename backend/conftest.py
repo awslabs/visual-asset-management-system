@@ -169,7 +169,12 @@ def setup_mock_imports():
     sys.modules['common.validators'] = validators_module
     
     # constants is pure data with no AWS dependencies, so load the real module
-    # (single source of truth) rather than a duplicate mock copy.
+    # (single source of truth) rather than a duplicate mock copy. The add-on constants lane it
+    # merges in loads first; `common` is a mock module here, so the import cannot find it by path.
+    sys.modules['common.addonConstants'] = import_module_from_path(
+        'common.addonConstants',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'addonConstants.py')
+    )
     constants_module = import_module_from_path(
         'common.constants',
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'constants.py')
