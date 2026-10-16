@@ -21,10 +21,12 @@ from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXT
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items
+from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_file_download_bulk
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetExport import (
     AssetExportRequestModel,
@@ -920,8 +922,9 @@ def enrich_files_with_primary_type(bucket: str, files: List[Dict]) -> None:
     """Fill in each listed file's primaryType from its S3 object metadata
 
     primaryType is stored in the object's user metadata, which no listing returns, so it takes
-    one HeadObject per file -- the only per-file S3 call the export makes. The calls run through
-    a bounded pool. Folder markers carry no primary type and are skipped.
+    one HeadObject per file -- one of the two per-file S3 calls the export makes, the other being
+    the blocklist head a file about to be signed pays. The calls run through a bounded pool.
+    Folder markers carry no primary type and are skipped.
     """
     targets = [file for file in files if not file['isFolder']]
     if not targets:
@@ -940,6 +943,71 @@ def enrich_files_with_primary_type(bucket: str, files: List[Dict]) -> None:
     max_workers = min(MAX_PARALLEL_FILE_WORKERS, len(targets))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(executor.map(_read_primary_type, targets))
+
+def file_type_allowed_for_download(bucket: str, key: str, version_id: str,
+                                   database_id: str, asset_id: str) -> bool:
+    """Whether a file about to receive an export download URL passes the executable blocklist.
+
+    The check `downloadAsset.py` makes before it signs: one HeadObject on the version
+    `generate_presigned_url` pins (an unversioned bucket lists 'null', which is not a VersionId),
+    then `validateUnallowedFileExtensionAndContentType` on the key and the reported ContentType.
+    False withholds the URL -- for a blocklisted file, and for a file whose head failed, so a
+    type that cannot be verified is never read as a pass. Both are logged with identifiers and
+    the file's extension only, never the key or file name. A failed head withholds this file
+    alone, whatever raised: the pass over the asset continues, the way the primaryType read's does.
+    """
+    params = {
+        'Bucket': bucket,
+        'Key': key
+    }
+
+    if version_id and version_id != 'null':
+        params['VersionId'] = version_id
+
+    try:
+        head = s3_client.head_object(**params)
+    except Exception as e:
+        # An S3 error is named by its code, anything else -- a botocore timeout or connection
+        # error that outlived the retries -- by its class. Neither carries the key; the message
+        # of a transport error names the request URL, which does.
+        reason = (e.response.get('Error', {}).get('Code', 'ClientError')
+                  if isinstance(e, ClientError) else type(e).__name__)
+        logger.warning(
+            f"Export did not sign a file of asset {asset_id} in database {database_id}: "
+            f"HeadObject failed with {reason}")
+        return False
+
+    if validateUnallowedFileExtensionAndContentType(key, head.get('ContentType', '')):
+        return True
+
+    logger.warning(
+        f"Export withheld download URL for blocklisted file type: asset {asset_id} in database "
+        f"{database_id}, extension '{os.path.splitext(key)[1].lower()}'")
+    return False
+
+def mark_files_allowed_for_download(bucket: str, files: List[Dict],
+                                    database_id: str, asset_id: str) -> None:
+    """Set each live file's downloadAllowed from the executable blocklist, through a bounded pool.
+
+    The HeadObject behind `file_type_allowed_for_download` is paid once per file the signing
+    loop will consider -- a non-folder, non-archived file -- and the calls run through the same
+    pool as the primaryType read, the way `downloadAsset.py` fans the identical head out for a
+    bulk download: an asset holds thousands of files and serial round trips exceed the API
+    Gateway integration timeout. A file the pass does not visit carries no flag, which the loop
+    reads as not allowed, so a file is signed only when its own head and check passed.
+    """
+    targets = [file for file in files
+               if not file['isFolder'] and not file.get('isArchived', False)]
+    if not targets:
+        return
+
+    def _mark(file_item):
+        file_item['downloadAllowed'] = file_type_allowed_for_download(
+            bucket, file_item['key'], file_item['versionId'], database_id, asset_id)
+
+    max_workers = min(MAX_PARALLEL_FILE_WORKERS, len(targets))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        list(executor.map(_mark, targets))
 
 def generate_presigned_url(bucket: str, key: str, version_id: str) -> Optional[str]:
     """Generate presigned URL for file download"""
@@ -1148,6 +1216,7 @@ def process_asset_batch(
     asset_identifiers: List[Dict],
     request_model: AssetExportRequestModel,
     claims_and_roles: Dict,
+    event: Dict,
     file_budget: Optional[int] = None,
     start_after_key: Optional[str] = None
 ) -> Tuple[List[Dict], Dict]:
@@ -1158,10 +1227,17 @@ def process_asset_batch(
     holding more files than the budget is exported across successive pages: its entry reports
     files_truncated, and the returned page state names the key its listing resumes after.
 
+    Presigned download URLs are issued only for a distributable asset's files, only for a file
+    whose extension and content type pass the executable blocklist, and every URL issued is
+    written to the file download audit log -- the controls the dedicated download routes apply.
+    A non-distributable asset is still exported, with its files carrying no URL and its entry
+    reporting isdistributable false; a blocklisted file stays in the listing with no URL.
+
     Args:
         asset_identifiers: The assets to process, in tree order
         request_model: The parsed export request
         claims_and_roles: The caller's claims
+        event: The API Gateway event, which the download audit entries attribute to the caller
         file_budget: Maximum files this page may export across the whole batch. None exports
             every file of every asset in the batch.
 
@@ -1355,6 +1431,12 @@ def process_asset_batch(
 
             asset_location_key = asset.get('assetLocation', {}).get('Key', '')
 
+            # Download URLs are issued only for a distributable asset, the same check the
+            # dedicated download routes make before signing anything.
+            distributable = bool(asset.get('isDistributable', False))
+            sign_files = request_model.generatePresignedUrls and distributable
+            signed_files = []
+
             # Filter on what the listing carries, read the survivors' primaryType, then apply
             # the one filter that selects on it. primaryType lives only in the object's own
             # metadata, so a file another filter drops costs no read.
@@ -1389,6 +1471,16 @@ def process_asset_batch(
                 if base_key not in preview_lookup:
                     preview_lookup[base_key] = []
                 preview_lookup[base_key].append(preview_file['key'])
+
+            # The executable blocklist check the download and stream routes make before they
+            # hand out content, run on the version about to be signed for every file the loop
+            # below would sign. One pooled pass per asset, so the loop itself stays free of S3
+            # calls; nothing is read when no file would be signed. A blocklisted file, or one
+            # whose type cannot be verified, stays in the listing with no URL and no download
+            # audit entry.
+            if sign_files:
+                mark_files_allowed_for_download(
+                    bucket_name, base_files_list, asset['databaseId'], asset['assetId'])
 
             # One asset-wide read each for metadata and attributes, keyed by file path, so the
             # per-file blocks below are in-memory lookups rather than two queries per file. None
@@ -1454,17 +1546,21 @@ def process_asset_batch(
                                     'value': None if value is None else str(value)
                                 }
 
-                # Generate presigned URL if requested (skip for archived files)
+                # Generate presigned URL if requested (skip for non-distributable assets, folders and archived files)
                 presigned_url = None
                 presigned_expires = None
-                if request_model.generatePresignedUrls and not file['isFolder'] and not file.get('isArchived', False):
-                    presigned_url = generate_presigned_url(
-                        bucket_name,
-                        file['key'],
-                        file['versionId']
-                    )
+                if sign_files and not file['isFolder'] and not file.get('isArchived', False):
+                    # downloadAllowed is the pre-pass verdict for this file; a file it did not
+                    # visit, or that it withheld, carries no truthy flag and is not signed.
+                    if file.get('downloadAllowed', False):
+                        presigned_url = generate_presigned_url(
+                            bucket_name,
+                            file['key'],
+                            file['versionId']
+                        )
                     if presigned_url:
                         presigned_expires = int(presigned_url_timeout)
+                        signed_files.append({"filePath": file['key'], "versionId": file['versionId']})
 
                 # Find preview file for this base file
                 preview_file_path = ''
@@ -1499,6 +1595,28 @@ def process_asset_batch(
                 }
                 export_files.append(export_file)
 
+            # The refusal is recorded once per asset so the attempt has a server-side trace, the
+            # way the dedicated download route's refusal does. Identifiers and a count only: the
+            # line carries no file key and no payload value.
+            if request_model.generatePresignedUrls and not distributable:
+                withheld_count = sum(
+                    1 for file in base_files_list
+                    if not file['isFolder'] and not file.get('isArchived', False))
+                logger.info(
+                    f"Presigned URLs withheld for non-distributable asset {asset['assetId']} "
+                    f"in database {asset['databaseId']}: {withheld_count} file(s) not signed")
+
+            # AUDIT LOG: File download - one entry per file that received a download URL, in a
+            # single batched CloudWatch write per asset.
+            if signed_files:
+                log_file_download_bulk(
+                    event,
+                    asset['databaseId'],
+                    asset['assetId'],
+                    signed_files,
+                    {"downloadType": "export"}
+                )
+
             # Build export asset model
             return {
                 'is_root_lookup_asset': asset_info.get('isRoot', False),
@@ -1511,7 +1629,7 @@ def process_asset_batch(
                 'bucketprefix': bucket_prefix,
                 'assettype': asset.get('assetType', 'none'),
                 'description': asset.get('description', ''),
-                'isdistributable': asset.get('isDistributable', False),
+                'isdistributable': distributable,
                 'tags': asset.get('tags', []),
                 'asset_version_id': current_version_id,
                 'asset_version_createdate': version_info.get('dateCreated', '') if version_info else '',
@@ -1584,6 +1702,7 @@ def export_assets(
             asset_tree,
             request_model,
             claims_and_roles,
+            event,
             file_budget=request_model.maxFiles,
             start_after_key=resume_after_key
         )
@@ -1686,6 +1805,7 @@ def export_assets(
         batch_asset_ids,
         request_model,
         claims_and_roles,
+        event,
         file_budget=request_model.maxFiles,
         start_after_key=resume_after_key
     )

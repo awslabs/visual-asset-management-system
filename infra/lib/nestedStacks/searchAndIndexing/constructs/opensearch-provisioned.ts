@@ -220,7 +220,7 @@ export class OpensearchProvisionedConstruct extends Construct {
                 entry: path.join(__dirname, "./schemaDeploy/deployschema.ts"),
                 handler: "handler",
                 bundling: {
-                    externalModules: ["aws-sdk"],
+                    externalModules: ["@aws-sdk/*"],
                 },
                 runtime: LAMBDA_NODE_RUNTIME,
                 //A freshly created domain can take several minutes to become reachable. The handler polls with

@@ -134,9 +134,8 @@ exists in the pool:
     replacement's create step fails with `AlreadyExists`, the nested authorization stack fails, and the
     **whole core stack rolls back** — roughly 15 minutes, across every nested stack.
 
-Synthesis warns whenever `app.adminUserId` and `app.adminEmailAddress` differ, restating that both are
-immutable — it cannot detect that a value has _changed_, because it has no view of what is deployed. It
-also rejects a username Amazon Cognito itself would refuse (whitespace, or over 128 characters), so that
+Synthesis cannot detect that either value has _changed_, because it has no view of what is deployed. It
+does reject a username Amazon Cognito itself would refuse (whitespace, or over 128 characters), so that
 failure arrives as a configuration message rather than as a rolled-back deployment.
 
 Treat both values as fixed for the life of the deployment. To change who administers VAMS, leave the
@@ -221,13 +220,17 @@ Use A/B deployment when the update involves changes that cannot be safely applie
     npx cdk deploy --all --require-approval never
     ```
 
-4. **Migrate DynamoDB data.** Use the A/B migration scripts provided in `infra/deploymentDataMigration/`:
+4. **Migrate DynamoDB data.** VAMS does not ship a Stack A to Stack B table copy script. Copy each Amazon DynamoDB table from Stack A into the matching table in Stack B with the tooling of your choice -- an AWS Glue job, an AWS Database Migration Service task, or a scan-and-batch-write script built on the AWS SDK. Both stacks publish their table names as AWS Systems Manager Parameter Store parameters under the prefix in the `ResourceNamesSSMParamPrefixOutput` CloudFormation output, so the source and destination names can be read from there instead of the console:
 
     ```bash
-    cd infra/deploymentDataMigration
-    pip install boto3
-    python tools/VAMSDataMigration.py config/<YOUR_MIGRATION_CONFIG>.json
+    aws ssm get-parameters-by-path --recursive \
+      --path "<ResourceNamesSSMParamPrefixOutput>/dynamoTables" \
+      --query 'Parameters[].[Name,Value]' --output table
     ```
+
+    Copy the tables with Stack B's data tier idle. Most Stack B tables are empty until the copy writes them, so no key collides there. Six are not: Stack B's own deployment writes them before any copy and rewrites those rows on every deploy. Do not copy `appFeatureEnabledStorage` -- it holds Stack B's feature switches, derived from Stack B's configuration, and a copy would replace them with Stack A's until the next deploy. `rolesStorage` (the `admin` and `basicReadOnly` roles), `constraintsStorage` (the `initial_admin_*` and `initial_basicro_*` constraints), `userStorage` and `userRolesStorage` (the `SYSTEM_USER` and `app.adminUserId` records and their `admin` role assignments) carry the deployment's bootstrap rows, and `metadataSchemaStorageV2` carries the default schemas when an `app.metadataSchema.autoLoad*` flag is on; copy those five with a writer that overwrites or skips an existing key rather than one that requires an empty destination.
+
+    If Stack B is a newer VAMS version than Stack A, copy the tables first and then run the same-stack upgrade scripts for each version step against Stack B (see [Version-specific migration instructions](#version-specific-migration-instructions)); the per-version `run_migration.sh` / `run_migration.ps1` scripts under `infra/deploymentDataMigration/` transform the schema in place and do not copy between stacks.
 
 5. **Migrate S3 data.** Sync asset buckets from Stack A to Stack B:
 

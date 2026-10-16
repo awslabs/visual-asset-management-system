@@ -202,7 +202,7 @@ class TestProfileSwitchCommand:
         
         assert result.exit_code == 1
         assert 'does not exist or is not configured' in result.output
-        assert 'vamscli setup' in result.output
+        assert "vamscli --profile nonexistent setup <api-gateway-url>" in result.output
     
     def test_switch_invalid_profile_name(self, cli_runner):
         """Test switching to invalid profile name."""

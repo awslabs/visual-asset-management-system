@@ -126,6 +126,7 @@ web/
       Navigation.tsx        # Left sidebar navigation
     utils/
       apiEndpoint.ts        # Resolves the API base URL
+      chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
       sessionManager.ts     # Idle/expiry session handling
     styles/

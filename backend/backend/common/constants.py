@@ -173,7 +173,9 @@ def get_constraint_fields_for_object_type(object_type):
 # Role field validation constants
 ALLOWED_ROLE_SOURCES = ['INTERNAL_SYSTEM']
 
-#Unallowed file extension list
+#Unallowed file extension list. Entries are lower-case and compared against the lower-cased
+#extension (common/s3.py validateUnallowedFileExtensionAndContentType); tests/common/
+#test_s3_blocklist_case_insensitive.py rejects an entry that is not lower-case or is listed twice.
 UNALLOWED_FILE_EXTENSION_LIST = [
     ".jar",
     ".java",
@@ -182,19 +184,18 @@ UNALLOWED_FILE_EXTENSION_LIST = [
     ".reg",
     ".pif",
     ".bak",
-    ".java",
     ".dll",
     ".exe",
     ".nat",
     ".cmd",
-    ".exe",
     ".lnk",
     ".docm",
     ".vbs",
     ".bat"
 ] 
 
-#Unallowed MIME type list for many of the equivilent file extensions in UNALLOWED_FILE_EXTENSION_LIST:
+#Unallowed MIME type list for many of the equivilent file extensions in UNALLOWED_FILE_EXTENSION_LIST.
+#Same contract: lower-case entries, matched against the lower-cased media type (parameters stripped).
 UNALLOWED_MIME_LIST = [
     "application/java-archive",
     "application/x-python-code",
@@ -203,7 +204,6 @@ UNALLOWED_MIME_LIST = [
     "application/x-sh",
     "application/java-vm",
     "application/x-msdownload",
-    "application/x-sh",
     "application/x-php",
     "application/x-ms-dos-executable",
     "application/x-ini",
@@ -212,7 +212,7 @@ UNALLOWED_MIME_LIST = [
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/x-ms-shortcut",
     "application/x-bat-script",
-    "application/vnd.ms-word.document.macroEnabled.12",
+    "application/vnd.ms-word.document.macroenabled.12",
     "application/javascript",
     "application/x-vbs",
     "application/x-powershell",

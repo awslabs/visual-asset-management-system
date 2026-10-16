@@ -273,16 +273,30 @@ class TestDatasetPathContainment:
         assert calls["uploads"] == []
 
     def test_an_escape_is_rejected_even_when_its_target_exists(self, monkeypatch, tmp_path):
-        """The one that does not rest on the error message. `/mnt/efs/gr00t-models/hf_cache` does not
-        exist on a test machine, so the existence check alone would stop it there and hide whether
-        containment is enforced at all — in the container that path DOES exist. Pointed at a real
-        directory outside the download folder, the unfixed code hands it to training and reports
-        success; this asserts it is refused."""
+        """The realpath-containment branch, reached with a target that exists. `/mnt/efs/gr00t-models/
+        hf_cache` does not exist on a test machine, so the existence check alone would stop it there
+        and hide whether containment is enforced at all — in the container that path DOES exist. The
+        download directory is ``tmp_path / "input"``, so ``../shared-efs/hf_cache`` is a relative value
+        that passes the shape checks in ``_reject_unusable_relative_path`` and resolves to a real
+        directory one level above it; only the containment comparison can refuse it. The unfixed code
+        hands that directory to training and reports success."""
+        (tmp_path / "shared-efs" / "hf_cache").mkdir(parents=True)
+        calls = _stage_run(monkeypatch, tmp_path,
+                           asset_file_config={"datasetPath": "../shared-efs/hf_cache"})
+        with pytest.raises(ValueError, match="outside the asset directory"):
+            container.main()
+        assert calls["training"] == []
+        assert calls["uploads"] == []
+
+    def test_an_absolute_path_is_refused_before_containment_is_consulted(self, monkeypatch, tmp_path):
+        """The other refusal route. An absolute value is rejected on shape alone, with its own message,
+        before the containment comparison runs — pinned here so the two routes cannot drift apart
+        again without a test saying which one fired."""
         outside = tmp_path / "shared-efs" / "hf_cache"
         outside.mkdir(parents=True)
         calls = _stage_run(monkeypatch, tmp_path,
                            asset_file_config={"datasetPath": outside.as_posix()})
-        with pytest.raises(ValueError, match="outside the asset directory"):
+        with pytest.raises(ValueError, match="is an absolute path"):
             container.main()
         assert calls["training"] == []
         assert calls["uploads"] == []

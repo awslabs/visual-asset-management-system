@@ -268,7 +268,7 @@ When building a new template, use these as a guide for expected constraint count
 -   **Tag admin (database-scoped)**: ~6 constraints (1 web + 1 api + 2 tag + 2 tagType)
 -   **Deny overlay**: 1 constraint per deny rule
 
-The api counts include the `{{ROLE_NAME}}-user-api-keys` constraint (all methods on `/auth/user/api-keys`, the caller's own API keys) that the admin, user and read-only templates each carry. The remaining api constraints are the route grants, the admin template's GET-only `/tags` and `/tag-types` constraint, and the execution-route denies described under Workflow Execution Routes: `executions-admin-deny` in the user template and `execution-logs-deny` in the two read-only templates.
+The api counts include the `{{ROLE_NAME}}-user-api-keys` constraint on `/auth/user/api-keys` (the caller's own API keys) that the admin, user and read-only templates each carry: the admin and user templates grant all methods on it, the two read-only templates grant GET only, so a read-only user can view their own keys but cannot create, extend, or delete them. The remaining api constraints are the route grants, the admin template's GET-only `/tags` and `/tag-types` constraint, and the execution-route denies described under Workflow Execution Routes: `executions-admin-deny` in the user template and `execution-logs-deny` in the two read-only templates.
 
 ## Workflow
 
