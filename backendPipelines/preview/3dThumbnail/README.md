@@ -192,6 +192,10 @@ Every point cloud reader keeps at most the run's point budget (see [Compute and 
 
 Points are rendered as colored spheres using per-point RGB colors when available, or colored by elevation (Y-axis) using the viridis colormap.
 
+### CAD (STEP) Handling
+
+A STEP file is read through XCAF (`STEPCAFControl_Reader`), so assemblies keep their structure, every component is placed by the transforms of all assembly levels above it, and a colour set on a part, a component or a face colours that face's triangles (the nearest colour wins; uncoloured faces in a coloured file get the default mesh colour). Every face is tessellated, including free surfaces beside solids. The linear deflection is 0.2% of the model's bounding-box diagonal and the angular deflection 0.35 rad, so detail does not depend on the model's units. STEP carries no up-axis metadata, so the model is rendered as authored. A file XCAF cannot read falls back to `STEPControl_Reader` (geometry only).
+
 ### USD Stage Handling
 
 The USD handler walks the composed stage with `Usd.PrimRange(..., Usd.TraverseInstanceProxies())`, so instanced geometry is drawn at every instance. A `PointInstancer` is expanded with `ComputeInstanceTransformsAtTime` and its prototypes are drawn only through it. A prim whose computed visibility is `invisible`, or whose computed purpose is `guide` or `proxy`, is skipped with its subtree. `Mesh` prims and the implicit `Cube`, `Sphere`, `Cylinder`, `Cone` and `Capsule` prims are tessellated. Values are read at the stage's `startTimeCode` when it declares a time range, else at each attribute's earliest time sample.

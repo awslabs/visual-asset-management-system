@@ -34,6 +34,8 @@ FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietar
 | ------ | --------------- | ----------------------- |
 | STEP   | `.stp`, `.step` | CadQuery / Open CASCADE |
 
+STEP files are read with their assembly placements and their part, component and face colours. Tessellation detail is relative to the model's size, so a part renders with the same detail in millimetres or metres, and free surfaces beside solids are kept.
+
 ### USD Formats
 
 | Format | Extension | Library       |
