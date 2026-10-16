@@ -88,9 +88,7 @@ def generate_rotating_frames(
         plotter.camera.clipping_range = (near_clip, far_clip)
 
         plotter.render()
-        img = plotter.screenshot(return_img=True)
-        img = _add_alpha_from_depth(plotter, img)
-        frames.append(img)
+        frames.append(_capture_rgba(plotter))
 
     plotter.close()
     logger.info(f"Generated {len(frames)} frames")
@@ -140,8 +138,7 @@ def generate_static_frame(
     plotter.camera.clipping_range = (near_clip, far_clip)
 
     plotter.render()
-    img = plotter.screenshot(return_img=True)
-    img = _add_alpha_from_depth(plotter, img)
+    img = _capture_rgba(plotter)
     plotter.close()
 
     return img
@@ -206,37 +203,16 @@ def _add_point_cloud(plotter: pv.Plotter, pv_data: pv.PolyData):
         )
 
 
-def _add_alpha_from_depth(plotter, img_rgb):
+def _capture_rgba(plotter) -> np.ndarray:
     """
-    Create RGBA image using the Z-buffer (depth buffer) to determine transparency.
+    Read the rendered frame as RGBA with a transparent background.
 
-    The depth buffer contains the distance from the camera to each pixel.
-    Background pixels have depth = 1.0 (far plane). Any pixel with geometry
-    has depth < 1.0. This gives a perfect binary mask regardless of model
-    color, texture, or sparsity — no color matching needed.
-
-    This works for all model types: solid meshes, sparse point clouds,
-    textured models, white surfaces, and models with holes.
+    Colour and alpha come from the same render: the background is cleared with zero alpha, so a pixel
+    is opaque exactly where geometry covers it and partially transparent where an anti-aliased edge
+    covers it in part.
     """
-    # Get the depth buffer from VTK's renderer
-    z_buffer = plotter.get_image_depth()
-
-    h, w = img_rgb.shape[:2]
-    rgba = np.zeros((h, w, 4), dtype=np.uint8)
-    rgba[:, :, :3] = img_rgb[:, :, :3]
-
-    # Background pixels have depth == 1.0 (far clipping plane)
-    # Model pixels have depth < 1.0
-    has_geometry = z_buffer < 0.9999
-
-    # Erode the geometry mask by 1 pixel to remove anti-aliased edge fringe
-    # that picks up background color blending
-    from scipy.ndimage import binary_erosion
-    has_geometry = binary_erosion(has_geometry, iterations=1)
-
-    rgba[:, :, 3] = np.where(has_geometry, 255, 0).astype(np.uint8)
-
-    return rgba
+    img = plotter.screenshot(transparent_background=True, return_img=True)
+    return np.ascontiguousarray(img, dtype=np.uint8)
 
 
 def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION):
