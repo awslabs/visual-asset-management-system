@@ -574,6 +574,7 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 1. Create `lib/nestedStacks/{name}/{name}Builder-nestedStack.ts` extending `NestedStack`
 2. Accept `config`, `storageResources`, and other shared resources as constructor params
 3. Instantiate in `core-stack.ts` with `addDependency(storageResourcesNestedStack)`
+4. Export any resources needed by other stacks via public properties
 
 ### Fork Extension Points (core + add-on + custom)
 
@@ -586,7 +587,7 @@ Every aggregated list in the CDK app is composed from a core part, an add-on par
 -   Feature switches are `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`) returned from `buildCustomResources()`.
 -   Fork settings come from `loadCustomConfig()` (`config/custom/customConfig.json`, outside `ConfigPublic`: not in `getConfig()`, the config templates or the ConfigBuilder).
 
-The custom stack holds a `CfnWaitConditionHandle` placeholder so it is valid while empty, has its own template (outside the API stacks' ceilings), and deploys before `RestApi`. The API Gateway path-tree quota is still shared. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`. 4. Export any resources needed by other stacks via public properties
+The custom stack holds a `CfnWaitConditionHandle` placeholder so it is valid while empty, has its own template (outside the API stacks' ceilings), and deploys before `RestApi`. The API Gateway path-tree quota is still shared. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### 4. Adding a New DynamoDB Table
 
