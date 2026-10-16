@@ -107,10 +107,12 @@ infra/
     pipelines/preview3dThumbnailComputeTiers.test.ts  # 3D thumbnail tiers: one job definition, the
                                  # Choice, per-tier vCPU/memory overrides, VAMS_COMPUTE_TIER, timeouts
     config/preview3dThumbnailComputeTierValidation.test.ts  # getConfig() Fargate-size + threshold checks
+    pipelines/batchJobDefinitionNagSuppression.test.ts  # cdk-nag on the 3D thumbnail construct with and
+                                 # without an account: SubmitJob on job-definition/* stays suppressed
     support/asl.ts               # parseAsl + lambda-env / job-definition-name / declared-stage-name helpers
                                  # joining a producer's *_STATE_NAME literals to the synthesized ASL
     support/pipelineConstructHarness.ts  # One-pipeline synth harness (stack, VPC, storage stubs, EFS/ECR imports)
-                                 # for per-construct assertions
+                                 # for per-construct assertions; `unresolvedAccount` synthesizes with no account
     support/templateSynth.ts     # T1 harness: synthesizes the whole app from each shipped config
                                  # template with no Docker daemon; exposes every nested template
     t1PartitionPortability.test.ts  # T1 assertions across commercial/govcloud/eusovereign
