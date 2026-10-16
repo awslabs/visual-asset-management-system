@@ -108,7 +108,8 @@ infra/
                                  # Choice, per-tier vCPU/memory overrides, VAMS_COMPUTE_TIER, timeouts
     config/preview3dThumbnailComputeTierValidation.test.ts  # getConfig() Fargate-size + threshold checks
     pipelines/batchJobDefinitionNagSuppression.test.ts  # cdk-nag on the 3D thumbnail construct with and
-                                 # without an account: SubmitJob on job-definition/* stays suppressed
+                                 # without an account: SubmitJob on job-definition/* stays suppressed;
+                                 # no pipeline construct interpolates the account into that appliesTo
     support/asl.ts               # parseAsl + lambda-env / job-definition-name / declared-stage-name helpers
                                  # joining a producer's *_STATE_NAME literals to the synthesized ASL
     support/pipelineConstructHarness.ts  # One-pipeline synth harness (stack, VPC, storage stubs, EFS/ECR imports)

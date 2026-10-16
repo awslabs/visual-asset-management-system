@@ -83,7 +83,6 @@ export class CosmosReasonConstruct extends Construct {
         props = { ...defaultProps, ...props };
 
         const region = Stack.of(this).region;
-        const account = Stack.of(this).account;
         const cosmosConfig = props.config.app.pipelines.useNvidiaCosmos;
 
         /**
@@ -989,7 +988,9 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
                         appliesTo: [
                             "Resource::*",
                             "Action::kms:GenerateDataKey*",
-                            `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                            {
+                                regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                            },
                             {
                                 regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                             },
