@@ -19,7 +19,9 @@ import { publishAddonResourceName } from "../../lib/nestedStacks/addon/addonStac
 import { publishCustomResourceName } from "../../lib/nestedStacks/custom/customStackHelpers";
 import { newTestApp } from "../support/testApp";
 
-const config = { resourceNamesSSMParamPrefix: "/vams-test/resourceNames" } as any;
+const config = {
+    resourceNamesSSMParamPrefix: "/vams-test/resourceNames",
+} as unknown as Parameters<typeof publishAddonResourceName>[1];
 const PROBE_CATEGORY = "laneCollisionProbe";
 
 const stackFor = () => new cdk.Stack(newTestApp(), "LaneNameStack");

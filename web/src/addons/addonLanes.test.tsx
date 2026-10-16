@@ -25,7 +25,7 @@ import { checkWebRoutesAllowed, WebRouteCheck } from "../services/webRoutesCheck
 jest.mock("../services/webRoutesCheck", () => ({ checkWebRoutesAllowed: jest.fn() }));
 
 jest.mock("./addonRoutes", () => {
-    const mockReact = require("react");
+    const mockReact = jest.requireActual("react");
     const page = (testId: string) => () =>
         mockReact.createElement("div", { "data-testid": testId });
     return {
@@ -42,7 +42,7 @@ jest.mock("./addonRoutes", () => {
 });
 
 jest.mock("../custom/customRoutes", () => {
-    const mockReact = require("react");
+    const mockReact = jest.requireActual("react");
     return {
         customRouteTable: [
             {

@@ -16,11 +16,10 @@ import os from "os";
 import path from "path";
 import { ALL_VIEWER_CONFIGS } from "../core/viewerSources";
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const {
-    checkViewerEnabled,
-    CONFIG_FILES,
-} = require("../../../customInstalls/utility/checkViewerEnabled");
+// The install script is CommonJS; jest.requireActual loads it without an import shim.
+const { checkViewerEnabled, CONFIG_FILES } = jest.requireActual(
+    "../../../customInstalls/utility/checkViewerEnabled"
+);
 
 const CONFIG_DIR = __dirname;
 const FILES = ["viewerConfig.json", "addonViewerConfig.json", "customViewerConfig.json"];
@@ -50,7 +49,7 @@ const setEnabled = (config: any, id: string, enabled: boolean) => {
 
 let warn: jest.SpyInstance;
 beforeEach(() => {
-    warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
 });
 afterEach(() => warn.mockRestore());
 afterAll(() => copies.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));

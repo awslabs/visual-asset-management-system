@@ -69,7 +69,11 @@ export function publishLaneResourceName(
     if (!key) {
         throw new Error(`${fn}: key must be a non-empty SSM key suffix`);
     }
-    if (resourceParamKeySet(RESOURCE_PARAM_KEYS as any).has(key)) {
+    if (
+        resourceParamKeySet(
+            RESOURCE_PARAM_KEYS as unknown as Record<string, Record<string, string>>
+        ).has(key)
+    ) {
         throw new Error(
             `${fn}: "${key}" is a core VAMS resource-name key; ` +
                 `declare the ${LANES[lane].label} resource under a key of its own`

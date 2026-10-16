@@ -205,13 +205,18 @@ describe("licensed viewers are add-on viewers", () => {
                     core.supportedExtensions.some((ext: string) =>
                         addon.supportedExtensions.includes(ext)
                     );
-                if (tie && !addonIds.has(core.id) && index.get(core.id)! > index.get(addon.id)!) {
+                const coreAt = index.get(core.id) ?? -1;
+                const addonAt = index.get(addon.id) ?? -1;
+                if (tie && !addonIds.has(core.id) && coreAt > addonAt) {
                     inverted.push(`${addon.id} before ${core.id}`);
                 }
             }
         }
         expect(inverted).toEqual([]);
-        expect(index.get("cesium-viewer")!).toBeLessThan(index.get("veerum-viewer")!);
+        expect(index.get("cesium-viewer")).toBeDefined();
+        expect(index.get("cesium-viewer") ?? Infinity).toBeLessThan(
+            index.get("veerum-viewer") ?? -1
+        );
     });
 });
 
