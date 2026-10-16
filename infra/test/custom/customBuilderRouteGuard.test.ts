@@ -77,7 +77,11 @@ function buildWithRoute(allowAnonymous: boolean | undefined, registry = new Rout
 /** A registry holding one authenticated route registered before the custom stack. */
 function registryWithCoreRoute(): RouteRegistry {
     const registry = new RouteRegistry();
-    registry.register({ path: "/database", method: HttpMethod.GET, lambdaFn: {} as any });
+    registry.register({
+        path: "/database",
+        method: HttpMethod.GET,
+        lambdaFn: {} as lambda.IFunction,
+    });
     return registry;
 }
 
