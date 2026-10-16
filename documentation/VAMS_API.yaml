@@ -7982,7 +7982,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     description: >
                         OK. A single abort carries a warnings array only when a registered sub-process
                         could not be stopped; the sub-process is then left running and the warning names
-                        it. A group abort carries the group id and a per-member result for every member
+                        it by its registered id or the final segment of its registered ARN, never the
+                        ARN. A group abort carries the group id and a per-member result for every member
                         the caller is authorized on, skippedInaccessibleCount when members were withheld
                         for access, and moreRemaining when active members remain beyond the request's
                         cap of 200 — re-invoke to continue. If a member's sub-process abort is
