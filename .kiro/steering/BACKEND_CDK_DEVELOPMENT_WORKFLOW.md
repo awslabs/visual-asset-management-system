@@ -21,11 +21,16 @@ backend/
 │   ├── models/                 # Pydantic request/response models
 │   │   ├── assetsV3.py        # Asset API models (GOLD STANDARD)
 │   │   ├── common.py          # Common response models
+│   │   ├── addon/             # Add-on models (physnaViewer.py)
+│   │   ├── custom/            # FORK EXTENSION POINT: fork models (shipped empty)
 │   │   └── [domain].py        # Domain-specific models
 │   ├── common/                # Shared utilities
-│   │   ├── constants.py       # Constants and configuration
+│   │   ├── constants.py       # Constants and configuration (object types, fields, blocklists: core + add-on + custom)
+│   │   ├── addonConstants.py  # Add-on object types, constraint fields, blocklist entries (shipped empty)
+│   │   ├── addonResourceNames.py  # Add-on resource-name keys (AddonResourceKeys, shipped empty)
 │   │   ├── validators.py      # Input validation functions
 │   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, batch_get_items, …)
+│   ├── custom/                # FORK EXTENSION POINT: customApiRoutes.py, customResourceNames.py, customConstants.py
 │   └── customLogging/         # Logging utilities
 ├── tests/                     # Test files (mirror handler structure)
 │   ├── handlers/              # Handler tests
@@ -78,17 +83,19 @@ One folder per domain. The current domains:
 
 Every list VAMS aggregates is `core + add-on + custom`. The custom part is fork-owned: upstream ships it empty and never edits it, so a fork adds net-new endpoints and resources without conflicting on upgrade. Each such file opens with the "Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
-| Layer                | Add-on file (upstream-owned)                                | Custom file (fork-owned, shipped empty)                                                     |
-| -------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| API routes           | `backend/backend/common/addonApiRoutes.py` (`ADDON_ROUTES`) | `backend/backend/custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                               |
-| Handlers / models    | `backend/backend/handlers/addon/`                           | `backend/backend/handlers/custom/`, `backend/backend/models/custom/`                        |
-| Resource names       | —                                                           | `backend/backend/custom/customResourceNames.py` ↔ `infra/common/customResourceParamKeys.ts` |
-| CDK resources        | `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts`  | `infra/lib/nestedStacks/custom/customResources.ts` (built inside the `CustomBuilder` stack) |
-| Feature switches     | `AddonBuilderNestedStack.enabledFeatures`                   | `infra/common/customAppFeatures.ts`, returned by `buildCustomResources()`                   |
-| CSP / default routes | `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`          | CSP: the existing `infra/config/csp/cspAdditionalConfig.json`                               |
-| Fork settings        | `app.addons.*` in `config.json`                             | `infra/config/custom/customConfig.json`, read with `loadCustomConfig()`                     |
+| Layer                                       | Add-on file (upstream-owned)                                                              | Custom file (fork-owned, shipped empty)                                                     |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| API routes                                  | `backend/backend/common/addonApiRoutes.py` (`ADDON_ROUTES`)                               | `backend/backend/custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                               |
+| Handlers / models                           | `backend/backend/handlers/addon/`                                                         | `backend/backend/handlers/custom/`, `backend/backend/models/custom/`                        |
+| Models                                      | `backend/backend/models/addon/`                                                           | `backend/backend/models/custom/`                                                            |
+| Object types, constraint fields, deny lists | `backend/backend/common/addonConstants.py`                                                | `backend/backend/custom/customConstants.py`, merged by `common/constants.py`                |
+| Resource names                              | `backend/backend/common/addonResourceNames.py` ↔ `infra/common/addonResourceParamKeys.ts` | `backend/backend/custom/customResourceNames.py` ↔ `infra/common/customResourceParamKeys.ts` |
+| CDK resources                               | `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts`                                | `infra/lib/nestedStacks/custom/customResources.ts` (built inside the `CustomBuilder` stack) |
+| Feature switches                            | `infra/common/addonAppFeatures.ts`, pushed by `AddonBuilderNestedStack.enabledFeatures`   | `infra/common/customAppFeatures.ts`, returned by `buildCustomResources()`                   |
+| CSP / default routes                        | `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`                                        | CSP: the existing `infra/config/csp/cspAdditionalConfig.json`                               |
+| Fork settings                               | `app.addons.*` in `config.json`                                                           | `infra/config/custom/customConfig.json`, read with `loadCustomConfig()`                     |
 
-Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (so they get the `VamsAuthorizer` scheme) and cannot be anonymous: `CustomBuilderNestedStack` fails synth on an `allowAnonymous` custom route and on an earlier route made anonymous, and `RouteRegistry` stores frozen descriptors. It also fails synth when `buildCustomResources()` returns a core `VAMS_APP_FEATURES` value. `publishCustomResourceName()` (`custom/customStackHelpers.ts`) fails synth on a key equal to a core key; the parameters hold names only, never a secret. Naming conventions (`/custom/` routes, `custom/` keys, `CUSTOM_*` switches) are recommended, not enforced. `customConfigCommon/` is the separate place for overriding **existing** behaviour (authorizer MFA check, login profile).
+Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (so they get the `VamsAuthorizer` scheme) and cannot be anonymous: `CustomBuilderNestedStack` fails synth on an `allowAnonymous` custom route and on an earlier route made anonymous, and `RouteRegistry` stores frozen descriptors. It also fails synth when `buildCustomResources()` returns a core `VAMS_APP_FEATURES` or add-on `ADDON_APP_FEATURES` value. `publishCustomResourceName()` (`custom/customStackHelpers.ts`) and `publishAddonResourceName()` (`addon/addonStackHelpers.ts`) fail synth on a key equal to a core key or one the other lane declares; the parameters hold names only, never a secret. The backend constants lanes are merged by `common/constants.py` at import and fail closed on a broken rule (names `^[A-Za-z][A-Za-z0-9]{1,63}$`, no reserved key, no redefinition, fields that exist, samples `""`/`[]`, append-only lower-case deny entries); an extension object type gets no seeded constraint, so even admin is denied on it until the fork adds one, and the `dynamodb-authdefaults-*` constructs are never extended for it. Naming conventions (`/custom/` routes, `custom/` keys, `CUSTOM_*` switches) are recommended, not enforced. `customConfigCommon/` is the separate place for overriding **existing** behaviour (authorizer MFA check, login profile).
 
 #### **Workflow Execution Storage**
 

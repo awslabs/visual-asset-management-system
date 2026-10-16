@@ -46,7 +46,7 @@ web/
     vntana/
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -108,6 +108,7 @@ web/
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
       addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
 
+    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
     custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
       customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
       customNavigation.ts   #   customNavSections, appended to the side navigation
@@ -803,7 +804,7 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 ### 7.5 Adding Pages in a Fork
 
-A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ---
 

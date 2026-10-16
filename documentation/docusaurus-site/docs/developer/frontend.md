@@ -25,15 +25,19 @@ The app mounts with `createRoot` from `react-dom/client`, so React 18 APIs such 
 ```
 web/src/
   App.tsx                 # Root shell, HashRouter, TopNavigation
-  routes.tsx              # Centralized route table with React.lazy
+  routes.tsx              # Centralized route table with React.lazy (core + add-on + custom)
   config.ts               # Static config (APP_TITLE, APP_TITLE_PREFIX, DEV_API_ENDPOINT)
   synonyms.tsx            # Customizable display names (Asset, Database, Comment)
   index.tsx               # Entry point (createRoot)
 
   FedAuth/Auth.tsx        # Dual-mode authentication orchestrator
 
+  addons/                 # Add-on web routes and navigation (addonRoutes.tsx, addonNavigation.ts)
+  custom/                 # FORK EXTENSION POINT: a fork's routes, navigation, pages and services
+
   services/               # API and data services (ONLY place to import apiClient)
     APIService.ts         # Main API service (~40+ exports)
+    addons/               # Add-on API calls (physnaAPIService.ts)
     apiClient.ts          # Custom fetch wrapper (internal only)
     appCache.ts           # localStorage cache (replaces Amplify Cache)
     AssetUploadService.ts
@@ -58,7 +62,6 @@ web/src/
     fileFormats.ts        # Preview file formats and .previewFile. pattern
     featuresEnabled.ts    # Feature flag name constants
     actions.ts            # Action name constants
-    permissionConstraintTypes.ts  # Permission constraint type constants
   constants/
     uploadLimits.ts       # Upload limits (part sizes, file counts, preview size)
 ```
@@ -545,6 +548,8 @@ The preview file pattern and allowed preview extensions are mirrored in the back
 3. Add a navigation item in `src/layout/Navigation.tsx` if needed.
 
 The route is automatically permission-filtered via the `webRoutes()` API call. The backend must also allow the route in the Casbin policy.
+
+The route table and the side navigation are composed in the order core, add-on, custom: `routes.tsx` appends `addonRouteTable` (`src/addons/addonRoutes.tsx`) and then `customRouteTable` (`src/custom/customRoutes.tsx`) to its core routes, and `Navigation.tsx` appends `addonNavSections` (`src/addons/addonNavigation.ts`) and then `customNavSections` (`src/custom/customNavigation.ts`) to its core sections. Both lanes ship empty. An add-on page is declared in the add-on files, and a fork's in the custom files ([Extending VAMS in a Fork](customizing-vams.md)), so neither edits the core files. Their routes and links pass through the same `web`-constraint filter as core ones, and a path that repeats an earlier route's path never replaces the core page, because the earlier route matches first.
 
 ### Component Template
 

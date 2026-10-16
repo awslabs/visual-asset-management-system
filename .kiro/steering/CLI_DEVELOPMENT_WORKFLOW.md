@@ -13,7 +13,9 @@ tools/VamsCLI/
 ├── vamscli/
 │   ├── main.py              # CLI entry point with global options
 │   ├── version.py           # Version management
-│   ├── constants.py         # ALL API endpoints and configuration constants
+│   ├── constants.py         # ALL API endpoints and configuration constants (re-exports addon_constants)
+│   ├── addon_constants.py   # Add-on FEATURE_* names (FEATURE_PHYSNA_ADDON), mirrors infra/common/addonAppFeatures.ts
+│   ├── custom_constants.py  # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
 │   ├── auth/                # Authentication providers
 │   │   ├── __init__.py
 │   │   ├── base.py          # Base interfaces
@@ -240,7 +242,7 @@ A fork adds CLI commands and MCP tools without editing `main.py`, `constants.py`
 -   `vamscli/commands/custom/__init__.py` — `CUSTOM_COMMANDS`; `main.py` registers each entry on the root `cli` group after every core command, and raises at import on a name that is already registered, so a custom command never replaces a core one (`tests/test_custom_commands.py`).
 -   `tools/VamsMCP/vams_mcp/custom_tools.py` — `register_custom_tools(mcp, client, config, tool_result)`, called once by `server.py` after the destructive block; gate write/destructive tools on `config.enable_writes` / `config.enable_destructive`. A custom tool with a core tool's name is not registered: the MCP SDK keeps the core tool and logs `Tool already exists: <name>` (`tools/VamsMCP/tests/test_custom_tools.py`).
 
-A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name. Names prefixed `custom-` (commands) and `custom_` (tools) are recommended, not enforced. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name. Names prefixed `custom-` (commands) and `custom_` (tools) are recommended, not enforced. Add-on feature-switch names live in `vamscli/addon_constants.py` (mirroring `infra/common/addonAppFeatures.ts`) and are re-exported from `constants.py`; the contract test checks core, add-on and custom constants against their enums in both directions. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### **Command Implementation Standards**
 

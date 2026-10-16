@@ -1062,6 +1062,9 @@ paths:
                 on each), the criteria operators, the permissions (HTTP actions), and the
                 permission types. Used by the constraints editor and CLI to drive
                 objectType, field, operator, permission, and permissionType selection.
+                The object types are the core types followed by any permission object types
+                the deployment registers (fork or add-on constants files); a registered type
+                is listed here even though no constraint grants access to it yet.
             responses:
                 "200":
                     description: Constraint object types, operators, permissions, and permission types
@@ -9523,8 +9526,15 @@ components:
                     description: "Constraint description (1-256 characters)"
                 objectType:
                     type: string
-                    enum: [database, asset, api, web, tag, tagType, role, userRole, pipeline, workflow, metadataSchema]
-                    description: "Type of object this constraint applies to"
+                    pattern: "^[A-Za-z][A-Za-z0-9]{1,63}$"
+                    example: asset
+                    description: >-
+                        Type of object this constraint applies to. The core types are database,
+                        asset, api, web, tag, tagType, role, userRole, pipeline, workflow and
+                        metadataSchema; a deployment can register more (permission object types in
+                        the fork or add-on constants files), so the set is not fixed. GET
+                        /auth/constraints/permissionObjects lists the types the deployment accepts,
+                        with the fields valid on each. Any other value is rejected with 400.
                 criteriaAnd:
                     type: array
                     items:
@@ -9584,8 +9594,15 @@ components:
                     description: "Constraint description"
                 objectType:
                     type: string
-                    enum: [database, asset, api, web, tag, tagType, role, userRole, pipeline, workflow, metadataSchema]
-                    description: "Type of object this constraint applies to"
+                    pattern: "^[A-Za-z][A-Za-z0-9]{1,63}$"
+                    example: asset
+                    description: >-
+                        Type of object this constraint applies to. The core types are database,
+                        asset, api, web, tag, tagType, role, userRole, pipeline, workflow and
+                        metadataSchema; a deployment can register more (permission object types in
+                        the fork or add-on constants files), so the set is not fixed. GET
+                        /auth/constraints/permissionObjects lists the types the deployment accepts,
+                        with the fields valid on each. Any other value is rejected with 400.
                 criteriaAnd:
                     type: array
                     items:

@@ -25,8 +25,10 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 infra/
   bin/infra.ts                  # CDK app entry point
   common/
-    vamsAppFeatures.ts          # VAMS_APP_FEATURES enum
+    vamsAppFeatures.ts          # VAMS_APP_FEATURES enum (core switches)
+    addonAppFeatures.ts         # ADDON_APP_FEATURES enum (PHYSNA_ADDON), pushed by AddonBuilderNestedStack
     resourceParamKeys.ts        # SSM key constants (mirrored in backend/common/resourceNames.py)
+    addonResourceParamKeys.ts   # Add-on SSM keys (shipped empty; mirrored in backend/common/addonResourceNames.py)
     customAppFeatures.ts        # FORK EXTENSION POINT: CUSTOM_APP_FEATURES enum (shipped empty)
     customResourceParamKeys.ts  # FORK EXTENSION POINT: custom SSM keys (mirrored in backend/custom/customResourceNames.py)
   config/
@@ -62,6 +64,7 @@ infra/
       resourceNames/
         resourceNamesBuilder-nestedStack.ts  # 66 SSM String parameters, one per registry descriptor
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
+        laneResourceNames.ts                 # publishLaneResourceName(): add-on/custom keys, refuses core and other-lane keys
       auth/
         authBuilder-nestedStack.ts       # Cognito user pool, identity pool, SAML, external OAuth
         constructs/                      # cognito-web-native, dynamodb-authdefaults-{admin,ro}
@@ -92,14 +95,15 @@ infra/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
       addon/
-        addonBuilder-nestedStack.ts        # Addon orchestrator; enabledFeatures (PHYSNA_ADDON) pushed by core-stack
+        addonBuilder-nestedStack.ts        # Addon orchestrator; enabledFeatures (ADDON_APP_FEATURES, rejects core values) pushed by core-stack
+        addonStackHelpers.ts               # publishAddonResourceName() (rejects a core or custom key)
         addonCsp.ts                        # addonCspSources(): add-on CSP origins, merged by security.ts
         addonDefaultRoutes.ts              # addonReadOnlyApiRouteCriteria(): add-on routes for the basic read-only role
         garnetFramework/                   # Garnet NGSI-LD digital twin framework
         physna/                            # Physna 3D/CAD geometric search sync (builds physnaFileSync, physnaAssetSync, physnaViewer lambdas for addon API)
       custom/
-        customBuilder-nestedStack.ts       # CustomBuilder: placeholder handle + calls buildCustomResources(); rejects anonymous custom routes and core feature values
-        customStackHelpers.ts              # CustomResourcesProps, loadCustomConfig(), publishCustomResourceName() (rejects a core key)
+        customBuilder-nestedStack.ts       # CustomBuilder: placeholder handle + calls buildCustomResources(); rejects anonymous custom routes and core/add-on feature values
+        customStackHelpers.ts              # CustomResourcesProps, loadCustomConfig(), publishCustomResourceName() (rejects a core or add-on key)
         customResources.ts                 # FORK EXTENSION POINT: buildCustomResources() (shipped empty)
   test/                          # Jest suites: route registry, OpenAPI spec, config-builder drift, WAF,
                                  # lambda grants, presigned-URL policy, migration tooling, plus the legacy
@@ -205,7 +209,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 
 ### Feature Flags (common/vamsAppFeatures.ts)
 
-`VAMS_APP_FEATURES` enum: `GOVCLOUD`, `ALLOWUNSAFEEVAL`, `LOCATIONSERVICES`, `ALBDEPLOY`, `CLOUDFRONTDEPLOY`, `NOOPENSEARCH`, `AUTHPROVIDER_COGNITO`, `AUTHPROVIDER_COGNITO_SAML`, `AUTHPROVIDER_COGNITO_OIDC`, `AUTHPROVIDER_EXTERNALOAUTHIDP`, `PHYSNA_ADDON`, `DEADLINECLOUD_PIPELINES`. Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`. Add-on switches are computed by `AddonBuilderNestedStack.enabledFeatures` and a fork's (`CUSTOM_APP_FEATURES`, `common/customAppFeatures.ts`) by its `buildCustomResources()`; `core-stack.ts` pushes both lists.
+`VAMS_APP_FEATURES` enum: `GOVCLOUD`, `ALLOWUNSAFEEVAL`, `LOCATIONSERVICES`, `ALBDEPLOY`, `CLOUDFRONTDEPLOY`, `NOOPENSEARCH`, `AUTHPROVIDER_COGNITO`, `AUTHPROVIDER_COGNITO_SAML`, `AUTHPROVIDER_COGNITO_OIDC`, `AUTHPROVIDER_EXTERNALOAUTHIDP`, `DEADLINECLOUD_PIPELINES`. `ADDON_APP_FEATURES` enum (`common/addonAppFeatures.ts`): `PHYSNA_ADDON`. Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`. Add-on switches (`ADDON_APP_FEATURES`) are computed by `AddonBuilderNestedStack.enabledFeatures` and a fork's (`CUSTOM_APP_FEATURES`, `common/customAppFeatures.ts`) by its `buildCustomResources()`; `core-stack.ts` pushes both lists.
 
 ---
 
@@ -578,13 +582,14 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 
 ### Fork Extension Points (core + add-on + custom)
 
-Every aggregated list in the CDK app is composed from a core part, an add-on part kept beside it (`lib/nestedStacks/addon/`: `addonCsp.ts`, `addonDefaultRoutes.ts`, `AddonBuilderNestedStack.enabledFeatures`), and a fork-owned custom part that upstream ships empty and never edits. Core files name no add-on (`test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts`, which `CustomBuilderNestedStack` calls with `CustomResourcesProps` (`config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets`, `registry`):
+Every aggregated list in the CDK app is composed from a core part, an add-on part kept beside it (`lib/nestedStacks/addon/`: `addonCsp.ts`, `addonDefaultRoutes.ts`, `addonStackHelpers.ts`; `common/addonAppFeatures.ts`; `common/addonResourceParamKeys.ts`), and a fork-owned custom part that upstream ships empty and never edits. Core files name no add-on (`test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts`, which `CustomBuilderNestedStack` calls with `CustomResourcesProps` (`config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets`, `registry`):
 
 -   Lambdas follow the [Lambda Builder Pattern](#lambda-builder-pattern) with all five security calls; handlers live in `backend/backend/handlers/custom/`.
 -   Routes use `attachFunctionToApi(scope, fn, { routePath, method, registry: props.registry })`. Synth fails when the fork's code registers an `allowAnonymous` route or makes an earlier route anonymous (`CustomBuilderNestedStack` compares the anonymous routes before and after the call); `RouteRegistry` stores frozen descriptors, so an earlier route cannot be edited through `list()`.
 -   Storage uses `storageResources.encryption.kmsKey` under the same `useKmsCmkEncryption` switch as the core tables (Rule 8).
--   Resource names are published with `publishCustomResourceName(scope, config, key, value)` (`customStackHelpers.ts`), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py` (`test/storage/resourceNamesMirror.test.ts`); a core key throws at synth. Handlers already hold `ssm:GetParameter*` on the prefix. The parameters hold names only; a secret goes in a `secretsmanager.Secret` with the key imported by ARN (trap 2 of "Encryption at rest for a new resource").
--   Feature switches are `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`) returned from `buildCustomResources()`; a returned `VAMS_APP_FEATURES` value fails synth.
+-   Resource names are published with `publishCustomResourceName(scope, config, key, value)` (`customStackHelpers.ts`), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py` (`test/storage/resourceNamesMirror.test.ts`); a core key, or a key declared in `common/addonResourceParamKeys.ts`, throws at synth. The add-on lane works the same way: keys in `common/addonResourceParamKeys.ts` (shipped empty), mirrored in `backend/backend/common/addonResourceNames.py`, published by an add-on stack with `publishAddonResourceName()` (`nestedStacks/addon/addonStackHelpers.ts`); both helpers share `nestedStacks/resourceNames/laneResourceNames.ts`. Handlers already hold `ssm:GetParameter*` on the prefix. The parameters hold names only; a secret goes in a `secretsmanager.Secret` with the key imported by ARN (trap 2 of "Encryption at rest for a new resource").
+-   Feature switches are `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`) returned from `buildCustomResources()`; a returned `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value fails synth. Add-on switches are `ADDON_APP_FEATURES` (`common/addonAppFeatures.ts`, `PHYSNA_ADDON`), pushed by `AddonBuilderNestedStack.enabledFeatures`, which refuses a core value. `test/addon/appFeatureLanes.test.ts` keeps the three enums disjoint.
+-   Permission object types for fork or add-on entities are backend constants (`backend/backend/custom/customConstants.py`, `common/addonConstants.py`), not CDK. They get **no seeded constraint**: never extend `dynamodb-authdefaults-admin-construct.ts` or `dynamodb-authdefaults-ro-construct.ts` for one.
 -   Fork settings come from `loadCustomConfig()` (`config/custom/customConfig.json`, outside `ConfigPublic`: not in `getConfig()`, the config templates or the ConfigBuilder). `test/api/apiRouteBackendCdkParity.test.ts` synthesizes with the committed file, so every custom route must be registered under it.
 
 The custom stack holds a `CfnWaitConditionHandle` placeholder so it is valid while empty, has its own template (outside the API stacks' ceilings), and deploys before `RestApi`. The API Gateway path-tree quota is still shared. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.

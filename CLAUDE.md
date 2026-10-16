@@ -38,11 +38,11 @@ The sub-package `package.json`/`package-lock.json` files under `infra/`, `web/`,
 root/
 ├── CLAUDE.md                  # THIS FILE - project-wide guide
 ├── web/                       # React frontend (Cloudscape, TypeScript, Vite)
-│   └── CLAUDE.md              # Frontend development guide
+│   └── CLAUDE.md              # Frontend development guide (src/addons/ add-on lane, src/custom/ fork lane)
 ├── backend/                   # Python Lambda handlers
-│   └── CLAUDE.md              # Backend development guide
+│   └── CLAUDE.md              # Backend development guide (common/addon*.py add-on lane, backend/custom/ fork lane)
 ├── infra/                     # CDK TypeScript infrastructure
-│   └── CLAUDE.md              # CDK development guide
+│   └── CLAUDE.md              # CDK development guide (common/addon*.ts add-on lane, common/custom*.ts fork lane)
 ├── tools/
 │   ├── VamsCLI/               # Python CLI tool
 │   │   └── CLAUDE.md          # CLI development guide
@@ -153,7 +153,7 @@ Adding a new API endpoint requires coordinated changes across multiple component
 
 **Never** add an endpoint without updating all required files. A handler without a route is dead code; a route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a missing entry is invisible to constraint authoring and the CLI. **API documentation lives in two places — the OpenAPI `VAMS_API.yaml` AND the Docusaurus `api/{domain}.md` reference page — and both must be updated together.**
 
-**In a fork** (a net-new endpoint the fork owns), the same steps target the fork extension points instead of the core files, so upstream merges stay conflict-free: `backend/backend/custom/customApiRoutes.py` (step 1), `backend/backend/handlers/custom/` and `models/custom/` (2–3), `infra/lib/nestedStacks/custom/customResources.ts` for the Lambda and its `attachFunctionToApi` route (4–5), `web/src/custom/services/` (6), `tools/VamsCLI/vamscli/custom_constants.py` + `utils/custom_api_client.py` + `commands/custom/` (7), and `tools/VamsMCP/vams_mcp/custom_tools.py` (8). Upstream ships each of these empty and never edits it. Add-on routes likewise live in `backend/backend/common/addonApiRoutes.py`, not `apiRoutes.py`. See `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+**In a fork** (a net-new endpoint the fork owns), the same steps target the fork extension points instead of the core files, so upstream merges stay conflict-free: `backend/backend/custom/customApiRoutes.py` (step 1), `backend/backend/handlers/custom/` and `models/custom/` (2–3), `infra/lib/nestedStacks/custom/customResources.ts` for the Lambda and its `attachFunctionToApi` route (4–5), `web/src/custom/services/` (6), `tools/VamsCLI/vamscli/custom_constants.py` + `utils/custom_api_client.py` + `commands/custom/` (7), and `tools/VamsMCP/vams_mcp/custom_tools.py` (8). When the fork's entity needs object-level (Tier 2) authorization on its own attributes, register a permission object type and its constraint fields in `backend/backend/custom/customConstants.py`; it grants nothing, even to admin, until the fork adds a constraint for it. Upstream ships each of these empty and never edits it. Add-on code likewise lives in the add-on files beside the core lists (`common/addonApiRoutes.py`, `common/addonConstants.py`, `common/addonResourceNames.py`, `models/addon/`, `infra/common/addonAppFeatures.ts`, `infra/common/addonResourceParamKeys.ts`, `web/src/addons/`, `vamscli/addon_constants.py`), never in the core file. Every list merges in the order core, add-on, custom. See `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### **Pattern 7: Backend → CLI → MCP / Connector Propagation Chain**
 
@@ -196,7 +196,7 @@ Reverse direction applies too: a change to the MCP server or a connector that re
 Authorization is enforced at two tiers everywhere in VAMS:
 
 -   **Tier 1 (API-level)**: Controls which API routes a role can access. Defined via `api` and `web` objectType constraints.
--   **Tier 2 (Object-level)**: Controls which data entities a role can access. Defined via entity-type constraints (`database`, `asset`, `pipeline`, etc.).
+-   **Tier 2 (Object-level)**: Controls which data entities a role can access. Defined via entity-type constraints (`database`, `asset`, `pipeline`, etc.). The object types and their fields are `common/constants.py` core + `common/addonConstants.py` + `custom/customConstants.py`, merged at import with fail-closed rules; an extension type gets no seeded constraint, so even admin is denied on it until a constraint allows it. Never add a seeded admin or read-only grant for an extension type.
 
 **Both tiers must allow for access to succeed.** This is defense-in-depth. The backend enforces via `CasbinEnforcer`, and the frontend gates UI routes via the `webRoutes()` API.
 
@@ -327,11 +327,11 @@ VAMS uses a custom Lambda authorizer for all API Gateway endpoints. Never use bu
 
 ### **Rule 6: Feature Switches Must Be Defined**
 
-New features must have a feature switch in `vamsAppFeatures.ts` and be gated by config in the core stack. Never deploy features unconditionally. In a fork, the switch goes in `infra/common/customAppFeatures.ts` and is returned from `buildCustomResources()`, gated on the fork's settings in `infra/config/custom/customConfig.json`.
+New features must have a feature switch in `vamsAppFeatures.ts` and be gated by config in the core stack. Never deploy features unconditionally. An add-on's switch goes in `infra/common/addonAppFeatures.ts` (`ADDON_APP_FEATURES`) and is pushed by `AddonBuilderNestedStack.enabledFeatures`. In a fork, the switch goes in `infra/common/customAppFeatures.ts` and is returned from `buildCustomResources()`, gated on the fork's settings in `infra/config/custom/customConfig.json`.
 
 ### **Rule 7: All CLI API Endpoints in Constants**
 
-CLI API endpoint paths must be defined in `tools/VamsCLI/vamscli/constants.py`. Never hardcode endpoint paths in command files or API client methods. In a fork, the fork's paths go in `tools/VamsCLI/vamscli/custom_constants.py`.
+CLI API endpoint paths must be defined in `tools/VamsCLI/vamscli/constants.py`. Never hardcode endpoint paths in command files or API client methods. Add-on feature-switch names go in `tools/VamsCLI/vamscli/addon_constants.py` (re-exported from `constants.py`). In a fork, the fork's paths go in `tools/VamsCLI/vamscli/custom_constants.py`.
 
 ### **Rule 8: KMS Encryption for All Storage Resources**
 
@@ -636,7 +636,7 @@ The same three-way constants update applies to new audit CloudWatch log groups. 
 
 ### **Adding a New Viewer Plugin**
 
-1. Create the viewer component as `web/src/visualizerPlugin/viewers/MyViewerPlugin/MyViewerComponent.tsx` (the registry loads only `*Component.tsx` files) and register it in `web/src/visualizerPlugin/viewers/manifest.ts` and `web/src/visualizerPlugin/config/viewerConfig.json` (full walkthrough: `web/src/visualizerPlugin/CLAUDE.md`). An add-on's viewer registers in `viewers/addonManifest.ts` + `config/addonViewerConfig.json`; a fork's in `viewers/custom/customManifest.ts` + `config/customViewerConfig.json`
+1. Create the viewer component as `web/src/visualizerPlugin/viewers/MyViewerPlugin/MyViewerComponent.tsx` (the registry loads only `*Component.tsx` files) and register it in `web/src/visualizerPlugin/viewers/manifest.ts` and `web/src/visualizerPlugin/config/viewerConfig.json` (full walkthrough: `web/src/visualizerPlugin/CLAUDE.md`). An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), registers in `viewers/addonManifest.ts` + `config/addonViewerConfig.json`; a fork's in `viewers/custom/customManifest.ts` + `config/customViewerConfig.json`
 2. List the file extensions it opens in that `viewerConfig.json` entry's `supportedExtensions`
 3. Add any required npm dependencies to `web/package.json`
 4. If the viewer needs `unsafe-eval`, check `allowUnsafeEvalFeatures` config

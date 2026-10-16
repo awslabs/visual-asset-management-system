@@ -18,7 +18,11 @@ infra/
 │   ├── saml-config.ts        # SAML authentication configuration
 │   └── policy/               # IAM policy templates and configurations
 ├── common/
-│   └── vamsAppFeatures.ts    # Feature switch constants and enums
+│   ├── vamsAppFeatures.ts    # Feature switch constants and enums (core)
+│   ├── addonAppFeatures.ts   # Add-on feature switches (ADDON_APP_FEATURES)
+│   ├── addonResourceParamKeys.ts   # Add-on SSM resource-name keys (shipped empty)
+│   ├── customAppFeatures.ts  # FORK EXTENSION POINT: custom feature switches (shipped empty)
+│   └── customResourceParamKeys.ts  # FORK EXTENSION POINT: custom SSM resource-name keys (shipped empty)
 ├── lib/
 │   ├── core-stack.ts         # Main orchestration stack
 │   ├── cf-waf-stack.ts       # Web Application Firewall stack
@@ -80,7 +84,7 @@ CoreVAMSStack (root)
 
 ### **Fork Extension Points (core + add-on + custom)**
 
-Every aggregated list is composed from a core part, an add-on part beside it (`lib/nestedStacks/addon/addonCsp.ts`, `addonDefaultRoutes.ts`, `AddonBuilderNestedStack.enabledFeatures`) and a fork-owned custom part shipped empty. Core files name no add-on (`infra/test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts` (`buildCustomResources(scope, props)`), called inside the `CustomBuilder` stack with `config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets` and the shared `registry`. Its Lambdas use the standard builder pattern and five security calls; its routes go through `attachFunctionToApi` and cannot be anonymous, nor make an earlier route anonymous (synth fails; `RouteRegistry` stores frozen descriptors); it publishes resource names with `publishCustomResourceName()` (a core key throws), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py`, and those parameters hold names only (a secret goes in a `secretsmanager.Secret` with the KMS key imported by ARN); it returns `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`; a `VAMS_APP_FEATURES` value fails synth); and it reads fork settings with `loadCustomConfig()` from `config/custom/customConfig.json`, which is outside `ConfigPublic`. `infra/test/api/apiRouteBackendCdkParity.test.ts` synthesizes with the committed `customConfig.json`, so every custom route must be registered under it. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+Every aggregated list is composed from a core part, an add-on part beside it (`lib/nestedStacks/addon/addonCsp.ts`, `addonDefaultRoutes.ts`, `addonStackHelpers.ts`; `common/addonAppFeatures.ts` (`ADDON_APP_FEATURES`, `PHYSNA_ADDON`, pushed by `AddonBuilderNestedStack.enabledFeatures`, which refuses a core value); `common/addonResourceParamKeys.ts`, mirrored in `backend/backend/common/addonResourceNames.py` and published with `publishAddonResourceName()`) and a fork-owned custom part shipped empty. Merge order is core, add-on, custom; `infra/test/addon/appFeatureLanes.test.ts` keeps the three feature enums disjoint. Core files name no add-on (`infra/test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts` (`buildCustomResources(scope, props)`), called inside the `CustomBuilder` stack with `config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets` and the shared `registry`. Its Lambdas use the standard builder pattern and five security calls; its routes go through `attachFunctionToApi` and cannot be anonymous, nor make an earlier route anonymous (synth fails; `RouteRegistry` stores frozen descriptors); it publishes resource names with `publishCustomResourceName()` (a core key or an add-on key throws; both publish helpers share `nestedStacks/resourceNames/laneResourceNames.ts`), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py`, and those parameters hold names only (a secret goes in a `secretsmanager.Secret` with the KMS key imported by ARN); it returns `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`; a `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value fails synth); and it reads fork settings with `loadCustomConfig()` from `config/custom/customConfig.json`, which is outside `ConfigPublic`. `infra/test/api/apiRouteBackendCdkParity.test.ts` synthesizes with the committed `customConfig.json`, so every custom route must be registered under it. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### **Cross-Stack Shared Interfaces**
 
@@ -425,7 +429,7 @@ if (props.config.app.newFeature.enabled) {
 }
 ```
 
-In a fork, the switch goes in `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`) and is returned from `buildCustomResources()` (`lib/nestedStacks/custom/customResources.ts`), gated on the fork's settings in `infra/config/custom/customConfig.json`. `vamsAppFeatures.ts` stays core-owned; a core value returned from the custom stack fails synth.
+In a fork, the switch goes in `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`) and is returned from `buildCustomResources()` (`lib/nestedStacks/custom/customResources.ts`), gated on the fork's settings in `infra/config/custom/customConfig.json`. `vamsAppFeatures.ts` stays core-owned and add-on switches go in `addonAppFeatures.ts`; a core or add-on value returned from the custom stack fails synth. Permission object types for fork or add-on entities are backend constants (`backend/backend/custom/customConstants.py`, `common/addonConstants.py`) with no seeded constraint: never extend the `dynamodb-authdefaults-*` constructs for one.
 
 ### **Nested Stack Implementation Standards**
 

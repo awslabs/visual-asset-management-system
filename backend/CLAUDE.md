@@ -38,7 +38,10 @@ backend/
 │   │   │                                           #   Handlers dispatch via ApiRoute.matches().
 │   │   ├── apiRouteTypes.py                        # ApiRoute + GET/POST/... (re-exported by apiRoutes.py)
 │   │   ├── addonApiRoutes.py                       # Add-on routes (Physna viewer) → ADDON_ROUTES
-│   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists
+│   │   ├── addonConstants.py                       # Add-on object types, constraint fields, blocklist entries
+│   │   ├── addonResourceNames.py                   # AddonResourceKeys (mirrors infra/common/addonResourceParamKeys.ts)
+│   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists:
+│   │   │                                           #   CORE_* lists merged with the add-on + custom lanes
 │   │   ├── dynamodb.py                             # query_all_items, query_has_match, batch_get_items,
 │   │   │                                           #   to_update_expr, get_asset_object_from_id
 │   │   ├── resourceNames.py                        # SSM resource-name resolver + ResourceKeys
@@ -60,6 +63,7 @@ backend/
 │   ├── customConfigCommon/                         # Override hooks for EXISTING behaviour (MFA check, login profile)
 │   ├── custom/                                     # FORK EXTENSION POINT (shipped empty, never edited upstream):
 │   │   ├── customApiRoutes.py                      #   CUSTOM_ROUTES, spliced into ALL_API_ROUTES
+│   │   ├── customConstants.py                      #   object types, constraint fields, blocklist entries
 │   │   └── customResourceNames.py                  #   CustomResourceKeys (mirrors infra/common/customResourceParamKeys.ts)
 │   ├── handlers/                                   # Lambda handlers, one folder per domain
 │   │   ├── assets/                                 # assetService.py (GOLD STANDARD),
@@ -87,6 +91,7 @@ backend/
 │   │       tagTypes, userRoles                     # Domain handlers (folder per domain)
 │   └── models/                                     # Pydantic v1 models, one file per domain
 │       ├── assetsV3.py                             # GOLD STANDARD model file
+│       ├── addon/                                  # Add-on models (physnaViewer.py)
 │       ├── common.py                               # Response helpers, APIGatewayProxyResponseV2
 │       ├── custom/                                 # FORK EXTENSION POINT: fork models
 │       └── apiKeys, pipelines, workflows, executions, assetHistory, [domain].py
@@ -508,7 +513,7 @@ return success(body=item)
 -   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "mfaEnabled": bool}`. `roles` comes from the `vams:roles` authorizer context value, which the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a 60-second per-user cache — so it is populated for every auth mode (Cognito, external OAuth IDP, API key), not only where a Cognito pre-token-generation trigger runs. It is informational for handlers and audit logs: `CasbinEnforcer` re-reads a user's roles from DynamoDB when building policy, so authorization does not depend on it.
 -   **MFA-aware**: roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims.
 -   **Object annotation**: set `item['object__type']` before every `enforce()` call.
--   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`. Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
+-   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, plus any type the add-on or fork constants lane registers (see "Fork Extension Points"). Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
 
 ### System User (`SYSTEM_USER`)
 
@@ -853,7 +858,7 @@ asset_table = dynamodb.Table(asset_table_name)
 
 ## File Security
 
-Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists live in `common/constants.py`; extend them there, never bypass.
+Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists are built in `common/constants.py` from the core lists plus the add-on (`common/addonConstants.py`) and fork (`custom/customConstants.py`) lanes, append-only; extend the core list there or a lane list, never bypass or remove an entry.
 
 ---
 
@@ -902,16 +907,37 @@ Upstream VAMS ships these files empty and never edits them again, so a fork that
 endpoints writes only here and merges upstream releases without conflicts. Each opens with the same
 "Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
-| What a fork adds   | Fork-owned file                                                       | Spliced in by                                       |
-| ------------------ | --------------------------------------------------------------------- | --------------------------------------------------- |
-| API routes         | `custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                         | `common/apiRoutes.py` → `ALL_API_ROUTES`            |
-| Resource-name keys | `custom/customResourceNames.py` (`CustomResourceKeys`)                | resolved with `get_resource_name()` like a core key |
-| Handlers           | `handlers/custom/<name>.py` (`handlers.custom.<name>.lambda_handler`) | the shared `backend/backend` code asset             |
-| Models             | `models/custom/<name>.py`                                             | imported by the fork's handlers                     |
+| What a fork adds                                   | Fork-owned file                                                       | Spliced in by                                       |
+| -------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------- |
+| API routes                                         | `custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                         | `common/apiRoutes.py` → `ALL_API_ROUTES`            |
+| Resource-name keys                                 | `custom/customResourceNames.py` (`CustomResourceKeys`)                | resolved with `get_resource_name()` like a core key |
+| Handlers                                           | `handlers/custom/<name>.py` (`handlers.custom.<name>.lambda_handler`) | the shared `backend/backend` code asset             |
+| Models                                             | `models/custom/<name>.py`                                             | imported by the fork's handlers                     |
+| Object types, constraint fields, deny-list entries | `custom/customConstants.py`                                           | `common/constants.py` (merged at import)            |
+
+The add-on lane sits beside each core list and is upstream-owned: `common/addonApiRoutes.py`,
+`common/addonResourceNames.py` (`AddonResourceKeys`), `common/addonConstants.py`, `handlers/addon/`
+and `models/addon/` (the Physna viewer model). Every list merges in the order core, add-on, custom.
 
 -   Fork handlers follow every rule above, including both Casbin tiers with the fail-closed
     pre-set flag (Rule 4) and dispatch on the `ApiRoute` constants from `custom/customApiRoutes.py`
-    (Rule 12). Tier 2 uses the existing entity types; a custom Casbin object type is not a seam.
+    (Rule 12). Tier 2 uses a core entity type or a permission object type the fork registers in
+    `custom/customConstants.py` (`CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS` + `CUSTOM_PERMISSION_CONSTRAINT_FIELDS`).
+-   **Constants lanes.** `common/constants.py` keeps the core lists as `CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES`,
+    `CORE_PERMISSION_CONSTRAINT_FIELDS`, `CORE_CONSTRAINT_OBJECT_TYPE_FIELDS`, `CORE_UNALLOWED_FILE_EXTENSION_LIST`
+    and `CORE_UNALLOWED_MIME_LIST`, and builds the public names (no `CORE_` prefix) as core + add-on + custom at
+    import. Consumers import the public names only (`tests/common/test_constants_extension_lanes.py` checks).
+    A lane entry that breaks a rule raises `ConstantsExtensionError` naming the file and entry, which fails
+    every Lambda's import (fail closed): names match `^[A-Za-z][A-Za-z0-9]{1,63}$` (no underscore, so no
+    `x__y` shape and nothing that leaves the `r.obj.<field>` position in a rule), are not `object__type`,
+    `route__path` or `method`, not a Python keyword or `EVALUATOR_RESERVED_ATTRIBUTES` name, and not a core or
+    other-lane entry; a type's fields exist in the merged field set; samples are `""` or `[]` (list fields
+    take only `is_one_of` / `is_not_one_of`). Deny-list entries are append-only, lower-case, `.ext` / `type/subtype`.
+-   **No automatic grant.** An extension object type gets no seeded constraint: the
+    `dynamodb-authdefaults-*` constructs are not extended, so every role, admin included, is denied on it until
+    the fork adds a constraint (`tests/handlers/authz/test_extension_object_types.py`). Never add one.
+-   Tests that pin constants must hold for any lane content: pin the `CORE_*` lists, or load a private copy of
+    `constants.py` with stand-in lane modules; never assert that the merged lists equal core.
 -   `custom/` modules import `ApiRoute` from `common/apiRouteTypes.py` and `ResourceParamKey` from
     `common/resourceNames.py`; nothing in core imports a fork handler or model.
 -   `customConfigCommon/` is different: it holds override hooks for **existing** behaviour (the

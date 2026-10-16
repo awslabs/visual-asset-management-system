@@ -36,6 +36,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Major changes:**
 
+-   **Fork extension points** — A fork adds its own APIs, pages, CDK resources, permission object types, CLI commands, MCP tools and viewers in files upstream ships empty, and add-on code moves out of the core list files. (issue #456, issue #457)
+
 **Breaking changes:**
 
 **Added:**
@@ -51,7 +53,11 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Text Diff Viewer** — Diffs two text files (or two versions of one file, optionally across assets) with side-by-side or inline layout, line/word/character granularity, a line-number toggle, collapse-unchanged with a configurable number of context lines, syntax highlighting and dark-mode support. Each side is fetched and authorized independently and carries its own version picker. The diff library is loaded on demand so it stays out of the base bundle.
 
 -   **Fork extension points** — A fork adds net-new API routes, handlers, models, CDK resources (in their own `CustomBuilder` nested stack, with settings in `infra/config/custom/customConfig.json`), SSM resource names, feature switches, web routes, navigation, services and pages, CLI commands, constants and client methods, MCP tools and viewer plugins in fork-owned files that upstream ships empty and does not modify, so merging an upstream release does not conflict with them. Custom routes are served behind the VAMS authorizer and cannot be anonymous, and a route, resource-name key, feature-switch value, viewer ID, CLI command or MCP tool that duplicates a core one is rejected. (issue #456)
--   **Extending VAMS in a fork guide** — A developer guide page lists every extension point, the recommended naming conventions and the known limits, with a worked example covering each hook; the `/add-api-endpoint` and `/add-pipeline` agent skills gain a fork mode. (issue #456)
+-   **Constants lanes** — `common/addonConstants.py` and `custom/customConstants.py` (shipped empty) extend the permission object types, the constraint fields and the upload deny lists, which `common/constants.py` builds at import as core + add-on + custom; an entry that breaks a rule fails the import with an error naming the file and the entry. (issue #456)
+-   **Extension permission object types** — A registered type and its constraint fields are validated, evaluated and listed by `GET /auth/constraints/permissionObjects` like a core type, so a fork authorizes its own entities on their own attributes. An extension type grants nothing until a constraint allows it, even to the admin role. (issue #456)
+-   **Append-only upload deny lists** — An add-on or fork can add blocked file extensions and MIME types; it cannot unblock a core entry. (issue #456)
+-   **Open `objectType` in the API spec** — `objectType` in the constraint request schemas of `VAMS_API.yaml` is a name pattern with the core types in its description instead of a closed enum. (issue #456)
+-   **Extending VAMS in a fork guide** — A developer guide page lists every extension point list by list (core, add-on and custom files), the permission object type and deny-list rules, the recommended naming conventions and the known limits, with a worked example covering each hook that registers its own `widget` object type and ships an inline constraint template; the permissions, API, architecture and developer pages describe extension object types, and the `/add-api-endpoint`, `/add-pipeline` and `/generate-permissions` agent skills gain fork notes. (issue #456)
 
 **Key fixes:**
 
@@ -79,7 +85,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Other changes:**
 
 -   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs.
--   **Add-on code separated from core list files** — The Physna and Garnet entries in the core route, CSP, default-role, feature-switch, web service and viewer files live in add-on files beside them (`common/addonApiRoutes.py`, `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`, the add-on stack's feature list, `services/addons/physnaAPIService.ts`, `addonViewerConfig.json` and `addonManifest.ts`); the synthesized templates are unchanged. (issue #457)
+-   **Add-on code separated from core list files** — The Physna and Garnet entries in the core route, model, CSP, default-role, feature-switch, web service and viewer files live in add-on files beside them (`common/addonApiRoutes.py`, `models/addon/`, `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`, `infra/common/addonAppFeatures.ts` with the CLI's `vamscli/addon_constants.py`, `services/addons/physnaAPIService.ts`, `addonViewerConfig.json` and `addonManifest.ts`). Add-on lanes for SSM resource-name keys and for web routes and navigation are in place, shipped empty. The licensed VNTANA and VEERUM viewers are add-on viewers, configured in `addonViewerConfig.json` and still disabled; a deployment that enabled one in `viewerConfig.json` sets `enabled` there instead. The published feature switches and the viewer set are unchanged. (issue #457)
 -   **Backend** — The DynamoDB BatchGetItem chunk + `UnprocessedKeys` retry loop is one shared helper, `common.dynamodb.batch_get_items`, returning `(rows, unresolved_keys)` so a missing row and an incomplete read stay distinguishable; the execution, asset-links, asset-export, workflow and asset listing services read through it instead of carrying their own copy. (issue #395)
     -   Note: the asset export previously read only the first response of each batch, so an asset DynamoDB deferred into `UnprocessedKeys` (a partial throttle, or a response at the 16 MB cap) was silently missing from the export. Those keys are now retried and, if still unresolved, read individually.
 

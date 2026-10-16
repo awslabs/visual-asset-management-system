@@ -284,7 +284,11 @@ Each object type accepts only the fields that are meaningful for it. `category` 
 without listing every identifier — for example allowing GET where `category equals conversion`, or denying
 PUT where `name starts_with prod-`. The authoritative per-type field matrix is returned by
 `GET /auth/constraints/permissionObjects`, which is the same mapping the backend validates a submitted
-constraint against.
+constraint against. A deployment can register more object types and fields for its own entities (add-on
+and fork constants files); those appear in the same response, are validated and evaluated the same way,
+and start with no access for any role, administrators included, until a constraint grants it. Names are
+letters and digits only, and an entry that redefines a built-in type or field stops every backend
+function from loading rather than changing what the built-in type allows.
 
 :::note
 A pipeline's `name` and `pipelineExecutionType` are stored structurally on the pipeline record
@@ -637,6 +641,8 @@ VAMS validates all uploaded files against blocked extension and MIME type lists 
 ### Blocked MIME Types
 
 `application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/javascript`, `application/x-powershell`, `application/vbscript`, and additional potentially dangerous MIME types.
+
+A deployment can add entries to both lists in its add-on or fork constants files; it cannot remove one. See [Upload deny lists](../developer/customizing-vams.md#upload-deny-lists).
 
 ## Audit Logging
 

@@ -26,7 +26,10 @@ VAMS uses Pydantic **v1** (1.10.x). Never use Pydantic v2 syntax (`model_validat
 backend/
   backend/
     common/                          # Shared utilities
-      constants.py                   # ABAC policy, allowed values, file blocklists
+      constants.py                   # ABAC policy, allowed values, file blocklists (core + add-on + custom)
+      addonConstants.py              # Add-on object types, constraint fields and blocklist entries
+      addonApiRoutes.py              # Add-on API routes
+      addonResourceNames.py          # Add-on SSM resource-name keys (AddonResourceKeys)
       dynamodb.py                    # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
       validators.py                  # Input validation regex patterns and validate() dispatcher
       s3.py                          # S3 file validation (extension + MIME type checks)
@@ -36,18 +39,23 @@ backend/
     customLogging/
       auditLogging.py                # CloudWatch audit logging (9 event types)
       logger.py                      # safeLogger wrapper with sensitive data redaction
+    custom/                          # FORK EXTENSION POINT: routes, resource names, constants (shipped empty)
     handlers/                        # Lambda handlers (one folder per domain)
+      addon/                         # Add-on handlers (Physna, Garnet)
       assets/assetService.py         # Gold standard handler
       auth/                          # Auth handlers (authorizer, constraints, cognito)
       authz/__init__.py              # Casbin ABAC/RBAC enforcer (CasbinEnforcer)
+      custom/                        # FORK EXTENSION POINT: a fork's handlers
       databases/                     # Database CRUD
       metadata/                      # Metadata CRUD
       pipelines/                     # Pipeline management
       workflows/                     # Step Functions workflow management
       ...                            # Additional handler domains
     models/                          # Pydantic v1 models
+      addon/                         # Add-on models (physnaViewer.py)
       assetsV3.py                    # Gold standard model file
       common.py                      # Response helpers, error functions
+      custom/                        # FORK EXTENSION POINT: a fork's models
       pipelines.py                   # Pipeline models
       workflows.py                   # Workflow models
       ...                            # Domain-specific models
@@ -463,6 +471,8 @@ System-owned key names, path prefixes, and file-name patterns are defined once i
 | `s3MetadataKeys.py`       | S3 object user-metadata keys (`assetid`, `databaseid`, `vams-*` status and change-provenance keys)    |
 | `s3PathPatterns.py`       | Reserved S3 prefix folders, the `.previewFile.` marker, allowed preview extensions, write prefixes    |
 | `dynamoDbMetadataKeys.py` | Special DynamoDB metadata keys (`REINDEX_METADATA_RECORD`) and internal field prefixes (`VAMS_`, `_`) |
+
+The permission object types, their constraint fields and the upload blocklists in `constants.py` are each built at import as core + add-on (`common/addonConstants.py`) + custom (`custom/customConstants.py`). Import the merged names (`ALLOWED_CONSTRAINT_OBJECT_TYPES`, `CONSTRAINT_OBJECT_TYPE_FIELDS`, `PERMISSION_CONSTRAINT_FIELDS`, `UNALLOWED_FILE_EXTENSION_LIST`, `UNALLOWED_MIME_LIST`), never the `CORE_*` lists they start from. An add-on or fork entry that breaks a rule raises at import; the rules are in [Extending VAMS in a Fork](customizing-vams.md#permission-object-types).
 
 ### S3 Path Patterns
 

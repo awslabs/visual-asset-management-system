@@ -82,6 +82,8 @@ graph TD
 | StaticWeb               | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`      | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
 | PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`          | Processing pipeline orchestrator                                                       |
 
+**Resource-name keys.** Core keys are declared in `common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS`) and published by ResourceNamesBuilder. The add-on and custom lanes declare theirs in `common/addonResourceParamKeys.ts` (`ADDON_RESOURCE_PARAM_KEYS`) and `common/customResourceParamKeys.ts` (`CUSTOM_RESOURCE_PARAM_KEYS`), both shipped empty. The stack that creates the resource publishes the key with `publishAddonResourceName()` (`nestedStacks/addon/addonStackHelpers.ts`) or `publishCustomResourceName()` (`nestedStacks/custom/customStackHelpers.ts`). Both helpers fail synthesis on a key equal to a core key or to one the other lane declares. Each lane's keys are mirrored in a backend file (`backend/backend/common/addonResourceNames.py`, `backend/backend/custom/customResourceNames.py`), and `test/storage/resourceNamesMirror.test.ts` compares each pair.
+
 ### Cross-Stack Shared Interfaces
 
 The `storageResources` interface (defined in `storageBuilder-nestedStack.ts`) is the primary shared interface. It exposes 20+ Amazon DynamoDB tables, Amazon S3 buckets, Amazon SNS topics, Amazon SQS queues, AWS KMS keys, and Amazon CloudWatch audit log groups to all downstream stacks.
@@ -370,16 +372,20 @@ enum VAMS_APP_FEATURES {
     AUTHPROVIDER_COGNITO_SAML,
     AUTHPROVIDER_COGNITO_OIDC,
     AUTHPROVIDER_EXTERNALOAUTHIDP,
-    PHYSNA_ADDON,
     DEADLINECLOUD_PIPELINES,
+}
+
+// common/addonAppFeatures.ts
+enum ADDON_APP_FEATURES {
+    PHYSNA_ADDON,
 }
 ```
 
-Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to Amazon DynamoDB by `CustomFeatureEnabledConfigNestedStack`. The frontend reads these from `/api/secure-config` at runtime.
+Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to Amazon DynamoDB by `CustomFeatureEnabledConfigNestedStack`. The frontend reads these from `/api/secure-config` at runtime. Core switches are in `common/vamsAppFeatures.ts` and are pushed by `core-stack.ts`. Add-on switches are in `common/addonAppFeatures.ts` and are returned by `AddonBuilderNestedStack.enabledFeatures`. A fork's switches are in `common/customAppFeatures.ts` and are returned by its `buildCustomResources()`. `core-stack.ts` publishes all three lists. A value may appear in only one of the three enums (`test/addon/appFeatureLanes.test.ts`), and the add-on and custom stacks fail synthesis when they return a value from another lane. The CLI mirrors the lanes in `vamscli/constants.py`, `vamscli/addon_constants.py` (re-exported from `constants.py`) and `vamscli/custom_constants.py`.
 
 ### Adding a New Feature Flag
 
-1. Add the constant to `VAMS_APP_FEATURES` enum in `common/vamsAppFeatures.ts`
+1. Add the constant to `VAMS_APP_FEATURES` enum in `common/vamsAppFeatures.ts` (an add-on's to `ADDON_APP_FEATURES` in `common/addonAppFeatures.ts`), and the matching `FEATURE_*` constant to the CLI file of the same lane
 2. Add the config option in `ConfigPublic` interface in `config/config.ts`
 3. Push to `enabledFeatures` array in `core-stack.ts` when the feature is enabled
 4. Gate frontend UI with feature check on `config.featuresEnabled`

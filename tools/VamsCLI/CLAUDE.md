@@ -26,7 +26,8 @@ tools/VamsCLI/
   vamscli/
     main.py                  # CLI entry point, @click.group, command registration (+ CUSTOM_COMMANDS)
     version.py               # __version__ and CLI_VERSION
-    constants.py             # All API endpoints, limits, config constants
+    constants.py             # All API endpoints, limits, config constants (re-exports addon_constants)
+    addon_constants.py       # Add-on FEATURE_* names (FEATURE_PHYSNA_ADDON), mirrors infra/common/addonAppFeatures.ts
     custom_constants.py      # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
     auth/
       base.py                # BaseAuthenticator abstract class
@@ -1056,25 +1057,29 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 
 ### Feature Switches
 
-One constant per member of `VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`), which is the set a
-deployment publishes through `/secure-config`. The two lists must stay equal in both directions — a
-missing constant is a gate no command can name, and an extra one names a gate no deployment publishes.
-`tests/test_constants_contract.py` parses the enum and fails on either drift.
+One constant per published feature switch, lane by lane: `constants.py` declares one per member of
+`VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`), `addon_constants.py` one per member of
+`ADDON_APP_FEATURES` (`infra/common/addonAppFeatures.ts`) and `custom_constants.py` one per member of a
+fork's `CUSTOM_APP_FEATURES`. `constants.py` re-exports every add-on name, so
+`from vamscli.constants import FEATURE_PHYSNA_ADDON` keeps working. Together they are the set a deployment
+publishes through `/secure-config`, and each lane must equal its enum in both directions — a missing
+constant is a gate no command can name, and an extra one names a gate no deployment publishes.
+`tests/test_constants_contract.py` parses the three enums and fails on either drift.
 
-| Constant                                | Value                             | Meaning                  |
-| --------------------------------------- | --------------------------------- | ------------------------ |
-| `FEATURE_GOVCLOUD`                      | `"GOVCLOUD"`                      | Restricted partition     |
-| `FEATURE_ALLOWUNSAFEEVAL`               | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
-| `FEATURE_LOCATIONSERVICES`              | `"LOCATIONSERVICES"`              | Location Service enabled |
-| `FEATURE_ALBDEPLOY`                     | `"ALBDEPLOY"`                     | ALB deployment mode      |
-| `FEATURE_CLOUDFRONTDEPLOY`              | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
-| `FEATURE_NOOPENSEARCH`                  | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
-| `FEATURE_AUTHPROVIDER_COGNITO`          | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
-| `FEATURE_AUTHPROVIDER_COGNITO_SAML`     | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
-| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`     | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
-| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP` | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
-| `FEATURE_PHYSNA_ADDON`                  | `"PHYSNA_ADDON"`                  | Physna add-on features   |
-| `FEATURE_DEADLINECLOUD_PIPELINES`       | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| Constant                                      | Value                             | Meaning                  |
+| --------------------------------------------- | --------------------------------- | ------------------------ |
+| `FEATURE_GOVCLOUD`                            | `"GOVCLOUD"`                      | Restricted partition     |
+| `FEATURE_ALLOWUNSAFEEVAL`                     | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
+| `FEATURE_LOCATIONSERVICES`                    | `"LOCATIONSERVICES"`              | Location Service enabled |
+| `FEATURE_ALBDEPLOY`                           | `"ALBDEPLOY"`                     | ALB deployment mode      |
+| `FEATURE_CLOUDFRONTDEPLOY`                    | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
+| `FEATURE_NOOPENSEARCH`                        | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
+| `FEATURE_AUTHPROVIDER_COGNITO`                | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
+| `FEATURE_AUTHPROVIDER_COGNITO_SAML`           | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
+| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`           | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
+| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`       | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
+| `FEATURE_PHYSNA_ADDON` (`addon_constants.py`) | `"PHYSNA_ADDON"`                  | Physna add-on features   |
+| `FEATURE_DEADLINECLOUD_PIPELINES`             | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
 
 ---
 

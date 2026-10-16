@@ -29,7 +29,7 @@ web/
   customInstalls/           # Viewer plugin custom install scripts
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -73,6 +73,7 @@ web/
       MetadataSchemaService.ts
       addons/               # Add-on API calls (physnaAPIService.ts)
 
+    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
     custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
                             #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5
 
