@@ -8,7 +8,8 @@ and destructive tools are defined. Define each tool inside the function with ``@
 the API through ``client.api.<method>`` (an ``APIClient`` method, including those a fork adds in
 ``vamscli/utils/custom_api_client.py``) or ``client.get_json`` / ``client.post_json`` for a one-off
 call. Tool names prefixed ``custom_`` are recommended so a later core tool does not collide with one
-defined here.
+defined here. A tool whose name a core tool already uses is not registered: the MCP SDK keeps the
+first registration (the core tool) and logs ``Tool already exists: <name>``.
 """
 
 from typing import Any, Callable

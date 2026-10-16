@@ -221,15 +221,23 @@ cli.add_command(user)
 cli.add_command(role)
 cli.add_command(api_key)
 
-# Commands a fork adds (commands/custom/__init__.py, shipped empty)
-for custom_command in CUSTOM_COMMANDS:
-    cli.add_command(custom_command)
-
 
 @cli.command()
 def version():
     """Show version information."""
     click.echo(f"VamsCLI version {get_version()}")
+
+
+# Commands a fork adds (commands/custom/__init__.py, shipped empty). Registered after every core
+# command so a name that is already taken is refused rather than replacing the core command.
+for custom_command in CUSTOM_COMMANDS:
+    if custom_command.name in cli.commands:
+        raise RuntimeError(
+            f"vamscli: custom command '{custom_command.name}' (vamscli/commands/custom) has the "
+            "name of a command that is already registered; core commands take precedence, so "
+            "rename the custom command"
+        )
+    cli.add_command(custom_command)
 
 
 def _use_utf8_output():

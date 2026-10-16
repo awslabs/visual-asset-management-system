@@ -6,7 +6,8 @@ here is an ordinary ``APIClient`` method: it calls ``self.get`` / ``self.post`` 
 ``self.delete`` with the same authentication, retry/backoff and typed errors as the core methods,
 and the MCP server reaches it as ``CLIENT.api.<method>``. Take endpoint paths from
 ``vamscli.custom_constants``; do not import from ``vamscli.commands`` here, which imports this
-module's subclass.
+module's subclass. A method whose name ``APIClient`` also defines is never called, because the core
+method comes first in the MRO; ``tests/test_custom_api_client.py`` fails on such a name.
 """
 
 

@@ -6,7 +6,8 @@ Top-level ``vamscli`` commands a fork adds. ``main.py`` registers every Click co
 commands. Put each command group in a module of this package, written like the core command files
 (``commands/roleUserConstraints.py``: profile support, ``--json-output``, typed errors), and list it
 here. Command names prefixed ``custom-`` are recommended so a later core command does not collide
-with one added here.
+with one added here. A command whose name is already registered is refused: ``vamscli`` fails at
+import with an error that names it, and the core command is never replaced.
 """
 
 CUSTOM_COMMANDS = []
