@@ -296,7 +296,8 @@ def _run_preview_pipeline(
 
     # Load with appropriate handler
     try:
-        pv_data = _load_file(local_filepath, ext)
+        pv_data = _load_file(local_filepath, ext,
+                             asset_root=None if localTest else reference_local_root)
     except Exception as e:
         logger.exception(f"Failed to load file: {e}")
         return _error_response(stage, f"Failed to load 3D file ({ext}): {str(e)}")
@@ -452,10 +453,11 @@ def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId
     return "/".join(input_parts[asset_id_idx + 1:-1])
 
 
-def _load_file(file_path: str, ext: str):
+def _load_file(file_path: str, ext: str, asset_root: str = None):
     """
     Load a 3D file with the appropriate format handler.
-    Returns a PyVista PolyData object.
+    Returns a PyVista PolyData object. ``asset_root`` is the local directory the input's referenced
+    files were fetched into (USD reads textures only from inside it).
     """
     if mesh_handler.can_handle(ext):
         return mesh_handler.load(file_path)
@@ -464,7 +466,7 @@ def _load_file(file_path: str, ext: str):
     elif cad_handler.can_handle(ext):
         return cad_handler.load(file_path)
     elif usd_handler.can_handle(ext):
-        return usd_handler.load(file_path)
+        return usd_handler.load(file_path, asset_root=asset_root)
     else:
         raise ValueError(
             f"Unsupported file format: {ext}. "

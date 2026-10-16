@@ -183,14 +183,20 @@ All data is normalized to Y-up before rendering:
 
 Point clouds are downsampled to a maximum of 20 million points for rendering performance. Downsampling uses random subsampling with a fixed seed for reproducibility. Points are rendered as colored spheres using per-point RGB colors when available, or colored by elevation (Y-axis) using the viridis colormap.
 
-### USD Texture Support
+### USD Stage Handling
 
-For USD files with material bindings, the pipeline traverses the UsdShade material graph to extract diffuse textures:
+The USD handler walks the composed stage with `Usd.PrimRange(..., Usd.TraverseInstanceProxies())`, so instanced geometry is drawn at every instance. A `PointInstancer` is expanded with `ComputeInstanceTransformsAtTime` and its prototypes are drawn only through it. A prim whose computed visibility is `invisible`, or whose computed purpose is `guide` or `proxy`, is skipped with its subtree. `Mesh` prims and the implicit `Cube`, `Sphere`, `Cylinder`, `Cone` and `Capsule` prims are tessellated. Values are read at the stage's `startTimeCode` when it declares a time range, else at each attribute's earliest time sample.
 
-1. Extracts UV coordinates from mesh primvars (supports common names: `st`, `UVMap`, `st0`, `texCoord_0`, `Texture_uv`, `uv`)
-2. Traverses `MaterialBindingAPI` -> `UsdPreviewSurface` -> `diffuseColor` -> `UsdUVTexture` to find texture file paths
-3. Loads textures from the filesystem or from inside USDZ archives (zip extraction)
+### USD Colour and Texture Support
+
+Each prim's colour comes from, in order: the diffuse texture of the `UsdUVTexture` connected to the bound `UsdPreviewSurface`'s `diffuseColor`; that input's constant value; the `displayColor` primvar (indices applied; constant, uniform, vertex/varying and faceVarying interpolation averaged onto vertices). A prim with no colour in a stage where others are coloured gets a neutral grey. Other textures of the material (normal, roughness, occlusion) are never used as colour.
+
+1. Extracts UV coordinates from the primvar the texture's `UsdPrimvarReader` names, else a common name (`st`, `UVMap`, `st0`, `texCoord_0`, `Texture_uv`, `uv`)
+2. Traverses `MaterialBindingAPI` -> `UsdPreviewSurface` -> `diffuseColor` -> `UsdUVTexture` to find the texture file
+3. Loads the texture from the path USD resolved against the layer that authored it, only from inside the input's local asset directory, or from inside a USDZ archive (zip extraction)
 4. Bakes texture colors to per-vertex RGB data for rendering
+
+MaterialX materials are not read (the `usd-core` build has no MaterialX plugin); their prims render in the default colour.
 
 ### File Size Limits
 

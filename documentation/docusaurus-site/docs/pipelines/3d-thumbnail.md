@@ -43,6 +43,8 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 | USDC   | `.usdc`   | OpenUSD (pxr) |
 | USDZ   | `.usdz`   | OpenUSD (pxr) |
 
+A USD stage is rendered as composed: instanced prims and point instancers are drawn at every instance, invisible prims and `guide` or `proxy` purpose prims are skipped, and implicit shapes (cube, sphere, cylinder, cone, capsule) are drawn. Colour comes from the diffuse texture or constant `diffuseColor` of the bound `UsdPreviewSurface`, else `displayColor`; an uncoloured prim is drawn in neutral grey. MaterialX materials are not read.
+
 ## Architecture
 
 ```mermaid
