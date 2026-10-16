@@ -308,13 +308,7 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({
                 alt=""
                 aria-hidden="true"
                 src={loginBgImageSrc}
-                style={{
-                    position: "fixed",
-                    top: 0,
-                    width: "100vw",
-                    left: 0,
-                    zIndex: "-100",
-                }}
+                className={styles.loginBackground}
             />
         </>
     );
@@ -990,13 +984,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         alt=""
                         aria-hidden="true"
                         src={loginBgImageSrc}
-                        style={{
-                            position: "fixed",
-                            top: 0,
-                            width: "100vw",
-                            left: 0,
-                            zIndex: "-100",
-                        }}
+                        className={styles.loginBackground}
                     />
                 </div>
                 <PageFooter />
@@ -1094,13 +1082,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         alt=""
                         aria-hidden="true"
                         src={loginBgImageSrc}
-                        style={{
-                            position: "fixed",
-                            top: 0,
-                            width: "100vw",
-                            left: 0,
-                            zIndex: "-100",
-                        }}
+                        className={styles.loginBackground}
                     />
                 </div>
                 <PageFooter />
