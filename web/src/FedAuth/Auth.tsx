@@ -305,7 +305,8 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({
                 </div>
             </div>
             <img
-                alt="background texture"
+                alt=""
+                aria-hidden="true"
                 src={loginBgImageSrc}
                 style={{
                     position: "fixed",
@@ -927,7 +928,10 @@ const Auth: React.FC<AuthProps> = (props) => {
     // Show error page if config failed to load
     if (config._configError) {
         return (
-            <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+            <div
+                className={styles.loginPage}
+                style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
+            >
                 <LoginHeader />
                 <div
                     style={{
@@ -983,7 +987,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                         </div>
                     </div>
                     <img
-                        alt="background texture"
+                        alt=""
+                        aria-hidden="true"
                         src={loginBgImageSrc}
                         style={{
                             position: "fixed",
@@ -1016,7 +1021,10 @@ const Auth: React.FC<AuthProps> = (props) => {
     //External OAUTH Login Page Return
     if (window.DISABLE_COGNITO === true && !isLoggedIn && ampInit) {
         return (
-            <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+            <div
+                className={styles.loginPage}
+                style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
+            >
                 <LoginHeader />
                 <GlobalHeader authorizationHeader={true} />
                 <div
@@ -1083,7 +1091,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                         ) : null}
                     </div>
                     <img
-                        alt="background texture"
+                        alt=""
+                        aria-hidden="true"
                         src={loginBgImageSrc}
                         style={{
                             position: "fixed",
@@ -1104,7 +1113,10 @@ const Auth: React.FC<AuthProps> = (props) => {
         if (window.COGNITO_FEDERATED === false) {
             //Non-federated login
             return (
-                <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+                <div
+                    className={styles.loginPage}
+                    style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
+                >
                     <LoginHeader />
                     <GlobalHeader authorizationHeader={true} />
                     <div
@@ -1140,7 +1152,10 @@ const Auth: React.FC<AuthProps> = (props) => {
         } else {
             //Federated Login
             return (
-                <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+                <div
+                    className={styles.loginPage}
+                    style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
+                >
                     <LoginHeader />
                     <GlobalHeader authorizationHeader={true} />
                     <div
