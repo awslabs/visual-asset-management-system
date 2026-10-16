@@ -39,10 +39,6 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   Behavior changes to review before upgrading: an asset export with `generatePresignedUrls` returns `presignedFileDownloadUrl: null` for every file of a non-distributable asset, where it returned a working URL — a client that depended on export to obtain download URLs for non-distributable assets must request them through a user who may download them, or mark the asset distributable; and six more AWS Common Rule Set rules are evaluated in `count` mode, so their matches appear in the AWS WAF metrics and sampled requests without blocking (see the configuration reference, "WAF rule policy").
 -   Twenty-six corrections from a v2.6.4 deployment audit (template import naming, route authorization before the request body on create, read-only templates and self-service API keys, CLI hints and masking, deploy scripts, documentation), plus a bounded Amazon Location Service lookup on `/secure-config` and a repaired GR00T container test.
 
-**Breaking changes:**
-
-**Added:**
-
 **Key fixes:**
 
 -   **Asset export download controls** — Asset export issues presigned download URLs only for files of distributable assets (a non-distributable asset is still exported, with `presignedFileDownloadUrl` null on each file) and records every URL it issues in the file download audit log, the same two controls the download endpoint applies. (issue #399)

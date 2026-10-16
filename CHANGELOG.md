@@ -10,10 +10,6 @@ All notable changes to this project will be documented in this file. See [standa
 -   Behavior changes to review before upgrading: an asset export with `generatePresignedUrls` returns `presignedFileDownloadUrl: null` for every file of a non-distributable asset, where it returned a working URL; six more AWS Common Rule Set rules are evaluated in `count` mode (see the Bug Fixes note). See the notes under Bug Fixes.
 -   Twenty-six corrections from a v2.6.4 deployment audit (template import naming, route authorization before the request body on create, read-only templates and self-service API keys, CLI hints and masking, deploy scripts, documentation), plus a bounded Amazon Location Service lookup on `/secure-config` and a repaired GR00T container test.
 
-### ⚠ BREAKING CHANGES
-
-### Features
-
 ### Bug Fixes
 
 -   **Backend** Asset export (`POST /database/{databaseId}/assets/{assetId}/export`) with `generatePresignedUrls` issues presigned download URLs only for files of assets whose `isDistributable` is true, and records every URL it issues in the file download audit log (one entry per file, `downloadType` `export`). It signed a URL for every non-archived file of every exported asset regardless of the flag and wrote no download audit entry, so a caller with `GET` on a non-distributable asset could obtain working download URLs through the export route that `POST .../download` refuses, invisibly to the download audit log group. A non-distributable asset is still exported; each of its files carries `presignedFileDownloadUrl: null` and the entry's `isdistributable` is `false`. ([#399](https://github.com/awslabs/visual-asset-management-system/issues/399))
@@ -58,7 +54,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Known Outstanding Issues
 
-### Troubleshooting
+-   **Docs** The documentation site lockfile keeps `http-cache-semantics` 4.2.0 (GHSA-ch52-4w7c-c8xp; its advisory names no patched version, and the 4.3.0 release of 2026-10-04 is younger than the repository's 7-day dependency intake floor) and `braces` 3.0.3 (GHSA-vfj7-8cjw-p6xm; no patched release). Both are build-time only. (#405)
 
 ## [2.6.4] (2026-10-05)
 
