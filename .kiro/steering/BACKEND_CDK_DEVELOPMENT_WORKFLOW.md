@@ -72,6 +72,23 @@ One folder per domain. The current domains:
 -   `userRoles/` — User-role assignment
 -   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation: Lambda/SQS/EventBridge/DeadlineCloud task states; `sfn/deadlineCloudJobCallback` resolves Deadline Cloud job task tokens from default-bus events)
 -   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers)
+-   `custom/` — Fork extension point: handlers a fork adds (`handlers.custom.<name>.lambda_handler`); shipped empty
+
+#### **Fork Extension Points (backend + CDK)**
+
+Every list VAMS aggregates is `core + add-on + custom`. The custom part is fork-owned: upstream ships it empty and never edits it, so a fork adds net-new endpoints and resources without conflicting on upgrade. Each such file opens with the "Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+| Layer                | Add-on file (upstream-owned)                                | Custom file (fork-owned, shipped empty)                                                     |
+| -------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| API routes           | `backend/backend/common/addonApiRoutes.py` (`ADDON_ROUTES`) | `backend/backend/custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                               |
+| Handlers / models    | `backend/backend/handlers/addon/`                           | `backend/backend/handlers/custom/`, `backend/backend/models/custom/`                        |
+| Resource names       | —                                                           | `backend/backend/custom/customResourceNames.py` ↔ `infra/common/customResourceParamKeys.ts` |
+| CDK resources        | `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts`  | `infra/lib/nestedStacks/custom/customResources.ts` (built inside the `CustomBuilder` stack) |
+| Feature switches     | `AddonBuilderNestedStack.enabledFeatures`                   | `infra/common/customAppFeatures.ts`, returned by `buildCustomResources()`                   |
+| CSP / default routes | `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`          | CSP: the existing `infra/config/csp/cspAdditionalConfig.json`                               |
+| Fork settings        | `app.addons.*` in `config.json`                             | `infra/config/custom/customConfig.json`, read with `loadCustomConfig()`                     |
+
+Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (so they get the `VamsAuthorizer` scheme) and cannot be anonymous: `CustomBuilderNestedStack` fails synth on an `allowAnonymous` custom route. `publishCustomResourceName()` (`custom/customStackHelpers.ts`) fails synth on a key equal to a core key. Naming conventions (`/custom/` routes, `custom/` keys, `CUSTOM_*` switches) are recommended, not enforced. `customConfigCommon/` is the separate place for overriding **existing** behaviour (authorizer MFA check, login profile).
 
 #### **Workflow Execution Storage**
 
@@ -969,7 +986,7 @@ return {
 
 ### **Rule 6: API Routes MUST Be Registered in an apiBuilder Nested Stack**
 
-Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py`.
+Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
 **Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.47 MB template and `apiBuilder2` emits 73 in ~0.30 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 

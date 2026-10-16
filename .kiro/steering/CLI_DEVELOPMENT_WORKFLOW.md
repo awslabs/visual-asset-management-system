@@ -227,6 +227,17 @@ def call_login_profile(self, user_id: str):
     return self.get(endpoint)
 ```
 
+#### **Fork Extension Points (commands, client methods, MCP tools)**
+
+A fork adds CLI commands and MCP tools without editing `main.py`, `constants.py`, `utils/api_client.py` or `tools/VamsMCP/vams_mcp/server.py`. Each splices in a fork-owned file that upstream ships empty and never edits:
+
+-   `vamscli/custom_constants.py` — the fork's `API_*` paths and `FEATURE_CUSTOM_*` names. It imports nothing from `vamscli`, so the files below can import it without a cycle. `tests/test_constants_contract.py` checks each path against the backend route lists (including `backend/backend/custom/customApiRoutes.py`) and each feature name against `infra/common/customAppFeatures.ts`.
+-   `vamscli/utils/custom_api_client.py` — `CustomAPIClientMixin`, which `APIClient` inherits; its methods get the core retry/backoff and typed errors and the MCP server reaches them as `CLIENT.api.<method>`. It must not import from `vamscli.commands`.
+-   `vamscli/commands/custom/__init__.py` — `CUSTOM_COMMANDS`; `main.py` registers each entry on the root `cli` group.
+-   `tools/VamsMCP/vams_mcp/custom_tools.py` — `register_custom_tools(mcp, client, config, tool_result)`, called once by `server.py` after the destructive block; gate write/destructive tools on `config.enable_writes` / `config.enable_destructive`.
+
+Names prefixed `custom-` (commands) and `custom_` (tools) are recommended, not enforced. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
 ### **Command Implementation Standards**
 
 #### **Rule 3: Command File Organization**

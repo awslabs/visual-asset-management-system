@@ -33,8 +33,11 @@ backend/
 │   │   ├── auth/authorizerCore.py                  #   JWT/API-key/IP validation
 │   │   ├── auth/clientIp.py                        #   True client-IP resolution
 │   │   ├── apiRoutes.py                            # MASTER API route registry: ApiRoute constants,
-│   │   │                                           #   category group arrays, ALL_API_ROUTES.
+│   │   │                                           #   category group arrays, ALL_API_ROUTES
+│   │   │                                           #   (core + ADDON_ROUTES + CUSTOM_ROUTES).
 │   │   │                                           #   Handlers dispatch via ApiRoute.matches().
+│   │   ├── apiRouteTypes.py                        # ApiRoute + GET/POST/... (re-exported by apiRoutes.py)
+│   │   ├── addonApiRoutes.py                       # Add-on routes (Physna viewer) → ADDON_ROUTES
 │   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists
 │   │   ├── dynamodb.py                             # query_all_items, query_has_match, batch_get_items,
 │   │   │                                           #   to_update_expr, get_asset_object_from_id
@@ -54,6 +57,10 @@ backend/
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
 │   │   └── logger.py                               # safeLogger with sensitive-data redaction
+│   ├── customConfigCommon/                         # Override hooks for EXISTING behaviour (MFA check, login profile)
+│   ├── custom/                                     # FORK EXTENSION POINT (shipped empty, never edited upstream):
+│   │   ├── customApiRoutes.py                      #   CUSTOM_ROUTES, spliced into ALL_API_ROUTES
+│   │   └── customResourceNames.py                  #   CustomResourceKeys (mirrors infra/common/customResourceParamKeys.ts)
 │   ├── handlers/                                   # Lambda handlers, one folder per domain
 │   │   ├── assets/                                 # assetService.py (GOLD STANDARD),
 │   │   │                                           #   assetVersions, assetHistory, etc.
@@ -74,12 +81,14 @@ backend/
 │   │   │                                           #   deadlineCloudJobCallback
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
+│   │   ├── custom/                                 # FORK EXTENSION POINT: fork handlers (handlers.custom.<name>)
 │   │   └── assetLinks, comments, config, databases, indexing, metadata,
 │   │       metadataschema, roles, search, sendEmail, subscription, tags,
 │   │       tagTypes, userRoles                     # Domain handlers (folder per domain)
 │   └── models/                                     # Pydantic v1 models, one file per domain
 │       ├── assetsV3.py                             # GOLD STANDARD model file
 │       ├── common.py                               # Response helpers, APIGatewayProxyResponseV2
+│       ├── custom/                                 # FORK EXTENSION POINT: fork models
 │       └── apiKeys, pipelines, workflows, executions, assetHistory, [domain].py
 ├── lambdaLayers/                                   # Lambda layer definitions
 └── tests/                                          # See backend/tests/CLAUDE.md
@@ -141,7 +150,11 @@ backend/
     API path, define the `ApiRoute` constant in `common/apiRoutes.py` AND add it to the
     matching category group array (`ASSET_FILE_ROUTES`, `AUTH_ROUTES`, …) so it is included
     in `ALL_API_ROUTES` and served by the `GET /auth/routes/api` listing. Keep route
-    templates in sync with the routes attached in the CDK api builder stacks.
+    templates in sync with the routes attached in the CDK api builder stacks. An add-on's
+    routes go in `common/addonApiRoutes.py` (`ADDON_ROUTES`); a fork's go in
+    `custom/customApiRoutes.py` (`CUSTOM_ROUTES`) and never in `apiRoutes.py` (see "Fork
+    extension points" below). Route lists import `ApiRoute` and the method constants from
+    `common/apiRouteTypes.py`, never from `apiRoutes.py`, which imports them.
 
 13. **ALWAYS use a leading `/` for normalized asset-relative file paths.** Normalized file
     paths (DynamoDB composite keys like `databaseId:assetId:filePath`, the `filePath`
@@ -882,6 +895,30 @@ Run `pytest` from `backend/` after `pip install -r requirements-dev.txt`. Tests 
 ## Templates
 
 New-handler / model / test skeletons: `backend/HANDLER_TEMPLATES.md`. Gold Standard: `backend/handlers/assets/assetService.py`.
+
+## Fork Extension Points
+
+Upstream VAMS ships these files empty and never edits them again, so a fork that adds net-new
+endpoints writes only here and merges upstream releases without conflicts. Each opens with the same
+"Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+| What a fork adds   | Fork-owned file                                                       | Spliced in by                                       |
+| ------------------ | --------------------------------------------------------------------- | --------------------------------------------------- |
+| API routes         | `custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                         | `common/apiRoutes.py` → `ALL_API_ROUTES`            |
+| Resource-name keys | `custom/customResourceNames.py` (`CustomResourceKeys`)                | resolved with `get_resource_name()` like a core key |
+| Handlers           | `handlers/custom/<name>.py` (`handlers.custom.<name>.lambda_handler`) | the shared `backend/backend` code asset             |
+| Models             | `models/custom/<name>.py`                                             | imported by the fork's handlers                     |
+
+-   Fork handlers follow every rule above, including both Casbin tiers with the fail-closed
+    pre-set flag (Rule 4) and dispatch on the `ApiRoute` constants from `custom/customApiRoutes.py`
+    (Rule 12). Tier 2 uses the existing entity types; a custom Casbin object type is not a seam.
+-   `custom/` modules import `ApiRoute` from `common/apiRouteTypes.py` and `ResourceParamKey` from
+    `common/resourceNames.py`; nothing in core imports a fork handler or model.
+-   `customConfigCommon/` is different: it holds override hooks for **existing** behaviour (the
+    authorizer MFA check, the login profile), which a fork edits in place.
+-   Recommended (not enforced) names: routes under `/custom/`, resource keys under `custom/`.
+    An exact duplicate of a core route or key is rejected (`tests/common/test_custom_extension_points.py`,
+    and at CDK synth).
 
 ---
 

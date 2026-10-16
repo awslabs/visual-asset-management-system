@@ -60,8 +60,8 @@ web/
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
 
-    services/               # API and data services (with features/orchestration/api/, the ONLY
-                            #   places apiClient is imported)
+    services/               # API and data services (with features/orchestration/api/ and, in a
+                            #   fork, custom/services/, the ONLY places apiClient is imported)
       APIService.ts         # Main API service (~900+ lines, 40+ exports)
       apiClient.ts          # Custom fetch wrapper (internal, never import from components)
       appCache.ts           # localStorage cache (replaces Amplify Cache)
@@ -71,6 +71,10 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      addons/               # Add-on API calls (physnaAPIService.ts)
+
+    custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
+                            #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -201,7 +205,7 @@ web/
 
 ### **Rule 1: All API Calls Go Through Service Layer Files**
 
-Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` may import `apiClient`.
+Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` (including `src/services/addons/` for add-on calls), `src/features/orchestration/api/` and, in a fork, `src/custom/services/` may import `apiClient`.
 
 ```typescript
 // CORRECT -- import from a service file

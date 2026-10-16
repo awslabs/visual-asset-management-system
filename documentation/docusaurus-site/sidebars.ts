@@ -95,6 +95,7 @@ const sidebars: SidebarsConfig = {
                 "developer/audit-logging",
                 "developer/security",
                 "developer/permissions",
+                "developer/customizing-vams",
                 "developer/workflow-execution-data-model-handoff",
                 {
                     type: "category",

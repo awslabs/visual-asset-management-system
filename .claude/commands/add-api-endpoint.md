@@ -17,6 +17,24 @@ You are scaffolding a new VAMS API endpoint. Follow root `CLAUDE.md` "Pattern 1:
 9. **Documentation** - `documentation/VAMS_API.yaml` AND `documentation/docusaurus-site/docs/api/{domain}.md` (both must be updated together)
 10. **Tests** - Unit tests for the handler
 
+### Fork mode
+
+When the endpoint is being added in a **fork** of VAMS (the user says so, or the endpoint is net-new fork functionality rather than an upstream contribution), scaffold every layer into the fork extension points instead of the core files, so the fork merges upstream releases without conflicts. Upstream ships each of these files empty and never edits them. Root `CLAUDE.md` Pattern 1 "In a fork" and `documentation/docusaurus-site/docs/developer/customizing-vams.md` are the authority:
+
+| Layer               | Core file (do NOT edit in fork mode)                                        | Fork-owned target                                                                                                                                                                                      |
+| ------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1. Master route     | `backend/backend/common/apiRoutes.py`                                       | `backend/backend/custom/customApiRoutes.py` — `ApiRoute` constant (import from `common.apiRouteTypes`) + `CUSTOM_ROUTES`                                                                               |
+| 2. Handler          | `backend/backend/handlers/{domain}/`                                        | `backend/backend/handlers/custom/{handler}.py` (`handlers.custom.{handler}.lambda_handler`)                                                                                                            |
+| 3. Models           | `backend/backend/models/{domain}.py`                                        | `backend/backend/models/custom/{domain}.py`                                                                                                                                                            |
+| 4–5. Lambda + route | `infra/lib/lambdaBuilder/`, `apiBuilder2-nestedStack.ts`                    | `infra/lib/nestedStacks/custom/customResources.ts` — builder pattern + five security calls + `attachFunctionToApi(scope, fn, { routePath, method, registry: props.registry })`; never `allowAnonymous` |
+| New table / name    | `storageBuilder-nestedStack.ts`, `resourceParamKeys.ts`, `resourceNames.py` | table in `customResources.ts` (KMS per Rule 8), key in `infra/common/customResourceParamKeys.ts` + `backend/backend/custom/customResourceNames.py`, published with `publishCustomResourceName()`       |
+| 6. Frontend         | `web/src/services/APIService.ts`                                            | `web/src/custom/services/customAPIService.ts` (+ page/route/nav in `web/src/custom/`)                                                                                                                  |
+| 7. CLI              | `vamscli/constants.py`, `utils/api_client.py`, `commands/`                  | `vamscli/custom_constants.py`, `utils/custom_api_client.py` (`CustomAPIClientMixin`), `commands/custom/` + `CUSTOM_COMMANDS`                                                                           |
+| 8. MCP              | `tools/VamsMCP/vams_mcp/server.py`                                          | `tools/VamsMCP/vams_mcp/custom_tools.py` (`register_custom_tools`)                                                                                                                                     |
+| 9. Docs             | `VAMS_API.yaml`, `docs/api/{domain}.md`                                     | the fork's own documentation                                                                                                                                                                           |
+
+Recommend (do not require) `/custom/` route paths, `custom/` resource keys, `CUSTOM_*` feature switches and `custom_*` MCP tool names. Tier-2 authorization uses an existing entity type (a new Casbin object type is not a seam); non-admin roles need an `api` constraint for the new route before they can call it. Everything else in the steps below — Pydantic v1, the fail-closed two-tier Casbin pattern, `ApiRoute.matches()` dispatch, the tests — applies unchanged.
+
 ### Step 1: Gather Requirements
 
 Ask the user for:

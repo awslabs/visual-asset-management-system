@@ -64,9 +64,11 @@ CoreVAMSStack (root)
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
   |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
   |     +-- AddonBuilder (Garnet, Physna Sync)               -> storage, resourceNames
+  |     +-- CustomBuilder (fork extension point)             -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)
   |     |                                                    -> storage, AuthBuilder, ApiBuilder,
-  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder
+  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder,
+  |     |                                                       CustomBuilder
   |     +-- StaticWeb (CloudFront or ALB hosting)            -> storage
   |
   +-- LocationService (conditional: useLocationService.enabled)
@@ -74,6 +76,10 @@ CoreVAMSStack (root)
 ```
 
 `RestApi` materializes the routes every API stack registered into `RouteRegistry`, which is why it depends on all of them rather than the reverse.
+
+### **Fork Extension Points (core + add-on + custom)**
+
+Every aggregated list is composed from a core part, an add-on part beside it (`lib/nestedStacks/addon/addonCsp.ts`, `addonDefaultRoutes.ts`, `AddonBuilderNestedStack.enabledFeatures`) and a fork-owned custom part shipped empty. Core files name no add-on (`infra/test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts` (`buildCustomResources(scope, props)`), called inside the `CustomBuilder` stack with `config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets` and the shared `registry`. Its Lambdas use the standard builder pattern and five security calls; its routes go through `attachFunctionToApi` and cannot be anonymous (synth fails); it publishes resource names with `publishCustomResourceName()` (a core key throws), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py`; it returns `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`); and it reads fork settings with `loadCustomConfig()` from `config/custom/customConfig.json`, which is outside `ConfigPublic`. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### **Cross-Stack Shared Interfaces**
 

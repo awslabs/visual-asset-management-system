@@ -658,7 +658,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
 ## Custom Authentication Hooks
 
-VAMS provides two customization points for organizations to extend authentication behavior without modifying core code. Both files are located in `backend/backend/customConfigCommon/`.
+VAMS provides two customization points for organizations to extend authentication behavior without modifying core code. Both files are located in `backend/backend/customConfigCommon/`. They override **existing** behavior; net-new endpoints and handlers in a fork go in the fork extension points described in [Extending VAMS in a Fork](customizing-vams.md).
 
 ### Login Profile Customization
 
@@ -759,3 +759,4 @@ Avoid these common mistakes in backend development.
 -   [CDK Infrastructure](cdk.md) -- Lambda builder patterns and API route wiring
 -   [Frontend Development](frontend.md) -- Consuming backend APIs from the React frontend
 -   [Audit Logging](audit-logging.md) -- Understanding the audit trail system
+-   [Extending VAMS in a Fork](customizing-vams.md) -- Adding endpoints and handlers in fork-owned files that upstream does not edit

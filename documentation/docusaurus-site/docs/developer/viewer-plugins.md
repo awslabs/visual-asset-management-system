@@ -413,3 +413,4 @@ import { DynamicViewer } from "./visualizerPlugin";
 -   [Frontend Development](frontend.md) -- React component patterns used by viewer plugins
 -   [CDK Infrastructure](cdk.md) -- Feature flag configuration for viewer restrictions
 -   [Local Development Setup](setup.md) -- Running the dev server with viewer plugins
+-   [Extending VAMS in a Fork](customizing-vams.md) -- Registering a fork's viewer in `customViewerConfig.json` and `viewers/custom/` instead of the core files

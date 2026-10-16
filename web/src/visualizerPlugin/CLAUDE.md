@@ -9,8 +9,9 @@ Auto-loaded when working within `web/src/visualizerPlugin/`. See `web/CLAUDE.md`
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`core/PluginRegistry.ts`) — Singleton that manages all viewer plugins
--   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for all plugins
--   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports
+-   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for the core plugins; `addonViewerConfig.json` (add-on) and `customViewerConfig.json` (fork extension point) hold the rest
+-   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` for add-on and fork viewers
+-   **viewerSources.ts** (`core/viewerSources.ts`) — Merges the three configs and manifests for the registry (see "Add-on and fork viewers")
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
 
@@ -282,6 +283,18 @@ export const VIEWER_COMPONENTS = {
 ```
 
 **Step 5:** If the viewer has external dependencies, create a custom install script in `web/customInstalls/myviewer/` and add it to the `postinstall` chain in `web/package.json`.
+
+### Add-on and fork viewers
+
+The registry loads three tiers, merged in this order by `core/viewerSources.ts`:
+
+| Tier   | Config                           | Manifest                           | Owner                                |
+| ------ | -------------------------------- | ---------------------------------- | ------------------------------------ |
+| Core   | `config/viewerConfig.json`       | `viewers/manifest.ts`              | upstream                             |
+| Add-on | `config/addonViewerConfig.json`  | `viewers/addonManifest.ts`         | upstream (the Physna viewer)         |
+| Custom | `config/customViewerConfig.json` | `viewers/custom/customManifest.ts` | fork extension point (shipped empty) |
+
+An add-on's viewer is registered in the add-on files, never in `viewerConfig.json` or `manifest.ts` (`infra/test/addon/addonCoreSeparation.test.ts`). A fork's viewer lives in `viewers/custom/<Name>Plugin/` and is registered in the custom files (Steps 1–4 apply with those paths); its install steps go in `web/customInstalls/custom/customInstall.js`, which `postinstall` already runs, so a fork does not edit the `postinstall` chain. A custom entry whose `id` repeats a core or add-on `id` is skipped with a console error, and a custom manifest key that repeats a shipped one is ignored, so a fork cannot replace a shipped viewer. Ids prefixed `custom-` are recommended, not enforced. The catalog table above lists core and add-on viewers only (`config/viewerConfig.test.ts` checks it against both files). `core/viewerSources.test.ts` covers the merge.
 
 ---
 

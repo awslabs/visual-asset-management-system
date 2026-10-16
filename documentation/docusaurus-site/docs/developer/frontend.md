@@ -628,3 +628,4 @@ When add-ons that embed external content are enabled, CSP is extended dynamicall
 -   [Viewer Plugin Development](viewer-plugins.md) -- Building custom file viewers
 -   [Backend Development](backend.md) -- API handler patterns
 -   [CDK Infrastructure](cdk.md) -- Frontend deployment configuration
+-   [Extending VAMS in a Fork](customizing-vams.md) -- Adding pages, routes and navigation in fork-owned files that upstream does not edit

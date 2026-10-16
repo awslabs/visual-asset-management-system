@@ -24,9 +24,10 @@ VamsCLI is a Python command-line interface built with the **Click** framework fo
 ```
 tools/VamsCLI/
   vamscli/
-    main.py                  # CLI entry point, @click.group, command registration
+    main.py                  # CLI entry point, @click.group, command registration (+ CUSTOM_COMMANDS)
     version.py               # __version__ and CLI_VERSION
     constants.py             # All API endpoints, limits, config constants
+    custom_constants.py      # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
     auth/
       base.py                # BaseAuthenticator abstract class
       cognito.py             # CognitoAuthenticator (SRP, USER_PASSWORD_AUTH)
@@ -55,6 +56,7 @@ tools/VamsCLI/
       execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
+      custom/__init__.py     # FORK EXTENSION POINT: CUSTOM_COMMANDS, registered on the root group by main.py
       industry/
         industry.py          # Industry command group
         engineering/
@@ -64,7 +66,8 @@ tools/VamsCLI/
         spatial/
           glb.py             # GLB file combination operations
     utils/
-      api_client.py          # APIClient class (HTTP, retries, error mapping)
+      api_client.py          # APIClient class (HTTP, retries, error mapping); inherits CustomAPIClientMixin
+      custom_api_client.py   # FORK EXTENSION POINT: CustomAPIClientMixin (shipped empty)
       profile.py             # ProfileManager (multi-profile, config dirs)
       exceptions.py          # Two-tier exception hierarchy (~140 classes)
       global_exceptions.py   # @handle_global_exceptions() decorator
@@ -807,6 +810,21 @@ Follow this checklist:
     - **Credentials go to the CLI's stdin, never onto argv** (Rule 11). The connectors pipe the password and the override token to `--password-stdin` / `--token-override-stdin`.
 
     To validate the command surface, walk `cli.commands[group].commands[cmd].params` for every group/subcommand/flag the connectors pass, then spot-check a live `--json-output` response for the keys each connector parses.
+
+### Adding Commands in a Fork
+
+A fork adds commands without editing `main.py`, `constants.py` or `utils/api_client.py`; each splices in a fork-owned file that upstream ships empty and never edits:
+
+| What                     | Fork-owned file                                                                                   | Spliced in by                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint paths, switches | `vamscli/custom_constants.py` (`API_*`, `FEATURE_CUSTOM_*`)                                       | read by the fork's client methods and commands (Rule 7)                                                                       |
+| API client methods       | `vamscli/utils/custom_api_client.py` (`CustomAPIClientMixin`)                                     | `APIClient` inherits it, so the methods get retries and typed errors and the MCP server reaches them as `CLIENT.api.<method>` |
+| Command groups           | `vamscli/commands/custom/<group>.py`, listed in `commands/custom/__init__.py` (`CUSTOM_COMMANDS`) | `main.py` registers every entry on the root `cli` group                                                                       |
+
+-   Command files follow the same patterns as core ones (`roleUserConstraints.py`: decorators, `--json-output`, typed errors).
+-   `custom_constants.py` imports nothing from `vamscli`, and `custom_api_client.py` must not import from `vamscli.commands` (which imports `APIClient`): either would create an import cycle.
+-   `tests/test_constants_contract.py` checks every custom `API_*` path against the backend route lists (including `backend/backend/custom/customApiRoutes.py`) and every `FEATURE_*` in `custom_constants.py` against `infra/common/customAppFeatures.ts`.
+-   Command names prefixed `custom-` are recommended, not enforced. Pattern 7 still applies: a custom command an agent should reach gets an MCP tool in `tools/VamsMCP/vams_mcp/custom_tools.py`.
 
 ### Adding a New Exception Class
 

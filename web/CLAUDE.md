@@ -88,6 +88,14 @@ web/
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
+      addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
+
+    custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
+      customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
+      customNavigation.ts   #   customNavSections, appended to the side navigation
+      customFeatures.ts     #   names of the fork's feature switches
+      services/             #   fork API calls (may import apiClient)
+      pages/                #   fork pages
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -130,10 +138,12 @@ web/
 
     visualizerPlugin/       # 3D/media viewer plugin system — see CLAUDE.md there
       index.ts README.md
-      config/viewerConfig.json  # Plugin configuration
-      core/                     # PluginRegistry.ts, StylesheetManager.ts, types.ts
+      config/viewerConfig.json  # Plugin configuration (core); addonViewerConfig.json (add-on),
+                                #   customViewerConfig.json (fork extension point)
+      core/                     # PluginRegistry.ts, viewerSources.ts, StylesheetManager.ts, types.ts
       components/               # Shared viewer UI components
-      viewers/                  # Individual viewer plugins + manifest.ts
+      viewers/                  # Individual viewer plugins + manifest.ts, addonManifest.ts,
+                                #   custom/customManifest.ts
 
     common/                 # Shared utilities and helpers
       GlobalHeader.tsx common-components.tsx
@@ -225,7 +235,7 @@ import { apiClient } from "../../services/apiClient";
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/` and `src/features/orchestration/api/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/`, `src/features/orchestration/api/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -233,9 +243,11 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
+-   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper).
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, never in `APIService.ts`.
 
 ### Rule 4: npm Only
 
@@ -825,6 +837,10 @@ const MyPage = React.lazy(() => import("./pages/MyPage"));
 
 The route is automatically permission-filtered via `webRoutes()` API call. The backend must also allow the route.
 
+### 7.5 Adding Pages in a Fork
+
+A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
 ---
 
 ## 8. Viewer Plugin System
@@ -832,10 +848,10 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 The 3D/media viewer system is a plugin-based architecture under `src/visualizerPlugin/`:
 
 -   **PluginRegistry** singleton at `visualizerPlugin/core/PluginRegistry.ts` manages all viewers
--   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json`
--   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports
+-   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json` (core), `addonViewerConfig.json` (add-on viewers) and `customViewerConfig.json` (fork extension point), merged by `core/viewerSources.ts`
+-   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` do the same for add-on and fork viewers
 -   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats); the SuperSplat Editor is iframe-embedded under `public/viewers/supersplat/`
--   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`
+-   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`, which ends with the fork-owned `customInstalls/custom/customInstall.js`
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
 
@@ -1121,7 +1137,7 @@ npm run build         # Production build (output: web/dist/)
 
 ### 12.3 Important: Postinstall Script
 
-The `postinstall` script runs custom viewer install scripts. If `npm install` fails, check:
+The `postinstall` script runs custom viewer install scripts, ending with the fork-owned no-op `customInstalls/custom/customInstall.js` (a fork's own install steps go there, not in `package.json`). If `npm install` fails, check:
 
 1. Individual viewer install scripts in `customInstalls/`
 2. Node.js version compatibility

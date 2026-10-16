@@ -8,6 +8,8 @@ You are scaffolding a new VAMS processing pipeline. Follow `backendPipelines/CLA
 
 ### Step 1: Gather Requirements
 
+**Fork mode.** Steps 5–8 below edit core files (`pipelineBuilder-nestedStack.ts`, `vpcBuilder-nestedStack.ts`, `config.ts` and the config templates), which conflict on every upstream merge. When the pipeline is being added in a **fork** of VAMS rather than contributed upstream, prefer an approach that edits none of them: deploy the pipeline as its own stack and register it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges` in `deployment/configuration-reference.md`), which resolves the orchestration bus, workflow role and `vamsSchema` import function from SSM at its own deploy time. The custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam: it does not depend on the stack that builds the `vamsSchema` import function, and a Batch/ECS/Fargate pipeline also needs the core VPC builder condition blocks (Step 7). See `documentation/docusaurus-site/docs/developer/customizing-vams.md`. The backend layout, `assetId` threading and output-path rules apply unchanged.
+
 Ask the user for:
 
 -   **Pipeline name**: A descriptive name in camelCase (e.g., `meshOptimizer`, `imageClassifier`, `pointCloudProcessor`)

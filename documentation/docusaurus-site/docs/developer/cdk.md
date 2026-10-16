@@ -444,3 +444,4 @@ Always use `nestedStack.addDependency(otherStack)` when one nested stack depends
 -   [Backend Development](backend.md) -- Lambda handler patterns that consume CDK-provisioned resources
 -   [Frontend Development](frontend.md) -- How the frontend reads configuration and feature flags
 -   [Local Development Setup](setup.md) -- CDK synthesis and deployment commands
+-   [Extending VAMS in a Fork](customizing-vams.md) -- Adding CDK resources, routes and resource names in the custom nested stack
