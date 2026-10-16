@@ -20,6 +20,8 @@ export function Header() {
                 }}
             />
             <img
+                alt=""
+                aria-hidden="true"
                 src={loginBgImageSrc}
                 style={{
                     position: "fixed",

@@ -1,4 +1,9 @@
 /* CenteredBox.module.css */
+/* Login screen root. Its own stacking context keeps the negative z-index background image
+   above the page background (#root / body) and below the header, form and footer. */
+.loginPage {
+    isolation: isolate;
+}
 .container {
     display: flex;
     justify-content: center;
