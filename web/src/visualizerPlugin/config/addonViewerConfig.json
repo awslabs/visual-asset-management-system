@@ -1,6 +1,42 @@
 {
     "viewers": [
         {
+            "id": "vntana-viewer",
+            "name": "VNTANA 3D Viewer",
+            "description": "View GLB files using VNTANA's high-quality 3D viewer (LICENSED VIEWER)",
+            "componentPath": "./viewers/VntanaViewerPlugin/VntanaViewerComponent",
+            "dependencyManager": "./viewers/VntanaViewerPlugin/dependencies",
+            "dependencyManagerClass": "VntanaDependencyManager",
+            "dependencyManagerMethod": "loadVntana",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".glb"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 2,
+            "dependencies": ["@vntana/viewer"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "enabled": false
+        },
+        {
+            "id": "veerum-viewer",
+            "name": "VEERUM 3D Viewer",
+            "description": "View Potree-converted point cloud files (.e57, .las, .laz, .ply) and 3D tilesets (.json) using VEERUM's advanced 3D viewer. Will always show the latest version of files only. (LICENSED VIEWER)",
+            "componentPath": "./viewers/VeerumViewerPlugin/VeerumViewerComponent",
+            "dependencyManager": "./viewers/VeerumViewerPlugin/dependencies",
+            "dependencyManagerClass": "VeerumDependencyManager",
+            "dependencyManagerMethod": "loadVeerum",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".e57", ".las", ".laz", ".ply", ".json"],
+            "supportsMultiFile": true,
+            "canFullscreen": true,
+            "priority": 2,
+            "dependencies": ["@veerum/viewer"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "enabled": false
+        },
+        {
             "id": "physna-viewer",
             "name": "Physna Viewer",
             "description": "View 3D/CAD files via the Physna platform. Requires the file to be synced and finished indexing in Physna.",

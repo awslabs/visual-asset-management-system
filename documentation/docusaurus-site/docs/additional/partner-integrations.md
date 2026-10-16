@@ -138,7 +138,7 @@ VNTANA provides both a viewer plugin and a processing pipeline (ModelOps).
 
 1. Subscribe to the VNTANA 3D Optimization Engine on the [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4).
 2. For the processing pipeline, set the container image URI in `app.pipelines.useModelOps.ecrContainerImageURI` and enable with `enabled: true`.
-3. For the viewer plugin, enable it in `web/src/visualizerPlugin/config/viewerConfig.json` by setting `"enabled": true` on the `vntana-viewer` entry.
+3. For the viewer plugin, enable it in `web/src/visualizerPlugin/config/addonViewerConfig.json` (the add-on viewer configuration) by setting `"enabled": true` on the `vntana-viewer` entry.
 4. Redeploy the stack.
 
 #### Veerum
@@ -148,7 +148,7 @@ VNTANA provides both a viewer plugin and a processing pipeline (ModelOps).
 The Veerum 3D Viewer provides advanced visualization for point cloud and 3D tileset files.
 
 1. Contact [Veerum](https://veerum.com/) to obtain a license.
-2. Enable the viewer in `web/src/visualizerPlugin/config/viewerConfig.json` by setting `"enabled": true` on the `veerum-viewer` entry.
+2. Enable the viewer in `web/src/visualizerPlugin/config/addonViewerConfig.json` (the add-on viewer configuration) by setting `"enabled": true` on the `veerum-viewer` entry.
 3. The Veerum Viewer requires the Potree Auto-Processing pipeline to be enabled for point cloud file loading.
 4. Rebuild and redeploy the web application.
 

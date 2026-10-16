@@ -22,15 +22,17 @@ graph TD
 | Component         | File                            | Purpose                                        |
 | ----------------- | ------------------------------- | ---------------------------------------------- |
 | PluginRegistry    | `core/PluginRegistry.ts`        | Singleton that manages all viewer plugins      |
-| viewerConfig.json | `config/viewerConfig.json`      | JSON configuration for all plugins             |
+| viewerConfig.json | `config/viewerConfig.json`      | JSON configuration for the core plugins        |
 | manifest.ts       | `viewers/manifest.ts`           | Vite static analysis paths for dynamic imports |
 | StylesheetManager | `core/StylesheetManager.ts`     | Per-plugin CSS lifecycle management            |
 | DynamicViewer     | `components/DynamicViewer.tsx`  | Main viewer component for rendering            |
 | ViewerSelector    | `components/ViewerSelector.tsx` | UI for choosing between compatible viewers     |
 
+The add-on viewers — the Physna viewer and the licensed VNTANA and VEERUM viewers, which ship disabled — are configured in `config/addonViewerConfig.json` and listed in `viewers/addonManifest.ts`; a fork's viewers go in `config/customViewerConfig.json` and `viewers/custom/customManifest.ts` (see [Extending VAMS in a Fork](customizing-vams.md)). `core/viewerSources.ts` merges the three tiers in the order core, add-on, custom, so on a priority tie a core viewer is listed before an add-on viewer.
+
 ### How It Works
 
-1. **Initialization** -- `PluginRegistry.initialize()` reads `viewerConfig.json` and registers metadata for all enabled plugins. No components are loaded at this stage.
+1. **Initialization** -- `PluginRegistry.initialize()` reads the merged configuration (core, add-on and custom) and registers metadata for all enabled plugins. No components are loaded at this stage.
 2. **Extension Matching** -- `getCompatibleViewers(extensions, isMultiFile)` returns metadata for all plugins that support the given file extensions.
 3. **On-Demand Loading** -- `loadPlugin(pluginId)` dynamically imports the React component and optional dependency manager when a viewer is selected.
 4. **Cleanup** -- `unloadPlugin(pluginId)` removes the component, cleans up dependencies, and removes plugin stylesheets.
@@ -391,8 +393,8 @@ import { DynamicViewer } from "./visualizerPlugin";
 
 ### Plugin Not Appearing
 
-1. Check that `enabled` is `true` in `viewerConfig.json`
-2. Verify the component path exists in `manifest.ts`
+1. Check that `enabled` is `true` in the viewer's entry: `viewerConfig.json` for a core viewer, `addonViewerConfig.json` for an add-on or licensed viewer (VNTANA, VEERUM)
+2. Verify the component path exists in `manifest.ts` (or `addonManifest.ts` for an add-on viewer)
 3. Check the browser console for feature restriction messages
 4. Confirm required feature flags are enabled in the deployment configuration
 

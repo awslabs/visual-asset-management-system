@@ -247,7 +247,7 @@ Two viewer plugins are integrations with commercial products and require separat
 | **VNTANA 3D Viewer** | [VNTANA](https://www.vntana.com/) | `.glb`                                  | Yes              |
 | **VEERUM 3D Viewer** | [Veerum](https://veerum.com/)     | `.e57`, `.las`, `.laz`, `.ply`, `.json` | Yes              |
 
-Both licensed viewers ship disabled in the viewer configuration, so neither appears in the viewer selector until it is enabled. Enabling one also requires a valid license from the respective vendor: without a license the viewer will not render content. Contact the vendor directly for licensing details.
+Both licensed viewers ship disabled in the add-on viewer configuration (`web/src/visualizerPlugin/config/addonViewerConfig.json`), so neither appears in the viewer selector until its entry is set to `"enabled": true`. Enabling one also requires a valid license from the respective vendor: without a license the viewer will not render content. Contact the vendor directly for licensing details.
 
 For more information on partner integrations, see [Partner Integrations](../additional/partner-integrations.md).
 

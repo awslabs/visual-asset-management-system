@@ -69,8 +69,11 @@ const CORE_AND_EMPTY_ADDON_FILES: Array<{ core: string; addon: string }> = [
     { core: "web/src/layout/Navigation.tsx", addon: "web/src/addons/addonNavigation.ts" },
 ];
 
-/** The add-ons VAMS ships (`infra/lib/nestedStacks/addon/<name>`). */
-const ADDON_NAME = /physna|garnet/i;
+/**
+ * The add-ons VAMS ships: the stacks under `infra/lib/nestedStacks/addon/<name>` and the licensed
+ * viewers, which ship disabled from the add-on viewer files.
+ */
+const ADDON_NAME = /physna|garnet|vntana|veerum/i;
 
 const read = (relative: string): string => fs.readFileSync(path.join(REPO_ROOT, relative), "utf8");
 
