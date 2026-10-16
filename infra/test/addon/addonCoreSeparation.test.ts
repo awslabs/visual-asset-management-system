@@ -55,6 +55,18 @@ const CORE_AND_ADDON_FILES: Array<{ core: string; addon: string }> = [
     },
 ];
 
+/**
+ * Core aggregators whose add-on file exists but holds no entry today: the add-on lane is in place
+ * for the next add-on that needs it.
+ */
+const CORE_AND_EMPTY_ADDON_FILES: Array<{ core: string; addon: string }> = [
+    { core: "infra/common/resourceParamKeys.ts", addon: "infra/common/addonResourceParamKeys.ts" },
+    {
+        core: "backend/backend/common/resourceNames.py",
+        addon: "backend/backend/common/addonResourceNames.py",
+    },
+];
+
 /** Core aggregators with no add-on counterpart today; an add-on entry still belongs elsewhere. */
 const CORE_ONLY_FILES = ["web/src/routes.tsx", "web/src/layout/Navigation.tsx"];
 
@@ -64,7 +76,11 @@ const ADDON_NAME = /physna|garnet/i;
 const read = (relative: string): string => fs.readFileSync(path.join(REPO_ROOT, relative), "utf8");
 
 describe("core aggregator files name no add-on", () => {
-    const coreFiles = [...CORE_AND_ADDON_FILES.map((pair) => pair.core), ...CORE_ONLY_FILES];
+    const coreFiles = [
+        ...CORE_AND_ADDON_FILES.map((pair) => pair.core),
+        ...CORE_AND_EMPTY_ADDON_FILES.map((pair) => pair.core),
+        ...CORE_ONLY_FILES,
+    ];
 
     test.each(coreFiles)("%s", (relative) => {
         const offending = read(relative)
@@ -80,6 +96,12 @@ describe("core aggregator files name no add-on", () => {
         // Without this the assertion above passes for a detector that matches nothing.
         for (const { addon } of CORE_AND_ADDON_FILES) {
             expect(ADDON_NAME.test(read(addon))).toBe(true);
+        }
+    });
+
+    test("[control] every empty add-on lane file exists", () => {
+        for (const { addon } of CORE_AND_EMPTY_ADDON_FILES) {
+            expect(read(addon).length).toBeGreaterThan(0);
         }
     });
 

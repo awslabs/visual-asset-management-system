@@ -15,7 +15,7 @@ import { Construct } from "constructs";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import * as Config from "../../../config/config";
-import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
+import { publishLaneResourceName } from "../resourceNames/laneResourceNames";
 import { RouteRegistry } from "../apiLambda/apiRouteRegistry";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 
@@ -61,20 +61,12 @@ export function loadCustomConfig(configPath: string = CUSTOM_CONFIG_PATH): Recor
     return parsed as Record<string, any>;
 }
 
-/** Every core SSM resource-name key suffix (all categories of RESOURCE_PARAM_KEYS). */
-function coreResourceParamKeys(): Set<string> {
-    return new Set(
-        Object.values(RESOURCE_PARAM_KEYS).flatMap((category) =>
-            Object.values(category as Record<string, string>)
-        )
-    );
-}
-
 /**
  * Publish a custom resource name as an SSM parameter under the deployment's resource-name prefix,
  * where backend handlers resolve it with get_resource_name(). `key` is a suffix declared in
- * CUSTOM_RESOURCE_PARAM_KEYS (common/customResourceParamKeys.ts). A key equal to a core key throws:
- * the core parameter already exists, and the deploy would otherwise fail part-way through.
+ * CUSTOM_RESOURCE_PARAM_KEYS (common/customResourceParamKeys.ts). A key equal to a core key or to an
+ * add-on key (ADDON_RESOURCE_PARAM_KEYS) throws: that parameter already exists or will, and the
+ * deploy would otherwise fail part-way through.
  */
 export function publishCustomResourceName(
     scope: Construct,
@@ -82,17 +74,5 @@ export function publishCustomResourceName(
     key: string,
     value: string
 ): ssm.StringParameter {
-    if (!key) {
-        throw new Error("publishCustomResourceName: key must be a non-empty SSM key suffix");
-    }
-    if (coreResourceParamKeys().has(key)) {
-        throw new Error(
-            `publishCustomResourceName: "${key}" is a core VAMS resource-name key; ` +
-                "declare the custom resource under a key of its own"
-        );
-    }
-    return new ssm.StringParameter(scope, `CustomResourceName-${key.replace(/\//g, "-")}`, {
-        parameterName: `${config.resourceNamesSSMParamPrefix}/${key}`,
-        stringValue: value,
-    });
+    return publishLaneResourceName("custom", scope, config, key, value);
 }

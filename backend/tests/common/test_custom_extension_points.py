@@ -14,6 +14,7 @@ dispatched to whichever handler matched first; a duplicate key would fail the de
 import pytest
 
 from backend.backend.common import apiRoutes
+from backend.backend.common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import ResourceKeys
 from custom.customResourceNames import CustomResourceKeys
 
@@ -69,6 +70,34 @@ class TestCustomResourceKeys:
         duplicated = sorted(_param_keys(CustomResourceKeys) & _param_keys(ResourceKeys))
         assert not duplicated, f"custom resource keys repeat a core key: {duplicated}"
 
+    def test_no_custom_key_duplicates_an_addon_key(self):
+        duplicated = sorted(_param_keys(CustomResourceKeys) & _param_keys(AddonResourceKeys))
+        assert not duplicated, f"custom resource keys repeat an add-on key: {duplicated}"
+
     def test_the_core_key_set_is_read(self):
         # Control: an empty core set would make the duplicate check above pass vacuously.
         assert "dynamoTables/assetStorage" in _param_keys(ResourceKeys)
+
+
+@pytest.mark.unit
+class TestAddonResourceKeys:
+    """``common/addonResourceNames.py`` is the add-on lane: upstream-owned, shipped empty today."""
+
+    def test_every_addon_key_is_a_resource_param_key(self):
+        for name, value in vars(AddonResourceKeys).items():
+            if name.startswith("_"):
+                continue
+            assert hasattr(value, "param_key") and hasattr(value, "env_var_names"), name
+
+    def test_no_addon_key_duplicates_a_core_key(self):
+        duplicated = sorted(_param_keys(AddonResourceKeys) & _param_keys(ResourceKeys))
+        assert not duplicated, f"add-on resource keys repeat a core key: {duplicated}"
+
+    def test_the_duplicate_check_detects_a_duplicate(self):
+        # Control: a lane class declaring a core key is reported.
+        from common.resourceNames import ResourceParamKey
+
+        class _Shadow:
+            PROBE = ResourceParamKey("dynamoTables/assetStorage", ("PROBE",))
+
+        assert _param_keys(_Shadow) & _param_keys(ResourceKeys) == {"dynamoTables/assetStorage"}
