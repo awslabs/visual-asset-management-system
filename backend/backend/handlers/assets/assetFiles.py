@@ -37,7 +37,11 @@ from common.s3MetadataKeys import (
     replace_metadata_copy_args,
     UserMetadataTooLargeError,
 )
-from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    select_newest_preview_file,
+)
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
@@ -1669,28 +1673,21 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
     
     return preview_files
 
-def get_top_preview_file(preview_files: List[str], filter_extensions: bool = True) -> Optional[str]:
-    """Get the top preview file from a list of preview files
-    
-    Args:
-        preview_files: List of preview file keys
-        filter_extensions: Whether to filter by allowed extensions
-        
-    Returns:
-        The top preview file key or None if no valid preview files
-    """
-    if not preview_files:
-        return None
-    
-    if filter_extensions:
-        # Filter by allowed extensions
-        allowed_files = [f for f in preview_files if is_allowed_preview_extension(f)]
-        if allowed_files:
-            return allowed_files[0]  # Return the first allowed file
-        return None
-    else:
-        # Return the first file without filtering
-        return preview_files[0]
+def find_newest_preview_file_for_base(bucket: str, base_key: str) -> Optional[str]:
+    """The key of the newest allowed preview object for ``base_key`` (see select_newest_preview_file)."""
+    directory = os.path.dirname(base_key)
+    prefix = f"{directory}/" if directory else ""
+    pattern = f"{os.path.basename(base_key)}{PREVIEW_FILE_PATTERN}"
+    candidates = []
+    try:
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix + pattern):
+            for obj in page.get('Contents', []):
+                if os.path.basename(obj['Key']).startswith(pattern):
+                    candidates.append((obj['Key'], obj.get('LastModified'), False))
+    except Exception as e:
+        logger.warning(f"Error finding preview files for {base_key}: {e}")
+    return select_newest_preview_file(candidates)
 
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
     """Get file versions for a specific asset version using the databaseIdAssetIdVersionIdIndex GSI
@@ -3101,11 +3098,8 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
 
     # Add preview file information if this is not a preview file itself
     if not is_preview_file(file_path) and not metadata.get('isFolder', False):
-        # Find preview files for this base file
-        preview_files = find_preview_files_for_base(bucket, full_key)
-        
-        # Get the top preview file with allowed extension
-        top_preview_file = get_top_preview_file(preview_files)
+        # The newest preview file with an allowed extension
+        top_preview_file = find_newest_preview_file_for_base(bucket, full_key)
         
         if top_preview_file:
             # Add relative path to the preview file
@@ -3351,8 +3345,9 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
                 # Store in lookup dictionary for preview file matching
                 base_files[item['key']] = len(file_items) - 1
 
-        # Process preview files
+        # Process preview files: collect each base file's candidates, then attach the newest
         orphaned_preview_files = []
+        preview_candidates = {}  # base file index -> [(key, lastModified, isArchived)]
 
         for preview_item in preview_files:
             # Get the base file key for this preview file
@@ -3360,23 +3355,23 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
 
             # Check if the base file exists
             if base_key in base_files:
-                # Base file exists, add this preview file to it if it has an allowed extension
-                if is_allowed_preview_extension(preview_item['key']):
-                    base_file_index = base_files[base_key]
-
-                    # Only add if the base file doesn't already have a preview file
-                    if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
-                        # Add relative path to the preview file
-                        if preview_item['key'].startswith(key):
-                            relative_preview_path = '/' + preview_item['key'][len(key):]
-                        else:
-                            relative_preview_path = '/' + preview_item['key']
-
-                        # Add preview file to base file
-                        file_items[base_file_index].previewFile = relative_preview_path
+                preview_candidates.setdefault(base_files[base_key], []).append((
+                    preview_item['key'],
+                    preview_item.get('dateCreatedCurrentVersion'),
+                    bool(preview_item.get('isArchived')),
+                ))
             else:
                 # Base file doesn't exist, this is an orphaned preview file
                 orphaned_preview_files.append(preview_item['key'])
+
+        for base_file_index, candidates in preview_candidates.items():
+            newest_preview = select_newest_preview_file(candidates)
+            if newest_preview:
+                # Add relative path to the preview file
+                if newest_preview.startswith(key):
+                    file_items[base_file_index].previewFile = '/' + newest_preview[len(key):]
+                else:
+                    file_items[base_file_index].previewFile = '/' + newest_preview
 
         # Log orphaned preview files
         if orphaned_preview_files:
@@ -3462,7 +3457,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
         # BASIC MODE: Construct file list directly from DynamoDB snapshot - NO S3 calls
         # First pass: separate base files from preview files
         base_file_items = []
-        preview_file_map = {}  # base_relative_key -> preview relative path
+        preview_candidates = {}  # base_relative_key -> [(preview relative key, lastModified, False)]
 
         for file_info in versioned_files:
             relative_key = file_info.get('relativeKey', '')
@@ -3475,8 +3470,8 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                     base_relative = base_file_key[len(key):].lstrip('/')
                 else:
                     base_relative = base_file_key
-                if is_allowed_preview_extension(full_file_key):
-                    preview_file_map[base_relative] = '/' + relative_key.lstrip('/')
+                preview_candidates.setdefault(base_relative, []).append(
+                    (relative_key.lstrip('/'), file_info.get('lastModified'), False))
                 continue
 
             file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
@@ -3499,11 +3494,12 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
             }
             base_file_items.append(AssetFileItemModel(**item))
 
-        # Second pass: attach preview files to their base files
+        # Second pass: attach each base file's newest preview file
         for file_item in base_file_items:
             item_relative_key = file_item.key[len(key):].lstrip('/') if file_item.key.startswith(key) else file_item.key
-            if item_relative_key in preview_file_map:
-                file_item.previewFile = preview_file_map[item_relative_key]
+            newest_preview = select_newest_preview_file(preview_candidates.get(item_relative_key, []))
+            if newest_preview:
+                file_item.previewFile = '/' + newest_preview
 
         return ListAssetFilesResponseModel(items=base_file_items, NextToken=None)
 
@@ -3643,16 +3639,20 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                         file_items.append(AssetFileItemModel(**item))
                         logger.info(f"File permanently deleted from S3: {relative_key}")
 
-        # Group preview files from the version snapshot under their base files
+        # Group preview files from the version snapshot under their base files and attach the newest
         # Only preview files that are part of this version snapshot are considered
-        for relative_key in versioned_file_lookup:
+        version_preview_candidates = {}  # base file index -> [(preview relative key, lastModified, False)]
+        for relative_key, version_info in versioned_file_lookup.items():
             full_file_key = key + relative_key.lstrip('/')
-            if is_preview_file(full_file_key) and is_allowed_preview_extension(full_file_key):
+            if is_preview_file(full_file_key):
                 base_key_for_preview = get_base_file_for_preview(full_file_key)
                 if base_key_for_preview in base_files:
-                    base_file_index = base_files[base_key_for_preview]
-                    if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
-                        file_items[base_file_index].previewFile = '/' + relative_key.lstrip('/')
+                    version_preview_candidates.setdefault(base_files[base_key_for_preview], []).append(
+                        (relative_key.lstrip('/'), version_info.get('lastModified'), False))
+        for base_file_index, candidates in version_preview_candidates.items():
+            newest_preview = select_newest_preview_file(candidates)
+            if newest_preview:
+                file_items[base_file_index].previewFile = '/' + newest_preview
 
         # Initialize previewFile field for files that don't have one
         for file_item in file_items:

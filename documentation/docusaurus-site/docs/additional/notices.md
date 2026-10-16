@@ -59,6 +59,10 @@ Certain optional components use LGPL-2.1 licensed libraries:
 LGPL-2.1 license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
 :::
 
+### 3D Preview Thumbnail Gaussian Splat Conversion Notice
+
+The 3D Preview Thumbnail pipeline converts `.spz`, `.sog`, `.ksplat`, `.lcc` and `.compressed.ply` Gaussian splats with the PlayCanvas [splat-transform](https://github.com/playcanvas/splat-transform) CLI (MIT license), installed at an exact version from a committed `package-lock.json`, and runs it on a pinned [Node.js](https://nodejs.org/) 22 release (MIT license) whose tarball is verified by SHA-256 when the image is built. Its dependency tree is permissively licensed (MIT, ISC, BSD-3-Clause, including the Dawn binaries bundled in `webgpu`); the full list is in `NOTICE.md`. Conversion runs on the CPU; no GPU is used.
+
 ### Coordinate Transform Pipeline Library Notice
 
 The Coordinate Transform pipeline depends on the open-source [laspy](https://github.com/laspy/laspy) library for reading and writing LAS/LAZ point cloud files. laspy is distributed under a 3-clause BSD license (BSD-3-Clause). The license text is a verbatim instance of the standard BSD-3-Clause template — its terms are equivalent to other permissive licenses such as MIT and Apache-2.0 (permitting use, modification, and redistribution with attribution and no warranty), with the additional standard third clause prohibiting use of the copyright holders' names to endorse derived products. It imposes no copyleft obligations.

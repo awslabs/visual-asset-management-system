@@ -6,33 +6,56 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 
 ### Mesh Formats
 
-| Format      | Extension | Library                                     |
-| ----------- | --------- | ------------------------------------------- |
-| PLY         | `.ply`    | Trimesh                                     |
-| STL         | `.stl`    | Trimesh                                     |
-| OBJ         | `.obj`    | Trimesh                                     |
-| GLB         | `.glb`    | Trimesh                                     |
-| GLTF        | `.gltf`   | Trimesh (with external dependency download) |
-| FBX         | `.fbx`    | Trimesh                                     |
-| DRC (Draco) | `.drc`    | Trimesh                                     |
+| Format      | Extension | Library                                          |
+| ----------- | --------- | ------------------------------------------------ |
+| PLY         | `.ply`    | Trimesh                                          |
+| STL         | `.stl`    | Trimesh                                          |
+| OBJ         | `.obj`    | Trimesh                                          |
+| GLB         | `.glb`    | Trimesh                                          |
+| GLTF        | `.gltf`   | Trimesh (with its referenced buffers and images) |
+| FBX         | `.fbx`    | Trimesh                                          |
+| DRC (Draco) | `.drc`    | Trimesh (with vertex colours)                    |
+| OFF         | `.off`    | Trimesh                                          |
+| 3MF         | `.3mf`    | built-in (hardened XML parsing)                  |
+| COLLADA     | `.dae`    | built-in (hardened XML parsing)                  |
+
+3MF and COLLADA files are parsed with DTDs and external entities disabled, so a crafted file cannot read local files or reach the network. The up axis comes from the file where it says (FBX `UpAxis`, COLLADA `<up_axis>`, 3MF and survey formats Z-up, glTF Y-up); other meshes, STL included, render as authored.
 
 ### Point Cloud Formats
 
-| Format | Extension | Library        |
-| ------ | --------- | -------------- |
-| LAS    | `.las`    | laspy          |
-| LAZ    | `.laz`    | laspy + laszip |
-| E57    | `.e57`    | pye57          |
-| PTX    | `.ptx`    | Open3D         |
-| PCD    | `.pcd`    | Open3D         |
-| FLS    | `.fls`    | Open3D         |
-| FWS    | `.fws`    | Open3D         |
+| Format              | Extension | Library        |
+| ------------------- | --------- | -------------- |
+| LAS                 | `.las`    | laspy          |
+| LAZ                 | `.laz`    | laspy + laszip |
+| E57                 | `.e57`    | pye57          |
+| PTX                 | `.ptx`    | built-in       |
+| PTS                 | `.pts`    | built-in       |
+| PCD                 | `.pcd`    | Open3D         |
+| PLY (vertices only) | `.ply`    | built-in       |
+
+FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
 
 ### CAD Formats
 
 | Format | Extension       | Library                 |
 | ------ | --------------- | ----------------------- |
 | STEP   | `.stp`, `.step` | CadQuery / Open CASCADE |
+
+STEP files are read with their assembly placements and their part, component and face colours. Tessellation detail is relative to the model's size, so a part renders with the same detail in millimetres or metres, and free surfaces beside solids are kept.
+
+### Gaussian Splat Formats
+
+| Format             | Extension         | Library                          |
+| ------------------ | ----------------- | -------------------------------- |
+| 3DGS PLY           | `.ply`            | built-in (routed by PLY header)  |
+| Compressed PLY     | `.compressed.ply` | PlayCanvas splat-transform (CPU) |
+| SPZ                | `.spz`            | PlayCanvas splat-transform (CPU) |
+| SOG                | `.sog`            | PlayCanvas splat-transform (CPU) |
+| antimatter15 splat | `.splat`          | built-in                         |
+| KSPLAT             | `.ksplat`         | PlayCanvas splat-transform (CPU) |
+| XGRIDS LCC         | `.lcc`            | PlayCanvas splat-transform (CPU) |
+
+Splats render on the CPU as point Gaussians coloured by their base (degree-0) spherical-harmonic colour; faint splats are dropped and the rest are sampled by opacity to the splat budget. A `.ply` with faces still renders as a mesh and a vertex-only `.ply` as a point cloud.
 
 ### USD Formats
 
@@ -42,6 +65,8 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 | USDA   | `.usda`   | OpenUSD (pxr) |
 | USDC   | `.usdc`   | OpenUSD (pxr) |
 | USDZ   | `.usdz`   | OpenUSD (pxr) |
+
+A USD stage is rendered as composed: instanced prims and point instancers are drawn at every instance, invisible prims and `guide` or `proxy` purpose prims are skipped, and implicit shapes (cube, sphere, cylinder, cone, capsule) are drawn. Colour comes from the diffuse texture or constant `diffuseColor` of the bound `UsdPreviewSurface`, else `displayColor`; an uncoloured prim is drawn in neutral grey. MaterialX materials are not read.
 
 ## Architecture
 
@@ -77,12 +102,12 @@ flowchart LR
 
 ### Processing Steps
 
-1. **Download** -- The container downloads the input file from the asset Amazon S3 bucket. For GLTF files, external dependencies (buffers, textures) are also downloaded.
+1. **Download** -- The container downloads the input file from the asset Amazon S3 bucket, then the files it references from the same asset: a glTF file's buffers and images, a USD layer's sublayers, references, payloads and asset-valued attributes such as texture paths (followed through each fetched layer), an OBJ file's material libraries and the texture maps they name, and an FBX file's texture files. A reference is fetched only when it is a relative path that stays inside the input's own asset; absolute paths, `..` segments that leave the asset, and URIs (`s3://`, `http(s)://`, `file:`) are skipped. At most 2,000 referenced files and 50 GiB are fetched, each checked against free disk space first. A skipped or missing reference is logged and does not fail the run.
 2. **Load** -- A format-specific handler loads the file into a PyVista PolyData object. The handler is selected based on file extension: mesh, point cloud, CAD, or USD.
 3. **Normalize** -- The pipeline detects and normalizes the coordinate up-axis to Y-up for consistent rendering. Z-up formats (LAS, LAZ, E57, STL, etc.) are rotated automatically. Variable formats use a bounding-box heuristic.
-4. **Render** -- PyVista generates rotating preview frames using headless off-screen rendering via Xvfb. If animated rendering fails, the pipeline falls back to a single static frame.
+4. **Render** -- PyVista renders with headless off-screen rendering via Xvfb: a 36-frame orbit for an animated or `auto` output, or one front three-quarter view for a `jpg` or `png` output. A mesh is framed on its full bounds and a point cloud on its 2nd-98th percentile bounds, which ignores stray points. If the orbit fails, the pipeline falls back to the single still view.
 5. **Save** -- The requested format is written: `auto` assembles multiple frames into an animated GIF and saves a single frame as a JPEG, while `gif`, `jpg` and `png` write that format whatever the frame count. The pipeline ensures the output stays under a size limit for efficient web display.
-6. **Upload** -- The preview file is uploaded to the asset bucket alongside the source file, preserving the relative directory structure.
+6. **Upload** -- The preview file is uploaded to the asset bucket alongside the source file, preserving the relative directory structure. When a file holds previews in several formats (for example a `.gif` from an earlier run and a `.png` from a later one), the file listing shows the most recently written one.
 
 ### Output Files
 
@@ -160,15 +185,18 @@ Parameters reach the pipeline through the template selected for the run. Deploym
 
 ## Limits and Constraints
 
-| Constraint                         | Value                       |
-| ---------------------------------- | --------------------------- |
-| Maximum input file size            | 100 GB                      |
-| Container ephemeral storage        | 200 GiB                     |
-| Point cloud downsampling threshold | 20 million points           |
-| Rendering method                   | CPU-based (no GPU required) |
+| Constraint                  | Value                                                                |
+| --------------------------- | -------------------------------------------------------------------- |
+| Maximum input file size     | The free space of the work volume, less 1 GiB kept for the output    |
+| Container ephemeral storage | 200 GiB                                                              |
+| Point budget                | 5 million per vCPU, at most 20 million (and 35% of the memory limit) |
+| Triangle budget             | 5 million per vCPU, at most 30 million (and 35% of the memory limit) |
+| Rendering method            | CPU-based (Mesa llvmpipe, one rasteriser thread per vCPU; no GPU)    |
+
+The container reads its memory limit and vCPU count from its cgroup and derives the budgets from them, so it stays within whichever task size runs it. A point cloud above the point budget is sampled while it is read (E57 scan by scan, PTX streamed from Amazon S3 with no local copy); a mesh above the triangle budget is decimated with VTK quadric clustering. An input larger than the free disk fails before the download with a message naming both sizes. The execution log records the input size, the budgets and each phase's duration (download, fetch, load, render, encode, upload).
 
 :::tip[Large Point Clouds]
-Point clouds exceeding 20 million points are automatically downsampled for rendering performance. The original file is not modified; only the rendering input is reduced.
+The original file is never modified; only the rendering input is reduced. Every scan of a multi-scan E57 or PTX file is read and placed by its pose or transform.
 :::
 
 ## Prerequisites
@@ -185,9 +213,10 @@ The container image is built during CDK deployment from `backendPipelines/previe
 -   **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, FBX, DRC (MIT license)
 -   **laspy** -- LAS/LAZ point cloud reading (BSD license)
 -   **pye57** -- E57 point cloud reading (MIT license)
--   **Open3D** -- Additional point cloud formats: PTX, PCD, FLS, FWS (MIT license)
+-   **Open3D** -- PCD point clouds and the FBX fallback (MIT license)
 -   **CadQuery** -- STEP/STP CAD file support (LGPL license)
 -   **OpenUSD (pxr)** -- USD format support (Modified Apache 2.0 license)
+-   **PlayCanvas splat-transform** -- Gaussian splat format conversion on the CPU (MIT license), run on **Node.js** 22 (MIT license)
 -   **Xvfb** -- Virtual framebuffer for headless rendering
 
 ## How It Works
