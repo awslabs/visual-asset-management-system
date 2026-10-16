@@ -25,7 +25,7 @@ from .utils import s3_utils as s3
 from .utils import manifest_io
 from .utils import image_utils
 from .format_handlers import mesh_handler, pointcloud_handler, cad_handler, usd_handler, splat_handler
-from .format_handlers import ply_header
+from .format_handlers import ply_header, xml_mesh_handler
 from . import dependencies
 from . import geometry_budget
 from . import renderer
@@ -532,6 +532,8 @@ def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
         return mesh_handler.load(file_path)
     if splat_handler.can_handle(ext):
         return splat_handler.load(file_path, max_splats=max_splats, work_dir=work_dir)
+    if xml_mesh_handler.can_handle(ext):
+        return xml_mesh_handler.load(file_path, ext)
     if mesh_handler.can_handle(ext):
         return mesh_handler.load(file_path)
     elif pointcloud_handler.can_handle(ext):
@@ -557,6 +559,7 @@ def _all_extensions():
         | cad_handler.SUPPORTED_EXTENSIONS
         | usd_handler.SUPPORTED_EXTENSIONS
         | splat_handler.SUPPORTED_EXTENSIONS
+        | xml_mesh_handler.SUPPORTED_EXTENSIONS
     )
 
 
@@ -573,25 +576,36 @@ def _find_local_test_file(input_dir: str) -> str:
 
 
 # Format-based up-axis conventions
-# Z-up: surveying/point cloud standards (LAS spec, E57 spec)
-_Z_UP_FORMATS = {".las", ".laz", ".e57", ".ptx", ".pcd", ".stl"}
-# Y-up: glTF 2.0 spec mandates Y-up; STEP/STP files are treated as Y-up because
-# cadquery tessellation preserves original model coordinates which render correctly as-is;
-# USD files handle up-axis internally via stage metadata (UsdGeom.GetStageUpAxis)
-_Y_UP_FORMATS = {".glb", ".gltf", ".stp", ".step", ".usd", ".usda", ".usdc", ".usdz"}
-# Variable (use heuristic): .obj, .fbx, .ply, .drc
+# Z-up: surveying/point cloud standards (LAS spec, E57 spec, Leica PTX/PTS)
+_Z_UP_FORMATS = {".las", ".laz", ".e57", ".ptx", ".pts", ".pcd"}
+# Y-up: glTF 2.0 mandates Y-up. STEP has no up-axis metadata and is rendered as authored. USD, 3MF and
+# COLLADA handlers convert from their own metadata (stage upAxis, the 3MF spec's Z-up, <up_axis>), and
+# the splat handler orients splat scenes, so all of these arrive Y-up.
+_Y_UP_FORMATS = {".glb", ".gltf", ".stp", ".step", ".usd", ".usda", ".usdc", ".usdz", ".3mf", ".dae",
+                 ".spz", ".sog", ".splat", ".ksplat", ".lcc"}
+# No convention (.obj, .ply, .drc, .stl, .off; .fbx without UpAxis): rendered as authored, Y-up.
 
 
 def _normalize_up_axis(pv_data, ext: str):
     """
-    Detect and normalize the up-axis to Y-up for consistent rendering.
+    Normalize the up-axis to Y-up from what the file declares.
 
     Strategy:
-      1. Known Z-up formats → rotate to Y-up
-      2. Known Y-up formats → no-op
-      3. Variable formats → bounding-box heuristic
+      1. An up axis the loader read from the file (FBX ``UpAxis``) -> rotate when it is Z
+      2. Known Y-up formats -> no-op
+      3. Known Z-up formats -> rotate to Y-up
+      4. Formats with no convention -> as authored. A bounding-box guess rotated Y-up models that are
+         long in depth (a car, a ship) onto their side, and an unconditional STL rotation did the same
+         to every Y-up STL.
     """
     ext = ext.lower()
+    declared = getattr(pv_data, "_preview_up_axis", None)
+    if declared == "Z":
+        logger.info(f"File declares Z-up ({ext}), rotating to Y-up")
+        return _rotate_z_up_to_y_up(pv_data)
+    if declared == "Y":
+        logger.info(f"File declares Y-up ({ext}), no rotation")
+        return pv_data
 
     if ext in _Y_UP_FORMATS:
         logger.info(f"Format {ext} is Y-up (no rotation needed)")
@@ -601,8 +615,8 @@ def _normalize_up_axis(pv_data, ext: str):
         logger.info(f"Format {ext} is Z-up, rotating to Y-up")
         return _rotate_z_up_to_y_up(pv_data)
 
-    # Variable format — use bounding-box heuristic
-    return _heuristic_up_axis(pv_data, ext)
+    logger.info(f"Format {ext} declares no up axis; rendering as authored (Y-up)")
+    return pv_data
 
 
 def _rotate_z_up_to_y_up(pv_data):
@@ -617,29 +631,6 @@ def _rotate_z_up_to_y_up(pv_data):
     new_points[:, 2] = -points[:, 1]   # Z = -old Y
     pv_data.points = new_points
     logger.info("Applied Z-up → Y-up rotation")
-    return pv_data
-
-
-def _heuristic_up_axis(pv_data, ext: str):
-    """
-    Detect up-axis from bounding box geometry for formats without a fixed convention.
-    If the Z extent is notably larger than the Y extent, the data is likely Z-up.
-    """
-    bounds = pv_data.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
-    dy = bounds[3] - bounds[2]
-    dz = bounds[5] - bounds[4]
-
-    if dz > dy * 1.2:
-        logger.info(
-            f"Heuristic ({ext}): Z extent ({dz:.2f}) > Y extent ({dy:.2f}) * 1.2, "
-            f"assuming Z-up → rotating to Y-up"
-        )
-        return _rotate_z_up_to_y_up(pv_data)
-
-    logger.info(
-        f"Heuristic ({ext}): Y extent ({dy:.2f}) >= Z extent ({dz:.2f}), "
-        f"assuming Y-up (no rotation)"
-    )
     return pv_data
 
 

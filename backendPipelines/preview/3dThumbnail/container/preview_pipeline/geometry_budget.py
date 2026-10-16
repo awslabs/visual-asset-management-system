@@ -22,10 +22,16 @@ _CLUSTER_PASSES = 4
 
 
 def apply_budgets(pv_data, budgets):
-    """``pv_data`` within ``budgets.points`` (point clouds) or ``budgets.triangles`` (meshes)."""
+    """``pv_data`` within ``budgets.points`` (point clouds) or ``budgets.triangles`` (meshes). An up
+    axis the loader read from the file travels to the reduced data."""
     if is_point_cloud(pv_data):
-        return limit_points(pv_data, budgets.points)
-    return limit_triangles(pv_data, budgets.triangles)
+        result = limit_points(pv_data, budgets.points)
+    else:
+        result = limit_triangles(pv_data, budgets.triangles)
+    up_axis = getattr(pv_data, "_preview_up_axis", None)
+    if result is not pv_data and isinstance(up_axis, str):
+        result._preview_up_axis = up_axis
+    return result
 
 
 def limit_points(pv_data, max_points: int, seed: int = 42):

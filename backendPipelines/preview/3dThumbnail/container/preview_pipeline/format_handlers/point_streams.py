@@ -377,3 +377,27 @@ def read_ptx(chunks: Iterable[bytes], max_points: int, chunk_lines: int = TEXT_C
         raise ValueError("No valid points found in PTX file")
     logger.info(f"PTX: {scans} scan(s), {sampler.seen:,} valid points")
     return points, colors
+
+
+def read_pts(chunks: Iterable[bytes], max_points: int, chunk_lines: int = TEXT_CHUNK_LINES):
+    """A Leica PTS stream (``x y z [intensity [r g b]]`` per line, optionally after a point-count
+    line, possibly several such blocks), sampled to ``max_points``."""
+    lines = LineReader(chunks)
+    sampler = ReservoirSampler(max_points)
+    while True:
+        block, count = lines.take_lines(chunk_lines)
+        if count == 0:
+            break
+        values = parse_number_block(block, 3)
+        if not len(values):
+            continue
+        colors = None
+        if values.shape[1] >= 7:
+            colors = np.clip(values[:, 4:7], 0, 255).astype(np.uint8)
+        elif values.shape[1] == 6:
+            colors = np.clip(values[:, 3:6], 0, 255).astype(np.uint8)
+        sampler.add(values[:, :3], colors)
+    points, colors = sampler.result()
+    if len(points) == 0:
+        raise ValueError("No valid points found in PTS file")
+    return points, colors

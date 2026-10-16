@@ -20,8 +20,9 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 
 | Category       | Extensions                                                      | Handler                                          |
 | :------------- | :-------------------------------------------------------------- | :----------------------------------------------- |
-| Mesh           | .ply, .stl, .obj, .glb, .gltf, .fbx, .drc                       | trimesh                                          |
-| Point Cloud    | .las, .laz, .e57, .ptx, .pcd                                    | laspy, pye57, open3d                             |
+| Mesh           | .ply, .stl, .obj, .glb, .gltf, .fbx, .drc, .off                 | trimesh                                          |
+| Mesh (XML)     | .3mf, .dae                                                      | built-in, hardened XML parsing                   |
+| Point Cloud    | .las, .laz, .e57, .ptx, .pts, .pcd, vertex-only .ply            | laspy, pye57, open3d                             |
 | CAD            | .stp, .step                                                     | cadquery                                         |
 | USD            | .usd, .usda, .usdc, .usdz                                       | usd-core (pxr)                                   |
 | Gaussian splat | .ply (3DGS), .compressed.ply, .spz, .sog, .splat, .ksplat, .lcc | numpy; PlayCanvas splat-transform for conversion |
@@ -175,12 +176,18 @@ Every reference is untrusted input. It is accepted only as a relative path that,
 
 ### Up-Axis Normalization
 
-All data is normalized to Y-up before rendering:
+All data is normalized to Y-up before rendering, from what the file or its format declares:
 
--   **Known Z-up formats** (LAS, LAZ, E57, PTX, PCD, STL): Rotated to Y-up automatically
--   **Known Y-up formats** (GLB, GLTF, STP, STEP, USD): No rotation
--   **Variable formats** (OBJ, FBX, PLY, DRC): Bounding-box heuristic determines up-axis
--   **USD files**: Up-axis read from stage metadata via `UsdGeom.GetStageUpAxis()`
+-   **Z-up formats** (LAS, LAZ, E57, PTX, PTS, PCD): rotated to Y-up
+-   **Y-up formats** (GLB, GLTF; STEP, rendered as authored since it carries no axis): no rotation
+-   **Formats with axis metadata**: USD (`UsdGeom.GetStageUpAxis()`), COLLADA (`<up_axis>`), 3MF (Z-up by specification) and FBX (`GlobalSettings` `UpAxis`) are converted by what they declare
+-   **Formats without a convention** (OBJ, PLY, DRC, STL, OFF, and FBX without `UpAxis`): rendered as authored. No bounding-box guess is made: it turned Y-up models that are long in depth (a car, a ship) onto their side.
+
+### XML and Archive Inputs
+
+3MF and COLLADA are XML. They are parsed with the standard library's expat parser with document type declarations, entity declarations and external entity references refused (ARCC BSC12), so a crafted file can neither expand entities nor read local files or URLs. A 3MF reads its build items, components (with their transforms) and `basematerials`/`colorgroup` colours; COLLADA reads the visual scene's node transforms, `triangles`, `polylist` and `polygons`, and each bound material's diffuse colour. A zip-based input (`.3mf`, `.sog`, and a texture read out of a `.usdz`) is checked from its central directory before anything is decompressed: the uncompressed total must fit the free disk and no member may be compressed more than 200:1 above 64 MiB.
+
+`.drc` files keep their vertex colours. `.pts` (Leica text) is streamed from Amazon S3 like PTX.
 
 ### Point Cloud Handling
 

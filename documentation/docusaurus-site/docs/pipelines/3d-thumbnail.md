@@ -14,17 +14,24 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 | GLB         | `.glb`    | Trimesh                                          |
 | GLTF        | `.gltf`   | Trimesh (with its referenced buffers and images) |
 | FBX         | `.fbx`    | Trimesh                                          |
-| DRC (Draco) | `.drc`    | Trimesh                                          |
+| DRC (Draco) | `.drc`    | Trimesh (with vertex colours)                    |
+| OFF         | `.off`    | Trimesh                                          |
+| 3MF         | `.3mf`    | built-in (hardened XML parsing)                  |
+| COLLADA     | `.dae`    | built-in (hardened XML parsing)                  |
+
+3MF and COLLADA files are parsed with DTDs and external entities disabled, so a crafted file cannot read local files or reach the network. The up axis comes from the file where it says (FBX `UpAxis`, COLLADA `<up_axis>`, 3MF and survey formats Z-up, glTF Y-up); other meshes, STL included, render as authored.
 
 ### Point Cloud Formats
 
-| Format | Extension | Library        |
-| ------ | --------- | -------------- |
-| LAS    | `.las`    | laspy          |
-| LAZ    | `.laz`    | laspy + laszip |
-| E57    | `.e57`    | pye57          |
-| PTX    | `.ptx`    | built-in       |
-| PCD    | `.pcd`    | Open3D         |
+| Format              | Extension | Library        |
+| ------------------- | --------- | -------------- |
+| LAS                 | `.las`    | laspy          |
+| LAZ                 | `.laz`    | laspy + laszip |
+| E57                 | `.e57`    | pye57          |
+| PTX                 | `.ptx`    | built-in       |
+| PTS                 | `.pts`    | built-in       |
+| PCD                 | `.pcd`    | Open3D         |
+| PLY (vertices only) | `.ply`    | built-in       |
 
 FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
 

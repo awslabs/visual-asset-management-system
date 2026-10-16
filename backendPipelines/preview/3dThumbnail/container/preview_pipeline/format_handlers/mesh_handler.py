@@ -7,6 +7,7 @@ Loads mesh geometry using trimesh and converts to PyVista for rendering.
 """
 
 import os
+import re
 import numpy as np
 import trimesh
 import pyvista as pv
@@ -14,14 +15,48 @@ from ..utils.logging import get_logger
 
 logger = get_logger()
 
-SUPPORTED_EXTENSIONS = {".ply", ".stl", ".obj", ".glb", ".gltf", ".fbx", ".drc"}
+SUPPORTED_EXTENSIONS = {".ply", ".stl", ".obj", ".glb", ".gltf", ".fbx", ".drc", ".off"}
 
 
 def can_handle(extension: str) -> bool:
     return extension.lower() in SUPPORTED_EXTENSIONS
 
 
+# FBX GlobalSettings: UpAxis 0 = X, 1 = Y, 2 = Z. ASCII: P: "UpAxis", "int", "Integer", "",2 ;
+# binary: the property record's strings followed by an 'I' int32.
+_FBX_UP_AXIS_ASCII = re.compile(rb'"UpAxis"\s*,\s*"int"\s*,\s*"Integer"\s*,\s*"[^"]*"\s*,\s*(-?\d+)')
+_FBX_UP_AXIS_BINARY = re.compile(rb"UpAxisS\x03\x00\x00\x00intS\x07\x00\x00\x00IntegerS\x00\x00\x00\x00I(.{4})",
+                                 re.DOTALL)
+_FBX_HEADER_SCAN = 64 * 1024 ** 2
+
+
+def fbx_up_axis(file_path: str):
+    """'X', 'Y' or 'Z' from an FBX file's GlobalSettings ``UpAxis``, or None when it is not found."""
+    try:
+        with open(file_path, "rb") as handle:
+            data = handle.read(_FBX_HEADER_SCAN)
+    except OSError:
+        return None
+    match = _FBX_UP_AXIS_ASCII.search(data)
+    value = int(match.group(1)) if match else None
+    if value is None:
+        match = _FBX_UP_AXIS_BINARY.search(data)
+        value = int.from_bytes(match.group(1), "little", signed=True) if match else None
+    return {0: "X", 1: "Y", 2: "Z"}.get(value)
+
+
 def load(file_path: str) -> pv.PolyData:
+    """Load a mesh file; an FBX carries the up axis its GlobalSettings declare."""
+    data = _load(file_path)
+    if os.path.splitext(file_path)[1].lower() == ".fbx":
+        axis = fbx_up_axis(file_path)
+        if axis:
+            logger.info(f"FBX UpAxis: {axis}")
+            data._preview_up_axis = axis
+    return data
+
+
+def _load(file_path: str) -> pv.PolyData:
     """
     Load a mesh file and return a PyVista PolyData object for rendering.
     Supports: .ply, .stl, .obj, .glb, .gltf, .fbx, .drc
@@ -408,6 +443,16 @@ def _load_draco(file_path: str) -> pv.PolyData:
         pv_mesh = pv.PolyData(vertices, pv_faces)
     else:
         pv_mesh = pv.PolyData(vertices)
+
+    colours = getattr(mesh, "colors", None)
+    if colours is not None:
+        colours = np.asarray(colours)
+        if colours.ndim == 2 and colours.shape[0] == len(vertices) and colours.shape[1] >= 3:
+            if colours.dtype.kind == "f":
+                scale = 255.0 if colours.max(initial=0) <= 1.0 else 1.0
+                colours = np.clip(colours[:, :3] * scale + 0.5, 0, 255)
+            pv_mesh.point_data["RGB"] = colours[:, :3].astype(np.uint8)
+            logger.info("Draco mesh carries vertex colours")
 
     logger.info(f"Loaded Draco mesh: {len(vertices)} vertices")
     return pv_mesh

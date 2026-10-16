@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Point cloud format handler for .las, .laz, .e57, .ptx, .pcd files.
+Point cloud format handler for .las, .laz, .e57, .ptx, .pts, .pcd files, and vertex-only .ply.
 Loads point cloud data, bounded to a point budget, and converts it to PyVista for rendering.
 
 FARO scans (.fls, .fws) are not supported: reading them needs the proprietary FARO SDK, and Open3D,
@@ -17,10 +17,10 @@ from . import point_streams
 
 logger = get_logger()
 
-SUPPORTED_EXTENSIONS = {".las", ".laz", ".e57", ".ptx", ".pcd"}
+SUPPORTED_EXTENSIONS = {".las", ".laz", ".e57", ".ptx", ".pts", ".pcd"}
 
 # Line-oriented formats read as a byte stream: in S3 mode straight from the object, with no local copy.
-STREAMED_EXTENSIONS = {".ptx"}
+STREAMED_EXTENSIONS = {".ptx", ".pts"}
 
 # Default point budget (the run passes the budget derived from its task's resources).
 MAX_POINTS_FOR_RENDER = 20_000_000
@@ -64,6 +64,8 @@ def load_stream(chunks, ext: str, max_points: int = MAX_POINTS_FOR_RENDER) -> pv
     ext = ext.lower()
     if ext == ".ptx":
         points, colors = point_streams.read_ptx(chunks, max_points)
+    elif ext == ".pts":
+        points, colors = point_streams.read_pts(chunks, max_points)
     else:
         raise ValueError(f"Unsupported streamed point cloud format: {ext}")
     return _to_pyvista(points, colors, max_points)

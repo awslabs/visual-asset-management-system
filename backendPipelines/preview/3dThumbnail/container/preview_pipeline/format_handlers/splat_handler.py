@@ -84,6 +84,11 @@ def load(file_path: str, max_splats: int = DEFAULT_MAX_SPLATS, work_dir: Optiona
     logger.info(f"Loading Gaussian splats: {file_path} (budget {max_splats:,} splats)")
     if needs_conversion(file_path) or compressed_ply:
         root = work_dir or os.path.dirname(os.path.abspath(file_path))
+        if name.endswith(".sog"):
+            from ..utils.archive import check_archive
+
+            # A .sog bundle is a zip: its uncompressed size must fit the disk before it is unpacked.
+            check_archive(file_path, root)
         directory = tempfile.mkdtemp(prefix="splat-", dir=root)
         try:
             source = file_path

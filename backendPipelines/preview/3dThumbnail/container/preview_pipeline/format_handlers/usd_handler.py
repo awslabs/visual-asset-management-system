@@ -39,6 +39,9 @@ logger = get_logger()
 
 SUPPORTED_EXTENSIONS = {".usd", ".usda", ".usdc", ".usdz"}
 
+# A texture read out of a USDZ archive is decompressed in memory; a larger member is skipped.
+MAX_USDZ_TEXTURE_BYTES = 512 * 1024 ** 2
+
 # Colour of a prim that carries none, in a stage where other prims are coloured.
 NEUTRAL_RGB = (190, 190, 190)
 # Upper bound on the vertices one stage expands to (instancing can multiply a small file).
@@ -560,12 +563,15 @@ def _load_texture_from_usdz(usdz_path, texture_rel_path):
     USDZ is an uncompressed zip containing a .usdc scene + texture files.
     """
     try:
+        from ..utils.archive import check_member
+
         with zipfile.ZipFile(usdz_path, "r") as zf:
             names = zf.namelist()
             clean_path = texture_rel_path.lstrip("./")
 
             # Strategy 1: Exact path match
             if clean_path in names:
+                check_member(zf.getinfo(clean_path), MAX_USDZ_TEXTURE_BYTES)
                 with zf.open(clean_path) as f:
                     return Image.open(io.BytesIO(f.read())).convert("RGB")
 
@@ -573,6 +579,7 @@ def _load_texture_from_usdz(usdz_path, texture_rel_path):
             basename = os.path.basename(clean_path)
             for name in names:
                 if os.path.basename(name) == basename:
+                    check_member(zf.getinfo(name), MAX_USDZ_TEXTURE_BYTES)
                     with zf.open(name) as f:
                         return Image.open(io.BytesIO(f.read())).convert("RGB")
 
