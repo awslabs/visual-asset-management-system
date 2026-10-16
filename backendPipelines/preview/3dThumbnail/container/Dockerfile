@@ -56,9 +56,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Install Python dependencies from the hash-locked set. requirements.txt lists the direct dependencies;
+# requirements.lock is generated from it (command in its header) and pins every package, transitive
+# ones included, by version and hash, so two builds of the same commit install the same packages.
+COPY requirements.lock /app/requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r /app/requirements.lock
 
 # Copy pipeline code
 COPY ./preview_pipeline /app/preview_pipeline

@@ -44,6 +44,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
+-   **Pipelines** The 3D Preview Thumbnail container installs its Python dependencies from `requirements.lock`, generated from `requirements.txt` with every package (transitive ones included) pinned by version and hash and installed with `pip install --require-hashes`, so two builds of the same commit install the same packages. ([#471](https://github.com/awslabs/visual-asset-management-system/issues/471))
 -   **CI** Third-party GitHub Actions (`snok/install-poetry`, `stelligent/cfn_nag`, `peaceiris/actions-gh-pages`) are pinned to the commit SHA their tag or branch resolved to, with the version recorded beside the pin.
 -   **Backend** The DynamoDB BatchGetItem chunk + `UnprocessedKeys` retry loop is a single shared helper, `common.dynamodb.batch_get_items`, returning `(rows, unresolved_keys)` so a missing row and an incomplete read stay distinguishable; the execution, asset-links, asset-export, workflow and asset listing services read through it instead of carrying their own copy. (issue #395)
     -   Note: the asset export previously read only the first response of each batch, so an asset DynamoDB deferred into `UnprocessedKeys` (a partial throttle, or a response at the 16 MB cap) was silently missing from the export. Those keys are now retried and, if still unresolved, read individually.

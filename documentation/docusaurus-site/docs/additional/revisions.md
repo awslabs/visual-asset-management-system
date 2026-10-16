@@ -75,6 +75,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Other changes:**
 
+-   **3D Preview Thumbnail dependency lock** — The pipeline container installs its Python dependencies from a hash-locked `requirements.lock` generated from `requirements.txt`, so every build of a commit installs the same package versions. (issue #471)
 -   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs.
 -   **Backend** — The DynamoDB BatchGetItem chunk + `UnprocessedKeys` retry loop is one shared helper, `common.dynamodb.batch_get_items`, returning `(rows, unresolved_keys)` so a missing row and an incomplete read stay distinguishable; the execution, asset-links, asset-export, workflow and asset listing services read through it instead of carrying their own copy. (issue #395)
     -   Note: the asset export previously read only the first response of each batch, so an asset DynamoDB deferred into `UnprocessedKeys` (a partial throttle, or a response at the 16 MB cap) was silently missing from the export. Those keys are now retried and, if still unresolved, read individually.
