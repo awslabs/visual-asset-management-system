@@ -48,6 +48,11 @@ const CORE_AND_ADDON_FILES: Array<{ core: string; addon: string }> = [
         core: "web/src/visualizerPlugin/viewers/manifest.ts",
         addon: "web/src/visualizerPlugin/viewers/addonManifest.ts",
     },
+    { core: "infra/common/vamsAppFeatures.ts", addon: "infra/common/addonAppFeatures.ts" },
+    {
+        core: "tools/VamsCLI/vamscli/constants.py",
+        addon: "tools/VamsCLI/vamscli/addon_constants.py",
+    },
 ];
 
 /** Core aggregators with no add-on counterpart today; an add-on entry still belongs elsewhere. */
@@ -79,8 +84,9 @@ describe("core aggregator files name no add-on", () => {
     });
 
     test("[control] every core file exists and is non-trivial", () => {
+        // The smallest core aggregator, vamsAppFeatures.ts, is a single enum under 1 KB.
         for (const relative of coreFiles) {
-            expect(read(relative).length).toBeGreaterThan(1000);
+            expect(read(relative).length).toBeGreaterThan(500);
         }
     });
 });

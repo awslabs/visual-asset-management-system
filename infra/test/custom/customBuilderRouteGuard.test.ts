@@ -13,8 +13,9 @@
  * compares the anonymous routes before and after the call, which also catches a descriptor replaced
  * in the registry's private array.
  *
- * A returned feature switch is never a core VAMS_APP_FEATURES value: core switches are enabled by the
- * core stack alone, and publishing one from the fork would tell the web a core feature is deployed.
+ * A returned feature switch is never a core VAMS_APP_FEATURES or add-on ADDON_APP_FEATURES value:
+ * those switches are enabled by the core and add-on stacks alone, and publishing one from the fork
+ * would tell the web a core feature or an add-on is deployed.
  *
  * The fork-owned customResources.ts is mocked here so the checks are exercised without editing it.
  */
@@ -23,6 +24,7 @@ import * as cdk from "aws-cdk-lib";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { Construct } from "constructs";
+import { ADDON_APP_FEATURES } from "../../common/addonAppFeatures";
 import { VAMS_APP_FEATURES } from "../../common/vamsAppFeatures";
 import {
     ApiRouteDescriptor,
@@ -174,20 +176,24 @@ describe("custom feature switches", () => {
             buildWith(() => ({
                 enabledFeatures: ["CUSTOM_PROBE", VAMS_APP_FEATURES.ALLOWUNSAFEEVAL],
             }))
-        ).toThrow(/returned core VAMS_APP_FEATURES values.*ALLOWUNSAFEEVAL/);
+        ).toThrow(
+            /returned core VAMS_APP_FEATURES or add-on ADDON_APP_FEATURES values.*ALLOWUNSAFEEVAL/
+        );
     });
 
-    test("every core value is refused", () => {
-        for (const core of Object.values(VAMS_APP_FEATURES)) {
-            expect(() => buildWith(() => ({ enabledFeatures: [core] }))).toThrow(
-                new RegExp(`core VAMS_APP_FEATURES values.*${core}`)
+    test("every core and add-on value is refused", () => {
+        const shipped = [...Object.values(VAMS_APP_FEATURES), ...Object.values(ADDON_APP_FEATURES)];
+        expect(shipped).toContain(ADDON_APP_FEATURES.PHYSNA_ADDON);
+        for (const value of shipped) {
+            expect(() => buildWith(() => ({ enabledFeatures: [value] }))).toThrow(
+                new RegExp(`ADDON_APP_FEATURES values.*${value}`)
             );
             mockedBuild.mockReset();
         }
     });
 
     test("a custom value is published", () => {
-        // Control: a value outside VAMS_APP_FEATURES passes the same check.
+        // Control: a value outside VAMS_APP_FEATURES and ADDON_APP_FEATURES passes the same check.
         const { stack } = buildWith(() => ({ enabledFeatures: ["CUSTOM_PROBE"] }));
         expect(stack.enabledFeatures).toEqual(["CUSTOM_PROBE"]);
     });

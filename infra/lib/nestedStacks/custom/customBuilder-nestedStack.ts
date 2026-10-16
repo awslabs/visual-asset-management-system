@@ -6,6 +6,7 @@
 import * as cloudformation from "aws-cdk-lib/aws-cloudformation";
 import { NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import { ADDON_APP_FEATURES } from "../../../common/addonAppFeatures";
 import { VAMS_APP_FEATURES } from "../../../common/vamsAppFeatures";
 import { RouteRegistry } from "../apiLambda/apiRouteRegistry";
 import { buildCustomResources } from "./customResources";
@@ -54,14 +55,21 @@ export class CustomBuilderNestedStack extends NestedStack {
             );
         }
 
-        // A core switch is enabled by the core stack only; publishing one from here would tell the
-        // web that a core feature is deployed when it is not.
-        const coreFeatures = new Set<string>(Object.values(VAMS_APP_FEATURES));
-        const coreReturned = this.enabledFeatures.filter((feature) => coreFeatures.has(feature));
-        if (coreReturned.length > 0) {
+        // A core switch is enabled by the core stack only, and an add-on switch by the add-on stack
+        // only; publishing one from here would tell the web that a core feature or an add-on is
+        // deployed when it is not.
+        const shippedFeatures = new Set<string>([
+            ...Object.values(VAMS_APP_FEATURES),
+            ...Object.values(ADDON_APP_FEATURES),
+        ]);
+        const shippedReturned = this.enabledFeatures.filter((feature) =>
+            shippedFeatures.has(feature)
+        );
+        if (shippedReturned.length > 0) {
             throw new Error(
-                `CustomBuilder: buildCustomResources() returned core VAMS_APP_FEATURES values; ` +
-                    `declare custom switches in CUSTOM_APP_FEATURES: ${coreReturned.join(", ")}`
+                `CustomBuilder: buildCustomResources() returned core VAMS_APP_FEATURES or add-on ` +
+                    `ADDON_APP_FEATURES values; declare custom switches in CUSTOM_APP_FEATURES: ` +
+                    `${shippedReturned.join(", ")}`
             );
         }
     }
