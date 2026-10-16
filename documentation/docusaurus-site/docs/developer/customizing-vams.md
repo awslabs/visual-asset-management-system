@@ -1,18 +1,43 @@
 # Extending VAMS in a Fork
 
-An organization that runs its own fork of VAMS can add net-new APIs, Lambda handlers, web pages, navigation entries, constants, CDK resources, AWS Systems Manager (SSM) resource names, CLI commands, MCP tools and viewer plugins without editing any file that upstream VAMS edits. Every place VAMS aggregates a list is composed from a core part, an add-on part and a **custom** part. Upstream ships each custom file empty and does not modify it again, so merging an upstream release (`git merge upstream/development` or a release tag) does not conflict with the fork's additions.
+An organization that runs its own fork of VAMS can add net-new APIs, Lambda handlers, web pages, navigation entries, constants, permission object types, upload deny-list entries, CDK resources, AWS Systems Manager (SSM) resource names, CLI commands, MCP tools and viewer plugins without editing any file that upstream VAMS edits. Every place VAMS aggregates a list is composed from a core part, an add-on part and a **custom** part. Upstream ships each custom file empty and does not modify it again, so merging an upstream release (`git merge upstream/development` or a release tag) does not conflict with the fork's additions.
 
 The extension points cover **additions**. Changing the behavior of an existing page, API or stack still means editing core files and resolving those changes on upgrade; see [Known limits](#known-limits).
 
 ## How the Extension Points Work
 
-Each aggregated list has three parts:
+Each aggregated list has three parts, merged in the order core, add-on, custom:
 
-| Part   | Owner    | Example                                                     |
-| ------ | -------- | ----------------------------------------------------------- |
-| Core   | upstream | `backend/backend/common/apiRoutes.py`, edited every release |
-| Add-on | upstream | `backend/backend/common/addonApiRoutes.py` (Physna, Garnet) |
-| Custom | the fork | `backend/backend/custom/customApiRoutes.py`, shipped empty  |
+| Part   | Owner    | Holds                                                                                          |
+| ------ | -------- | ---------------------------------------------------------------------------------------------- |
+| Core   | upstream | the core entries, edited every release                                                         |
+| Add-on | upstream | the optional add-ons (Physna, Garnet) and the licensed viewers (VNTANA, VEERUM), one file each |
+| Custom | the fork | the fork's entries; shipped empty                                                              |
+
+The files, list by list:
+
+| List                                                          | Core                                                        | Add-on                                               | Custom                                             |
+| ------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------- |
+| API routes                                                    | `backend/backend/common/apiRoutes.py`                       | `backend/backend/common/addonApiRoutes.py`           | `backend/backend/custom/customApiRoutes.py`        |
+| Lambda handlers                                               | `backend/backend/handlers/<domain>/`                        | `backend/backend/handlers/addon/`                    | `backend/backend/handlers/custom/`                 |
+| Request and response models                                   | `backend/backend/models/`                                   | `backend/backend/models/addon/`                      | `backend/backend/models/custom/`                   |
+| Permission object types, constraint fields, upload deny lists | `backend/backend/common/constants.py`                       | `backend/backend/common/addonConstants.py`           | `backend/backend/custom/customConstants.py`        |
+| Resource-name keys (backend)                                  | `backend/backend/common/resourceNames.py`                   | `backend/backend/common/addonResourceNames.py`       | `backend/backend/custom/customResourceNames.py`    |
+| Resource-name keys (CDK)                                      | `infra/common/resourceParamKeys.ts`                         | `infra/common/addonResourceParamKeys.ts`             | `infra/common/customResourceParamKeys.ts`          |
+| Feature switches (CDK)                                        | `infra/common/vamsAppFeatures.ts`                           | `infra/common/addonAppFeatures.ts`                   | `infra/common/customAppFeatures.ts`                |
+| Feature switches (CLI)                                        | `tools/VamsCLI/vamscli/constants.py`                        | `tools/VamsCLI/vamscli/addon_constants.py`           | `tools/VamsCLI/vamscli/custom_constants.py`        |
+| CDK resources                                                 | the core nested stacks                                      | `infra/lib/nestedStacks/addon/` (`AddonBuilder`)     | `infra/lib/nestedStacks/custom/customResources.ts` |
+| Content Security Policy sources                               | `infra/lib/helper/security.ts`                              | `infra/lib/nestedStacks/addon/addonCsp.ts`           | `infra/config/csp/cspAdditionalConfig.json`        |
+| Read-only role default routes                                 | `.../auth/constructs/dynamodb-authdefaults-ro-construct.ts` | `infra/lib/nestedStacks/addon/addonDefaultRoutes.ts` | none; a fork writes its own constraints            |
+| Web routes                                                    | `web/src/routes.tsx`                                        | `web/src/addons/addonRoutes.tsx`                     | `web/src/custom/customRoutes.tsx`                  |
+| Web navigation                                                | `web/src/layout/Navigation.tsx`                             | `web/src/addons/addonNavigation.ts`                  | `web/src/custom/customNavigation.ts`               |
+| Web API calls                                                 | `web/src/services/APIService.ts`                            | `web/src/services/addons/`                           | `web/src/custom/services/`                         |
+| Viewer configuration                                          | `web/src/visualizerPlugin/config/viewerConfig.json`         | `.../config/addonViewerConfig.json`                  | `.../config/customViewerConfig.json`               |
+| Viewer manifest                                               | `web/src/visualizerPlugin/viewers/manifest.ts`              | `.../viewers/addonManifest.ts`                       | `.../viewers/custom/customManifest.ts`             |
+| CLI commands                                                  | `tools/VamsCLI/vamscli/commands/`                           | none                                                 | `tools/VamsCLI/vamscli/commands/custom/`           |
+| MCP tools                                                     | `tools/VamsMCP/vams_mcp/server.py`                          | none                                                 | `tools/VamsMCP/vams_mcp/custom_tools.py`           |
+
+The add-on files hold upstream code that most deployments do not run, so it is kept off the path of every core change. The licensed VNTANA and VEERUM viewers are add-on viewers: they ship disabled in `addonViewerConfig.json`, and a deployment with a license enables one by setting `"enabled": true` on its entry there. Their plugin directories (`viewers/VntanaViewerPlugin/`, `viewers/VeerumViewerPlugin/`), their install scripts in `web/customInstalls/vntana/` and `web/customInstalls/veerum/`, and their `postinstall` entries are unchanged.
 
 The core file splices the custom part in with a single line that does not change between releases. Every custom file opens with the same header:
 
@@ -28,24 +53,26 @@ The custom files are for **net-new** additions. Two other kinds of fork-friendly
 
 ## Extension Points
 
-| Layer                    | Fork-owned file(s)                                                                                    | Spliced in by                                                                            |
-| ------------------------ | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| API routes               | `backend/backend/custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                                         | `common/apiRoutes.py` → `ALL_API_ROUTES` and the `GET /auth/routes/api` listing          |
-| Handlers and models      | `backend/backend/handlers/custom/`, `backend/backend/models/custom/`                                  | the shared `backend/backend` Lambda code asset (`handlers.custom.<name>.lambda_handler`) |
-| Resource names (backend) | `backend/backend/custom/customResourceNames.py` (`CustomResourceKeys`)                                | resolved with `get_resource_name()`, like a core key                                     |
-| Resource names (CDK)     | `infra/common/customResourceParamKeys.ts` (`CUSTOM_RESOURCE_PARAM_KEYS`)                              | published with `publishCustomResourceName()`                                             |
-| CDK resources            | `infra/lib/nestedStacks/custom/customResources.ts` (`buildCustomResources`)                           | the `CustomBuilder` nested stack in `core-stack.ts`                                      |
-| Feature switches         | `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`)                                           | returned by `buildCustomResources()` and published through `/api/secure-config`          |
-| Fork settings            | `infra/config/custom/customConfig.json`                                                               | read with `loadCustomConfig()` in `customResources.ts`                                   |
-| Web routes               | `web/src/custom/customRoutes.tsx` (`customRouteTable`)                                                | `web/src/routes.tsx` (same permission filter as core routes)                             |
-| Web navigation           | `web/src/custom/customNavigation.ts` (`customNavSections`)                                            | `web/src/layout/Navigation.tsx` (same permission filter)                                 |
-| Web services and pages   | `web/src/custom/services/`, `web/src/custom/pages/`, `web/src/custom/customFeatures.ts`               | imported by the fork's routes and pages                                                  |
-| CLI commands             | `tools/VamsCLI/vamscli/commands/custom/` (`CUSTOM_COMMANDS`)                                          | `vamscli/main.py` registers each on the root command group                               |
-| CLI constants            | `tools/VamsCLI/vamscli/custom_constants.py` (`API_*`, `FEATURE_CUSTOM_*`)                             | imported by the fork's client methods and commands                                       |
-| CLI API client           | `tools/VamsCLI/vamscli/utils/custom_api_client.py` (`CustomAPIClientMixin`)                           | inherited by `APIClient`                                                                 |
-| MCP tools                | `tools/VamsMCP/vams_mcp/custom_tools.py` (`register_custom_tools`)                                    | called once by `vams_mcp/server.py`, after the upstream tools                            |
-| Viewer plugins           | `web/src/visualizerPlugin/config/customViewerConfig.json`, `web/src/visualizerPlugin/viewers/custom/` | merged by `visualizerPlugin/core/viewerSources.ts`                                       |
-| Viewer install steps     | `web/customInstalls/custom/customInstall.js`                                                          | the last step of the `postinstall` script in `web/package.json`                          |
+| Layer                    | Fork-owned file(s)                                                                                                          | Spliced in by                                                                            |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| API routes               | `backend/backend/custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                                                               | `common/apiRoutes.py` → `ALL_API_ROUTES` and the `GET /auth/routes/api` listing          |
+| Handlers and models      | `backend/backend/handlers/custom/`, `backend/backend/models/custom/`                                                        | the shared `backend/backend` Lambda code asset (`handlers.custom.<name>.lambda_handler`) |
+| Resource names (backend) | `backend/backend/custom/customResourceNames.py` (`CustomResourceKeys`)                                                      | resolved with `get_resource_name()`, like a core key                                     |
+| Resource names (CDK)     | `infra/common/customResourceParamKeys.ts` (`CUSTOM_RESOURCE_PARAM_KEYS`)                                                    | published with `publishCustomResourceName()`                                             |
+| Permission object types  | `backend/backend/custom/customConstants.py` (`CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS`, `CUSTOM_PERMISSION_CONSTRAINT_FIELDS`) | merged by `common/constants.py`; see [Permission object types](#permission-object-types) |
+| Upload deny lists        | `backend/backend/custom/customConstants.py` (`CUSTOM_UNALLOWED_FILE_EXTENSIONS`, `CUSTOM_UNALLOWED_MIME_TYPES`)             | merged by `common/constants.py`; see [Upload deny lists](#upload-deny-lists)             |
+| CDK resources            | `infra/lib/nestedStacks/custom/customResources.ts` (`buildCustomResources`)                                                 | the `CustomBuilder` nested stack in `core-stack.ts`                                      |
+| Feature switches         | `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`)                                                                 | returned by `buildCustomResources()` and published through `/api/secure-config`          |
+| Fork settings            | `infra/config/custom/customConfig.json`                                                                                     | read with `loadCustomConfig()` in `customResources.ts`                                   |
+| Web routes               | `web/src/custom/customRoutes.tsx` (`customRouteTable`)                                                                      | `web/src/routes.tsx` (same permission filter as core routes)                             |
+| Web navigation           | `web/src/custom/customNavigation.ts` (`customNavSections`)                                                                  | `web/src/layout/Navigation.tsx` (same permission filter)                                 |
+| Web services and pages   | `web/src/custom/services/`, `web/src/custom/pages/`, `web/src/custom/customFeatures.ts`                                     | imported by the fork's routes and pages                                                  |
+| CLI commands             | `tools/VamsCLI/vamscli/commands/custom/` (`CUSTOM_COMMANDS`)                                                                | `vamscli/main.py` registers each on the root command group                               |
+| CLI constants            | `tools/VamsCLI/vamscli/custom_constants.py` (`API_*`, `FEATURE_CUSTOM_*`)                                                   | imported by the fork's client methods and commands                                       |
+| CLI API client           | `tools/VamsCLI/vamscli/utils/custom_api_client.py` (`CustomAPIClientMixin`)                                                 | inherited by `APIClient`                                                                 |
+| MCP tools                | `tools/VamsMCP/vams_mcp/custom_tools.py` (`register_custom_tools`)                                                          | called once by `vams_mcp/server.py`, after the upstream tools                            |
+| Viewer plugins           | `web/src/visualizerPlugin/config/customViewerConfig.json`, `web/src/visualizerPlugin/viewers/custom/`                       | merged by `visualizerPlugin/core/viewerSources.ts`                                       |
+| Viewer install steps     | `web/customInstalls/custom/customInstall.js`                                                                                | the last step of the `postinstall` script in `web/package.json`                          |
 
 The custom CDK resources live in a nested stack of their own, so they count against neither API builder stack's 500-resource and 1 MB template limits. The stack holds a permissionless `AWS::CloudFormation::WaitConditionHandle` placeholder so it is valid while it holds nothing else, deploys after the storage and resource-name stacks, and deploys before the REST API stack, which renders custom routes with the core ones.
 
@@ -65,17 +92,19 @@ These conventions make it unlikely that a later upstream addition uses the same 
 
 An **exact duplicate** of a core name never replaces the core entry, whatever the convention:
 
-| Fork addition                 | When core already uses the name                                                                                                         |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| API route (method and path)   | Synthesis fails (`RouteRegistry.register`)                                                                                              |
-| SSM resource-name key         | Synthesis fails (`publishCustomResourceName`)                                                                                           |
-| Feature switch value          | Synthesis fails when `buildCustomResources()` returns a `VAMS_APP_FEATURES` value (`CustomBuilderNestedStack`)                          |
-| Viewer ID                     | The custom viewer is skipped in the browser with a console error                                                                        |
-| CLI command name              | `vamscli` fails at startup with an error that names the command (`vamscli/main.py`)                                                     |
-| `CustomAPIClientMixin` method | The core `APIClient` method is called instead, because it comes first in the MRO; `tools/VamsCLI/tests/test_custom_api_client.py` fails |
-| MCP tool name                 | The MCP SDK keeps the first registration (the core tool), logs `Tool already exists: <name>` and does not register the custom tool      |
+| Fork addition                              | When core already uses the name                                                                                                         |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| API route (method and path)                | Synthesis fails (`RouteRegistry.register`)                                                                                              |
+| SSM resource-name key                      | Synthesis fails (`publishCustomResourceName`), also for a key the add-on lane declares                                                  |
+| Feature switch value                       | Synthesis fails when `buildCustomResources()` returns a `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value (`CustomBuilderNestedStack`)  |
+| Permission object type or constraint field | Every backend Lambda fails at import with an error that names `custom/customConstants.py` and the entry (`common/constants.py`)         |
+| Upload deny-list entry                     | The same import error: an entry can be added, never repeated                                                                            |
+| Viewer ID                                  | The custom viewer is skipped in the browser with a console error                                                                        |
+| CLI command name                           | `vamscli` fails at startup with an error that names the command (`vamscli/main.py`)                                                     |
+| `CustomAPIClientMixin` method              | The core `APIClient` method is called instead, because it comes first in the MRO; `tools/VamsCLI/tests/test_custom_api_client.py` fails |
+| MCP tool name                              | The MCP SDK keeps the first registration (the core tool), logs `Tool already exists: <name>` and does not register the custom tool      |
 
-A later upstream release that adds a name the fork already uses therefore surfaces when the fork merges it: synthesis, the CLI or a test fails, and the fork renames its entry. MCP tools are the exception, where the log line on the server's standard error is the only signal.
+A later upstream release that adds a name the fork already uses therefore surfaces when the fork merges it: synthesis, the backend tests, the CLI or a test fails, and the fork renames its entry. MCP tools are the exception, where the log line on the server's standard error is the only signal.
 
 ### Secrets
 
@@ -86,11 +115,56 @@ Custom resource-name parameters and `infra/config/custom/customConfig.json` hold
 -   Only the Lambda that uses the secret is granted read on it (`secret.grantRead(fn)`). It receives the secret's ARN in an environment variable, or its name through `publishCustomResourceName()`, and reads the value at runtime with `GetSecretValue`.
 -   A secret without automatic rotation carries an `AwsSolutions-SMG4` suppression whose reason says who rotates it (root `CLAUDE.md` Rule 4).
 
+### Permission object types
+
+A fork's handlers authorize their own entities with a **permission object type** of their own, registered in `backend/backend/custom/customConstants.py` (the add-ons use `common/addonConstants.py` the same way). Tier 2 then decides on the entity's own attributes instead of borrowing a core type: before it evaluates a constraint, the enforcer keeps only the attributes registered for the object's type, so an attribute that is not registered never reaches a constraint. The worked example registers a `widget` type authorized on `databaseId` and `widgetId`:
+
+```python
+CUSTOM_PERMISSION_CONSTRAINT_FIELDS = {
+    "widgetId": "",  # "" for one value; [] for a list of values
+}
+
+CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS = {
+    "widget": {
+        "label": "Widget",
+        "fields": [
+            {"label": "Database ID", "value": "databaseId"},
+            {"label": "Widget ID", "value": "widgetId"},
+        ],
+    },
+}
+```
+
+`common/constants.py` merges these into `ALLOWED_CONSTRAINT_OBJECT_TYPES`, `CONSTRAINT_OBJECT_TYPE_FIELDS` and `PERMISSION_CONSTRAINT_FIELDS` at import, so constraint validation, template import, the enforcer and the `GET /auth/constraints/permissionObjects` listing all see the new type. The constraint editor and `vamscli role constraint permission-objects` read that listing, so the type appears there with no web or CLI change. The rules, each checked at import:
+
+| Rule             | Detail                                                                                                                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Names            | Type and field names match `^[A-Za-z][A-Za-z0-9]{1,63}$`: letters and digits only, so a name can neither take the reserved `<x>__<y>` shape nor leave its place in a rule expression                                |
+| Reserved names   | `object__type`, `route__path` and `method` cannot be declared or listed; a field cannot be a Python keyword or a name the rule evaluator resolves to something else (`keys`, `get`, `items`, `format` and the like) |
+| No redefinition  | A type or field cannot repeat a core one, and the add-on and custom lanes cannot repeat each other                                                                                                                  |
+| Field references | Each field a type lists is a core field (such as `databaseId`) or one declared in a lane                                                                                                                            |
+| Sample values    | `""` for a single value; `[]` for a list of values, which, like `tags`, accepts only the `is_one_of` and `is_not_one_of` operators                                                                                  |
+
+A rule that is broken fails the import of `common/constants.py`, so every backend Lambda and the backend unit tests fail with an error that names the lane file and the entry. Nothing is skipped or loosened at runtime.
+
+**An extension type grants nothing until a constraint allows it, the admin role included.** VAMS seeds constraints only for the core types, so after deployment no role, admin or otherwise, can reach a widget. The fork writes the constraints that grant access, as in [step 4 of the example](#4-permissions). This follows two authorization principles: access decisions live in policy data that administrators manage, not in code a fork hard-codes, and nothing is granted by default.
+
+### Upload deny lists
+
+The add-on and custom lanes can block more file types on upload, download, streaming and workflow output; they cannot unblock one. `common/constants.py` appends each lane's entries to the core `UNALLOWED_FILE_EXTENSION_LIST` and `UNALLOWED_MIME_LIST`. In `backend/backend/custom/customConstants.py`:
+
+```python
+CUSTOM_UNALLOWED_FILE_EXTENSIONS = [".xyz"]
+CUSTOM_UNALLOWED_MIME_TYPES = ["application/x-example"]
+```
+
+An extension is lower-case with one leading dot (`.xyz`, not `xyz`, `.XYZ` or `.tar.gz`), and a MIME type is lower-case with no parameters. An entry that is malformed or repeats a core entry, or one the other lane adds, fails the import with an error naming the file and the entry. The core entries always stay in the merged list, so there is no way for a lane to remove one.
+
 ## Worked Example: Widgets
 
-This example adds a "widgets" feature end to end: a widget table, an SSM resource name, a database-scoped API (`GET` and `POST /custom/database/{databaseId}/widgets`), a handler with both authorization tiers, a feature switch, a web page with a navigation entry, a CLI command group, an MCP tool and a viewer plugin for `.widget` files. Every file it touches is a fork extension point. The example is documentation only; upstream does not ship it. It is kept to the extension points: a production handler would first confirm that the database exists, as the core handlers do, and would remove its widget rows when the database is deleted.
+This example adds a "widgets" feature end to end: a widget table, an SSM resource name, a database-scoped API (`GET` and `POST /custom/database/{databaseId}/widgets`, `GET /custom/database/{databaseId}/widgets/{widgetId}`), a `widget` permission object type, a handler with both authorization tiers, a feature switch, a web page with a navigation entry, a CLI command group, an MCP tool and a viewer plugin for `.widget` files. Every file it touches is a fork extension point. The example is documentation only; upstream does not ship it. It is kept to the extension points: a production handler would first confirm that the database exists, as the core handlers do, and would remove its widget rows when the database is deleted.
 
-### 1. Route, resource name, feature switch and settings
+### 1. Route, resource name, object type, feature switch and settings
 
 ```python
 # backend/backend/custom/customApiRoutes.py
@@ -99,8 +173,32 @@ from typing import Tuple
 from common.apiRouteTypes import GET, POST, ApiRoute
 
 API_CUSTOM_WIDGETS = ApiRoute("/custom/database/{databaseId}/widgets", (GET, POST), "custom")
+API_CUSTOM_WIDGET = ApiRoute("/custom/database/{databaseId}/widgets/{widgetId}", (GET,), "custom")
 
-CUSTOM_ROUTES: Tuple[ApiRoute, ...] = (API_CUSTOM_WIDGETS,)
+CUSTOM_ROUTES: Tuple[ApiRoute, ...] = (API_CUSTOM_WIDGETS, API_CUSTOM_WIDGET)
+```
+
+```python
+# backend/backend/custom/customConstants.py
+from typing import Dict, List, Union
+
+CUSTOM_PERMISSION_CONSTRAINT_FIELDS: Dict[str, Union[str, List[str]]] = {
+    "widgetId": "",
+}
+
+CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS: Dict[str, dict] = {
+    "widget": {
+        "label": "Widget",
+        "fields": [
+            {"label": "Database ID", "value": "databaseId"},
+            {"label": "Widget ID", "value": "widgetId"},
+        ],
+    },
+}
+
+CUSTOM_UNALLOWED_FILE_EXTENSIONS: List[str] = []
+
+CUSTOM_UNALLOWED_MIME_TYPES: List[str] = []
 ```
 
 ```python
@@ -136,7 +234,7 @@ The fork's settings go in `infra/config/custom/customConfig.json`:
 }
 ```
 
-The environment variable in the `ResourceParamKey` is the break-glass override that tests and local tools use, as for core keys. The resource-name parameter and `customConfig.json` hold names and settings, never a secret value; see [Secrets](#secrets).
+The environment variable in the `ResourceParamKey` is the break-glass override that tests and local tools use, as for core keys. The resource-name parameter and `customConfig.json` hold names and settings, never a secret value; see [Secrets](#secrets). The `widget` type and its `widgetId` field follow the [permission object type](#permission-object-types) rules; the deny lists stay empty.
 
 ### 2. Model and handler
 
@@ -144,8 +242,10 @@ The environment variable in the `ResourceParamKey` is the break-glass override t
 # backend/backend/models/custom/widgets.py
 from typing import Optional
 
-from aws_lambda_powertools.utilities.parser import BaseModel
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from pydantic import Field
+
+from common.validators import validate
 
 # A page must fit the 6 MB Lambda response limit; tokens are a base64 LastEvaluatedKey.
 MAX_WIDGET_LIST_PAGE_SIZE = 1000
@@ -159,11 +259,23 @@ class ListWidgetsRequestModel(BaseModel, extra="ignore"):
 
 
 class CreateWidgetRequestModel(BaseModel, extra="ignore"):
+    # Optional: the caller may choose the new widget's UUID; otherwise the handler generates one.
+    widgetId: Optional[str] = None
     widgetName: str = Field(min_length=1, max_length=256)
     description: Optional[str] = Field(default=None, max_length=256)
+
+    @root_validator
+    def validate_widget_id(cls, values):
+        if values.get("widgetId") is not None:
+            (valid, message) = validate(
+                {"widgetId": {"value": values["widgetId"], "validator": "UUID"}}
+            )
+            if not valid:
+                raise ValueError(message)
+        return values
 ```
 
-The handler follows the gold-standard shape (`backend/HANDLER_TEMPLATES.md`): resource names resolved at module level, Tier 1 (`enforceAPI`) with the fail-closed pre-set flag, dispatch on the `ApiRoute` constant, and Tier 2 on the existing `database` entity type. The listing pages externally like the core list endpoints: it reads `maxItems`, `pageSize` and `startingToken`, returns one page, and returns a base64 `NextToken` while more widgets remain. Caller errors are a 400, as in the core handlers: a `startingToken` that is not this table's key for the database in the path, and a POST body that is missing or not JSON.
+The handler follows the gold-standard shape (`backend/HANDLER_TEMPLATES.md`): resource names resolved at module level, Tier 1 (`enforceAPI`) with the fail-closed pre-set flag, dispatch on the `ApiRoute` constants, and Tier 2 on the `widget` object type. The single-widget read and the create are single-resource checks, each with the token guard as its own statement before `enforce()`; the listing filters each widget through `enforce()` and appends it only when that passes. Because `widgetId` is now an authorization attribute, the handler accepts it only as a UUID wherever it comes in: the path, the request body and the pagination token. The listing pages externally like the core list endpoints: it reads `maxItems`, `pageSize` and `startingToken`, returns one page, and returns a base64 `NextToken` while more widgets remain. Caller errors are a 400, as in the core handlers: a `widgetId` that is not a UUID, a `startingToken` that is not this table's key for the database in the path, and a POST body that is missing or not JSON.
 
 ```python
 # backend/backend/handlers/custom/widgetService.py
@@ -174,17 +286,24 @@ import uuid
 import boto3
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 
 from common.dynamodb import validate_pagination_info
 from common.validators import validate
-from custom.customApiRoutes import API_CUSTOM_WIDGETS
+from custom.customApiRoutes import API_CUSTOM_WIDGET, API_CUSTOM_WIDGETS
 from custom.customResourceNames import CustomResourceKeys
 from common.resourceNames import get_resource_name
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
-from models.common import authorization_error, internal_error, success, validation_error
+from models.common import (
+    authorization_error,
+    general_error,
+    internal_error,
+    success,
+    validation_error,
+)
 from models.custom.widgets import CreateWidgetRequestModel, ListWidgetsRequestModel
 
 logger = safeLogger(service_name="CustomWidgetService")
@@ -197,12 +316,17 @@ except Exception:
     raise
 
 
-def _database_allowed(claims_and_roles, database_id, method):
-    # Tier 2: widgets belong to a database, so the database entity decides access.
-    if len(claims_and_roles["tokens"]) == 0:
-        return False
-    database = {"databaseId": database_id, "object__type": "database"}
-    return CasbinEnforcer(claims_and_roles).enforce(database, method)
+def _widget_object(database_id, widget_id):
+    # The authorization object of the `widget` type registered in custom/customConstants.py.
+    return {"databaseId": database_id, "widgetId": widget_id, "object__type": "widget"}
+
+
+def _widget_id(value):
+    # A widget ID is a UUID wherever it comes in; normalized to the lower-case form uuid4() stores.
+    if not isinstance(value, str):
+        return None
+    (valid, _message) = validate({"widgetId": {"value": value, "validator": "UUID"}})
+    return value.lower() if valid else None
 
 
 def _start_key_from_token(token, database_id):
@@ -214,14 +338,15 @@ def _start_key_from_token(token, database_id):
         return None
     if not isinstance(start_key, dict) or set(start_key) != {"databaseId", "widgetId"}:
         return None
-    if not all(isinstance(value, str) and value for value in start_key.values()):
-        return None
     if start_key["databaseId"] != database_id:
         return None
-    return start_key
+    widget_id = _widget_id(start_key["widgetId"])
+    if widget_id is None:
+        return None
+    return {"databaseId": database_id, "widgetId": widget_id}
 
 
-def _list_widgets(event, database_id):
+def _list_widgets(event, claims_and_roles, database_id):
     query_parameters = event.get("queryStringParameters") or {}
     validate_pagination_info(query_parameters, 100)
     request = parse(query_parameters, model=ListWidgetsRequestModel)
@@ -235,7 +360,14 @@ def _list_widgets(event, database_id):
             return validation_error(body={"message": "Invalid pagination token"}, event=event)
         query_kwargs["ExclusiveStartKey"] = start_key
     response = widget_table.query(**query_kwargs)
-    result = {"Items": response.get("Items", [])}
+    # Tier 2, list filtering: a widget is returned only when enforce() allows it.
+    enforcer = CasbinEnforcer(claims_and_roles)
+    allowed = []
+    for item in response.get("Items", []):
+        widget = _widget_object(database_id, item["widgetId"])
+        if len(claims_and_roles["tokens"]) > 0 and enforcer.enforce(widget, "GET"):
+            allowed.append(item)
+    result = {"Items": allowed}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = base64.b64encode(
             json.dumps(response["LastEvaluatedKey"]).encode("utf-8")
@@ -243,7 +375,22 @@ def _list_widgets(event, database_id):
     return success(body=result)
 
 
-def _create_widget(event, database_id):
+def _get_widget(event, claims_and_roles, database_id):
+    widget_id = _widget_id((event.get("pathParameters") or {}).get("widgetId"))
+    if widget_id is None:
+        return validation_error(body={"message": "widgetId must be a UUID"}, event=event)
+    # Tier 2, single resource: decided on the path before the table is read.
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not CasbinEnforcer(claims_and_roles).enforce(_widget_object(database_id, widget_id), "GET"):
+        return authorization_error()
+    item = widget_table.get_item(Key={"databaseId": database_id, "widgetId": widget_id}).get("Item")
+    if item is None:
+        return general_error(status_code=404, body={"message": "Widget not found"}, event=event)
+    return success(body=item)
+
+
+def _create_widget(event, claims_and_roles, database_id):
     # Required event body, parsed the way the core handlers do: a missing or non-JSON body is a 400.
     body = event.get("body")
     if not body:
@@ -258,8 +405,19 @@ def _create_widget(event, database_id):
         logger.error("Request body is not a string or dict")
         return validation_error(body={"message": "Request body cannot be parsed"}, event=event)
     request = parse(body, model=CreateWidgetRequestModel)
-    item = {"databaseId": database_id, "widgetId": str(uuid.uuid4()), **request.dict()}
-    widget_table.put_item(Item=item)
+    widget_id = request.widgetId.lower() if request.widgetId else str(uuid.uuid4())
+    # Tier 2, single resource: the new widget, as the constraint will see it.
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not CasbinEnforcer(claims_and_roles).enforce(_widget_object(database_id, widget_id), "POST"):
+        return authorization_error()
+    item = {**request.dict(exclude={"widgetId"}), "databaseId": database_id, "widgetId": widget_id}
+    try:
+        widget_table.put_item(Item=item, ConditionExpression="attribute_not_exists(widgetId)")
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return validation_error(body={"message": "Widget already exists"}, event=event)
+        raise
     return success(body=item)
 
 
@@ -275,20 +433,20 @@ def lambda_handler(event, context):
 
         path = event["requestContext"]["http"]["path"]
         method = event["requestContext"]["http"]["method"]
-        if not API_CUSTOM_WIDGETS.matches(path):
+        if not (API_CUSTOM_WIDGETS.matches(path) or API_CUSTOM_WIDGET.matches(path)):
             return validation_error(body={"message": "Unknown route"}, event=event)
 
-        database_id = event.get("pathParameters", {}).get("databaseId", "")
+        database_id = (event.get("pathParameters") or {}).get("databaseId", "")
         (valid, message) = validate({"databaseId": {"value": database_id, "validator": "ID"}})
         if not valid:
             return validation_error(body={"message": message}, event=event)
-        if not _database_allowed(claims_and_roles, database_id, method):
-            return authorization_error()
 
-        if method == "GET":
-            return _list_widgets(event, database_id)
-        if method == "POST":
-            return _create_widget(event, database_id)
+        if API_CUSTOM_WIDGET.matches(path) and method == "GET":
+            return _get_widget(event, claims_and_roles, database_id)
+        if API_CUSTOM_WIDGETS.matches(path) and method == "GET":
+            return _list_widgets(event, claims_and_roles, database_id)
+        if API_CUSTOM_WIDGETS.matches(path) and method == "POST":
+            return _create_widget(event, claims_and_roles, database_id)
         return validation_error(body={"message": "Method not allowed"}, event=event)
     except ValidationError:
         return validation_error(body={"message": "Invalid widget request"}, event=event)
@@ -384,6 +542,11 @@ export function buildCustomResources(
             registry: props.registry,
         });
     }
+    attachFunctionToApi(scope, widgetService, {
+        routePath: "/custom/database/{databaseId}/widgets/{widgetId}",
+        method: HttpMethod.GET,
+        registry: props.registry,
+    });
 
     return { enabledFeatures: [CUSTOM_APP_FEATURES.CUSTOM_WIDGETS] };
 }
@@ -393,37 +556,84 @@ export function buildCustomResources(
 
 ### 4. Permissions
 
-A custom route is served behind the VAMS custom authorizer like every core route, and the handler enforces both tiers. The `admin` role's default constraints match every route, so administrators reach the new API and page as soon as they deploy. Every other role, including the default read-only role, is denied until a constraint allows it. A role is granted the API and the page with two Tier 1 constraints. The permission constraints, in the format of the [permission templates](../concepts/permissions-model.md), are:
+A custom route is served behind the VAMS custom authorizer like every core route, and the handler enforces both tiers. Tier 1 is the `api` and `web` object types: the `admin` role's default constraints match every route, so administrators reach the API and the page as soon as they deploy, and every other role, including the default read-only role, is denied them until a constraint allows it. Tier 2 is the `widget` type, which no seeded constraint covers. **Until a `widget` constraint exists, no role can read or create a widget, the admin role included**: the listing returns no widgets, and the single-widget read and the create return 403.
+
+The template below grants one role `GET` and `POST` on the widgets of one database: the `widget` constraint for Tier 2, and Tier 1 constraints for the API routes under `/custom/database/{databaseId}/widgets` and for the widget page. It is in the format of the [permission templates](permissions.md#permission-templates). It stays with the fork rather than in `documentation/permissionsTemplates/`, because a core deployment has no `widget` type to import it into. Save it as `widget-users.json`:
 
 ```json
-[
-    {
-        "name": "widget-users-api",
-        "description": "Allow the widget API",
-        "objectType": "api",
-        "criteriaAnd": [],
-        "criteriaOr": [
-            { "field": "route__path", "operator": "starts_with", "value": "/custom/database/" }
-        ],
-        "groupPermissions": [
-            { "action": "GET", "type": "allow" },
-            { "action": "POST", "type": "allow" }
-        ]
+{
+    "metadata": {
+        "name": "Widget Users",
+        "description": "Read and create the widgets of one database.",
+        "version": "1.0"
     },
-    {
-        "name": "widget-users-web",
-        "description": "Allow the widget page",
-        "objectType": "web",
-        "criteriaAnd": [],
-        "criteriaOr": [
-            { "field": "route__path", "operator": "starts_with", "value": "/custom/widgets" }
-        ],
-        "groupPermissions": [{ "action": "GET", "type": "allow" }]
-    }
-]
+    "variables": [
+        {
+            "name": "DATABASE_ID",
+            "required": true,
+            "description": "The database whose widgets the role may use"
+        },
+        {
+            "name": "ROLE_NAME",
+            "required": true,
+            "description": "The role to attach these constraints to"
+        }
+    ],
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-widgets",
+            "description": "Read and create the widgets of {{DATABASE_ID}}",
+            "objectType": "widget",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-widgets-api",
+            "description": "Allow the widget API for {{DATABASE_ID}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/custom/database/{{DATABASE_ID}}/widgets"
+                }
+            ],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-widgets-web",
+            "description": "Allow the widget page",
+            "objectType": "web",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/custom/widgets" }
+            ],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        }
+    ]
+}
 ```
 
-Tier 2 is the role's existing `database` constraints, because the handler checks the database the widgets belong to.
+Preview the import, then run it without `--dry-run`:
+
+```bash
+python tools/permissionsSetup/apply_template.py \
+    --template widget-users.json \
+    --role-name widget-users \
+    --variables '{"DATABASE_ID": "my-project-db"}' --dry-run
+```
+
+To give administrators widget access, apply the same template with `--role-name admin`; the existing role is kept and the constraints are added to it. A `widgetId` criterion narrows a constraint to one widget, for example `{ "field": "widgetId", "operator": "equals", "value": "<widget UUID>" }`.
 
 ### 5. Web page, route and navigation
 
@@ -682,24 +892,26 @@ The viewer contract and the remaining configuration fields are in [Viewer Plugin
 
 The repository's own tests apply to the custom files once a fork fills them in, so the fork inherits the drift guards the core files have:
 
-| Test                                                   | What it checks for custom content                                                                                   |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `infra/test/api/apiRouteBackendCdkParity.test.ts`      | every route registered with API Gateway is declared in a backend route list, and every declared route is registered |
-| `infra/test/storage/resourceNamesMirror.test.ts`       | `customResourceParamKeys.ts` and `customResourceNames.py` declare the same keys, none equal to a core key           |
-| `backend/tests/common/test_custom_extension_points.py` | custom routes reach `ALL_API_ROUTES` and repeat no core method and path; custom resource keys repeat no core key    |
-| `tools/VamsCLI/tests/test_constants_contract.py`       | each custom CLI path is a declared route; each `FEATURE_*` in `custom_constants.py` matches `customAppFeatures.ts`  |
-| `tools/VamsCLI/tests/test_custom_api_client.py`        | no `CustomAPIClientMixin` method has the name of an `APIClient` method                                              |
-| `web/src/visualizerPlugin/core/viewerSources.test.ts`  | every registered viewer, custom ones included, resolves its component through a manifest                            |
+| Test                                                     | What it checks for custom content                                                                                    |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `infra/test/api/apiRouteBackendCdkParity.test.ts`        | every route registered with API Gateway is declared in a backend route list, and every declared route is registered  |
+| `infra/test/storage/resourceNamesMirror.test.ts`         | `customResourceParamKeys.ts` and `customResourceNames.py` declare the same keys, none equal to a core or add-on key  |
+| `backend/tests/common/test_custom_extension_points.py`   | custom routes reach `ALL_API_ROUTES` and repeat no core method and path; custom resource keys repeat no core key     |
+| `backend/tests/common/test_constants_extension_lanes.py` | the rules for object types, constraint fields and deny-list entries, applied to whatever the lanes hold              |
+| `infra/test/addon/appFeatureLanes.test.ts`               | no feature-switch value is declared in two of `vamsAppFeatures.ts`, `addonAppFeatures.ts` and `customAppFeatures.ts` |
+| `tools/VamsCLI/tests/test_constants_contract.py`         | each custom CLI path is a declared route; each `FEATURE_*` in `custom_constants.py` matches `customAppFeatures.ts`   |
+| `tools/VamsCLI/tests/test_custom_api_client.py`          | no `CustomAPIClientMixin` method has the name of an `APIClient` method                                               |
+| `web/src/visualizerPlugin/core/viewerSources.test.ts`    | every registered viewer, custom ones included, resolves its component through a manifest                             |
 
 The parity test synthesizes with the committed `infra/config/custom/customConfig.json`, so every route declared in `customApiRoutes.py` must be registered by `buildCustomResources()` under that file, or `no backend route is unregistered` fails. A fork that gates its routes on a setting in `customConfig.json`, as the worked example does with `widgets.enabled`, commits that setting enabled.
 
-The other checks run at every synthesis or CLI start rather than in a test. `CustomBuilderNestedStack` fails synthesis when `buildCustomResources()` registers a route marked `allowAnonymous`, makes an earlier route anonymous, or returns a `VAMS_APP_FEATURES` value; `RouteRegistry` stores each route as a frozen copy, so an earlier route cannot be edited at all. `publishCustomResourceName()` fails on a key equal to a core key, and `vamscli` refuses a custom command whose name is already registered.
+The other checks run at every synthesis, backend import or CLI start rather than in a test. `CustomBuilderNestedStack` fails synthesis when `buildCustomResources()` registers a route marked `allowAnonymous`, makes an earlier route anonymous, or returns a `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value; `RouteRegistry` stores each route as a frozen copy, so an earlier route cannot be edited at all. `publishCustomResourceName()` fails on a key equal to a core key or an add-on key. `common/constants.py` refuses a constants-lane entry that breaks a rule when it is imported, so every backend Lambda and the backend tests fail with the file and entry named. `vamscli` refuses a custom command whose name is already registered.
 
 ## Known Limits
 
 -   **Existing behavior is not overridable through these seams.** A change to a core page, API, stack or default is a core edit.
--   **No new Casbin object types.** Custom routes use the `api` and `web` object types for Tier 1 and the existing entity types (such as `database` and `asset`) for Tier 2.
--   **Non-admin roles are denied until a constraint allows them.** The default read-only role does not see custom routes or pages; this is fail-closed by design.
+-   **Extension object types start with no access.** A permission object type a fork or add-on registers is covered by no seeded constraint, so every role, admin included, is denied on it until the fork adds constraints (see [Permission object types](#permission-object-types)). The default constraints are not extended automatically.
+-   **Non-admin roles are denied custom routes until a constraint allows them.** The default read-only role does not see custom routes or pages; this is fail-closed by design.
 -   **No anonymous custom routes.** An unauthenticated route also needs an entry in the authorizer's ignored-path list, which stays core-owned so that no fork file can widen the unauthenticated surface. A fork that needs one edits the core list and resolves that change on upgrade.
 -   **Shared API Gateway quota.** Custom routes add to the same REST API, so they count against its resources-per-API quota (300 by default, adjustable).
 -   **Shared dependency files.** npm and Python dependencies a fork adds still go in the shared `package.json` and `pyproject.toml` files, which can conflict on upgrade.
