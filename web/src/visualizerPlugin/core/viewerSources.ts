@@ -33,9 +33,6 @@ export function mergeViewerConfigs(
     const ids = new Set(shipped.map((viewer) => viewer.id));
     for (const viewer of custom) {
         if (ids.has(viewer.id)) {
-            // Console logging only: a % specifier in the interpolated value can at most garble this
-            // one log line; nothing is executed, stored or returned from it.
-            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(
                 `Custom viewer ${viewer.id} skipped: its id is already registered by another viewer`
             );
