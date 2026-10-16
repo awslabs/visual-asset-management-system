@@ -9,6 +9,7 @@ import { SideNavigation, Spinner } from "@cloudscape-design/components";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
+import { addonNavSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
@@ -177,7 +178,9 @@ export function Navigation({
             text: "User",
             items: [{ type: "link", text: "API Key Management", href: "#/auth/api-keys/" }],
         },
-        // Sections a fork adds (custom/customNavigation.ts, shipped empty)
+        // Sections the add-ons add (addons/addonNavigation.ts), then a fork's
+        // (custom/customNavigation.ts, shipped empty)
+        ...addonNavSections,
         ...customNavSections,
     ];
 

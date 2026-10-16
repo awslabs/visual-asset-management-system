@@ -65,10 +65,9 @@ const CORE_AND_EMPTY_ADDON_FILES: Array<{ core: string; addon: string }> = [
         core: "backend/backend/common/resourceNames.py",
         addon: "backend/backend/common/addonResourceNames.py",
     },
+    { core: "web/src/routes.tsx", addon: "web/src/addons/addonRoutes.tsx" },
+    { core: "web/src/layout/Navigation.tsx", addon: "web/src/addons/addonNavigation.ts" },
 ];
-
-/** Core aggregators with no add-on counterpart today; an add-on entry still belongs elsewhere. */
-const CORE_ONLY_FILES = ["web/src/routes.tsx", "web/src/layout/Navigation.tsx"];
 
 /** The add-ons VAMS ships (`infra/lib/nestedStacks/addon/<name>`). */
 const ADDON_NAME = /physna|garnet/i;
@@ -79,7 +78,6 @@ describe("core aggregator files name no add-on", () => {
     const coreFiles = [
         ...CORE_AND_ADDON_FILES.map((pair) => pair.core),
         ...CORE_AND_EMPTY_ADDON_FILES.map((pair) => pair.core),
-        ...CORE_ONLY_FILES,
     ];
 
     test.each(coreFiles)("%s", (relative) => {

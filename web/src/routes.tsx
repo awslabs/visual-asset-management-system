@@ -16,6 +16,7 @@ import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
+import { addonRouteTable } from "./addons/addonRoutes";
 import { customRouteTable } from "./custom/customRoutes";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
@@ -219,8 +220,12 @@ const coreRouteTable: RouteOption[] = [
     },
 ];
 
-/** Core routes plus the routes a fork adds (custom/customRoutes.tsx, shipped empty). */
-export const routeTable: RouteOption[] = [...coreRouteTable, ...customRouteTable];
+/** Core routes, then the add-ons' (addons/addonRoutes.tsx), then a fork's (custom/customRoutes.tsx). */
+export const routeTable: RouteOption[] = [
+    ...coreRouteTable,
+    ...addonRouteTable,
+    ...customRouteTable,
+];
 
 interface AppRoutesProps {
     navigationOpen: boolean;
