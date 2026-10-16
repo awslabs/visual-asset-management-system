@@ -163,7 +163,7 @@ class CreateWidgetRequestModel(BaseModel, extra="ignore"):
     description: Optional[str] = Field(default=None, max_length=256)
 ```
 
-The handler follows the gold-standard shape (`backend/HANDLER_TEMPLATES.md`): resource names resolved at module level, Tier 1 (`enforceAPI`) with the fail-closed pre-set flag, dispatch on the `ApiRoute` constant, and Tier 2 on the existing `database` entity type. The listing pages externally like the core list endpoints: it reads `maxItems`, `pageSize` and `startingToken`, returns one page, and returns a base64 `NextToken` while more widgets remain.
+The handler follows the gold-standard shape (`backend/HANDLER_TEMPLATES.md`): resource names resolved at module level, Tier 1 (`enforceAPI`) with the fail-closed pre-set flag, dispatch on the `ApiRoute` constant, and Tier 2 on the existing `database` entity type. The listing pages externally like the core list endpoints: it reads `maxItems`, `pageSize` and `startingToken`, returns one page, and returns a base64 `NextToken` while more widgets remain. A `startingToken` that is not this table's key for the database in the path is a 400, as in the core handlers.
 
 ```python
 # backend/backend/handlers/custom/widgetService.py
@@ -205,6 +205,22 @@ def _database_allowed(claims_and_roles, database_id, method):
     return CasbinEnforcer(claims_and_roles).enforce(database, method)
 
 
+def _start_key_from_token(token, database_id):
+    # A token is a base64 LastEvaluatedKey of this query: the table's two key attributes, for the
+    # database in the path. Anything else is the caller's error and is not sent to DynamoDB.
+    try:
+        start_key = json.loads(base64.b64decode(token).decode("utf-8"))
+    except ValueError:
+        return None
+    if not isinstance(start_key, dict) or set(start_key) != {"databaseId", "widgetId"}:
+        return None
+    if not all(isinstance(value, str) and value for value in start_key.values()):
+        return None
+    if start_key["databaseId"] != database_id:
+        return None
+    return start_key
+
+
 def _list_widgets(event, database_id):
     query_parameters = event.get("queryStringParameters") or {}
     validate_pagination_info(query_parameters, 100)
@@ -214,12 +230,10 @@ def _list_widgets(event, database_id):
         "Limit": request.pageSize,
     }
     if request.startingToken:
-        try:
-            query_kwargs["ExclusiveStartKey"] = json.loads(
-                base64.b64decode(request.startingToken).decode("utf-8")
-            )
-        except ValueError:
+        start_key = _start_key_from_token(request.startingToken, database_id)
+        if start_key is None:
             return validation_error(body={"message": "Invalid pagination token"}, event=event)
+        query_kwargs["ExclusiveStartKey"] = start_key
     response = widget_table.query(**query_kwargs)
     result = {"Items": response.get("Items", [])}
     if "LastEvaluatedKey" in response:
