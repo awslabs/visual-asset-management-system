@@ -221,6 +221,8 @@ _FBX_TEXTURE = re.compile(
     rb"[A-Za-z0-9_ .:/\\\-()]{1,512}\.(?:png|jpe?g|tga|bmp|tiff?|dds|exr|hdr|psd|gif)",
     re.IGNORECASE)
 _FBX_SCAN_LIMIT = 512 * 1024 ** 2
+# An LCC scene description is a small JSON document; more than this is not one.
+_JSON_SCAN_LIMIT = 64 * 1024 ** 2
 
 
 def _fbx_references(path: str) -> List[tuple]:
@@ -248,11 +250,30 @@ def _fbx_references(path: str) -> List[tuple]:
     return references
 
 
+# The data files an XGRIDS LCC scene (``meta.lcc``) reads beside it; ``environment`` may name another.
+_LCC_SIBLINGS = ("data.bin", "index.bin", "shcoef.bin", "environment.bin")
+
+
+def _lcc_references(path: str) -> List[tuple]:
+    """The data files beside an LCC scene description, plus the environment file its JSON names."""
+    references = [(name, False) for name in _LCC_SIBLINGS]
+    try:
+        with open(path, "rb") as handle:
+            meta = json.loads(handle.read(_JSON_SCAN_LIMIT).decode("utf-8", errors="replace"))
+        environment = meta.get("environment") if isinstance(meta, dict) else None
+        if isinstance(environment, str) and (environment, False) not in references:
+            references.append((environment, False))
+    except (OSError, ValueError):
+        pass
+    return references
+
+
 _COLLECTORS: Dict[str, Callable[[str], List[tuple]]] = {
     ".gltf": _gltf_references,
     ".obj": _obj_references,
     ".mtl": _mtl_references,
     ".fbx": _fbx_references,
+    ".lcc": _lcc_references,
     **{ext: _usd_references for ext in _USD_LAYER_EXTENSIONS},
 }
 

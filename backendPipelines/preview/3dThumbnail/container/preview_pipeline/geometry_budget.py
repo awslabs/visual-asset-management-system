@@ -35,8 +35,10 @@ def limit_points(pv_data, max_points: int, seed: int = 42):
         return pv_data
     keep = np.sort(np.random.default_rng(seed).choice(pv_data.n_points, size=max_points, replace=False))
     sampled = pv.PolyData(np.asarray(pv_data.points)[keep])
-    if "RGB" in pv_data.point_data:
-        sampled.point_data["RGB"] = np.asarray(pv_data.point_data["RGB"])[keep]
+    for name in pv_data.point_data.keys():
+        values = np.asarray(pv_data.point_data[name])
+        if len(values) == pv_data.n_points:
+            sampled.point_data[name] = values[keep]
     logger.info(f"Point budget: sampled {max_points:,} of {pv_data.n_points:,} points")
     return sampled
 

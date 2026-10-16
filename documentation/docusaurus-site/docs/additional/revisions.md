@@ -81,6 +81,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Multi-scan E57 and PTX thumbnails show every scan** — Every scan of an E57 or PTX file is read and placed by its pose or transform, E57 colours are scaled from their declared range, and a PTX file's later scans are no longer misread. (issue #467)
 -   **3D preview thumbnails of multi-GB inputs stay within memory and disk** — The container sizes its point and triangle budgets to the task's memory and vCPUs, decimates oversized meshes, reads E57 scan by scan and streams PTX from Amazon S3, downloads in parallel after checking free disk (instead of a fixed 100 GB limit), and logs the input size, compute tier, budgets and each phase's duration. (issue #470)
 -   **STEP thumbnails keep colours and assembly placement** — STEP assemblies render with every part in place and with their part, component and face colours; free surfaces beside solids are drawn, and tessellation detail is relative to the model's size, so a part modelled in metres is no longer faceted and one in millimetres no longer over-tessellated. (issue #468)
+-   **Gaussian splat thumbnails on the CPU** — 3D Gaussian splats (`.ply`, `.compressed.ply`, `.spz`, `.sog`, `.splat`, `.ksplat`, `.lcc`) get a coloured, transparent-background preview without a GPU; a `.ply` is recognised as splats, a mesh or a point cloud from its header, and faint floaters no longer cloud the image. (issue #469)
 
 **Other changes:**
 

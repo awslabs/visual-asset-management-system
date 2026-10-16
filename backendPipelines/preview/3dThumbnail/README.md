@@ -18,12 +18,13 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 
 ## Supported Formats
 
-| Category    | Extensions                                | Handler              |
-| :---------- | :---------------------------------------- | :------------------- |
-| Mesh        | .ply, .stl, .obj, .glb, .gltf, .fbx, .drc | trimesh              |
-| Point Cloud | .las, .laz, .e57, .ptx, .pcd              | laspy, pye57, open3d |
-| CAD         | .stp, .step                               | cadquery             |
-| USD         | .usd, .usda, .usdc, .usdz                 | usd-core (pxr)       |
+| Category       | Extensions                                                      | Handler                                          |
+| :------------- | :-------------------------------------------------------------- | :----------------------------------------------- |
+| Mesh           | .ply, .stl, .obj, .glb, .gltf, .fbx, .drc                       | trimesh                                          |
+| Point Cloud    | .las, .laz, .e57, .ptx, .pcd                                    | laspy, pye57, open3d                             |
+| CAD            | .stp, .step                                                     | cadquery                                         |
+| USD            | .usd, .usda, .usdc, .usdz                                       | usd-core (pxr)                                   |
+| Gaussian splat | .ply (3DGS), .compressed.ply, .spz, .sog, .splat, .ksplat, .lcc | numpy; PlayCanvas splat-transform for conversion |
 
 FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
 
@@ -195,6 +196,14 @@ Points are rendered as colored spheres using per-point RGB colors when available
 ### CAD (STEP) Handling
 
 A STEP file is read through XCAF (`STEPCAFControl_Reader`), so assemblies keep their structure, every component is placed by the transforms of all assembly levels above it, and a colour set on a part, a component or a face colours that face's triangles (the nearest colour wins; uncoloured faces in a coloured file get the default mesh colour). Every face is tessellated, including free surfaces beside solids. The linear deflection is 0.2% of the model's bounding-box diagonal and the angular deflection 0.35 rad, so detail does not depend on the model's units. STEP carries no up-axis metadata, so the model is rendered as authored. A file XCAF cannot read falls back to `STEPControl_Reader` (geometry only).
+
+### Gaussian Splat Handling
+
+A `.ply` is routed by its header: a vertex element with `f_dc_0`, `opacity`, `scale_*` and `rot_*` is a 3D Gaussian Splatting scene, a PLY with faces is a mesh, and a vertex-only PLY is a point cloud (sampled to the point budget). A 3DGS PLY is read through a memory map; `.splat` (32-byte records) is decoded in numpy; `.spz`, `.sog`, `.ksplat`, `.lcc` and `.compressed.ply` are converted to a 3DGS PLY on the CPU with the PlayCanvas [`splat-transform`](https://github.com/playcanvas/splat-transform) CLI (MIT), pinned by `container/splat-transform/package-lock.json` and installed with `npm ci` on a pinned, SHA-256-verified Node.js 22 release. An `.lcc` scene's `data.bin`, `index.bin`, `shcoef.bin` and `environment.bin` are fetched beside it as referenced files.
+
+Each splat is drawn as a point Gaussian: colour from the degree-0 spherical harmonic (`0.5 + 0.28209479 × f_dc`), opacity `sigmoid(opacity)`, footprint twice `exp(max(scale_*))`. Splats with opacity below 0.2 are dropped and the rest are sampled to the splat budget (1 million per vCPU, at most 5 million) with probability proportional to opacity, so the percentile framing of point data follows the opaque content. Scenes are turned 180° about Z, the original 3DGS (COLMAP) Y-down convention to Y-up, as SuperSplat does. View-dependent colour and anisotropic splat shapes are not rendered.
+
+`splat-transform` runs `.mjs` generator scripts and downloads `http(s)://` inputs, so the container only ever passes it a local regular file inside the job's work directory whose name ends in an allowlisted splat extension, starts it with an argument list (no shell), `--gpu cpu` and a minimal environment, and stops it after 30 minutes.
 
 ### USD Stage Handling
 

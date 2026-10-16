@@ -36,6 +36,20 @@ FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietar
 
 STEP files are read with their assembly placements and their part, component and face colours. Tessellation detail is relative to the model's size, so a part renders with the same detail in millimetres or metres, and free surfaces beside solids are kept.
 
+### Gaussian Splat Formats
+
+| Format             | Extension         | Library                          |
+| ------------------ | ----------------- | -------------------------------- |
+| 3DGS PLY           | `.ply`            | built-in (routed by PLY header)  |
+| Compressed PLY     | `.compressed.ply` | PlayCanvas splat-transform (CPU) |
+| SPZ                | `.spz`            | PlayCanvas splat-transform (CPU) |
+| SOG                | `.sog`            | PlayCanvas splat-transform (CPU) |
+| antimatter15 splat | `.splat`          | built-in                         |
+| KSPLAT             | `.ksplat`         | PlayCanvas splat-transform (CPU) |
+| XGRIDS LCC         | `.lcc`            | PlayCanvas splat-transform (CPU) |
+
+Splats render on the CPU as point Gaussians coloured by their base (degree-0) spherical-harmonic colour; faint splats are dropped and the rest are sampled by opacity to the splat budget. A `.ply` with faces still renders as a mesh and a vertex-only `.ply` as a point cloud.
+
 ### USD Formats
 
 | Format | Extension | Library       |
@@ -195,6 +209,7 @@ The container image is built during CDK deployment from `backendPipelines/previe
 -   **Open3D** -- PCD point clouds and the FBX fallback (MIT license)
 -   **CadQuery** -- STEP/STP CAD file support (LGPL license)
 -   **OpenUSD (pxr)** -- USD format support (Modified Apache 2.0 license)
+-   **PlayCanvas splat-transform** -- Gaussian splat format conversion on the CPU (MIT license), run on **Node.js** 22 (MIT license)
 -   **Xvfb** -- Virtual framebuffer for headless rendering
 
 ## How It Works

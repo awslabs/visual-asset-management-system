@@ -240,9 +240,22 @@ This software includes third party software subject to the following copyrights:
 | imageio  | >=2.36.0 | BSD-2-Clause        | GIF/image I/O                                     |
 | Pillow   | >=11.0.0 | HPND                | Image optimization and processing                 |
 | DracoPy  | >=1.4.0  | Apache-2.0          | Draco compressed mesh (.drc) support              |
-| open3d   | >=0.19.0 | MIT                 | PCD and FARO point cloud format support           |
+| open3d   | >=0.19.0 | MIT                 | PCD point clouds and the FBX fallback             |
 | usd-core | >=24.8   | Modified Apache-2.0 | OpenUSD Python bindings for USD/USDA/USDC/USDZ    |
 | boto3    | >=1.35.0 | Apache-2.0          | AWS SDK for Python                                |
+
+**Preview 3D Thumbnail Pipeline Gaussian Splat Conversion (Node.js, pinned by `container/splat-transform/package-lock.json`)**
+
+| Name                        | Version       | License      | Notes                                                                              |
+| :-------------------------- | :------------ | :----------- | :--------------------------------------------------------------------------------- |
+| Node.js                     | 22.23.3       | MIT          | Runtime for splat-transform; release tarball verified by SHA-256 at image build    |
+| @playcanvas/splat-transform | 3.10.1        | MIT          | Converts .spz, .sog, .ksplat, .lcc and .compressed.ply splats to PLY on the CPU    |
+| playcanvas                  | 2.23.3        | MIT          | Engine library used by splat-transform                                             |
+| webgpu                      | 0.6.2         | MIT          | Dawn bindings required by splat-transform (bundled Dawn: BSD-3-Clause); GPU unused |
+| @adobe/spz                  | 0.2.3         | ISC          | SPZ codec used by splat-transform                                                  |
+| @webgpu/types               | 0.1.74        | BSD-3-Clause | Type definitions (transitive)                                                      |
+| @types/webxr                | 0.5.24        | MIT          | Type definitions (transitive)                                                      |
+| debug / ms                  | 4.4.3 / 2.1.3 | MIT          | Transitive dependencies of webgpu                                                  |
 
 ### Coordinate Transform Pipeline
 

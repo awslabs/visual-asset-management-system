@@ -51,6 +51,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # OCC/cadquery STEP file support
     libglib2.0-0 \
     libxkbcommon0 \
+    # Unpacks the pinned Node.js release tarball
+    xz-utils \
     # Cleanup
     && rm -rf /var/lib/apt/lists/*
 
@@ -61,6 +63,30 @@ WORKDIR /app
 # ones included, by version and hash, so two builds of the same commit install the same packages.
 COPY requirements.lock /app/requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r /app/requirements.lock
+
+# Node.js for the PlayCanvas splat-transform CLI, which converts .spz/.sog/.ksplat/.lcc/.compressed.ply
+# Gaussian splats to PLY on the CPU. The package needs Node.js >= 22 and Debian trixie ships 20, so a
+# pinned release tarball is used, verified against its published SHA-256 in the same RUN.
+ARG NODE_VERSION=22.23.3
+ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
+RUN python3 -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/tmp/node.tar.xz')" \
+        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" && \
+    echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c - && \
+    mkdir -p /opt/node && \
+    tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 --no-same-owner && \
+    rm -rf /tmp/node.tar.xz /opt/node/include /opt/node/share/doc /opt/node/share/man
+
+# splat-transform at the exact version and dependency tree of the committed package-lock.json
+# (npm ci fails when the two disagree). Install scripts are skipped: the CLI's only native dependency
+# (webgpu, Dawn) ships prebuilt binaries and is used for GPU work this pipeline never requests; the
+# other platforms' binaries are removed.
+COPY splat-transform/package.json splat-transform/package-lock.json /opt/splat-transform/
+RUN cd /opt/splat-transform && \
+    PATH=/opt/node/bin:$PATH npm ci --omit=dev --ignore-scripts --no-audit --no-fund && \
+    rm -rf node_modules/webgpu/dist/darwin-universal node_modules/webgpu/dist/linux-arm64 \
+           node_modules/webgpu/dist/win32-arm64 node_modules/webgpu/dist/win32-x64 && \
+    /opt/node/bin/node node_modules/@playcanvas/splat-transform/bin/cli.mjs --version && \
+    chmod -R a+rX /opt/node /opt/splat-transform
 
 # Copy pipeline code
 COPY ./preview_pipeline /app/preview_pipeline

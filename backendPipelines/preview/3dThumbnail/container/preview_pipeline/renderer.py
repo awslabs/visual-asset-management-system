@@ -39,6 +39,10 @@ _CAMERA_ELEVATION_DEG = 25
 # i * 360 / n_frames degrees, so the middle frame of an orbit shows the back of the model.
 STILL_VIEW_DEG = 45.0
 
+# Point-Gaussian footprint of a splat relative to its largest scale (exp(max(scale_*))): about two
+# standard deviations, where a 3DGS splat's contribution fades out.
+SPLAT_SCALE_FACTOR = 2.0
+
 
 def is_point_cloud(pv_data) -> bool:
     """True when the data has no surface cells: no cells at all, or vertex cells only.
@@ -219,6 +223,19 @@ def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
 def _add_point_cloud(plotter: pv.Plotter, pv_data: pv.PolyData):
     """Add a point cloud to the plotter with appropriate styling."""
     has_colors = "RGB" in pv_data.point_data
+
+    if "splat_radius" in pv_data.point_data:
+        # Gaussian splats: one screen-aligned Gaussian per splat, sized by the splat's largest scale.
+        actor = plotter.add_mesh(
+            pv_data,
+            scalars="RGB",
+            rgb=True,
+            style="points_gaussian",
+            emissive=False,
+        )
+        actor.mapper.SetScaleArray("splat_radius")
+        actor.mapper.SetScaleFactor(SPLAT_SCALE_FACTOR)
+        return
 
     if has_colors:
         plotter.add_mesh(

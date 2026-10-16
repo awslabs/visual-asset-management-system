@@ -24,7 +24,8 @@ from .utils.logging import get_logger
 from .utils import s3_utils as s3
 from .utils import manifest_io
 from .utils import image_utils
-from .format_handlers import mesh_handler, pointcloud_handler, cad_handler, usd_handler
+from .format_handlers import mesh_handler, pointcloud_handler, cad_handler, usd_handler, splat_handler
+from .format_handlers import ply_header
 from . import dependencies
 from . import geometry_budget
 from . import renderer
@@ -344,9 +345,11 @@ def _run_preview_stage(
         logger.exception(f"Failed to load file: {e}")
         return _error_response(stage, f"Failed to load 3D file ({ext}): {str(e)}")
 
-    # Detect and normalize up-axis to Y-up for consistent rendering
+    # Detect and normalize up-axis to Y-up for consistent rendering (splat scenes are oriented by
+    # their handler)
     try:
-        pv_data = _normalize_up_axis(pv_data, ext)
+        if not splat_handler.is_splat(pv_data):
+            pv_data = _normalize_up_axis(pv_data, ext)
     except Exception as e:
         logger.warning(f"Up-axis normalization failed, rendering with original orientation: {e}")
 
@@ -506,8 +509,29 @@ def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
     Load a 3D file with the appropriate format handler.
     Returns a PyVista PolyData object. ``asset_root`` is the local directory the input's referenced
     files were fetched into (USD reads textures only from inside it). ``budgets`` bounds the points
-    a point-cloud reader keeps.
+    a point-cloud reader and the splats a splat reader keep.
+
+    A ``.ply`` is routed by its header: Gaussian splats, a mesh, or a point cloud (vertices only). A
+    ``.compressed.ply`` is a compressed splat scene.
     """
+    max_points = budgets.points if budgets is not None else pointcloud_handler.MAX_POINTS_FOR_RENDER
+    max_splats = budgets.splats if budgets is not None else splat_handler.DEFAULT_MAX_SPLATS
+    work_dir = asset_root or os.path.dirname(os.path.abspath(file_path))
+    if ext == ".ply":
+        if splat_handler.is_compressed_ply(file_path):
+            return splat_handler.load(file_path, max_splats=max_splats, work_dir=work_dir)
+        kind = ply_header.ply_kind(file_path)
+        logger.info(f"PLY content: {kind}")
+        if kind == ply_header.KIND_SPLAT:
+            return splat_handler.load_ply(file_path, max_splats)
+        if kind == ply_header.KIND_COMPRESSED_SPLAT:
+            return splat_handler.load(file_path, max_splats=max_splats, work_dir=work_dir,
+                                      compressed_ply=True)
+        if kind == ply_header.KIND_POINTS:
+            return pointcloud_handler.load_ply_points(file_path, max_points)
+        return mesh_handler.load(file_path)
+    if splat_handler.can_handle(ext):
+        return splat_handler.load(file_path, max_splats=max_splats, work_dir=work_dir)
     if mesh_handler.can_handle(ext):
         return mesh_handler.load(file_path)
     elif pointcloud_handler.can_handle(ext):
@@ -532,6 +556,7 @@ def _all_extensions():
         | pointcloud_handler.SUPPORTED_EXTENSIONS
         | cad_handler.SUPPORTED_EXTENSIONS
         | usd_handler.SUPPORTED_EXTENSIONS
+        | splat_handler.SUPPORTED_EXTENSIONS
     )
 
 

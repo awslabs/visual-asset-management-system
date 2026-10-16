@@ -34,7 +34,12 @@
                 "*.usd",
                 "*.usda",
                 "*.usdc",
-                "*.usdz"
+                "*.usdz",
+                "*.spz",
+                "*.sog",
+                "*.splat",
+                "*.ksplat",
+                "*.lcc"
             ],
             "exclude": []
         },
@@ -67,7 +72,12 @@
                     "*.usd",
                     "*.usda",
                     "*.usdc",
-                    "*.usdz"
+                    "*.usdz",
+                    "*.spz",
+                    "*.sog",
+                    "*.splat",
+                    "*.ksplat",
+                    "*.lcc"
                 ],
                 "exclude": []
             },

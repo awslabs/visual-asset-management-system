@@ -69,6 +69,72 @@ def load_stream(chunks, ext: str, max_points: int = MAX_POINTS_FOR_RENDER) -> pv
     return _to_pyvista(points, colors, max_points)
 
 
+def load_ply_points(file_path: str, max_points: int = MAX_POINTS_FOR_RENDER) -> pv.PolyData:
+    """A vertex-only PLY (a point cloud), sampled to ``max_points``.
+
+    A binary PLY is memory-mapped and sampled by row index, so only the kept rows are read. An ASCII
+    PLY is streamed after its header in blocks of lines through the reservoir sampler.
+    """
+    from . import ply_header
+
+    header = ply_header.read_header(file_path)
+    vertex = header.element("vertex")
+    if vertex is None or vertex.count == 0:
+        raise ValueError("PLY file has no vertices")
+    names = [name for name, _ in vertex.properties]
+    colour_names = next((group for group in (("red", "green", "blue"), ("r", "g", "b"),
+                                             ("diffuse_red", "diffuse_green", "diffuse_blue"))
+                         if set(group) <= set(names)), None)
+    if header.format != "ascii":
+        rows = ply_header.vertex_memmap(file_path, header)
+        if len(rows) > max_points:
+            keep = np.sort(np.random.default_rng(42).choice(len(rows), size=max_points, replace=False))
+            rows = rows[keep]
+        points = np.column_stack([rows["x"], rows["y"], rows["z"]]).astype(np.float64)
+        colors = None
+        if colour_names:
+            values = np.column_stack([rows[name] for name in colour_names])
+            colors = _to_uint8_colours(values)
+        return _to_pyvista(points, colors, max_points)
+
+    if header.elements[0] is not vertex or vertex.has_list:
+        raise ValueError("ASCII PLY point cloud must start with a list-free vertex element")
+    columns = [names.index(axis) for axis in ("x", "y", "z")]
+    colour_columns = [names.index(name) for name in colour_names] if colour_names else None
+    sampler = point_streams.ReservoirSampler(max_points)
+    chunks = point_streams.iter_file_bytes(file_path)
+    lines = point_streams.LineReader(chunks)
+    # Skip the header, then read exactly the vertex element's lines.
+    while True:
+        line = lines.next_line()
+        if line is None or line.strip() == b"end_header":
+            break
+    remaining = vertex.count
+    while remaining > 0:
+        block, count = lines.take_lines(min(remaining, point_streams.TEXT_CHUNK_LINES))
+        if count == 0:
+            break
+        remaining -= count
+        values = point_streams.parse_number_block(block, len(names))
+        if not len(values):
+            continue
+        colors = _to_uint8_colours(values[:, colour_columns]) if colour_columns else None
+        sampler.add(values[:, columns], colors)
+    points, colors = sampler.result()
+    if not len(points):
+        raise ValueError("No points found in PLY file")
+    return _to_pyvista(points, colors, max_points)
+
+
+def _to_uint8_colours(values) -> np.ndarray:
+    values = np.asarray(values)
+    if values.dtype.kind == "f":
+        peak = 1.0 if float(np.nanmax(values, initial=0.0)) <= 1.0 else 255.0
+        return np.clip(values / peak * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    peak = 65535.0 if int(values.max(initial=0)) > 255 else 255.0
+    return np.clip(values.astype(np.float64) / peak * 255.0 + 0.5, 0, 255).astype(np.uint8)
+
+
 def _to_pyvista(points, colors, max_points: int) -> pv.PolyData:
     if len(points) > max_points:
         logger.info(f"Downsampling from {len(points)} to {max_points} points")
