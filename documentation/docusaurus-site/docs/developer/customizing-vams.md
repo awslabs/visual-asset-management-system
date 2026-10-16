@@ -63,7 +63,28 @@ These conventions make it unlikely that a later upstream addition uses the same 
 | MCP tool names         | `custom_*`                                |
 | Viewer plugin IDs      | `custom-*`                                |
 
-An **exact duplicate** of a core name is rejected whatever the convention: a method and path already registered with API Gateway fail synthesis (`RouteRegistry.register`), a resource-name key equal to a core key fails synthesis (`publishCustomResourceName`), and a viewer ID equal to a core or add-on viewer ID is skipped in the browser with a console error.
+An **exact duplicate** of a core name never replaces the core entry, whatever the convention:
+
+| Fork addition                 | When core already uses the name                                                                                                         |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| API route (method and path)   | Synthesis fails (`RouteRegistry.register`)                                                                                              |
+| SSM resource-name key         | Synthesis fails (`publishCustomResourceName`)                                                                                           |
+| Feature switch value          | Synthesis fails when `buildCustomResources()` returns a `VAMS_APP_FEATURES` value (`CustomBuilderNestedStack`)                          |
+| Viewer ID                     | The custom viewer is skipped in the browser with a console error                                                                        |
+| CLI command name              | `vamscli` fails at startup with an error that names the command (`vamscli/main.py`)                                                     |
+| `CustomAPIClientMixin` method | The core `APIClient` method is called instead, because it comes first in the MRO; `tools/VamsCLI/tests/test_custom_api_client.py` fails |
+| MCP tool name                 | The MCP SDK keeps the first registration (the core tool), logs `Tool already exists: <name>` and does not register the custom tool      |
+
+A later upstream release that adds a name the fork already uses therefore surfaces when the fork merges it: synthesis, the CLI or a test fails, and the fork renames its entry. MCP tools are the exception, where the log line on the server's standard error is the only signal.
+
+### Secrets
+
+Custom resource-name parameters and `infra/config/custom/customConfig.json` hold names and non-sensitive settings only. `publishCustomResourceName()` writes a plain SSM `String` parameter under a prefix that VAMS Lambdas are granted read access to, and `customConfig.json` is committed with the fork and read at synthesis, so a value taken from it lands in the synthesized template. A password, API key or token in either is readable well beyond the code that uses it. A secret goes in AWS Secrets Manager instead:
+
+-   `buildCustomResources()` creates the secret without a value, encrypted with the deployment's AWS KMS key **imported by ARN** (`kms.Key.fromKeyArn`), as `infra/CLAUDE.md` describes for `secretsmanager.Secret`. Passing the key object instead makes the storage stack and the custom stack depend on each other.
+-   The value is set outside the template, for example with `aws secretsmanager put-secret-value`.
+-   Only the Lambda that uses the secret is granted read on it (`secret.grantRead(fn)`). It receives the secret's ARN in an environment variable, or its name through `publishCustomResourceName()`, and reads the value at runtime with `GetSecretValue`.
+-   A secret without automatic rotation carries an `AwsSolutions-SMG4` suppression whose reason says who rotates it (root `CLAUDE.md` Rule 4).
 
 ## Worked Example: Widgets
 
@@ -115,7 +136,7 @@ The fork's settings go in `infra/config/custom/customConfig.json`:
 }
 ```
 
-The environment variable in the `ResourceParamKey` is the break-glass override that tests and local tools use, as for core keys.
+The environment variable in the `ResourceParamKey` is the break-glass override that tests and local tools use, as for core keys. The resource-name parameter and `customConfig.json` hold names and settings, never a secret value; see [Secrets](#secrets).
 
 ### 2. Model and handler
 
@@ -126,16 +147,27 @@ from typing import Optional
 from aws_lambda_powertools.utilities.parser import BaseModel
 from pydantic import Field
 
+# A page must fit the 6 MB Lambda response limit; tokens are a base64 LastEvaluatedKey.
+MAX_WIDGET_LIST_PAGE_SIZE = 1000
+MAX_PAGINATION_TOKEN_LENGTH = 4096
+
+
+class ListWidgetsRequestModel(BaseModel, extra="ignore"):
+    maxItems: Optional[int] = Field(default=100, ge=1, le=MAX_WIDGET_LIST_PAGE_SIZE)
+    pageSize: Optional[int] = Field(default=100, ge=1, le=MAX_WIDGET_LIST_PAGE_SIZE)
+    startingToken: Optional[str] = Field(default=None, max_length=MAX_PAGINATION_TOKEN_LENGTH)
+
 
 class CreateWidgetRequestModel(BaseModel, extra="ignore"):
     widgetName: str = Field(min_length=1, max_length=256)
     description: Optional[str] = Field(default=None, max_length=256)
 ```
 
-The handler follows the gold-standard shape (`backend/HANDLER_TEMPLATES.md`): resource names resolved at module level, Tier 1 (`enforceAPI`) with the fail-closed pre-set flag, dispatch on the `ApiRoute` constant, and Tier 2 on the existing `database` entity type.
+The handler follows the gold-standard shape (`backend/HANDLER_TEMPLATES.md`): resource names resolved at module level, Tier 1 (`enforceAPI`) with the fail-closed pre-set flag, dispatch on the `ApiRoute` constant, and Tier 2 on the existing `database` entity type. The listing pages externally like the core list endpoints: it reads `maxItems`, `pageSize` and `startingToken`, returns one page, and returns a base64 `NextToken` while more widgets remain.
 
 ```python
 # backend/backend/handlers/custom/widgetService.py
+import base64
 import json
 import uuid
 
@@ -144,6 +176,7 @@ from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 
+from common.dynamodb import validate_pagination_info
 from common.validators import validate
 from custom.customApiRoutes import API_CUSTOM_WIDGETS
 from custom.customResourceNames import CustomResourceKeys
@@ -152,7 +185,7 @@ from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from models.common import authorization_error, internal_error, success, validation_error
-from models.custom.widgets import CreateWidgetRequestModel
+from models.custom.widgets import CreateWidgetRequestModel, ListWidgetsRequestModel
 
 logger = safeLogger(service_name="CustomWidgetService")
 dynamodb = boto3.resource("dynamodb", config=Config(retries={"max_attempts": 5, "mode": "adaptive"}))
@@ -170,6 +203,30 @@ def _database_allowed(claims_and_roles, database_id, method):
         return False
     database = {"databaseId": database_id, "object__type": "database"}
     return CasbinEnforcer(claims_and_roles).enforce(database, method)
+
+
+def _list_widgets(event, database_id):
+    query_parameters = event.get("queryStringParameters") or {}
+    validate_pagination_info(query_parameters, 100)
+    request = parse(query_parameters, model=ListWidgetsRequestModel)
+    query_kwargs = {
+        "KeyConditionExpression": Key("databaseId").eq(database_id),
+        "Limit": request.pageSize,
+    }
+    if request.startingToken:
+        try:
+            query_kwargs["ExclusiveStartKey"] = json.loads(
+                base64.b64decode(request.startingToken).decode("utf-8")
+            )
+        except ValueError:
+            return validation_error(body={"message": "Invalid pagination token"}, event=event)
+    response = widget_table.query(**query_kwargs)
+    result = {"Items": response.get("Items", [])}
+    if "LastEvaluatedKey" in response:
+        result["NextToken"] = base64.b64encode(
+            json.dumps(response["LastEvaluatedKey"]).encode("utf-8")
+        ).decode("utf-8")
+    return success(body=result)
 
 
 def lambda_handler(event, context):
@@ -195,8 +252,7 @@ def lambda_handler(event, context):
             return authorization_error()
 
         if method == "GET":
-            response = widget_table.query(KeyConditionExpression=Key("databaseId").eq(database_id))
-            return success(body={"Items": response.get("Items", [])})
+            return _list_widgets(event, database_id)
         if method == "POST":
             request = parse(json.loads(event.get("body") or "{}"), model=CreateWidgetRequestModel)
             item = {"databaseId": database_id, "widgetId": str(uuid.uuid4()), **request.dict()}
@@ -210,7 +266,7 @@ def lambda_handler(event, context):
         return internal_error(event=event)
 ```
 
-A listing that can exceed one page returns a `NextToken`, as the core list endpoints do (`backend/CLAUDE.md`, pagination patterns).
+A caller that needs every widget follows `NextToken`, passing it back as `startingToken`, as the web service, CLI command and MCP tool below do.
 
 ### 3. CDK resources
 
@@ -346,8 +402,17 @@ import { apiClient } from "../../services/apiClient";
 
 export const fetchWidgets = async (databaseId: string): Promise<[boolean, any]> => {
     try {
-        const response = await apiClient.get(`custom/database/${databaseId}/widgets`, {});
-        return [true, response?.Items ?? []];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
+        let response = await apiClient.get(`custom/database/${databaseId}/widgets`, init);
+        let items: any[] = response?.Items ?? [];
+        while (response?.NextToken) {
+            init.queryStringParameters.startingToken = response.NextToken;
+            response = await apiClient.get(`custom/database/${databaseId}/widgets`, init);
+            items = items.concat(response?.Items ?? []);
+        }
+        return [true, items];
     } catch (error: any) {
         return [false, error?.message];
     }
@@ -429,7 +494,7 @@ FEATURE_CUSTOM_WIDGETS = "CUSTOM_WIDGETS"
 
 ```python
 # tools/VamsCLI/vamscli/utils/custom_api_client.py
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from ..custom_constants import API_CUSTOM_WIDGETS
 
@@ -437,8 +502,13 @@ from ..custom_constants import API_CUSTOM_WIDGETS
 class CustomAPIClientMixin:
     """API client methods for the endpoints a fork adds."""
 
-    def list_custom_widgets(self, database_id: str) -> Dict[str, Any]:
-        response = self.get(API_CUSTOM_WIDGETS.format(databaseId=database_id), include_auth=True)
+    def list_custom_widgets(
+        self, database_id: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """One page of widgets; `params` carries maxItems, pageSize and startingToken."""
+        response = self.get(
+            API_CUSTOM_WIDGETS.format(databaseId=database_id), include_auth=True, params=params or {}
+        )
         return response.json()
 
     def create_custom_widget(self, database_id: str, name: str) -> Dict[str, Any]:
@@ -464,14 +534,23 @@ def widgets():
 
 @widgets.command(name="list")
 @click.option("-d", "--database-id", required=True, help="Database ID")
+@click.option("--page-size", type=int, help="Number of items per page")
+@click.option("--starting-token", help="NextToken from the previous page")
 @click.option("--json-output", is_flag=True, help="Output raw JSON response")
 @click.pass_context
 @requires_setup_and_auth
-def list_widgets(ctx: click.Context, database_id: str, json_output: bool):
-    """List the widgets of a database."""
+def list_widgets(
+    ctx: click.Context, database_id: str, page_size: int, starting_token: str, json_output: bool
+):
+    """List one page of the widgets of a database; the result carries NextToken while more remain."""
     profile_manager = get_profile_manager_from_context(ctx)
     api_client = APIClient(profile_manager.load_config()["api_gateway_url"], profile_manager)
-    result = api_client.list_custom_widgets(database_id)
+    params = {}
+    if page_size:
+        params["pageSize"] = page_size
+    if starting_token:
+        params["startingToken"] = starting_token
+    result = api_client.list_custom_widgets(database_id, params=params)
     output_result(result, json_output, success_message="Widgets retrieved")
     return result
 ```
@@ -483,21 +562,28 @@ from .widgets import widgets
 CUSTOM_COMMANDS = [widgets]
 ```
 
-`vamscli custom-widgets list -d <databaseId>` then works like a core command. Error mapping for the new endpoint follows the core client methods and the CLI exception hierarchy (`tools/VamsCLI/CLAUDE.md`).
+`vamscli custom-widgets list -d <databaseId>` then works like a core command; `--starting-token` takes the previous page's `NextToken`. Error mapping for the new endpoint follows the core client methods and the CLI exception hierarchy (`tools/VamsCLI/CLAUDE.md`).
 
 ### 7. MCP tool
 
 ```python
 # tools/VamsMCP/vams_mcp/custom_tools.py
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 def register_custom_tools(mcp, client, config, tool_result) -> None:
     @mcp.tool()
     @tool_result
-    def custom_list_widgets(database_id: str) -> Dict[str, Any]:
-        """List the widgets of one database."""
-        return client.api.list_custom_widgets(database_id)
+    def custom_list_widgets(
+        database_id: str, max_items: Optional[int] = None, starting_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """List the widgets of one database. The walk is bounded: `truncated` means rows were not
+        seen, and `NextToken` continues it when passed back as `starting_token`."""
+        return client.paginate(
+            lambda params: client.api.list_custom_widgets(database_id, params=params),
+            max_items=max_items,
+            starting_token=starting_token,
+        )
 
     if config.enable_writes:
 
@@ -508,7 +594,7 @@ def register_custom_tools(mcp, client, config, tool_result) -> None:
             return client.api.create_custom_widget(database_id, name)
 ```
 
-`client.api` is the CLI's `APIClient`, which inherits the fork's methods, so the tool calls the API with the same authentication and retries as the upstream tools. The write tool is registered only when `VAMS_ENABLE_WRITES=true`. See [Adding tools in a fork](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsMCP/README.md) in the MCP server README.
+`client.api` is the CLI's `APIClient`, which inherits the fork's methods, so the tool calls the API with the same authentication and retries as the upstream tools, and `client.paginate` follows `NextToken` with the same bounds as the upstream list tools. The write tool is registered only when `VAMS_ENABLE_WRITES=true`. See [Adding tools in a fork](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsMCP/README.md) in the MCP server README.
 
 ### 8. Viewer plugin
 
@@ -571,9 +657,12 @@ The repository's own tests apply to the custom files once a fork fills them in, 
 | `infra/test/storage/resourceNamesMirror.test.ts`       | `customResourceParamKeys.ts` and `customResourceNames.py` declare the same keys, none equal to a core key           |
 | `backend/tests/common/test_custom_extension_points.py` | custom routes reach `ALL_API_ROUTES` and repeat no core method and path; custom resource keys repeat no core key    |
 | `tools/VamsCLI/tests/test_constants_contract.py`       | each custom CLI path is a declared route; each `FEATURE_*` in `custom_constants.py` matches `customAppFeatures.ts`  |
+| `tools/VamsCLI/tests/test_custom_api_client.py`        | no `CustomAPIClientMixin` method has the name of an `APIClient` method                                              |
 | `web/src/visualizerPlugin/core/viewerSources.test.ts`  | every registered viewer, custom ones included, resolves its component through a manifest                            |
 
-Two checks run at every synthesis rather than in a test: `CustomBuilderNestedStack` fails on a custom route marked `allowAnonymous`, and `publishCustomResourceName()` fails on a key equal to a core key.
+The parity test synthesizes with the committed `infra/config/custom/customConfig.json`, so every route declared in `customApiRoutes.py` must be registered by `buildCustomResources()` under that file, or `no backend route is unregistered` fails. A fork that gates its routes on a setting in `customConfig.json`, as the worked example does with `widgets.enabled`, commits that setting enabled.
+
+The other checks run at every synthesis or CLI start rather than in a test. `CustomBuilderNestedStack` fails synthesis when `buildCustomResources()` registers a route marked `allowAnonymous`, makes an earlier route anonymous, or returns a `VAMS_APP_FEATURES` value; `RouteRegistry` stores each route as a frozen copy, so an earlier route cannot be edited at all. `publishCustomResourceName()` fails on a key equal to a core key, and `vamscli` refuses a custom command whose name is already registered.
 
 ## Known Limits
 

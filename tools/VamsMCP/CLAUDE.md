@@ -290,7 +290,10 @@ and call `client.api.<method>` — a method added to the CLI's `CustomAPIClientM
 (`tools/VamsCLI/vamscli/utils/custom_api_client.py`) is an ordinary `APIClient`
 method here. Steps 4–8 above apply, except that the README entry goes in the fork's
 own documentation (the README tool-list test covers the upstream tools only). Tool
-names prefixed `custom_` are recommended, not enforced. A fork tests its tools by
+names prefixed `custom_` are recommended, not enforced. A custom tool with the name of
+a core tool is not registered: the MCP SDK keeps the first registration (the core
+tool) and logs `Tool already exists: <name>` (pinned by `tests/test_custom_tools.py`).
+A fork tests its tools by
 calling `register_custom_tools` with a fake `mcp` and client, or with the reload
 pattern of `tests/test_custom_tools.py`.
 

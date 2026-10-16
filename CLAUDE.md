@@ -327,11 +327,11 @@ VAMS uses a custom Lambda authorizer for all API Gateway endpoints. Never use bu
 
 ### **Rule 6: Feature Switches Must Be Defined**
 
-New features must have a feature switch in `vamsAppFeatures.ts` and be gated by config in the core stack. Never deploy features unconditionally.
+New features must have a feature switch in `vamsAppFeatures.ts` and be gated by config in the core stack. Never deploy features unconditionally. In a fork, the switch goes in `infra/common/customAppFeatures.ts` and is returned from `buildCustomResources()`, gated on the fork's settings in `infra/config/custom/customConfig.json`.
 
 ### **Rule 7: All CLI API Endpoints in Constants**
 
-CLI API endpoint paths must be defined in `tools/VamsCLI/vamscli/constants.py`. Never hardcode endpoint paths in command files or API client methods.
+CLI API endpoint paths must be defined in `tools/VamsCLI/vamscli/constants.py`. Never hardcode endpoint paths in command files or API client methods. In a fork, the fork's paths go in `tools/VamsCLI/vamscli/custom_constants.py`.
 
 ### **Rule 8: KMS Encryption for All Storage Resources**
 

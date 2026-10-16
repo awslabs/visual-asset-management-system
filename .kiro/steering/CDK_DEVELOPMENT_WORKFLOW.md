@@ -80,7 +80,7 @@ CoreVAMSStack (root)
 
 ### **Fork Extension Points (core + add-on + custom)**
 
-Every aggregated list is composed from a core part, an add-on part beside it (`lib/nestedStacks/addon/addonCsp.ts`, `addonDefaultRoutes.ts`, `AddonBuilderNestedStack.enabledFeatures`) and a fork-owned custom part shipped empty. Core files name no add-on (`infra/test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts` (`buildCustomResources(scope, props)`), called inside the `CustomBuilder` stack with `config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets` and the shared `registry`. Its Lambdas use the standard builder pattern and five security calls; its routes go through `attachFunctionToApi` and cannot be anonymous (synth fails); it publishes resource names with `publishCustomResourceName()` (a core key throws), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py`; it returns `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`); and it reads fork settings with `loadCustomConfig()` from `config/custom/customConfig.json`, which is outside `ConfigPublic`. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+Every aggregated list is composed from a core part, an add-on part beside it (`lib/nestedStacks/addon/addonCsp.ts`, `addonDefaultRoutes.ts`, `AddonBuilderNestedStack.enabledFeatures`) and a fork-owned custom part shipped empty. Core files name no add-on (`infra/test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts` (`buildCustomResources(scope, props)`), called inside the `CustomBuilder` stack with `config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets` and the shared `registry`. Its Lambdas use the standard builder pattern and five security calls; its routes go through `attachFunctionToApi` and cannot be anonymous, nor make an earlier route anonymous (synth fails; `RouteRegistry` stores frozen descriptors); it publishes resource names with `publishCustomResourceName()` (a core key throws), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py`, and those parameters hold names only (a secret goes in a `secretsmanager.Secret` with the KMS key imported by ARN); it returns `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`; a `VAMS_APP_FEATURES` value fails synth); and it reads fork settings with `loadCustomConfig()` from `config/custom/customConfig.json`, which is outside `ConfigPublic`. `infra/test/api/apiRouteBackendCdkParity.test.ts` synthesizes with the committed `customConfig.json`, so every custom route must be registered under it. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### **Cross-Stack Shared Interfaces**
 
@@ -227,7 +227,7 @@ The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration 
 #### **Step 1: Configuration Interface Design**
 
 -   [ ] **Add Configuration Types**: Add new interfaces to `ConfigPublic` in `config.ts`
--   [ ] **Add Feature Constants**: Add feature switches to `vamsAppFeatures.ts`
+-   [ ] **Add Feature Constants**: Add feature switches to `vamsAppFeatures.ts` (in a fork: `customAppFeatures.ts`, returned from `buildCustomResources()`)
 -   [ ] **Add Validation Logic**: Include configuration validation in `getConfig()`
 -   [ ] **Update Templates**: Update **all** configuration templates — `config.template.commercial.json`, `config.template.govcloud.json`, **and** `config.template.eusovereign.json` — plus the active `config.json`. A missed template silently falls back to `getConfig()` defaults and drops any operator-set value.
 
@@ -424,6 +424,8 @@ if (props.config.app.newFeature.enabled) {
     this.enabledFeatures.push(VAMS_APP_FEATURES.NEW_FEATURE);
 }
 ```
+
+In a fork, the switch goes in `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`) and is returned from `buildCustomResources()` (`lib/nestedStacks/custom/customResources.ts`), gated on the fork's settings in `infra/config/custom/customConfig.json`. `vamsAppFeatures.ts` stays core-owned; a core value returned from the custom stack fails synth.
 
 ### **Nested Stack Implementation Standards**
 
@@ -2749,6 +2751,8 @@ if (props.config.app.newFeature.enabled) {
 // ❌ INCORRECT - Don't hardcode feature enablement
 const newFeatureStack = new NewFeatureStack(); // VIOLATION - should check config
 ```
+
+In a fork, the same holds for `CUSTOM_APP_FEATURES` values returned from `buildCustomResources()`, gated on `infra/config/custom/customConfig.json`.
 
 ### **Rule 3: CDK Nag Suppressions MUST Be Justified**
 

@@ -918,7 +918,8 @@ endpoints writes only here and merges upstream releases without conflicts. Each 
     authorizer MFA check, the login profile), which a fork edits in place.
 -   Recommended (not enforced) names: routes under `/custom/`, resource keys under `custom/`.
     An exact duplicate of a core route or key is rejected (`tests/common/test_custom_extension_points.py`,
-    and at CDK synth).
+    and at CDK synth). A resource-name key resolves a name, never a secret; a handler reads a secret
+    from AWS Secrets Manager at runtime.
 
 ---
 
