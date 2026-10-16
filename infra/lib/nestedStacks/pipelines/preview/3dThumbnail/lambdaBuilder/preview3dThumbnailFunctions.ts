@@ -105,6 +105,7 @@ export function buildOpenPipelineFunction(
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
     batchLogs: OpenPipelineBatchLogProps,
+    largeTierThresholdBytes: number,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -136,9 +137,13 @@ export function buildOpenPipelineFunction(
             // the Batch state's log source (streams are `<jobDefinitionName>/default/<task-id>`).
             ...vendedBatchJobLogGroupEnvironment(batchLogs.logGroup),
             BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
+            // Inputs at or above this size run on the large compute tier.
+            LARGE_TIER_THRESHOLD_BYTES: String(largeTierThresholdBytes),
         },
     });
 
+    // Read on the asset buckets also covers the HeadObject that sizes the input for its compute tier
+    // and the run's input configuration, which may force a tier.
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);

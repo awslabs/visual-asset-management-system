@@ -109,6 +109,48 @@ export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 // long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
 export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
+// The 3D preview thumbnail compute tiers when app.pipelines.usePreview3dThumbnail sets none: each
+// tier's AWS Fargate vCPU and memory, and the input size (GiB) at or above which a run takes the
+// large tier.
+export const PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS = {
+    standard: { vcpu: 4, memoryGiB: 16 },
+    large: { vcpu: 16, memoryGiB: 120 },
+} as const;
+export const PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB = 2;
+
+/** `minGiB`..`maxGiB` in `stepGiB` increments, as MiB. */
+const mibRange = (minGiB: number, maxGiB: number, stepGiB: number): number[] => {
+    const values: number[] = [];
+    for (let gib = minGiB; gib <= maxGiB; gib += stepGiB) values.push(gib * 1024);
+    return values;
+};
+
+// The memory sizes (MiB) AWS Fargate accepts for each Linux task vCPU size.
+export const FARGATE_MEMORY_MIB_BY_VCPU: ReadonlyMap<number, readonly number[]> = new Map([
+    [0.25, [512, 1024, 2048]],
+    [0.5, mibRange(1, 4, 1)],
+    [1, mibRange(2, 8, 1)],
+    [2, mibRange(4, 16, 1)],
+    [4, mibRange(8, 30, 1)],
+    [8, mibRange(16, 60, 4)],
+    [16, mibRange(32, 120, 8)],
+]);
+
+/** A memory size in GiB as the MiB value a Fargate resource requirement carries. */
+export function fargateMemoryMiB(memoryGiB: number): number {
+    return Math.round(memoryGiB * 1024);
+}
+
+/** True when AWS Fargate runs a Linux task of `vcpu` vCPU with `memoryGiB` of memory. */
+export function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
+    if (typeof vcpu !== "number" || typeof memoryGiB !== "number") return false;
+    const memoryMiB = memoryGiB * 1024;
+    return (
+        Number.isInteger(memoryMiB) &&
+        (FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu) ?? []).includes(memoryMiB)
+    );
+}
+
 // CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
 // from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
 // log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
@@ -706,10 +748,59 @@ export function getConfig(app: cdk.App): Config {
             enabled: false,
             autoRegisterWithVAMS: false,
             autoRegisterAutoTriggerOnFileUpload: false,
+            computeTiers: {
+                standard: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.standard },
+                large: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.large },
+            },
+            largeTierThresholdGiB: PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB,
         };
     }
     if (config.app.pipelines.usePreview3dThumbnail.enabled == undefined) {
         config.app.pipelines.usePreview3dThumbnail.enabled = false;
+    }
+    if (config.app.pipelines.usePreview3dThumbnail.computeTiers == undefined) {
+        config.app.pipelines.usePreview3dThumbnail.computeTiers = {
+            standard: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.standard },
+            large: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.large },
+        };
+    }
+    for (const tier of ["standard", "large"] as const) {
+        const tiers = config.app.pipelines.usePreview3dThumbnail.computeTiers;
+        tiers[tier] = { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS[tier], ...tiers[tier] };
+    }
+    if (config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB == undefined) {
+        config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB =
+            PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB;
+    }
+
+    // 3D preview thumbnail compute tiers. Each tier's vCPU and memory are the resource overrides of its
+    // Batch state, and AWS Batch checks an override against the Fargate task sizes only when a job is
+    // submitted -- so an unsupported large-tier pair deploys and then fails every run routed to it.
+    if (config.app.pipelines.usePreview3dThumbnail.enabled) {
+        const thumbnail = config.app.pipelines.usePreview3dThumbnail;
+        for (const tier of ["standard", "large"] as const) {
+            const { vcpu, memoryGiB } = thumbnail.computeTiers[tier];
+            if (!isFargateCpuMemory(vcpu, memoryGiB)) {
+                const memoryChoices = FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu as number);
+                throw new Error(
+                    `Configuration Error: pipelines.usePreview3dThumbnail.computeTiers.${tier} ` +
+                        `(vcpu ${JSON.stringify(vcpu)}, memoryGiB ${JSON.stringify(memoryGiB)}) ` +
+                        `is not an AWS Fargate task size. ` +
+                        (memoryChoices
+                            ? `With ${vcpu} vCPU, memoryGiB must be one of ` +
+                              `${memoryChoices.map((mib) => mib / 1024).join(", ")}.`
+                            : `vcpu must be one of ` +
+                              `${Array.from(FARGATE_MEMORY_MIB_BY_VCPU.keys()).join(", ")}.`)
+                );
+            }
+        }
+        const threshold = thumbnail.largeTierThresholdGiB;
+        if (typeof threshold !== "number" || !Number.isFinite(threshold) || threshold <= 0) {
+            throw new Error(
+                "Configuration Error: pipelines.usePreview3dThumbnail.largeTierThresholdGiB must be " +
+                    `a positive number of GiB. Received: ${JSON.stringify(threshold)}`
+            );
+        }
     }
 
     // Cosmos Predict defaults
@@ -3594,6 +3685,17 @@ export interface ConfigPublic {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
+                computeTiers: {
+                    standard: {
+                        vcpu: number;
+                        memoryGiB: number;
+                    };
+                    large: {
+                        vcpu: number;
+                        memoryGiB: number;
+                    };
+                };
+                largeTierThresholdGiB: number;
             };
             useNvidiaCosmos: {
                 enabled: boolean;
