@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Setup and Authentication Troubleshooting | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Setup and Authentication Troubleshooting | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page covers issues encountered while configuring VamsCLI, signing in, managing profiles, and connecting to the VAMS API."><meta data-rh="true" property="og:description" content="This page covers issues encountered while configuring VamsCLI, signing in, managing profiles, and connecting to the VAMS API."><link data-rh="true" rel="icon" href="/visual-asset-management-system/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Setup and Authentication","item":"https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/assets/js/runtime~main.c3efa080.js" defer="defer"></script>
+<script src="/visual-asset-management-system/assets/js/runtime~main.825e695f.js" defer="defer"></script>
 <script src="/visual-asset-management-system/assets/js/main.a4361309.js" defer="defer"></script>
 </head>
 <body>
@@ -175,7 +175,7 @@
 <p>Profile names must be 3 to 50 characters using only letters, numbers, hyphens, and underscores. The names <code>help</code>, <code>version</code>, and <code>list</code> are reserved.</p>
 <p><strong>Resolution:</strong></p>
 <p>Choose a name that satisfies these rules.</p>
-<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">vamscli setup https://prod-vams.example.com </span><span class="token parameter variable" style="color:#36acaa">--profile</span><span class="token plain"> production</span><br></div></code></pre></div></div>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">vamscli </span><span class="token parameter variable" style="color:#36acaa">--profile</span><span class="token plain"> production setup https://prod-vams.example.com</span><br></div></code></pre></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="profile-does-not-exist">Profile Does Not Exist<a href="#profile-does-not-exist" class="hash-link" aria-label="Direct link to Profile Does Not Exist" title="Direct link to Profile Does Not Exist" translate="no">​</a></h3>
 <p><strong>Symptoms:</strong></p>
 <ul>
@@ -184,7 +184,7 @@
 <p><strong>Resolution:</strong></p>
 <ol>
 <li class="">List configured profiles: <code>vamscli profile list</code>.</li>
-<li class="">Create the profile by running setup for it: <code>vamscli setup &lt;base-url&gt; --profile &lt;name&gt;</code>.</li>
+<li class="">Create the profile by running setup for it: <code>vamscli --profile &lt;name&gt; setup &lt;base-url&gt;</code>.</li>
 <li class="">Switch to an existing profile: <code>vamscli profile switch &lt;name&gt;</code>.</li>
 </ol>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="cannot-delete-the-default-profile">Cannot Delete the Default Profile<a href="#cannot-delete-the-default-profile" class="hash-link" aria-label="Direct link to Cannot Delete the Default Profile" title="Direct link to Cannot Delete the Default Profile" translate="no">​</a></h3>
@@ -230,7 +230,7 @@
 <p><strong>Resolution:</strong></p>
 <ol>
 <li class="">Re-run setup with <code>--force</code> to rewrite the configuration: <code>vamscli setup &lt;base-url&gt; --force</code>.</li>
-<li class="">For a specific profile, include <code>--profile</code>: <code>vamscli setup &lt;base-url&gt; --profile &lt;name&gt; --force</code>.</li>
+<li class="">For a specific profile, put <code>--profile</code> before the command: <code>vamscli --profile &lt;name&gt; setup &lt;base-url&gt; --force</code>.</li>
 </ol>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="resetting-vamscli-configuration">Resetting VamsCLI Configuration<a href="#resetting-vamscli-configuration" class="hash-link" aria-label="Direct link to Resetting VamsCLI Configuration" title="Direct link to Resetting VamsCLI Configuration" translate="no">​</a></h3>
 <p>To start over completely, remove the configuration directory and run setup again.</p>
