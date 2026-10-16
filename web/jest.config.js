@@ -33,7 +33,7 @@ module.exports = {
         // environment. Re-check this mapping when axios is upgraded; the exports map is what governs it.
         "^axios$": "axios/dist/browser/axios.cjs",
         "\\.(css|scss)$": "<rootDir>/src/__mocks__/styleMock.js",
-        "\\.(png|jpg|jpeg|gif|svg)$": "<rootDir>/src/__mocks__/fileMock.js",
+        "\\.(png|jpg|jpeg|gif|svg|webp)$": "<rootDir>/src/__mocks__/fileMock.js",
         // Monaco: the real `monaco-editor` package is a UMD/AMD bundle (calls `define`) and its
         // `?worker` imports are Vite-only — both break under jest. Stub them; component tests mock
         // @monaco-editor/react separately, so the editor never actually renders in unit tests.
