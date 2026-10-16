@@ -131,13 +131,33 @@ class TestEmptyStateEqualsCore:
         assert C.UNALLOWED_FILE_EXTENSION_LIST == C.CORE_UNALLOWED_FILE_EXTENSION_LIST
         assert C.UNALLOWED_MIME_LIST == C.CORE_UNALLOWED_MIME_LIST
 
-    def test_the_shipped_lane_files_merge_to_core(self):
-        # The module every Lambda imports, built from the real (shipped) lane files.
-        assert shipped.ALLOWED_CONSTRAINT_OBJECT_TYPES == C.CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES
-        assert shipped.CONSTRAINT_OBJECT_TYPE_FIELDS == C.CORE_CONSTRAINT_OBJECT_TYPE_FIELDS
-        assert shipped.PERMISSION_CONSTRAINT_FIELDS == C.CORE_PERMISSION_CONSTRAINT_FIELDS
-        assert shipped.UNALLOWED_FILE_EXTENSION_LIST == C.CORE_UNALLOWED_FILE_EXTENSION_LIST
-        assert shipped.UNALLOWED_MIME_LIST == C.CORE_UNALLOWED_MIME_LIST
+    def test_the_shipped_lane_files_are_merged_into_the_module_lambdas_import(self):
+        """The module every Lambda imports is core + the real lane files, whatever they hold.
+
+        Asserted for any lane content (a fork fills custom/customConstants.py), never that the lanes
+        are empty: the merge of the CORE_* lists with the lane files on disk must equal what the
+        module exposes.
+        """
+        from backend.backend.common import addonConstants as addon_lane
+        from backend.backend.custom import customConstants as custom_lane
+
+        expected = shipped.merge_constraint_extensions(
+            shipped.CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES,
+            shipped.CORE_PERMISSION_CONSTRAINT_FIELDS,
+            shipped.CORE_CONSTRAINT_OBJECT_TYPE_FIELDS,
+            [(shipped.ADDON_CONSTANTS_SOURCE, addon_lane.ADDON_PERMISSION_CONSTRAINT_FIELDS,
+              addon_lane.ADDON_CONSTRAINT_OBJECT_TYPE_FIELDS),
+             (shipped.CUSTOM_CONSTANTS_SOURCE, custom_lane.CUSTOM_PERMISSION_CONSTRAINT_FIELDS,
+              custom_lane.CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS)],
+        )
+        assert (shipped.ALLOWED_CONSTRAINT_OBJECT_TYPES, shipped.PERMISSION_CONSTRAINT_FIELDS,
+                shipped.CONSTRAINT_OBJECT_TYPE_FIELDS) == expected
+        assert shipped.UNALLOWED_FILE_EXTENSION_LIST == (
+            shipped.CORE_UNALLOWED_FILE_EXTENSION_LIST
+            + addon_lane.ADDON_UNALLOWED_FILE_EXTENSIONS + custom_lane.CUSTOM_UNALLOWED_FILE_EXTENSIONS)
+        assert shipped.UNALLOWED_MIME_LIST == (
+            shipped.CORE_UNALLOWED_MIME_LIST
+            + addon_lane.ADDON_UNALLOWED_MIME_TYPES + custom_lane.CUSTOM_UNALLOWED_MIME_TYPES)
 
     def test_the_core_lists_are_the_eleven_core_types(self):
         # Control: the comparison above is against the real core matrix, not two empty lists.

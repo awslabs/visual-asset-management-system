@@ -92,7 +92,13 @@ def _core_body():
 
 @pytest.mark.unit
 class TestPermissionObjectsLanes:
-    def test_the_empty_state_body_is_exactly_the_core_body(self):
+    def test_the_empty_state_body_is_exactly_the_core_body(self, monkeypatch):
+        # The endpoint bound to constants built with empty lanes (a private load), so this holds in a
+        # fork whose own lane registers types.
+        monkeypatch.setattr(authConstraintsService, "ALLOWED_CONSTRAINT_OBJECT_TYPES",
+                            CORE.ALLOWED_CONSTRAINT_OBJECT_TYPES)
+        monkeypatch.setattr(authConstraintsService, "CONSTRAINT_OBJECT_TYPE_FIELDS",
+                            CORE.CONSTRAINT_OBJECT_TYPE_FIELDS)
         assert _body() == _core_body()
         # Control: the core body is the eleven core types, not an empty listing.
         assert len(_core_body()["objectTypes"]) == 11
