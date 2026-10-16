@@ -88,7 +88,7 @@ Custom resource-name parameters and `infra/config/custom/customConfig.json` hold
 
 ## Worked Example: Widgets
 
-This example adds a "widgets" feature end to end: a widget table, an SSM resource name, a database-scoped API (`GET` and `POST /custom/database/{databaseId}/widgets`), a handler with both authorization tiers, a feature switch, a web page with a navigation entry, a CLI command group, an MCP tool and a viewer plugin for `.widget` files. Every file it touches is a fork extension point. The example is documentation only; upstream does not ship it.
+This example adds a "widgets" feature end to end: a widget table, an SSM resource name, a database-scoped API (`GET` and `POST /custom/database/{databaseId}/widgets`), a handler with both authorization tiers, a feature switch, a web page with a navigation entry, a CLI command group, an MCP tool and a viewer plugin for `.widget` files. Every file it touches is a fork extension point. The example is documentation only; upstream does not ship it. It is kept to the extension points: a production handler would first confirm that the database exists, as the core handlers do, and would remove its widget rows when the database is deleted.
 
 ### 1. Route, resource name, feature switch and settings
 
