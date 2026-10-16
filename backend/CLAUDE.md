@@ -40,7 +40,7 @@ backend/
 │   │   │                                           #   to_update_expr, get_asset_object_from_id
 │   │   ├── resourceNames.py                        # SSM resource-name resolver + ResourceKeys
 │   │   ├── s3.py                                   # S3 file validation + paged list helpers
-│   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns (mirror web/src/common/constants/fileFormats.ts)
+│   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns + select_newest_preview_file (mirror web/src/common/constants/fileFormats.ts)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns

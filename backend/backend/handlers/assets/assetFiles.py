@@ -6,7 +6,7 @@ import boto3
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
@@ -37,7 +37,11 @@ from common.s3MetadataKeys import (
     replace_metadata_copy_args,
     UserMetadataTooLargeError,
 )
-from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    select_newest_preview_file,
+)
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
@@ -1668,64 +1672,6 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
         logger.warning(f"Error finding preview files (including archived) for {base_key}: {e}")
     
     return preview_files
-
-def get_top_preview_file(preview_files: List[str], filter_extensions: bool = True) -> Optional[str]:
-    """Get the top preview file from a list of preview files
-    
-    Args:
-        preview_files: List of preview file keys
-        filter_extensions: Whether to filter by allowed extensions
-        
-    Returns:
-        The top preview file key or None if no valid preview files
-    """
-    if not preview_files:
-        return None
-    
-    if filter_extensions:
-        # Filter by allowed extensions
-        allowed_files = [f for f in preview_files if is_allowed_preview_extension(f)]
-        if allowed_files:
-            return allowed_files[0]  # Return the first allowed file
-        return None
-    else:
-        # Return the first file without filtering
-        return preview_files[0]
-
-
-def _preview_modified_timestamp(value: Any) -> float:
-    """Sort key for a preview candidate's last-modified value: a datetime or ISO 8601 text, read
-    as UTC when it carries no offset. A missing or unreadable value sorts as the oldest."""
-    try:
-        if isinstance(value, str):
-            value = datetime.fromisoformat(value.strip().replace('Z', '+00:00')) if value.strip() else None
-        if isinstance(value, datetime):
-            if value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
-            return value.timestamp()
-    except (ValueError, OverflowError, OSError):
-        pass
-    return float('-inf')
-
-
-def select_newest_preview_file(candidates: List[Tuple[str, Any, bool]]) -> Optional[str]:
-    """The preview to attach to one base file, from its ``(key, lastModified, isArchived)`` candidates.
-
-    A file can hold several ``.previewFile.<ext>`` objects: a pipeline run with another output format
-    writes ``<file>.previewFile.png`` beside an existing ``<file>.previewFile.gif``, and neither the
-    run nor process-output removes the other format. The newest one is the file's current preview,
-    so a live preview beats an archived one and, among those, the latest ``lastModified`` wins;
-    equal times keep the first in key order. Candidates without an allowed extension are ignored.
-    """
-    best_key, best_rank = None, None
-    for key, modified, archived in sorted(candidates, key=lambda candidate: candidate[0]):
-        if not is_allowed_preview_extension(key):
-            continue
-        rank = (not archived, _preview_modified_timestamp(modified))
-        if best_rank is None or rank > best_rank:
-            best_key, best_rank = key, rank
-    return best_key
-
 
 def find_newest_preview_file_for_base(bucket: str, base_key: str) -> Optional[str]:
     """The key of the newest allowed preview object for ``base_key`` (see select_newest_preview_file)."""
