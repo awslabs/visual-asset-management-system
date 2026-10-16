@@ -110,10 +110,13 @@ def save_jpeg(image_array, output_path, quality=85):
     logger.info(f"Saved JPEG to {output_path} ({os.path.getsize(output_path) / 1024:.1f} KB)")
 
 
-def ensure_under_size_limit(frames, output_path, max_bytes=MAX_FILE_SIZE_BYTES):
+def ensure_under_size_limit(frames, output_path, max_bytes=MAX_FILE_SIZE_BYTES, still_frame=None):
     """
     Attempt to save frames as GIF under the size limit. If GIF is too large,
     progressively reduce quality and ultimately fall back to a single PNG or JPEG.
+
+    still_frame is the image the PNG/JPEG fallback writes (the caller passes the front
+    three-quarter view); without it the fallback takes the middle frame.
 
     Returns the final output path (may change extension if falling back).
     """
@@ -150,7 +153,7 @@ def ensure_under_size_limit(frames, output_path, max_bytes=MAX_FILE_SIZE_BYTES):
 
     # Strategy 4: Fall back to single PNG (preserves transparency)
     logger.info("Falling back to single PNG frame...")
-    middle_frame = frames[len(frames) // 2]
+    middle_frame = frames[len(frames) // 2] if still_frame is None else still_frame
     png_path = os.path.splitext(output_path)[0] + ".png"
     save_png(middle_frame, png_path)
     if os.path.getsize(png_path) <= max_bytes:

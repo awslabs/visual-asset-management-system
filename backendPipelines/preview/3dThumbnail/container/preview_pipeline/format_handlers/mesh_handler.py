@@ -48,11 +48,15 @@ def load(file_path: str) -> pv.PolyData:
         # Use scene.dump() to get transformed meshes (applies scene graph
         # transforms so sub-meshes are positioned correctly relative to each other).
         trimeshes = []
+        clouds = []
         for geom in scene_or_mesh.dump():
             if isinstance(geom, trimesh.Trimesh):
                 trimeshes.append(geom)
             elif isinstance(geom, trimesh.PointCloud):
-                return _pointcloud_to_pyvista(geom)
+                clouds.append(geom)
+        if clouds:
+            # A scene holding point clouds renders every one of its parts, meshes included.
+            return _scene_parts_to_pyvista(trimeshes, clouds)
         if not trimeshes:
             raise ValueError("No valid mesh geometry found in scene")
 
@@ -315,6 +319,45 @@ def _pointcloud_to_pyvista(pc: trimesh.PointCloud) -> pv.PolyData:
         if colors.shape[1] >= 3:
             pv_cloud.point_data["RGB"] = colors[:, :3]
     return pv_cloud
+
+
+# Colours for the parts of a mixed scene that carry none: the renderer's uncoloured-mesh colour, and a
+# neutral grey for points.
+_MIXED_SCENE_MESH_RGB = (173, 216, 230)
+_MIXED_SCENE_POINT_RGB = (200, 200, 200)
+
+
+def _with_rgb(pv_data: pv.PolyData, default_rgb) -> pv.PolyData:
+    """The data with a uint8 per-point RGB array, filled with default_rgb when it has none."""
+    rgb = pv_data.point_data.get("RGB") if "RGB" in pv_data.point_data else None
+    if rgb is None or len(rgb) != pv_data.n_points:
+        rgb = np.tile(np.asarray(default_rgb, dtype=np.uint8), (pv_data.n_points, 1))
+    pv_data.point_data["RGB"] = np.asarray(rgb)[:, :3].astype(np.uint8)
+    return pv_data
+
+
+def _scene_parts_to_pyvista(trimeshes: list, clouds: list) -> pv.PolyData:
+    """One PolyData holding every mesh and point cloud of a scene.
+
+    Each mesh's texture is baked to vertex colours (one PolyData carries one texture), and every part
+    gets a per-point RGB array so the colours survive the append; a point cloud keeps its vertex
+    cells, so the renderer draws its points beside the meshes' faces.
+    """
+    parts = []
+    for mesh in trimeshes:
+        baked = _bake_texture_to_vertex_colors(mesh)
+        if getattr(getattr(baked, "visual", None), "kind", None) == "texture":
+            try:
+                baked.visual = baked.visual.to_color()
+            except Exception:
+                pass
+        parts.append(_with_rgb(_trimesh_to_pyvista(baked), _MIXED_SCENE_MESH_RGB))
+    for cloud in clouds:
+        parts.append(_with_rgb(_pointcloud_to_pyvista(cloud), _MIXED_SCENE_POINT_RGB))
+    merged = parts[0] if len(parts) == 1 else parts[0].append_polydata(*parts[1:])
+    logger.info(f"Loaded scene with {len(trimeshes)} meshes and {len(clouds)} point clouds: "
+                f"{merged.n_points} points, {merged.n_cells} cells")
+    return merged
 
 
 def _load_draco(file_path: str) -> pv.PolyData:

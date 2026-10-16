@@ -35,31 +35,67 @@ _FOCUS_PERCENTILE_HI = 98
 # 25 degrees is the industry standard for 3D product thumbnails.
 _CAMERA_ELEVATION_DEG = 25
 
+# Orbit angle of a still preview: the front three-quarter view. Orbit frame i is at
+# i * 360 / n_frames degrees, so the middle frame of an orbit shows the back of the model.
+STILL_VIEW_DEG = 45.0
+
+
+def is_point_cloud(pv_data) -> bool:
+    """True when the data has no surface cells: no cells at all, or vertex cells only.
+
+    A scene that mixes meshes and points holds both vertex and face cells, so it is not a point
+    cloud and renders through the mesh path, points included.
+    """
+    n_cells = pv_data.n_cells
+    if n_cells == 0:
+        return True
+    n_verts = getattr(pv_data, "n_verts", None)
+    if isinstance(n_verts, (int, np.integer)):
+        return int(n_verts) == n_cells
+    return n_cells == pv_data.n_points
+
+
+def still_view_frame_index(n_frames: int) -> int:
+    """The orbit frame nearest the still-preview angle, for a still taken from an orbit."""
+    if n_frames <= 1:
+        return 0
+    return int(np.floor(STILL_VIEW_DEG / (360.0 / n_frames) + 0.5)) % n_frames
+
+
+def _resolve_full_bounds(pv_data, use_full_bounds):
+    """Frame a mesh on its full bounds and a point cloud on its percentile bounds unless told.
+
+    Percentile framing exists to ignore stray points in scans and splats; on a mesh it crops the
+    coarser parts of a model whose vertices concentrate in a finely detailed region.
+    """
+    if use_full_bounds is None:
+        return not is_point_cloud(pv_data)
+    return bool(use_full_bounds)
+
 
 def generate_rotating_frames(
     pv_data: pv.PolyData,
     n_frames: int = DEFAULT_N_FRAMES,
     resolution: tuple = DEFAULT_RESOLUTION,
-    use_full_bounds: bool = False,
+    use_full_bounds=None,
 ) -> list:
     """
     Render a rotating sequence of frames around the Y-axis of the given PyVista data.
-    Returns RGBA frames with transparent background.
+    Returns RGBA frames with transparent background. ``use_full_bounds`` None frames a mesh on its
+    full bounds and a point cloud on its percentile bounds.
     """
     logger.info(f"Generating {n_frames} rotating frames at {resolution}")
 
     plotter = pv.Plotter(off_screen=True, window_size=resolution)
     plotter.set_background(_BG_COLOR)
 
-    is_point_cloud = pv_data.n_cells == 0 or pv_data.n_cells == pv_data.n_points
-
-    if is_point_cloud:
+    if is_point_cloud(pv_data):
         _add_point_cloud(plotter, pv_data)
     else:
         _add_mesh(plotter, pv_data)
 
     focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
     )
 
     # Compute stable clipping range from the actual max vertex distance
@@ -98,31 +134,29 @@ def generate_rotating_frames(
 def generate_static_frame(
     pv_data: pv.PolyData,
     resolution: tuple = DEFAULT_RESOLUTION,
-    use_full_bounds: bool = False,
+    use_full_bounds=None,
 ) -> np.ndarray:
     """
-    Render a single static frame of the given PyVista data.
-    Returns RGBA image with transparent background.
+    Render a single static frame of the given PyVista data from the front three-quarter view
+    (STILL_VIEW_DEG). Returns RGBA image with transparent background.
     """
     logger.info(f"Generating static frame at {resolution}")
 
     plotter = pv.Plotter(off_screen=True, window_size=resolution)
     plotter.set_background(_BG_COLOR)
 
-    is_point_cloud = pv_data.n_cells == 0 or pv_data.n_cells == pv_data.n_points
-
-    if is_point_cloud:
+    if is_point_cloud(pv_data):
         _add_point_cloud(plotter, pv_data)
     else:
         _add_mesh(plotter, pv_data)
 
     focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
     )
 
     max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
 
-    angle_rad = np.radians(45)
+    angle_rad = np.radians(STILL_VIEW_DEG)
     cam_x = focal_point[0] + radius * np.cos(angle_rad)
     cam_z = focal_point[2] + radius * np.sin(angle_rad)
     cam_y = focal_point[1] + elevation
@@ -166,6 +200,7 @@ def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
             rgb=True,
             smooth_shading=True,
             show_edges=False,
+            point_size=POINT_SIZE,  # vertex cells of a scene that mixes meshes and points
         )
     else:
         plotter.add_mesh(

@@ -293,19 +293,23 @@ def _run_preview_pipeline(
     except Exception as e:
         logger.warning(f"Up-axis normalization failed, rendering with original orientation: {e}")
 
-    # Generate preview frames
-    # For USD and CAD files, use full bounding box (no percentile cropping)
-    # since these are engineered models where all geometry is intentional
-    _full_bounds_exts = {'.usd', '.usda', '.usdc', '.usdz', '.stp', '.step'}
-    use_full_bounds = ext.lower() in _full_bounds_exts
+    # Generate preview frames. A still output renders the front three-quarter view only; an animated
+    # or automatic output renders the orbit, with that still as the fallback. The renderer frames a
+    # mesh on its full bounds and a point cloud on its percentile bounds (stray points ignored).
+    still_requested = output_type in ("jpg", "png")
     try:
-        frames = renderer.generate_rotating_frames(pv_data, use_full_bounds=use_full_bounds)
+        if still_requested:
+            frames = [renderer.generate_static_frame(pv_data)]
+        else:
+            frames = renderer.generate_rotating_frames(pv_data)
     except Exception as e:
         logger.exception(f"Failed to render frames: {e}")
+        if still_requested:
+            return _error_response(stage, f"Failed to render preview: {str(e)}")
         # Fall back to static frame
         try:
             logger.info("Attempting static frame fallback...")
-            static_img = renderer.generate_static_frame(pv_data, use_full_bounds=use_full_bounds)
+            static_img = renderer.generate_static_frame(pv_data)
             frames = [static_img]
         except Exception as e2:
             logger.exception(f"Static frame fallback also failed: {e2}")
@@ -316,18 +320,19 @@ def _run_preview_pipeline(
         # Use actual file basename (from local_filepath for localTest, objectKey for S3)
         input_basename = os.path.basename(local_filepath)
         # auto animates whenever the renderer produced more than one frame; a named format applies
-        # whatever the frame count, taking the middle frame for a still as the size-limit fallback does.
+        # whatever the frame count. A still is the front three-quarter view: the rendered still, or
+        # the orbit frame nearest that angle when only an orbit exists.
         animate = len(frames) > 1 if output_type == OUTPUT_TYPE_AUTO else output_type == "gif"
         still_extension = "png" if output_type == "png" else "jpg"
         extension = "gif" if animate else still_extension
         output_filename = f"{input_basename}.previewFile.{extension}"
 
         output_path = os.path.join(local_output_dir, output_filename)
+        still_frame = frames[renderer.still_view_frame_index(len(frames))]
 
         if animate:
-            final_path = image_utils.ensure_under_size_limit(frames, output_path)
+            final_path = image_utils.ensure_under_size_limit(frames, output_path, still_frame=still_frame)
         else:
-            still_frame = frames[len(frames) // 2]
             if still_extension == "png":
                 image_utils.save_png(still_frame, output_path)
             else:

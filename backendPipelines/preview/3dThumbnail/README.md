@@ -158,7 +158,11 @@ The output preview file will be written to the mounted output directory.
 
 ### Camera Framing
 
-The renderer uses percentile-based camera framing (2nd-98th percentile) instead of the full bounding box. This ensures that sparse scenes such as single-position LiDAR scans with distant outlier points are framed tightly around the dense content rather than zoomed out to include outliers.
+A mesh (glTF, OBJ, FBX, STL, PLY mesh, STEP, USD) is framed on its full bounding box. A point cloud uses percentile-based camera framing (2nd-98th percentile) instead of the full bounding box, so sparse scenes such as single-position LiDAR scans with distant outlier points are framed tightly around the dense content rather than zoomed out to include outliers. A scene that holds both meshes and points renders all of them and is framed as a mesh.
+
+### Still View
+
+A still preview (`outputType` `jpg` or `png`, the static fallback, and the size-limit fallback of an animated preview) shows the front three-quarter view: 45° around the orbit and 25° above it.
 
 ### Up-Axis Normalization
 

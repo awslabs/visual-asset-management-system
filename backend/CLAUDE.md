@@ -842,6 +842,10 @@ asset_table = dynamodb.Table(asset_table_name)
 
 Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists live in `common/constants.py`; extend them there, never bypass.
 
+### Choosing a file's `.previewFile.<ext>`
+
+A file can hold several `<file>.previewFile.<ext>` objects (a pipeline re-run in another format writes a `.png` beside an existing `.gif`; nothing deletes the other). Every path in `handlers/assets/assetFiles.py` that attaches `previewFile` — the current listing, the version-snapshot listing in basic and detailed mode, and the single-file info — goes through `select_newest_preview_file((key, lastModified, isArchived) …)`: a live preview beats an archived one, then the latest `lastModified` wins, ties keep key order. Do not pick "the first in key order" in a new path. Test: `tests/handlers/assets/test_assetFiles_newest_preview.py`.
+
 ---
 
 ## Partition Portability (Commercial / GovCloud / EU Sovereign)

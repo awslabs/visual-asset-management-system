@@ -191,7 +191,10 @@ class TestRenderedTransparency:
     def test_every_orbit_frame_has_a_transparent_background(self, scene):
         from preview_pipeline import renderer
 
-        frames = renderer.generate_rotating_frames(scene(), resolution=(W * 2, H * 2))
+        # Percentile framing puts the camera inside the scene's bounds -- the wide clipping range
+        # that broke the depth-buffer mask. (A mesh frames on its full bounds by default.)
+        frames = renderer.generate_rotating_frames(scene(), resolution=(W * 2, H * 2),
+                                                   use_full_bounds=False)
         assert len(frames) == renderer.DEFAULT_N_FRAMES
         for number, frame in enumerate(frames):
             _assert_transparent_background(frame, f"frame {number}")
