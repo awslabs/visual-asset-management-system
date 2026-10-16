@@ -25,7 +25,6 @@ export const WEB_DEPLOYMENT_EPHEMERAL_STORAGE = cdk.Size.gibibytes(4);
 // extension using Python's `mimetypes`, which has no `.mjs` entry and falls back to `text/plain`. Browsers
 // enforce strict MIME checking on module scripts and the bucket also sends `X-Content-Type-Options:
 // nosniff`, so such a file is refused with "Failed to load module script" however valid its contents.
-// That took out the PDF viewer, whose pdf.js worker was emitted as `pdf.worker.min-<hash>.mjs`.
 //
 // `text/javascript` is the type the HTML spec prescribes for JavaScript. The ALB path is affected exactly
 // as the CloudFront one is: the ALB forwards to an S3 VPC endpoint, so the object's stored Content-Type is
@@ -134,7 +133,8 @@ export function deployWebAppBundle(
         distributionPaths: props.distribution ? ["/*"] : undefined,
     });
 
-    // Files already uploaded by DeployHashedAssets are unchanged, so this pass only deletes.
+    // The handler's archive extraction does not keep file times, so `aws s3 sync` uploads every `assets/*`
+    // file again, byte-identical and with the same metadata, before it deletes the keys this build lacks.
     const hashedAssetsPrune = new s3deployment.BucketDeployment(scope, "PruneHashedAssets", {
         ...common,
         ...hashedAssetsOnly,
