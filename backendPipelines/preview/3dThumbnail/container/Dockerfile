@@ -19,6 +19,68 @@
 #   TOK=$(curl -s "https://public.ecr.aws/token/?scope=repository:docker/library/python:pull&service=public.ecr.aws" | jq -r .token)
 #   curl -sI -H "Authorization: Bearer $TOK" -H "Accept: application/vnd.oci.image.index.v1+json" \
 #        https://public.ecr.aws/v2/docker/library/python/manifests/3.12-slim | grep -i docker-content-digest
+#
+# Both stages pin the same digest; move them together.
+
+# ---------------------------------------------------------------------------------------------------
+# Builder stage: compilers, the Python environment, Node.js and splat-transform. Only the installed
+# results are copied into the runtime stage, so gcc/g++/cmake/make and xz never reach the image a job
+# pulls.
+# ---------------------------------------------------------------------------------------------------
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Build tools for native extensions without a prebuilt wheel (e.g. pye57, Open3D), and xz to unpack
+# the Node.js release tarball.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    cmake \
+    make \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies from the hash-locked set into a virtual environment the runtime stage
+# copies whole. requirements.txt lists the direct dependencies; requirements.lock is generated from it
+# (command in its header) and pins every package, transitive ones included, by version and hash, so two
+# builds of the same commit install the same packages.
+COPY requirements.lock /build/requirements.lock
+RUN chmod a+r /build/requirements.lock && \
+    python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --require-hashes -r /build/requirements.lock && \
+    chmod -R a+rX /opt/venv
+
+# Node.js for the PlayCanvas splat-transform CLI, which converts .spz/.sog/.ksplat/.lcc/.compressed.ply
+# Gaussian splats to PLY on the CPU. The package needs Node.js >= 22 and Debian trixie ships 20, so a
+# pinned release tarball is used, verified against its published SHA-256 in the same RUN.
+ARG NODE_VERSION=22.23.3
+ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
+RUN python3 -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/tmp/node.tar.xz')" \
+        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" && \
+    echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c - && \
+    mkdir -p /opt/node && \
+    tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 --no-same-owner && \
+    rm -rf /tmp/node.tar.xz /opt/node/include /opt/node/share/doc /opt/node/share/man && \
+    chmod -R a+rX /opt/node
+
+# splat-transform at the exact version and dependency tree of the committed package-lock.json
+# (npm ci fails when the two disagree). Install scripts are skipped: the CLI's only native dependency
+# (webgpu, Dawn) ships prebuilt binaries and is used for GPU work this pipeline never requests; the
+# other platforms' binaries are removed.
+COPY splat-transform/package.json splat-transform/package-lock.json /opt/splat-transform/
+RUN chmod -R a+rX /opt/splat-transform && \
+    cd /opt/splat-transform && \
+    PATH=/opt/node/bin:$PATH npm ci --omit=dev --ignore-scripts --no-audit --no-fund && \
+    rm -rf node_modules/webgpu/dist/darwin-universal node_modules/webgpu/dist/linux-arm64 \
+           node_modules/webgpu/dist/win32-arm64 node_modules/webgpu/dist/win32-x64 && \
+    /opt/node/bin/node node_modules/@playcanvas/splat-transform/bin/cli.mjs --version && \
+    chmod -R a+rX /opt/splat-transform
+
+# ---------------------------------------------------------------------------------------------------
+# Runtime stage: the same pinned base, rendering libraries only.
+# ---------------------------------------------------------------------------------------------------
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
 
 # python environment variables
@@ -32,8 +94,7 @@ ENV PYVISTA_TRAME_SERVER_PROXY_PREFIX=""
 ENV MESA_GL_VERSION_OVERRIDE=4.5
 ENV VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN=1
 
-# Install system dependencies for headless 3D rendering (OSMesa + Xvfb)
-# and build tools needed by some Python packages
+# System libraries for headless 3D rendering (OSMesa + Xvfb) and OCC/cadquery.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-dev \
     libosmesa6-dev \
@@ -43,50 +104,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     libxext6 \
     libsm6 \
-    # Build tools for native extensions (e.g., pye57, Open3D)
-    gcc \
-    g++ \
-    cmake \
-    make \
     # OCC/cadquery STEP file support
     libglib2.0-0 \
     libxkbcommon0 \
-    # Unpacks the pinned Node.js release tarball
-    xz-utils \
+    # OpenMP runtime (Open3D); the builder's gcc used to pull it in
+    libgomp1 \
     # Cleanup
     && rm -rf /var/lib/apt/lists/*
 
+# The Python environment, Node.js and splat-transform from the builder. Their read bits were normalised
+# in the builder, in the RUN that created them; COPY --from keeps those modes. A chmod -R here would
+# rewrite every file into a second layer and double the image, so each COPY --from is followed by a
+# check that fails the build if anything is unreadable to the non-root USER below.
+COPY --from=builder /opt/venv /opt/venv
+RUN test -z "$(find /opt/venv ! -perm -a+r -print -quit)"
+COPY --from=builder /opt/node /opt/node
+RUN test -z "$(find /opt/node ! -perm -a+r -print -quit)"
+COPY --from=builder /opt/splat-transform /opt/splat-transform
+RUN test -z "$(find /opt/splat-transform ! -perm -a+r -print -quit)"
+ENV PATH=/opt/venv/bin:$PATH
+
 WORKDIR /app
-
-# Install Python dependencies from the hash-locked set. requirements.txt lists the direct dependencies;
-# requirements.lock is generated from it (command in its header) and pins every package, transitive
-# ones included, by version and hash, so two builds of the same commit install the same packages.
-COPY requirements.lock /app/requirements.lock
-RUN pip install --no-cache-dir --require-hashes -r /app/requirements.lock
-
-# Node.js for the PlayCanvas splat-transform CLI, which converts .spz/.sog/.ksplat/.lcc/.compressed.ply
-# Gaussian splats to PLY on the CPU. The package needs Node.js >= 22 and Debian trixie ships 20, so a
-# pinned release tarball is used, verified against its published SHA-256 in the same RUN.
-ARG NODE_VERSION=22.23.3
-ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
-RUN python3 -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/tmp/node.tar.xz')" \
-        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" && \
-    echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c - && \
-    mkdir -p /opt/node && \
-    tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 --no-same-owner && \
-    rm -rf /tmp/node.tar.xz /opt/node/include /opt/node/share/doc /opt/node/share/man
-
-# splat-transform at the exact version and dependency tree of the committed package-lock.json
-# (npm ci fails when the two disagree). Install scripts are skipped: the CLI's only native dependency
-# (webgpu, Dawn) ships prebuilt binaries and is used for GPU work this pipeline never requests; the
-# other platforms' binaries are removed.
-COPY splat-transform/package.json splat-transform/package-lock.json /opt/splat-transform/
-RUN cd /opt/splat-transform && \
-    PATH=/opt/node/bin:$PATH npm ci --omit=dev --ignore-scripts --no-audit --no-fund && \
-    rm -rf node_modules/webgpu/dist/darwin-universal node_modules/webgpu/dist/linux-arm64 \
-           node_modules/webgpu/dist/win32-arm64 node_modules/webgpu/dist/win32-x64 && \
-    /opt/node/bin/node node_modules/@playcanvas/splat-transform/bin/cli.mjs --version && \
-    chmod -R a+rX /opt/node /opt/splat-transform
 
 # Copy pipeline code
 COPY ./preview_pipeline /app/preview_pipeline

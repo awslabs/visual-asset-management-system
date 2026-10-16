@@ -49,22 +49,23 @@ S3 Event / API Trigger
 
 The pipeline produces a single preview file alongside the original asset:
 
--   **Animated GIF** (`<filename>.previewFile.gif`): 36-frame rotation around the Y-axis at 800x600 resolution. If the GIF exceeds the size limit, frames are reduced by half iteratively. Maximum output size is approximately 5 MB.
--   **Static JPEG** (`<filename>.previewFile.jpg`): Single isometric-view frame. Used as a fallback when the rotating render fails or when only one frame is produced.
+-   **Animated GIF** (`<filename>.previewFile.gif`): 36-frame orbit around the Y-axis at 800x600 with a transparent background. If the GIF exceeds the 5 MB size limit, it is written again with 18, 12 and then 8 frames, then with those 8 frames at 75%, 50% and 37.5% resolution, and finally as a single PNG (then JPEG) of the still view.
+-   **Still PNG or JPEG** (`<filename>.previewFile.png` / `.jpg`): one front three-quarter view. Written when `outputType` asks for it, when `auto` gets a single frame, or when the orbit render fails.
 
 ## Input Parameters
 
 Input parameters are passed as a JSON string via the `inputParameters` field of the pipeline execution payload. All parameters are optional.
 
-| Parameter                       | Type    | Default | Description                                                                                                                                                |
-| :------------------------------ | :------ | :------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `overwriteExistingPreviewFiles` | boolean | `false` | When `false`, the pipeline will fail with an error if a preview file already exists for the input file. Set to `true` to overwrite existing preview files. |
+| Parameter                       | Type    | Default | Description                                                                                                                                                                          |
+| :------------------------------ | :------ | :------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `overwriteExistingPreviewFiles` | boolean | `true`  | When `true`, a preview is generated even if one already exists for the input file. When `false`, a file that already has a preview is skipped and the run completes without writing. |
+| `outputType`                    | enum    | `auto`  | `auto` writes an animated GIF when the renderer produces several frames and a JPEG otherwise; `gif`, `jpg` and `png` write that format for every input.                              |
 
 ### Example
 
 ```json
 {
-    "inputParameters": "{\"overwriteExistingPreviewFiles\": true}"
+    "inputParameters": "{\"overwriteExistingPreviewFiles\": false, \"outputType\": \"png\"}"
 }
 ```
 

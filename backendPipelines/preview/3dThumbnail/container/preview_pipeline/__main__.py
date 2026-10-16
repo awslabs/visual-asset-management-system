@@ -18,6 +18,9 @@ from botocore.config import Config
 # burst surfaces as a throttling error on the caller instead of being smoothed.
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
+# Step Functions SendTaskFailure limits: cause 32,768 characters, error 256.
+SFN_CAUSE_MAX_LENGTH = 32768
+
 set_log_level(logging.INFO)
 
 
@@ -97,9 +100,10 @@ def _send_sfn_failure_on_fatal(error_msg: str):
             "stepfunctions", region_name=os.getenv("AWS_REGION", "us-east-1"),
             config=retry_config
         )
-        # SFN cause field has a 256-char limit — truncate with indicator
-        if len(error_msg) > 253:
-            cause = error_msg[:250] + "..."
+        # The Step Functions failure cause is limited to 32,768 characters (256 is the limit for the
+        # error name), so the traceback is kept up to that length.
+        if len(error_msg) > SFN_CAUSE_MAX_LENGTH:
+            cause = error_msg[:SFN_CAUSE_MAX_LENGTH - 3] + "..."
         else:
             cause = error_msg
         client.send_task_failure(

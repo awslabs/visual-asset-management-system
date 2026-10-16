@@ -107,6 +107,10 @@ A container job role usually reads every asset bucket, so a path written inside 
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
 -   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
 
+## Parsing XML From Uploaded Files
+
+An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`).
+
 ## Sizing a Container's Work to Its Task
 
 A Batch/Fargate container reads its limits from its own cgroup rather than from a tier name or a constant, so it stays inside whichever job size started it. `preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
