@@ -163,7 +163,7 @@ class CreateWidgetRequestModel(BaseModel, extra="ignore"):
     description: Optional[str] = Field(default=None, max_length=256)
 ```
 
-The handler follows the gold-standard shape (`backend/HANDLER_TEMPLATES.md`): resource names resolved at module level, Tier 1 (`enforceAPI`) with the fail-closed pre-set flag, dispatch on the `ApiRoute` constant, and Tier 2 on the existing `database` entity type. The listing pages externally like the core list endpoints: it reads `maxItems`, `pageSize` and `startingToken`, returns one page, and returns a base64 `NextToken` while more widgets remain. A `startingToken` that is not this table's key for the database in the path is a 400, as in the core handlers.
+The handler follows the gold-standard shape (`backend/HANDLER_TEMPLATES.md`): resource names resolved at module level, Tier 1 (`enforceAPI`) with the fail-closed pre-set flag, dispatch on the `ApiRoute` constant, and Tier 2 on the existing `database` entity type. The listing pages externally like the core list endpoints: it reads `maxItems`, `pageSize` and `startingToken`, returns one page, and returns a base64 `NextToken` while more widgets remain. Caller errors are a 400, as in the core handlers: a `startingToken` that is not this table's key for the database in the path, and a POST body that is missing or not JSON.
 
 ```python
 # backend/backend/handlers/custom/widgetService.py
@@ -243,6 +243,26 @@ def _list_widgets(event, database_id):
     return success(body=result)
 
 
+def _create_widget(event, database_id):
+    # Required event body, parsed the way the core handlers do: a missing or non-JSON body is a 400.
+    body = event.get("body")
+    if not body:
+        return validation_error(body={"message": "Request body is required"}, event=event)
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            return validation_error(body={"message": "Invalid JSON in request body"}, event=event)
+    elif not isinstance(body, dict):
+        logger.error("Request body is not a string or dict")
+        return validation_error(body={"message": "Request body cannot be parsed"}, event=event)
+    request = parse(body, model=CreateWidgetRequestModel)
+    item = {"databaseId": database_id, "widgetId": str(uuid.uuid4()), **request.dict()}
+    widget_table.put_item(Item=item)
+    return success(body=item)
+
+
 def lambda_handler(event, context):
     claims_and_roles = request_to_claims(event)
     try:
@@ -268,10 +288,7 @@ def lambda_handler(event, context):
         if method == "GET":
             return _list_widgets(event, database_id)
         if method == "POST":
-            request = parse(json.loads(event.get("body") or "{}"), model=CreateWidgetRequestModel)
-            item = {"databaseId": database_id, "widgetId": str(uuid.uuid4()), **request.dict()}
-            widget_table.put_item(Item=item)
-            return success(body=item)
+            return _create_widget(event, database_id)
         return validation_error(body={"message": "Method not allowed"}, event=event)
     except ValidationError:
         return validation_error(body={"message": "Invalid widget request"}, event=event)
