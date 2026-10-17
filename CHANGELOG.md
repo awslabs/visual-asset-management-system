@@ -35,6 +35,27 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Troubleshooting
 
+## [2.6.6] (2026-10-30)
+
+### Major Change Summary:
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+### Bug Fixes
+
+### Chores
+
+-   **Security** Dependency updates to resolve security advisories: `handlebars` 4.7.10 (root and `infra/` build and test tooling), `simple-git` 4.0.2 (the `web/` viewer install scripts), `source-map-js` 1.2.2 and `pbkdf2` 3.1.7 (`web/`), `dompurify` 3.4.16 and `fast-uri` 3.1.8 (the `web/customInstalls/*` viewer installs), `http-cache-semantics` 4.3.0, `joi` 17.13.8 and `postcss-selector-parser` 7.1.6 (documentation site), and `Werkzeug` 3.1.9 (backend test dependencies). `dompurify` ships in the Cesium 3D Tileset viewer; the other packages are build, install and test tooling or browser polyfills. ([#486](https://github.com/awslabs/visual-asset-management-system/issues/486))
+    -   Note: `simple-git` 4 removes every inherited `GIT_*` environment variable (for example `GIT_SSL_CAINFO` and `GIT_CONFIG_GLOBAL`), plus the editor, pager and askpass variables, from the git commands the Potree and Needle USD viewer install scripts run during `npm install` in `web/`. A build host that relies on one of them for those clones sets the equivalent in `~/.gitconfig` (for example `http.sslCAInfo`); `HTTPS_PROXY` and `SSL_CERT_FILE` still apply. The install scripts catch git errors, so a failed clone leaves that viewer missing rather than failing `npm install`.
+
+### Known Outstanding Issues
+
+-   **Security** Build- and test-time dependencies that a package update alone does not fix: `brace-expansion` 5.0.9 bundled in `aws-cdk-lib` 2.265.0 (`infra/`; fixed in `aws-cdk-lib` 2.273.0); `braces`, `micromatch` and `postcss-selector-parser` 6.x through `tailwindcss` 3 (`web/`), `@typescript-eslint` 5 (root) and `cssnano` 6 in `@docusaurus/core` 3.10.2 (documentation site); `katex` 0.16 through `mermaid` 11 (documentation site); and `sprintf-js` 1.0.3 through `babel-jest` (`web/` tests) and `elliptic` through `vite-plugin-node-polyfills` (`web/`), which have no patched release. ([#486](https://github.com/awslabs/visual-asset-management-system/issues/486))
+
+### Troubleshooting
+
 ## [2.6.5] (2026-10-16)
 
 ### Major Change Summary:
