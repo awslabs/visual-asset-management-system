@@ -4443,6 +4443,18 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "409":
+                    description: >
+                        The workflow's state machine could not be brought up to date with its
+                        pipelines' current execution settings, so no execution was started. A launch
+                        whose workflow was deployed from different pipeline settings redeploys it first
+                        and starts on the published state machine version built from the current ones;
+                        this is returned when that redeploy fails or a pipeline changed again during it.
+                        Retryable; the message carries any reason.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -4752,6 +4764,11 @@ paths:
                     default: false
         put:
             summary: "Update a pipeline."
+            description: >
+                A change to a setting that workflow state machines encode (execution type, target,
+                callback mode, timeouts, Deadline Cloud job settings) schedules a background redeploy
+                of every non-archived workflow that references the pipeline; the response warns how
+                many are being redeployed. Other changes are read when each execution starts.
             requestBody:
                 required: true
                 content:
@@ -4770,7 +4787,7 @@ paths:
                                         $ref: '#/components/schemas/pipelineV2'
                                     warnings:
                                         type: array
-                                        description: "Non-fatal trigger-consistency warnings, returned alongside message. For example, a require-template pipeline that is part of an auto-triggered workflow whose trigger has chosen no default template for it — triggered executions fail until the trigger picks one."
+                                        description: "Non-fatal warnings, returned alongside message: trigger-consistency warnings (for example, a require-template pipeline that is part of an auto-triggered workflow whose trigger has chosen no default template for it — triggered executions fail until the trigger picks one); 'N referencing workflow(s) are being redeployed against the new execution configuration.' when the execution binding changed; and, when systemConfig changed, each new finding of a referencing workflow's save checks, prefixed 'workflow <databaseId>:<workflowId>:' (at most 25 listed). None blocks the save."
                                         items:
                                             type: string
                 "400":
@@ -11215,6 +11232,14 @@ components:
                 workflow_arn:
                     type: string
                     description: "ARN of the workflow's Step Functions state machine."
+                deploymentStale:
+                    type: boolean
+                    nullable: true
+                    description: "True when the state machine could not be redeployed after a referenced pipeline's execution settings changed; null when the deployment is current. A stale workflow is redeployed on its next save or launch, and a launch never runs the stale definition."
+                deploymentStaleReason:
+                    type: string
+                    nullable: true
+                    description: "Why the last redeploy failed. Present only with deploymentStale true."
                 dateCreated:
                     type: string
                     description: "ISO-8601 creation timestamp."

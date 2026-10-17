@@ -251,6 +251,8 @@ suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grant
 -   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards.
 -   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies IAM4/IAM5 suppressions to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach.
 
+**Lambda-to-Lambda invokes.** When one VAMS Lambda invokes another, grant `lambda:InvokeFunction` on the target's exact `functionArn` with an explicit `PolicyStatement` rather than `grantInvoke()`, which also grants `{functionArn}:*` (every version and alias), and pass the target's name as an env var. `grantWorkflowServiceInternalInvoke` (`lambdaBuilder/workflowFunctions.ts`) does this for the two callers of the workflow service's internal redeploy actions, `pipelineService` and `executeWorkflow` (env `WORKFLOW_SERVICE_V2_FUNCTION_NAME`); neither gets a Step Functions or `iam:PassRole` grant, since the workflow service deploys with its own role. `test/security/workflowLambdaGrants.test.ts` pins both, together with the workflow service's `states:PublishStateMachineVersion` / `ListStateMachineVersions` / `DeleteStateMachineVersion` grants.
+
 ---
 
 ## API Gateway Pattern
