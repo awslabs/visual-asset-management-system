@@ -21,11 +21,16 @@ backend/
 │   ├── models/                 # Pydantic request/response models
 │   │   ├── assetsV3.py        # Asset API models (GOLD STANDARD)
 │   │   ├── common.py          # Common response models
+│   │   ├── addon/             # Add-on models (physnaViewer.py)
+│   │   ├── custom/            # FORK EXTENSION POINT: fork models (shipped empty)
 │   │   └── [domain].py        # Domain-specific models
 │   ├── common/                # Shared utilities
-│   │   ├── constants.py       # Constants and configuration
+│   │   ├── constants.py       # Constants and configuration (object types, fields, blocklists: core + add-on + custom)
+│   │   ├── addonConstants.py  # Add-on object types, constraint fields, blocklist entries (shipped empty)
+│   │   ├── addonResourceNames.py  # Add-on resource-name keys (AddonResourceKeys, shipped empty)
 │   │   ├── validators.py      # Input validation functions
 │   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, batch_get_items, …)
+│   ├── custom/                # FORK EXTENSION POINT: customApiRoutes.py, customResourceNames.py, customConstants.py
 │   └── customLogging/         # Logging utilities
 ├── tests/                     # Test files (mirror handler structure)
 │   ├── handlers/              # Handler tests
@@ -72,6 +77,27 @@ One folder per domain. The current domains:
 -   `userRoles/` — User-role assignment
 -   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation: Lambda/SQS/EventBridge/DeadlineCloud task states; `sfn/deadlineCloudJobCallback` resolves Deadline Cloud job task tokens from default-bus events)
 -   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers)
+-   `custom/` — Fork extension point: handlers a fork adds (`handlers.custom.<name>.lambda_handler`); shipped empty
+
+#### **Fork Extension Points (backend + CDK)**
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+Every list VAMS aggregates is `core + add-on + custom`. The custom part is fork-owned: upstream ships it empty and never edits it, so a fork adds net-new endpoints and resources without conflicting on upgrade. Each such file opens with the "Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+| Layer                                       | Add-on file (upstream-owned)                                                              | Custom file (fork-owned, shipped empty)                                                     |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| API routes                                  | `backend/backend/common/addonApiRoutes.py` (`ADDON_ROUTES`)                               | `backend/backend/custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                               |
+| Handlers                                    | `backend/backend/handlers/addon/`                                                         | `backend/backend/handlers/custom/`                                                          |
+| Models                                      | `backend/backend/models/addon/`                                                           | `backend/backend/models/custom/`                                                            |
+| Object types, constraint fields, deny lists | `backend/backend/common/addonConstants.py`                                                | `backend/backend/custom/customConstants.py`, merged by `common/constants.py`                |
+| Resource names                              | `backend/backend/common/addonResourceNames.py` ↔ `infra/common/addonResourceParamKeys.ts` | `backend/backend/custom/customResourceNames.py` ↔ `infra/common/customResourceParamKeys.ts` |
+| CDK resources                               | `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts`                                | `infra/lib/nestedStacks/custom/customResources.ts` (built inside the `CustomBuilder` stack) |
+| Feature switches                            | `infra/common/addonAppFeatures.ts`, pushed by `AddonBuilderNestedStack.enabledFeatures`   | `infra/common/customAppFeatures.ts`, returned by `buildCustomResources()`                   |
+| CSP / default routes                        | `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`                                        | CSP: the existing `infra/config/csp/cspAdditionalConfig.json`                               |
+| Fork settings                               | `app.addons.*` in `config.json`                                                           | `infra/config/custom/customConfig.json`, read with `loadCustomConfig()`                     |
+
+Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (so they get the `VamsAuthorizer` scheme) and cannot be anonymous: `CustomBuilderNestedStack` fails synth on an `allowAnonymous` custom route and on an earlier route made anonymous, and `RouteRegistry` stores frozen descriptors. It also fails synth when `buildCustomResources()` returns a core `VAMS_APP_FEATURES` or add-on `ADDON_APP_FEATURES` value. `publishCustomResourceName()` (`custom/customStackHelpers.ts`) and `publishAddonResourceName()` (`addon/addonStackHelpers.ts`) fail synth on a key equal to a core key or one the other lane declares; the parameters hold names only, never a secret. The backend constants lanes are merged by `common/constants.py` at import and fail closed on a broken rule (names `^[A-Za-z][A-Za-z0-9]{1,63}$`, no reserved key, no field named as a Python keyword or an `EVALUATOR_RESERVED_ATTRIBUTES` name, no redefinition, fields that exist, samples `""`/`[]` with list-valued fields taking only `is_one_of` / `is_not_one_of`, append-only lower-case deny entries). Type and field names are compared ignoring letter case when checking for a repeat, so `Asset` repeats `asset` and `DatabaseId` repeats `databaseId`; authorization still matches a name exactly. An extension object type gets no seeded constraint, so even admin is denied on it until the fork adds one, and the `dynamodb-authdefaults-*` constructs are never extended for it. Naming conventions (`/custom/` routes, `custom/` keys, `CUSTOM_*` switches) are recommended, not enforced. `customConfigCommon/` is the separate place for overriding **existing** behaviour (authorizer MFA check, login profile).
 
 #### **Workflow Execution Storage**
 
@@ -144,9 +170,11 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Mock AWS Services**: Use proper mocking for DynamoDB, S3, SNS
 -   [ ] **Run All Tests**: Ensure `pytest` passes with coverage
 
+The add-on and custom lane modules (`common/addonConstants.py`, `common/addonResourceNames.py`, `custom/`) are pure data and need no mock under `tests/mocks/`. `common` is a `MagicMock` in `tests/conftest.py`, so the conftests register `common.addonConstants` in `sys.modules` by path before `constants.py` loads. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules (`tests/common/test_constants_extension_lanes.py`). Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes.
+
 #### **Step 6: Frontend Integration**
 
--   [ ] **Update API Service**: Add methods to `web/src/services/APIService.js` (or update existing API Paths that may not be always in this file)
+-   [ ] **Update API Service**: Add methods to `web/src/services/APIService.ts` (or update existing API Paths that may not be always in this file)
 -   [ ] **Follow Frontend Patterns**: Use boolean/message return patterns
 -   [ ] **Handle Response Formats**: Support both legacy and new response formats
 -   [ ] **Add Error Handling**: Include proper error message extraction
@@ -980,7 +1008,7 @@ return {
 
 ### **Rule 6: API Routes MUST Be Registered in an apiBuilder Nested Stack**
 
-Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py`.
+Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
 **Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.47 MB template and `apiBuilder2` emits 73 in ~0.30 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
@@ -1017,10 +1045,10 @@ attachFunctionToApi(this, [domain]Service, {
 });
 ```
 
-### **Rule 7: Frontend Integration MUST Follow APIService.js Patterns**
+### **Rule 7: Frontend Integration MUST Follow APIService.ts Patterns**
 
 ```javascript
-// ✅ CORRECT - Add to web/src/services/APIService.js
+// ✅ CORRECT - Add to web/src/services/APIService.ts
 /**
  * [Operation description]
  * @param {Object} params - Parameters object
@@ -2604,7 +2632,7 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 
 ### **Integration Compliance**
 
--   [ ] Frontend service methods follow `APIService.js` patterns
+-   [ ] Frontend service methods follow `APIService.ts` patterns
 -   [ ] CLI API client methods follow `api_client.py` patterns
 -   [ ] Constants added to appropriate files
 -   [ ] Exceptions added to exception hierarchy
@@ -2806,7 +2834,7 @@ required_table = dynamodb.Table(required_table_name)
 #### **Step 6: Add Frontend Integration**
 
 ```javascript
-// web/src/services/APIService.js
+// web/src/services/APIService.ts
 // Add service methods following existing patterns. Check for other files that may already implement the API route but aren't in APIService.
 ```
 

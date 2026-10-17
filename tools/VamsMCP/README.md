@@ -412,6 +412,55 @@ and is the better first move.
 -   The server persists nothing; revoking access is just `vamscli auth logout`
     (or letting your session expire).
 
+## Adding tools in a fork
+
+A fork of VAMS adds its own tools in `vams_mcp/custom_tools.py`, which upstream ships
+as a no-op and does not modify, so the fork's tools do not conflict when it merges an
+upstream release. `server.py` calls `register_custom_tools(mcp, client, config,
+tool_result)` once, after its own tools are defined:
+
+```python
+# vams_mcp/custom_tools.py (in the fork)
+from typing import Any, Dict, Optional
+
+
+def register_custom_tools(mcp, client, config, tool_result) -> None:
+    @mcp.tool()
+    @tool_result
+    def custom_list_widgets(
+        database_id: str, max_items: Optional[int] = None, starting_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """List the widgets of one database. The walk is bounded: `truncated` means rows were not
+        seen, and `NextToken` continues it when passed back as `starting_token`."""
+        return client.paginate(
+            lambda params: client.api.list_custom_widgets(database_id, params=params),
+            max_items=max_items,
+            starting_token=starting_token,
+        )
+
+    if config.enable_writes:
+
+        @mcp.tool()
+        @tool_result
+        def custom_create_widget(database_id: str, name: str) -> Dict[str, Any]:
+            """Create a widget in a database."""
+            return client.api.create_custom_widget(database_id, name)
+```
+
+-   Gate write tools on `config.enable_writes` and destructive tools on
+    `config.enable_destructive`, as the upstream tools are; the `VAMS_ENABLE_*`
+    variables then govern them too.
+-   `client.api` is the `vamscli` `APIClient`, which inherits the fork's methods from
+    `vamscli/utils/custom_api_client.py`, so a custom tool calls the fork's API
+    through the same authentication and retry path as the upstream tools, and
+    `client.paginate` follows `NextToken` with the same bounds as the upstream list tools.
+-   Prefix tool names with `custom_` so a later upstream tool does not collide with
+    one of yours, and list your tools (and any `autoApprove` choice) in your own
+    documentation. A tool whose name an upstream tool already uses is not registered:
+    the server keeps the upstream tool and logs `Tool already exists: <name>`.
+
+The "Extending VAMS in a fork" developer guide has the end-to-end example.
+
 ## License
 
 Apache-2.0.

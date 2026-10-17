@@ -76,7 +76,7 @@ def _CasbinEnforcer(claims_and_roles):  # noqa: N802 — mirrors import name
 
 
 def _parse_viewer_request(raw: Dict[str, Any]):
-    from models.physnaViewer import PhysnaViewerRequestModel  # noqa: WPS433
+    from models.addon.physnaViewer import PhysnaViewerRequestModel  # noqa: WPS433
 
     return PhysnaViewerRequestModel(**raw)
 

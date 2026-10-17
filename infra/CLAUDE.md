@@ -25,14 +25,19 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 infra/
   bin/infra.ts                  # CDK app entry point
   common/
-    vamsAppFeatures.ts          # VAMS_APP_FEATURES enum
+    vamsAppFeatures.ts          # VAMS_APP_FEATURES enum (core switches)
+    addonAppFeatures.ts         # ADDON_APP_FEATURES enum (PHYSNA_ADDON), pushed by AddonBuilderNestedStack
     resourceParamKeys.ts        # SSM key constants (mirrored in backend/common/resourceNames.py)
+    addonResourceParamKeys.ts   # Add-on SSM keys (shipped empty; mirrored in backend/common/addonResourceNames.py)
+    customAppFeatures.ts        # FORK EXTENSION POINT: CUSTOM_APP_FEATURES enum (shipped empty)
+    customResourceParamKeys.ts  # FORK EXTENSION POINT: custom SSM keys (mirrored in backend/custom/customResourceNames.py)
   config/
     config.ts                   # Config interfaces, getConfig(), constants
     config.json                 # Active deployment configuration
     config.template.{commercial,govcloud,eusovereign}.json
     saml-config.ts              # SAML provider settings
     csp/ docker/ policy/        # CSP additional config, Docker build, S3 bucket + IAM role + WAF rule policy (wafPolicyConfig.json) JSON
+    custom/customConfig.json    # FORK EXTENSION POINT: fork settings ({}), read only by nestedStacks/custom/customResources.ts
   gen/genEndpoints.ts           # Endpoint generation utility
   lib/
     core-stack.ts               # CoreVAMSStack -- root stack orchestrator
@@ -59,6 +64,7 @@ infra/
       resourceNames/
         resourceNamesBuilder-nestedStack.ts  # 66 SSM String parameters, one per registry descriptor
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
+        laneResourceNames.ts                 # publishLaneResourceName(): add-on/custom keys, refuses core and other-lane keys
       auth/
         authBuilder-nestedStack.ts       # Cognito user pool, identity pool, SAML, external OAuth
         constructs/                      # cognito-web-native, dynamodb-authdefaults-{admin,ro}
@@ -89,9 +95,16 @@ infra/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
       addon/
-        addonBuilder-nestedStack.ts        # Addon orchestrator
+        addonBuilder-nestedStack.ts        # Addon orchestrator; enabledFeatures (ADDON_APP_FEATURES, rejects core values) pushed by core-stack
+        addonStackHelpers.ts               # publishAddonResourceName() (rejects a core or custom key)
+        addonCsp.ts                        # addonCspSources(): add-on CSP origins, merged by security.ts
+        addonDefaultRoutes.ts              # addonReadOnlyApiRouteCriteria(): add-on routes for the basic read-only role
         garnetFramework/                   # Garnet NGSI-LD digital twin framework
         physna/                            # Physna 3D/CAD geometric search sync (builds physnaFileSync, physnaAssetSync, physnaViewer lambdas for addon API)
+      custom/
+        customBuilder-nestedStack.ts       # CustomBuilder: placeholder handle + calls buildCustomResources(); rejects anonymous custom routes and core/add-on feature values
+        customStackHelpers.ts              # CustomResourcesProps, loadCustomConfig(), publishCustomResourceName() (rejects a core or add-on key)
+        customResources.ts                 # FORK EXTENSION POINT: buildCustomResources() (shipped empty)
   test/                          # Jest suites: route registry, OpenAPI spec, config-builder drift, WAF,
                                  # lambda grants, presigned-URL policy, migration tooling, plus the legacy
                                  # infra.test.ts snapshot (uses the outdated @aws-cdk/assert)
@@ -139,8 +152,10 @@ CoreVAMSStack (root)
   |     |                                                           (its vamsSchema registration custom
   |     |                                                            resources invoke an ApiBuilder2 Lambda)
   |     +-- AddonBuilder (Garnet, Physna Sync)                   -> storage, resourceNames
+  |     +-- CustomBuilder (fork extension point)                 -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)   -> storage, AuthBuilder, ApiBuilder,
-  |     |                                                           ApiBuilder2, SearchBuilder, AddonBuilder
+  |     |                                                           ApiBuilder2, SearchBuilder, AddonBuilder,
+  |     |                                                           CustomBuilder
   |     +-- StaticWeb (CloudFront or ALB hosting)                -> storage
   +-- LocationService (conditional: useLocationService.enabled)
   +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
@@ -194,7 +209,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 
 ### Feature Flags (common/vamsAppFeatures.ts)
 
-`VAMS_APP_FEATURES` enum: `GOVCLOUD`, `ALLOWUNSAFEEVAL`, `LOCATIONSERVICES`, `ALBDEPLOY`, `CLOUDFRONTDEPLOY`, `NOOPENSEARCH`, `AUTHPROVIDER_COGNITO`, `AUTHPROVIDER_COGNITO_SAML`, `AUTHPROVIDER_COGNITO_OIDC`, `AUTHPROVIDER_EXTERNALOAUTHIDP`, `PHYSNA_ADDON`, `DEADLINECLOUD_PIPELINES`. Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`.
+`VAMS_APP_FEATURES` enum: `GOVCLOUD`, `ALLOWUNSAFEEVAL`, `LOCATIONSERVICES`, `ALBDEPLOY`, `CLOUDFRONTDEPLOY`, `NOOPENSEARCH`, `AUTHPROVIDER_COGNITO`, `AUTHPROVIDER_COGNITO_SAML`, `AUTHPROVIDER_COGNITO_OIDC`, `AUTHPROVIDER_EXTERNALOAUTHIDP`, `DEADLINECLOUD_PIPELINES`. `ADDON_APP_FEATURES` enum (`common/addonAppFeatures.ts`): `PHYSNA_ADDON`. Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`. Add-on switches (`ADDON_APP_FEATURES`) are computed by `AddonBuilderNestedStack.enabledFeatures` and a fork's (`CUSTOM_APP_FEATURES`, `common/customAppFeatures.ts`) by its `buildCustomResources()`; `core-stack.ts` pushes both lists.
 
 ---
 
@@ -266,7 +281,7 @@ suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grant
 
 ### Route Registration (attachFunctionToApi helper)
 
-Routes are registered via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })` from the nested stack that builds the route's Lambda. Most routes live in the two API builder stacks, `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts`; the pipeline, pipeline-template, workflow, workflow-trigger, and execution routes all live in `apiBuilder2`. The search stack (`lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts`) registers `/search` and `/search/simple`, and an add-on stack registers its routes only when its add-on is enabled (`lib/nestedStacks/addon/physna/physnaSyncBuilder-nestedStack.ts` registers `/addon/physna/viewer`). `grep -rlE "attachFunctionToApi\(|registry\.register\(" lib` lists every registering file (`apiRouteRegistry.ts` is the helper's definition). For each route the helper adds a descriptor (path, method, Lambda function, allow-anonymous flag) to `RouteRegistry` and creates no API resource itself. `RestApiGatewayConstruct` (`constructs/rest-api-gateway-construct.ts`), which the `RestApi` stack builds after every other registering stack, registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly, then renders all descriptors into a single OpenAPI spec, materializes them on the `SpecRestApi`, and adds one `lambda:InvokeFunction` permission for the API Gateway service principal per registered function. `test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `backend/backend/common/apiRoutes.py`.
+Routes are registered via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })` from the nested stack that builds the route's Lambda. Most routes live in the two API builder stacks, `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts`; the pipeline, pipeline-template, workflow, workflow-trigger, and execution routes all live in `apiBuilder2`. The search stack (`lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts`) registers `/search` and `/search/simple`, and an add-on stack registers its routes only when its add-on is enabled (`lib/nestedStacks/addon/physna/physnaSyncBuilder-nestedStack.ts` registers `/addon/physna/viewer`). A fork registers its routes from `lib/nestedStacks/custom/customResources.ts`, inside the `CustomBuilder` stack; a custom route cannot set `allowAnonymous` (synth fails), because an anonymous route also needs the core-owned authorizer ignored-path list. `grep -rlE "attachFunctionToApi\(|registry\.register\(" lib` lists every registering file (`apiRouteRegistry.ts` is the helper's definition). For each route the helper adds a descriptor (path, method, Lambda function, allow-anonymous flag) to `RouteRegistry`, which stores it as a frozen copy, and creates no API resource itself. `RestApiGatewayConstruct` (`constructs/rest-api-gateway-construct.ts`), which the `RestApi` stack builds after every other registering stack, registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly, then renders all descriptors into a single OpenAPI spec, materializes them on the `SpecRestApi`, and adds one `lambda:InvokeFunction` permission for the API Gateway service principal per registered function. `test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `backend/backend/common/apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
 ### API Stack Ceilings
 
@@ -565,6 +580,22 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 3. Instantiate in `core-stack.ts` with `addDependency(storageResourcesNestedStack)`
 4. Export any resources needed by other stacks via public properties
 
+### Fork Extension Points (core + add-on + custom)
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+Every aggregated list in the CDK app is composed from a core part, an add-on part kept beside it (`lib/nestedStacks/addon/`: `addonCsp.ts`, `addonDefaultRoutes.ts`, `addonStackHelpers.ts`; `common/addonAppFeatures.ts`; `common/addonResourceParamKeys.ts`), and a fork-owned custom part that upstream ships empty and never edits. Core files name no add-on (`test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts`, which `CustomBuilderNestedStack` calls with `CustomResourcesProps` (`config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets`, `registry`):
+
+-   Lambdas follow the [Lambda Builder Pattern](#lambda-builder-pattern) with all five security calls; handlers live in `backend/backend/handlers/custom/`.
+-   Routes use `attachFunctionToApi(scope, fn, { routePath, method, registry: props.registry })`. Synth fails when the fork's code registers an `allowAnonymous` route or makes an earlier route anonymous (`CustomBuilderNestedStack` compares the anonymous routes before and after the call); `RouteRegistry` stores frozen descriptors, so an earlier route cannot be edited through `list()`.
+-   Storage uses `storageResources.encryption.kmsKey` under the same `useKmsCmkEncryption` switch as the core tables (Rule 8).
+-   Resource names are published with `publishCustomResourceName(scope, config, key, value)` (`customStackHelpers.ts`), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py` (`test/storage/resourceNamesMirror.test.ts`); a core key, or a key declared in `common/addonResourceParamKeys.ts`, throws at synth. The add-on lane works the same way: keys in `common/addonResourceParamKeys.ts` (shipped empty), mirrored in `backend/backend/common/addonResourceNames.py`, published by an add-on stack with `publishAddonResourceName()` (`nestedStacks/addon/addonStackHelpers.ts`); both helpers share `nestedStacks/resourceNames/laneResourceNames.ts`. Handlers already hold `ssm:GetParameter*` on the prefix. The parameters hold names only; a secret goes in a `secretsmanager.Secret` with the key imported by ARN (trap 2 of "Encryption at rest for a new resource").
+-   Feature switches are `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`) returned from `buildCustomResources()`; a returned `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value fails synth. Add-on switches are `ADDON_APP_FEATURES` (`common/addonAppFeatures.ts`, `PHYSNA_ADDON`), pushed by `AddonBuilderNestedStack.enabledFeatures`, which refuses a core value. `test/addon/appFeatureLanes.test.ts` keeps the three enums disjoint.
+-   Permission object types for fork or add-on entities are backend constants (`backend/backend/custom/customConstants.py`, `common/addonConstants.py`), not CDK. They get **no seeded constraint**: never extend `dynamodb-authdefaults-admin-construct.ts` or `dynamodb-authdefaults-ro-construct.ts` for one.
+-   Fork settings come from `loadCustomConfig()` (`config/custom/customConfig.json`, outside `ConfigPublic`: not in `getConfig()`, the config templates or the ConfigBuilder). `test/api/apiRouteBackendCdkParity.test.ts` synthesizes with the committed file, so every custom route must be registered under it.
+
+The custom stack holds a `CfnWaitConditionHandle` placeholder so it is valid while empty, has its own template (outside the API stacks' ceilings), and deploys before `RestApi`. The API Gateway path-tree quota is still shared. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
 ### 4. Adding a New DynamoDB Table
 
 1. Add to `storageResources` interface + create the table in `storageResourcesBuilder()` in `storageBuilder-nestedStack.ts`
@@ -745,6 +776,7 @@ node -e "const l=require('./package-lock.json');Object.entries(l.packages).filte
 | S3 bucket registry                | `lib/helper/s3AssetBuckets.ts`                                                               |
 | Batch container log group env     | `lib/helper/batchJobLogGroup.ts`                                                             |
 | Feature flags enum                | `common/vamsAppFeatures.ts`                                                                  |
+| Fork extension point (CDK)        | `lib/nestedStacks/custom/customResources.ts` (+ `customBuilder-nestedStack.ts`, helpers)     |
 | WAF stack                         | `lib/cf-waf-stack.ts`                                                                        |
 | WAF construct + rule policy       | `lib/constructs/wafv2-basic-construct.ts` + `config/policy/wafPolicyConfig.json`             |
 | Aspects (IAM role, log retention) | `lib/aspects/{iam-role-transform,log-retention}.aspect.ts`                                   |

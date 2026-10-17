@@ -31,4 +31,24 @@ describe("RouteRegistry", () => {
         });
         expect(r.list()[0].allowAnonymous).toBe(true);
     });
+
+    it("stores a frozen copy of each descriptor", () => {
+        const r = new RouteRegistry();
+        const d = { path: "/database", method: HttpMethod.GET, lambdaFn: fakeFn("a") };
+        r.register(d);
+        const stored = r.list()[0];
+        expect(Object.isFrozen(stored)).toBe(true);
+        expect(() => {
+            (stored as { allowAnonymous?: boolean }).allowAnonymous = true;
+        }).toThrow(TypeError);
+        // The caller's own object is neither frozen nor linked to the stored copy.
+        expect(Object.isFrozen(d)).toBe(false);
+        (d as { allowAnonymous?: boolean }).allowAnonymous = true;
+        expect(r.list()[0].allowAnonymous).toBeUndefined();
+        expect(r.list()[0]).toEqual({
+            path: "/database",
+            method: HttpMethod.GET,
+            lambdaFn: d.lambdaFn,
+        });
+    });
 });
