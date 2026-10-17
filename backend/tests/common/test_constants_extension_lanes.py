@@ -542,6 +542,43 @@ class TestConsumersReadTheMergedStructures:
         assert s3_mod.validateUnallowedFileExtensionAndContentType("/a/tool.exe", "") is False
         assert s3_mod.validateUnallowedFileExtensionAndContentType("/a/model.glb", "model/gltf-binary") is True
 
+    @pytest.mark.parametrize("key", [
+        "/a/model.XYZ", "/a/model.Xyz",           # case (#412)
+        "/a/model.xyz.", "/a/model.xyz ", "/a/model.xyz/", "/a/..xyz",   # trailing dot/space/slash (#420)
+        "/a/model.xyz::$DATA", "/a/model.xyz:evil", "/a/x:model.xyz",   # each ':' piece (#423)
+    ])
+    def test_a_lane_extension_is_read_like_a_core_one(self, key):
+        """A lane entry goes through the same helper as a core entry, so every spelling the helper
+        normalizes for `.exe` is blocked for `.xyz` too."""
+        s3_mod = _load_s3(_populated())
+        assert s3_mod.validateUnallowedFileExtensionAndContentType(key, "") is False
+        # Control: the same spelling of a core entry is blocked as well.
+        assert s3_mod.validateUnallowedFileExtensionAndContentType(key.replace("xyz", "exe")
+                                                                   .replace("Xyz", "Exe")
+                                                                   .replace("XYZ", "EXE"), "") is False
+
+    @pytest.mark.parametrize("content_type", ["Application/X-Widget", "application/x-widget; charset=binary"])
+    def test_a_lane_mime_type_is_read_like_a_core_one(self, content_type):
+        s3_mod = _load_s3(_populated())
+        assert s3_mod.validateUnallowedFileExtensionAndContentType("/a/model.bin", content_type) is False
+
+    def test_a_lane_extension_without_the_lane_is_not_blocked(self):
+        # Control for the two tests above: the shipped (empty) lanes leave `.xyz` allowed.
+        s3_mod = _load_s3(C)
+        assert s3_mod.validateUnallowedFileExtensionAndContentType("/a/model.XYZ", "") is True
+        assert s3_mod.validateUnallowedFileExtensionAndContentType("/a/model.bin", "Application/X-Widget") is True
+
+    def test_a_populated_merge_keeps_the_412_list_hygiene(self):
+        """tests/common/test_s3_blocklist_case_insensitive.py checks the merged lists of the shipped
+        tree; whatever a lane adds must keep them lower-case, unrepeated and dotted, which the merge
+        rules guarantee (an entry that would break this is refused at import)."""
+        module = _populated()
+        for entries in (module.UNALLOWED_FILE_EXTENSION_LIST, module.UNALLOWED_MIME_LIST):
+            assert all(entry == entry.lower() for entry in entries)
+            assert len(entries) == len(set(entries))
+        assert all(entry.startswith(".") for entry in module.UNALLOWED_FILE_EXTENSION_LIST)
+        assert module.UNALLOWED_FILE_EXTENSION_LIST[-1] == ".xyz"
+
     def test_constraint_validation_accepts_an_extension_type_and_its_fields(self):
         body = {
             "identifier": "widget-readers", "name": "widget-readers", "description": "Widgets",
