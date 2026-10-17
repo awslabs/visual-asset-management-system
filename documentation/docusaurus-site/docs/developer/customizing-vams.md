@@ -563,7 +563,7 @@ export function buildCustomResources(
 
 A custom route is served behind the VAMS custom authorizer like every core route, and the handler enforces both tiers. Tier 1 is the `api` and `web` object types: the `admin` role's default constraints match every route, so administrators reach the API and the page as soon as they deploy, and every other role, including the default read-only role, is denied them until a constraint allows it. Tier 2 is the `widget` type, which no seeded constraint covers. **Until a `widget` constraint exists, no role can read or create a widget, the admin role included**: the listing returns no widgets, and the single-widget read and the create return 403.
 
-The template below grants one role `GET` and `POST` on the widgets of one database: the `widget` constraint for Tier 2, and Tier 1 constraints for the API routes under `/custom/database/{databaseId}/widgets` and for the widget page. It is in the format of the [permission templates](permissions.md#permission-templates). It stays with the fork rather than in `documentation/permissionsTemplates/`, because a core deployment has no `widget` type to import it into. Save it as `widget-users.json`:
+The template below grants one role `GET` and `POST` on the widgets of one database: the `widget` constraint for Tier 2, and Tier 1 constraints for the widget API routes and the widget page. It is in the format of the [permission templates](permissions.md#permission-templates). It stays with the fork rather than in `documentation/permissionsTemplates/`, because a core deployment has no `widget` type to import it into. Save it as `widget-users.json`:
 
 ```json
 {
@@ -600,14 +600,14 @@ The template below grants one role `GET` and `POST` on the widgets of one databa
         },
         {
             "name": "{{ROLE_NAME}}-widgets-api",
-            "description": "Allow the widget API for {{DATABASE_ID}}",
+            "description": "Allow the widget API routes",
             "objectType": "api",
             "criteriaAnd": [],
             "criteriaOr": [
                 {
                     "field": "route__path",
                     "operator": "starts_with",
-                    "value": "/custom/database/{{DATABASE_ID}}/widgets"
+                    "value": "/custom/database"
                 }
             ],
             "groupPermissions": [
@@ -637,6 +637,8 @@ python tools/permissionsSetup/apply_template.py \
     --role-name widget-users \
     --variables '{"DATABASE_ID": "my-project-db"}' --dry-run
 ```
+
+The `api` constraint names the route prefix, not one database, as the shipped templates do: Tier 1 decides which routes a role may call and the `widget` constraint limits it to one database. The routes view (`GET /auth/routes/api/allowed`) checks each route with a placeholder in place of every path parameter, so a route constraint that names a database would never show the routes as allowed there even though the requests pass.
 
 To give administrators widget access, apply the same template with `--role-name admin`; the existing role is kept and the constraints are added to it. A `widgetId` criterion narrows a constraint to one widget, for example `{ "field": "widgetId", "operator": "equals", "value": "<widget UUID>" }`.
 
