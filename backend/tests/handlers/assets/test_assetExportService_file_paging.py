@@ -163,7 +163,7 @@ def _run_batch(m, s3, query_client, assets, **request_overrides):
     try:
         return m.process_asset_batch(
             identifiers, request_model, {"tokens": ["alice"], "roles": []},
-            file_budget=request_overrides.get('maxFiles'))
+            {'requestContext': {}}, file_budget=request_overrides.get('maxFiles'))
     finally:
         for one in reversed(patches):
             one.stop()

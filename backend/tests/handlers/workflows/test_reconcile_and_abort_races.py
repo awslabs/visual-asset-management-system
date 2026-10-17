@@ -480,3 +480,26 @@ class TestADeadlineCloudJobIsCancellable:
         assert "Sub-process of type 'ecsTask' (0123abcd) could not be aborted" in warning
         assert "arn:" not in warning and "123456789012" not in warning
         client.update_job.assert_not_called()
+
+
+@pytest.mark.unit
+class TestAbortWarningsNameTheDisplayIdentifier:
+    """An abort warning names an ARN-located sub-process by its final ARN segment, so the account id
+    and Region never reach the caller; the stop call still receives the full ARN."""
+
+    def test_a_sub_execution_that_could_not_be_stopped_is_named_by_execution_name(self):
+        execution_arn = "arn:aws:states:us-east-1:123456789012:execution:sub:run-1"
+        with patch.object(le, "_stop_sfn_execution_reporting",
+                          return_value=(False, "AccessDeniedException")) as stop:
+            warning = le._abort_registered_sub_process(
+                {"resourceType": "stepFunctionsExecution", "executionArn": execution_arn})
+        assert warning == "Sub-process abort failed for run-1: AccessDeniedException"
+        stop.assert_called_once_with(execution_arn)
+
+    def test_a_batch_job_that_could_not_be_terminated_is_named_by_job_id(self):
+        job_arn = "arn:aws:batch:us-east-1:123456789012:job/abc-123"
+        with patch.object(le, "_terminate_batch_job_reporting",
+                          return_value=(False, "AccessDeniedException")) as terminate:
+            warning = le._abort_registered_sub_process({"resourceType": "batchJob", "jobArn": job_arn})
+        assert warning == "Sub-process abort failed for Batch job abc-123: AccessDeniedException"
+        terminate.assert_called_once_with(job_arn)
