@@ -81,7 +81,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Other changes:**
 
 -   **Dependency security updates** — `handlebars` 4.7.10, `simple-git` 4.0.2, `source-map-js` 1.2.2, `pbkdf2` 3.1.7, `dompurify` 3.4.16, `fast-uri` 3.1.8, `http-cache-semantics` 4.3.0, `joi` 17.13.8, `postcss-selector-parser` 7.1.6 and `Werkzeug` 3.1.9 resolve security advisories in the root, `infra/`, `web/`, viewer install, documentation site and backend test dependencies. `dompurify` ships in the Cesium 3D Tileset viewer; the other packages are build, install and test tooling or browser polyfills. (issue #486)
-    -   Note: `simple-git` 4 removes `GIT_SSL_CAINFO`, `GIT_SSH_COMMAND` and `GIT_CONFIG_GLOBAL` from the environment of the git commands the Potree and Needle USD viewer install scripts run during `npm install` in `web/`. A build host that relies on one of them for those clones sets the equivalent in `~/.gitconfig` (for example `http.sslCAInfo`); `HTTPS_PROXY` and `SSL_CERT_FILE` still apply.
+    -   Note: `simple-git` 4 removes every inherited `GIT_*` environment variable (for example `GIT_SSL_CAINFO` and `GIT_CONFIG_GLOBAL`), plus the editor, pager and askpass variables, from the git commands the Potree and Needle USD viewer install scripts run during `npm install` in `web/`. A build host that relies on one of them for those clones sets the equivalent in `~/.gitconfig` (for example `http.sslCAInfo`); `HTTPS_PROXY` and `SSL_CERT_FILE` still apply. The install scripts catch git errors, so a failed clone leaves that viewer missing rather than failing `npm install`.
 
 **Known issues:**
 
