@@ -82,6 +82,34 @@ class TestWorkflowGet:
             result = cli_runner.invoke(cli, ['workflow', 'get', '-d', 'my-db', '-w', 'bad'])
             assert result.exit_code != 0
 
+    def test_a_stale_deployment_is_shown_with_its_reason(self, cli_runner, generic_command_mocks):
+        # Set when the state machine could not be redeployed after a referenced pipeline changed.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].get_workflow.return_value = {'message': {
+                'workflowId': 'wf1', 'deploymentStale': True,
+                'deploymentStaleReason': 'The state machine could not be redeployed (Throttling).'}}
+            result = cli_runner.invoke(cli, ['workflow', 'get', '-d', 'my-db', '-w', 'wf1'])
+            assert result.exit_code == 0
+            assert 'Deployment: stale (The state machine could not be redeployed' in result.output
+
+    def test_a_current_deployment_adds_no_line(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].get_workflow.return_value = {'message': {
+                'workflowId': 'wf1', 'deploymentStale': None, 'deploymentStaleReason': None}}
+            result = cli_runner.invoke(cli, ['workflow', 'get', '-d', 'my-db', '-w', 'wf1'])
+            assert result.exit_code == 0
+            assert 'Deployment:' not in result.output
+
+    def test_json_output_passes_the_stale_fields_through(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].get_workflow.return_value = {'message': {
+                'workflowId': 'wf1', 'deploymentStale': True, 'deploymentStaleReason': 'r'}}
+            result = cli_runner.invoke(cli, ['workflow', 'get', '-d', 'my-db', '-w', 'wf1',
+                                             '--json-output'])
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload['deploymentStale'] is True and payload['deploymentStaleReason'] == 'r'
+
 
 class TestWorkflowCreate:
     def test_create_with_pipeline_refs(self, cli_runner, generic_command_mocks):
