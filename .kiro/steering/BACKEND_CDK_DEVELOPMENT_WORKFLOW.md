@@ -519,6 +519,17 @@ A new validator name is one `_VALIDATOR_DISPATCH` entry **plus** one `LEGITIMATE
 `test_the_table_covers_every_implemented_name` fails otherwise) and a negative sample in
 `backend/tests/common/test_mock_validators_delegates.py`.
 
+The file-key validators (`RELATIVE_FILE_PATH`, `RELATIVE_FILE_PATH_ARRAY`, `DOWNLOAD_KEY_ARRAY`,
+`ASSET_PATH`, `ASSET_AUXILIARYPREVIEW_PATH`) also refuse a key whose **UTF-8 encoding** exceeds
+`MAX_S3_OBJECT_KEY_BYTES` (1024, the Amazon S3 object-key limit) — bytes, not characters. The
+validator sees only the asset-relative part, so the handlers that resolve a key against the asset prefix
+re-check the RESOLVED key before their first S3 call and answer a generic `400` that does not echo the
+key: `streamAsset.py`, `streamAuxiliaryPreviewAsset.py`, `downloadAsset.py`, `uploadFile.py`
+`initialize_upload` (final and `temp-uploads/` key, in the pre-loop block so a refused batch creates no
+multipart upload) and `assetFiles.py` `create_folder` / `move_file` / `copy_file` (destination key).
+Every guard calls `common/validators.exceeds_s3_object_key_limit(key)` rather than re-implementing the
+byte comparison; an over-long key is a `400`, never an S3 `ClientError` reported as a `500` (issue #407).
+
 #### **Request/Response Model Strategy**:
 
 1. **Use validators first** where a validation type exists
@@ -2378,6 +2389,8 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 **Pipeline handlers** in `backendPipelines/` continue to use legacy environment variables and do not call `get_table_name()`.
 
 **`PRESIGNED_URL_TIMEOUT_SECONDS` is not global.** Only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, for the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`), and all five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level. A handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start — CDK synth, lint, and env-patching unit tests all pass. Add the variable to the handler's own builder before reading it.
+
+**Every path that hands out asset file content applies three controls on top of Casbin.** A presigned GET URL or a streamed body — in `downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, and `assetExportService` — is refused (or, for the export's per-asset entries, withheld) when the asset's `isDistributable` is false; is refused (export: withheld, the file stays in the listing) when `validateUnallowedFileExtensionAndContentType` rejects the file's key or the `ContentType` a `head_object` of the version about to be served reports, or when that head fails; and every URL or body actually issued is written to the file-download audit log (`log_file_download` / `log_file_download_bulk` / `log_file_download_streamed` in `customLogging/auditLogging.py`). A new download surface gets all three; `downloadAsset.py`'s `lambda_handler` is the reference call shape, and `assetExportService.py` `file_type_allowed_for_download` is the withhold-not-refuse form. A surface that checks many files in one request runs the heads through a bounded pool (`downloadAsset.py`'s bulk branch, `assetExportService.py` `mark_files_allowed_for_download`): serial per-file heads over an asset of thousands of files exceed the API Gateway integration timeout.
 
 ### **AWS Client Configuration Pattern**
 

@@ -418,12 +418,18 @@ class TestTrimmingDoesNotReachBeyondNamesAndIds:
 
     def test_an_s3_key_keeps_its_surrounding_whitespace(self):
         """A trailing space is a legitimate S3 key character, so trimming a path would retarget
-        the operation at a different object."""
+        the operation at a different object. The source of a move or copy names an object that
+        already exists and is passed through verbatim; the destination names a key the request
+        creates, and since issue #420 a trailing dot or space there is REFUSED, never trimmed (a
+        trimmed destination would silently create a different object than the one asked for)."""
+        from aws_lambda_powertools.utilities.parser import ValidationError
         from models.assetsV3 import CopyFileRequestModel, MoveFileRequestModel
 
         for model_cls in (CopyFileRequestModel, MoveFileRequestModel):
-            model = model_cls(sourcePath="/a/b ", destinationPath="/a/c ")
-            assert (model.sourcePath, model.destinationPath) == ("/a/b ", "/a/c ")
+            model = model_cls(sourcePath="/a/b ", destinationPath="/a/c")
+            assert (model.sourcePath, model.destinationPath) == ("/a/b ", "/a/c")
+            with pytest.raises(ValidationError):
+                model_cls(sourcePath="/a/b", destinationPath="/a/c ")
 
     def test_the_physna_relative_path_keeps_its_surrounding_whitespace(self):
         from models.addon.physnaViewer import PhysnaViewerRequestModel

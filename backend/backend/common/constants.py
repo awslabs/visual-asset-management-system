@@ -59,9 +59,12 @@ EVALUATOR_RESERVED_ATTRIBUTES = frozenset({
     "values",
 })
 
-# Upload deny-list entries an extension adds. The upload check compares the key's last extension
-# (everything from its last dot) and the media type without parameters, both lower-cased, so an
-# entry is lower-case, an extension has exactly one leading dot, and a MIME type has no parameters.
+# Upload deny-list entries an extension adds. The upload check (common/s3.py
+# validateUnallowedFileExtensionAndContentType) lower-cases the media type with its parameters
+# stripped, and lower-cases each extension it reads: everything from the last dot of each
+# ':'-separated piece of the key's final non-empty segment, after trailing dots and whitespace are
+# removed. So an entry is lower-case, an extension has exactly one leading dot and no other dot,
+# ':' or whitespace, and a MIME type has no parameters.
 EXTENSION_DENY_EXTENSION_PATTERN = r"^\.[a-z0-9][a-z0-9_+-]{0,31}$"
 EXTENSION_DENY_MIME_PATTERN = r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$"
 
@@ -386,7 +389,9 @@ def get_constraint_fields_for_object_type(object_type):
 # Role field validation constants
 ALLOWED_ROLE_SOURCES = ['INTERNAL_SYSTEM']
 
-#Unallowed file extension list
+#Unallowed file extension list. Entries are lower-case and compared against the lower-cased
+#extension (common/s3.py validateUnallowedFileExtensionAndContentType); tests/common/
+#test_s3_blocklist_case_insensitive.py rejects an entry that is not lower-case or is listed twice.
 CORE_UNALLOWED_FILE_EXTENSION_LIST = [
     ".jar",
     ".java",
@@ -395,19 +400,18 @@ CORE_UNALLOWED_FILE_EXTENSION_LIST = [
     ".reg",
     ".pif",
     ".bak",
-    ".java",
     ".dll",
     ".exe",
     ".nat",
     ".cmd",
-    ".exe",
     ".lnk",
     ".docm",
     ".vbs",
     ".bat"
 ] 
 
-#Unallowed MIME type list for many of the equivilent file extensions in UNALLOWED_FILE_EXTENSION_LIST:
+#Unallowed MIME type list for many of the equivilent file extensions in UNALLOWED_FILE_EXTENSION_LIST.
+#Same contract: lower-case entries, matched against the lower-cased media type (parameters stripped).
 CORE_UNALLOWED_MIME_LIST = [
     "application/java-archive",
     "application/x-python-code",
@@ -416,7 +420,6 @@ CORE_UNALLOWED_MIME_LIST = [
     "application/x-sh",
     "application/java-vm",
     "application/x-msdownload",
-    "application/x-sh",
     "application/x-php",
     "application/x-ms-dos-executable",
     "application/x-ini",
@@ -425,7 +428,7 @@ CORE_UNALLOWED_MIME_LIST = [
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/x-ms-shortcut",
     "application/x-bat-script",
-    "application/vnd.ms-word.document.macroEnabled.12",
+    "application/vnd.ms-word.document.macroenabled.12",
     "application/javascript",
     "application/x-vbs",
     "application/x-powershell",
@@ -434,6 +437,8 @@ CORE_UNALLOWED_MIME_LIST = [
     "application/powershell"
 ]
 
+# The lists common/s3.py imports: core + add-on + custom, append-only (see "Extension lanes"). The
+# hygiene tests in tests/common/test_s3_blocklist_case_insensitive.py read these merged lists.
 UNALLOWED_FILE_EXTENSION_LIST = merge_deny_list(
     "file extension",
     CORE_UNALLOWED_FILE_EXTENSION_LIST,
