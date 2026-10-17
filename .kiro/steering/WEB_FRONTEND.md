@@ -1044,6 +1044,50 @@ value is deliberately double-encoded (see the comment in `SuperSplatViewerCompon
 same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
 breaks and S3 returns 400.
 
+### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
+
+A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
+expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
+are not treated as containing credentials and stay in the web app access-logs bucket until its
+lifecycle rule removes them (`WebAppAccessLogsBucket` in `staticWebBuilder-nestedStack.ts`): the bucket
+is versioned, so a log object expires after 30 days and its noncurrent version is deleted 30 days later.
+
+`supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
+`?load=<presigned>&filename=…`) — one object, expiring, but logged. **Do not copy the pattern into a new
+viewer.** Use the **URL fragment** instead: browsers do not transmit a fragment, so nothing reaches the
+server or its logs.
+
+For a vendored build that reads `location.search` and cannot be changed at the call site, inject a shim
+into its `index.html` from that viewer's `customInstalls/` script which moves the fragment into the query
+string with `history.replaceState` before the bundle runs. Write the shim as a file beside `index.html`
+and load it with a classic `<script src>` placed ahead of the bundle's: the CSP's `script-src` admits an
+inline script only by the hashes of `web/index.html`'s own blocks (`cspInlineScriptHashes.ts`), so an
+inline shim in a viewer page never runs. Patch the HTML entry rather than the minified bundle: the bundle
+is regenerated from a pinned upstream tag on every `npm install`, so a regex against its internals breaks
+on the next version bump while injected elements do not.
+
+The shimmed page also needs `<meta name="referrer" content="no-referrer">` at the top of its `<head>`,
+ahead of the shim and of every `<script>` and `<link>`. `replaceState` issues no request, but it
+changes the document URL, and the browser builds the `Referer` of every later request the page makes
+from that URL. The CloudFront distribution sends `Referrer-Policy: strict-origin-when-cross-origin`
+(`cloudfront-s3-website-construct.ts`) and the ALB sends none, so the browser default applies, which is
+the same policy. Both put the full URL, query string included, in the `Referer` of a same-origin request,
+and a vendored viewer keeps fetching its own files after it starts (SuperSplat loads `static/locales/`
+and `static/lib/webp/webp.wasm` from `/viewers/supersplat/`). Without the `<meta>`, each of those requests
+carries the presigned URL into the web access logs: CloudFront standard logs record the `Referer`, and on
+the ALB path so do the web bucket's S3 server access logs. A `<meta>` referrer policy replaces the
+response header's for the requests the document makes after the element is parsed, which is why it goes
+at the top, and it is the only control that covers both distributions, because the ALB cannot add a
+`Referrer-Policy` header. The iframe's `referrerPolicy` attribute, which `HTMLViewerComponent.tsx` sets,
+is not a substitute: it governs only the request that loads the framed page, not the requests that page
+makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
+the fragment.
+
+Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
+value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
+same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
+breaks and S3 returns 400.
+
 ---
 
 ## 9. Configuration System
