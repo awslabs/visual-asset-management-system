@@ -40,6 +40,7 @@ import {
     buildHandleExecutionErrorFunction,
     buildRegisterPipelineExecutionFunction,
     buildWorkflowRole,
+    grantWorkflowServiceInternalInvoke,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
     buildPipelineServiceV2Function,
@@ -525,6 +526,13 @@ export class ApiBuilder2NestedStack extends NestedStack {
                 resources: [executeWorkflowV2.functionArn],
             })
         );
+
+        // Keep workflow state machines current with their pipelines: a pipeline save schedules an
+        // asynchronous redeploy of every referencing workflow, and a launch redeploys a stale workflow
+        // synchronously before starting it. Both invoke the workflow service, which holds the deploy
+        // permissions, so each caller gets only lambda:InvokeFunction on its exact function ARN.
+        grantWorkflowServiceInternalInvoke(pipelineServiceV2, workflowServiceV2);
+        grantWorkflowServiceInternalInvoke(executeWorkflowV2, workflowServiceV2);
 
         // File-upload trigger dispatcher (WB5b): orchestration-bus rule -> SQS buffer -> this lambda,
         // which matches fileUpload triggers and invokes executeWorkflowV2 per firing workflow.

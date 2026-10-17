@@ -1271,6 +1271,30 @@ export function buildImportGlobalPipelineWorkflowFunction(
 }
 
 /**
+ * Let `caller` invoke the workflow service's internal redeploy actions: the pipeline service schedules
+ * a refresh of every workflow referencing a pipeline whose definition-relevant settings changed, and the
+ * execute handler redeploys a stale workflow before launching it. The grant is `lambda:InvokeFunction`
+ * on the workflow service's function ARN only; the caller gets no Step Functions or iam:PassRole
+ * permission, since the workflow service performs the deploy with its own role.
+ */
+export function grantWorkflowServiceInternalInvoke(
+    caller: lambda.Function,
+    workflowServiceFunction: lambda.Function
+): void {
+    caller.addEnvironment(
+        "WORKFLOW_SERVICE_V2_FUNCTION_NAME",
+        workflowServiceFunction.functionName
+    );
+    caller.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["lambda:InvokeFunction"],
+            resources: [workflowServiceFunction.functionArn],
+        })
+    );
+}
+
+/**
  * Workflow V2 service (CRUD + enable/disable/archive + save-validation). Reads/writes the V2
  * workflow + triggers tables (triggers listed on the details view) and reads the V2 pipeline table
  * (referenced-pipeline authorization + save-consistency checks + GLOBAL/scope string checks).
@@ -1279,7 +1303,8 @@ export function buildImportGlobalPipelineWorkflowFunction(
  * Functions state machine (common.workflows.workflowAsl.deploy_state_machine), so it receives the
  * dedicated SFN execution role (buildWorkflowRole, built by the caller so its ARN can also be published
  * to SSM) and the execution-overhaul lambda names + log group + partition as env, plus
- * states:Create/Describe/UpdateStateMachine + iam:PassRole.
+ * states:Create/Describe/UpdateStateMachine + iam:PassRole. Every deploy publishes a state machine
+ * version (and deletes versions past the retained count), which a launch starts on.
  */
 export function buildWorkflowServiceV2Function(
     scope: Construct,
@@ -1334,6 +1359,9 @@ export function buildWorkflowServiceV2Function(
                 "states:CreateStateMachine",
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
+                "states:PublishStateMachineVersion",
+                "states:ListStateMachineVersions",
+                "states:DeleteStateMachineVersion",
             ],
             resources: [
                 IAMArn("*" + config.name + "*").statemachine,
