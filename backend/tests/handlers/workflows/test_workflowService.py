@@ -146,7 +146,7 @@ class TestWorkflowServiceV2:
         mock_enforcer.return_value = _enforcer()
         mock_get_pipe.return_value = PIPELINE_REC
         mock_asl.ASL_SCHEMA_VERSION = 1
-        mock_asl.deploy_state_machine.return_value = ("", [])
+        mock_asl.deploy_state_machine.return_value = ("", [], "")
         table = MagicMock()
         table.get_item.return_value = {}  # no existing workflow
         mock_table.return_value = table
@@ -226,7 +226,7 @@ class TestWorkflowServiceV2:
         # resolution, so a workflow-denied caller cannot use either as an existence oracle.
         mock_claims.return_value = {"tokens": ["user1"]}
         mock_enforcer.return_value = _enforcer(api=True, obj=False)  # workflow POST denied
-        mock_asl.deploy_state_machine.return_value = ("", [])
+        mock_asl.deploy_state_machine.return_value = ("", [], "")
         table = MagicMock()
         mock_table.return_value = table
         body = {"databaseId": "db1", "workflowId": "wflow1", "workflowName": "W",
