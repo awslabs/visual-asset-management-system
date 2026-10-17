@@ -158,7 +158,7 @@ CUSTOM_UNALLOWED_FILE_EXTENSIONS = [".xyz"]
 CUSTOM_UNALLOWED_MIME_TYPES = ["application/x-example"]
 ```
 
-An extension is lower-case with one leading dot (`.xyz`, not `xyz`, `.XYZ` or `.tar.gz`), and a MIME type is lower-case with no parameters. A lane entry is matched exactly as a core entry is (see [Blocked File Types](../architecture/security.md#blocked-file-types)): the check lower-cases the file's extension and media type, so `.xyz` also blocks `model.XYZ`. An entry that is malformed or repeats a core entry, or one the other lane adds, fails the import with an error naming the file and the entry. The core entries always stay in the merged list, so there is no way for a lane to remove one.
+An extension is lower-case with one leading dot (`.xyz`, not `xyz`, `.XYZ` or `.tar.gz`), and a MIME type is lower-case with no parameters. A lane entry is matched the same way as a core entry (see [Blocked File Types](../architecture/security.md#blocked-file-types)): the check lower-cases the file's extension and media type, so `.xyz` also blocks `model.XYZ`. An entry that is malformed or repeats a core entry, or one the other lane adds, fails the import with an error naming the file and the entry. The core entries always stay in the merged list, so there is no way for a lane to remove one.
 
 ## Worked Example: Widgets
 
