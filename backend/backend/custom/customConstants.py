@@ -12,14 +12,15 @@ raises at import, naming this file and the entry, so every Lambda and the backen
 * ``CUSTOM_PERMISSION_CONSTRAINT_FIELDS`` -- constraint fields a custom object type is authorized
   on, each mapped to its sample value: ``""`` for a single value, ``[]`` for a list of values (a list
   field accepts only the ``is_one_of`` / ``is_not_one_of`` operators, like ``tags``). A name matches
-  ``^[A-Za-z][A-Za-z0-9]{1,63}$``, is not a Python keyword, and is not a core or add-on field.
+  ``^[A-Za-z][A-Za-z0-9]{1,63}$``, is not a Python keyword, and is not a core or add-on field in
+  any letter case.
 * ``CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS`` -- permission object types for the entities a fork's
   handlers authorize, each mapped to
   ``{"label": "...", "fields": [{"label": "...", "value": "<field>"}]}``. A type name follows the
-  same pattern and is not a core or add-on type; each field it lists is a core field (for example
-  ``databaseId``) or one declared above. The type then appears in the constraint editor and the
-  ``GET /auth/constraints/permissionObjects`` listing. It grants nothing until a constraint allows
-  it, the seeded admin role included, so the fork adds its own constraints.
+  same pattern and is not a core or add-on type in any letter case; each field it lists is a core
+  field (for example ``databaseId``) or one declared above. The type then appears in the constraint
+  editor and the ``GET /auth/constraints/permissionObjects`` listing. It grants nothing until a
+  constraint allows it, the seeded admin role included, so the fork adds its own constraints.
 * ``CUSTOM_UNALLOWED_FILE_EXTENSIONS`` / ``CUSTOM_UNALLOWED_MIME_TYPES`` -- entries added to the
   upload deny lists, append-only: a lower-case extension with its leading dot (``".xyz"``), a
   lower-case MIME type (``"application/x-example"``). A core entry cannot be removed or repeated.

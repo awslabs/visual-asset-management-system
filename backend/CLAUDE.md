@@ -934,7 +934,9 @@ and `models/addon/` (the Physna viewer model). Every list merges in the order co
     `x__y` shape and nothing that leaves the `r.obj.<field>` position in a rule), are not `object__type`,
     `route__path` or `method`, not a Python keyword or `EVALUATOR_RESERVED_ATTRIBUTES` name, and not a core or
     other-lane entry; a type's fields exist in the merged field set; samples are `""` or `[]` (list fields
-    take only `is_one_of` / `is_not_one_of`). Deny-list entries are append-only, lower-case, `.ext` / `type/subtype`.
+    take only `is_one_of` / `is_not_one_of`). Type and field names are compared ignoring letter case when
+    checking for a repeat, so `Asset` repeats `asset` and `DatabaseId` repeats `databaseId`; authorization
+    still matches a name exactly. Deny-list entries are append-only, lower-case, `.ext` / `type/subtype`.
 -   **No automatic grant.** An extension object type gets no seeded constraint: the
     `dynamodb-authdefaults-*` constructs are not extended, so every role, admin included, is denied on it until
     the fork adds a constraint (`tests/handlers/authz/test_extension_object_types.py`). Never add one.

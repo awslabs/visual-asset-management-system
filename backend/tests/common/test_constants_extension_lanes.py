@@ -309,6 +309,78 @@ class TestObjectTypeAndFieldMerge:
             _merge(custom_fields=["widgetId"])
 
 
+_SOURCE = {"addon": r"common/addonConstants\.py", "custom": r"custom/customConstants\.py"}
+
+
+@pytest.mark.unit
+class TestCaseVariantsAreRepeats:
+    """A name that differs from a core or other-lane name only in letter case is a repeat.
+
+    Authorization still matches names exactly, so a look-alike such as `Asset` would never match a
+    core asset; it is refused so that a constraint editor never lists two types (or fields) that
+    differ only in case.
+    """
+
+    @pytest.mark.parametrize("lane", ["addon", "custom"])
+    @pytest.mark.parametrize("variant, core_field", [("DatabaseId", "databaseId"), ("TAGS", "tags"),
+                                                      ("assetname", "assetName")])
+    def test_a_case_variant_of_a_core_field_is_refused(self, lane, variant, core_field):
+        with pytest.raises(Error, match=f"{_SOURCE[lane]}: constraint field '{variant}' is already "
+                                        f"declared by core as '{core_field}'"):
+            _merge(**{f"{lane}_fields": {variant: ""}})
+
+    @pytest.mark.parametrize("lane", ["addon", "custom"])
+    @pytest.mark.parametrize("variant, core_type", [("Asset", "asset"), ("DATABASE", "database"),
+                                                     ("metadataschema", "metadataSchema"),
+                                                     ("UserRole", "userRole")])
+    def test_a_case_variant_of_a_core_type_is_refused(self, lane, variant, core_type):
+        entry = {variant: {"label": "X", "fields": [{"label": "D", "value": "databaseId"}]}}
+        with pytest.raises(Error, match=f"{_SOURCE[lane]}: object type '{variant}' is already "
+                                        f"declared by core as '{core_type}'"):
+            _merge(**{f"{lane}_types": entry})
+
+    def test_add_on_and_custom_cannot_declare_case_variants_of_each_other(self):
+        with pytest.raises(Error, match=r"custom/customConstants\.py: constraint field 'WidgetId' is "
+                                        r"already declared by common/addonConstants\.py as 'widgetId'"):
+            _merge(addon_fields={"widgetId": ""}, custom_fields={"WidgetId": ""})
+        with pytest.raises(Error, match=r"custom/customConstants\.py: object type 'Widget' is "
+                                        r"already declared by common/addonConstants\.py as 'widget'"):
+            _merge(addon_fields={"widgetId": ""}, addon_types=WIDGET_TYPE,
+                   custom_types={"Widget": {"label": "W", "fields": [{"label": "W", "value": "widgetId"}]}})
+
+    def test_one_lane_cannot_declare_two_case_variants(self):
+        with pytest.raises(Error, match=r"custom/customConstants\.py: constraint field 'WidgetId' is "
+                                        r"already declared by custom/customConstants\.py as 'widgetId'"):
+            _merge(custom_fields={"widgetId": "", "WidgetId": ""})
+
+    def test_an_exact_repeat_keeps_its_exact_message(self):
+        # The exact-duplicate refusal is unchanged: same text, no case-variant suffix.
+        with pytest.raises(Error) as excinfo:
+            _merge(custom_fields={"databaseId": ""})
+        assert str(excinfo.value) == ("custom/customConstants.py: constraint field 'databaseId' "
+                                      "is already declared by core")
+        with pytest.raises(Error) as excinfo:
+            _merge(addon_types=WIDGET_TYPE, custom_types=WIDGET_TYPE, addon_fields={"widgetId": ""})
+        assert str(excinfo.value) == ("custom/customConstants.py: object type 'widget' "
+                                      "is already declared by common/addonConstants.py")
+
+    def test_a_name_that_differs_in_more_than_case_is_accepted(self):
+        # Control for the refusals above: near names that are not case variants still merge.
+        object_types, fields, _ = _merge(
+            addon_fields={"databaseIds": ""},
+            addon_types={"assetGroup": {"label": "G", "fields": [{"label": "D", "value": "databaseIds"}]}},
+            custom_fields={"widgetId": "", "tagsList": []}, custom_types=WIDGET_TYPE)
+        assert object_types[-2:] == ["assetGroup", "widget"]
+        assert list(fields)[-3:] == ["databaseIds", "widgetId", "tagsList"]
+
+    def test_empty_lanes_still_merge_to_exactly_core(self):
+        assert _merge() == (C.CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES, C.CORE_PERMISSION_CONSTRAINT_FIELDS,
+                            C.CORE_CONSTRAINT_OBJECT_TYPE_FIELDS)
+        # The core names are distinct in any case, so the rule never refuses core itself.
+        for names in (C.CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES, list(C.CORE_PERMISSION_CONSTRAINT_FIELDS)):
+            assert len({name.casefold() for name in names}) == len(names)
+
+
 @pytest.mark.unit
 class TestDenyListMerge:
     def test_entries_are_appended_and_the_core_list_is_kept_whole(self):
@@ -372,6 +444,12 @@ class TestRefusalHappensAtImport:
     def test_a_bad_add_on_lane_fails_the_import_naming_the_file(self):
         with pytest.raises(Error, match=r"common/addonConstants\.py: file extension '\.EXE'"):
             load_constants(addon=addon_lane(extensions=[".EXE"]))
+
+    def test_a_case_variant_of_a_core_type_fails_the_import(self):
+        with pytest.raises(Error, match=r"custom/customConstants\.py: object type 'Asset' is "
+                                        r"already declared by core as 'asset'"):
+            load_constants(custom=custom_lane(
+                types_={"Asset": {"label": "A", "fields": [{"label": "D", "value": "databaseId"}]}}))
 
     def test_a_good_lane_imports_and_merges(self):
         module = load_constants(custom=custom_lane(fields={"widgetId": ""}, types_=WIDGET_TYPE,

@@ -83,14 +83,20 @@ def merge_constraint_extensions(core_object_types, core_fields, core_type_fields
     ``*_PERMISSION_CONSTRAINT_FIELDS`` and ``*_CONSTRAINT_OBJECT_TYPE_FIELDS``. Raises
     ConstantsExtensionError when an entry breaks a rule: a malformed name; a reserved key; a Python
     keyword or evaluator-reserved field name; a sample value other than "" or []; a type or field
-    that repeats a core one or one another lane declares; a malformed type entry; or a type that
-    lists a field the merged field set does not hold. The core arguments are not modified.
+    that repeats a core one or one another lane declares, compared case-insensitively; a malformed
+    type entry; or a type that lists a field the merged field set does not hold. The core arguments
+    are not modified.
     """
     object_types = list(core_object_types)
     fields = dict(core_fields)
     type_fields = dict(core_type_fields)
     field_owner = {name: "core" for name in fields}
     type_owner = {name: "core" for name in object_types}
+    # A name repeats another when the two are equal ignoring letter case (`Asset` repeats `asset`),
+    # so the constraint editor never lists two names that differ only in case. Rules still match a
+    # name exactly. Each maps the casefolded name to the name as declared.
+    field_folded = {name.casefold(): name for name in fields}
+    type_folded = {name.casefold(): name for name in object_types}
 
     # Fields first, across every lane, so a type may list a field another lane declares.
     for source, lane_fields, _lane_types in lanes:
@@ -104,11 +110,16 @@ def merge_constraint_extensions(core_object_types, core_fields, core_type_fields
                      source, f"constraint field {name!r} cannot be evaluated as an attribute name")
             _require(name not in field_owner, source,
                      f"constraint field {name!r} is already declared by {field_owner.get(name)}")
+            folded = field_folded.get(name.casefold())
+            _require(folded is None, source,
+                     f"constraint field {name!r} is already declared by {field_owner.get(folded)} "
+                     f"as {folded!r}")
             _require((isinstance(sample, str) and sample == "")
                      or (isinstance(sample, list) and sample == []), source,
                      f"constraint field {name!r} must map to \"\" (one value) or [] (a list of values)")
             fields[name] = [] if isinstance(sample, list) else ""
             field_owner[name] = source
+            field_folded[name.casefold()] = name
 
     for source, _lane_fields, lane_types in lanes:
         _require(isinstance(lane_types, dict), source,
@@ -119,6 +130,10 @@ def merge_constraint_extensions(core_object_types, core_fields, core_type_fields
                      f"object type {type_name!r} is a reserved key")
             _require(type_name not in type_owner, source,
                      f"object type {type_name!r} is already declared by {type_owner.get(type_name)}")
+            folded = type_folded.get(type_name.casefold())
+            _require(folded is None, source,
+                     f"object type {type_name!r} is already declared by {type_owner.get(folded)} "
+                     f"as {folded!r}")
             _require(isinstance(entry, dict) and set(entry) == {"label", "fields"}, source,
                      f"object type {type_name!r} must map to {{\"label\": ..., \"fields\": [...]}}")
             _require(isinstance(entry["label"], str) and entry["label"].strip() != "", source,
@@ -147,6 +162,7 @@ def merge_constraint_extensions(core_object_types, core_fields, core_type_fields
                 "fields": [{"label": f["label"], "value": f["value"]} for f in entry["fields"]],
             }
             type_owner[type_name] = source
+            type_folded[type_name.casefold()] = type_name
 
     return object_types, fields, type_fields
 
