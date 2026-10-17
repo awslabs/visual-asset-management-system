@@ -74,6 +74,7 @@ web/
       addons/               # Add-on API calls (physnaAPIService.ts)
 
     addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
+                            #   — see WEB_FRONTEND.md 7.5
     custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
                             #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5
 
