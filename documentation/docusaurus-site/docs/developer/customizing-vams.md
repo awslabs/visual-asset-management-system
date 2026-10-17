@@ -242,10 +242,10 @@ The environment variable in the `ResourceParamKey` is the break-glass override t
 # backend/backend/models/custom/widgets.py
 from typing import Optional
 
-from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from pydantic import Field
 
-from common.validators import validate
+from common.validators import trim_name, validate
 
 # A page must fit the 6 MB Lambda response limit; tokens are a base64 LastEvaluatedKey.
 MAX_WIDGET_LIST_PAGE_SIZE = 1000
@@ -263,6 +263,11 @@ class CreateWidgetRequestModel(BaseModel, extra="ignore"):
     widgetId: Optional[str] = None
     widgetName: str = Field(min_length=1, max_length=256)
     description: Optional[str] = Field(default=None, max_length=256)
+
+    # Trim surrounding whitespace before the length checks, as core models do; the repo's
+    # model tests fail on a name or free-text field that neither trims nor is exempted.
+    _trim_names = validator("widgetName", pre=True, allow_reuse=True)(trim_name)
+    _trim_text = validator("description", pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_widget_id(cls, values):
