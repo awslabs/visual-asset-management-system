@@ -1885,6 +1885,8 @@ The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP
 -   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
 -   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
 
+**Lambda-to-Lambda invokes** (mirrors `infra/CLAUDE.md`): grant `lambda:InvokeFunction` on the target's exact `functionArn` with an explicit `PolicyStatement` rather than `grantInvoke()` (which adds `{functionArn}:*`), and pass the target's name as an env var. `grantWorkflowServiceInternalInvoke` (`lambdaBuilder/workflowFunctions.ts`) does this for `pipelineService` and `executeWorkflow` calling the workflow service's internal redeploy actions (env `WORKFLOW_SERVICE_V2_FUNCTION_NAME`), with no Step Functions or `iam:PassRole` grant on either caller; `test/security/workflowLambdaGrants.test.ts` pins it.
+
 #### **KMS Key Permissions Pattern**
 
 ```typescript
