@@ -340,7 +340,8 @@ def _run_preview_stage(
         return _error_response(
             stage,
             f"Out of memory loading the 3D file ({ext}) within the task's "
-            f"{budgets.memory_bytes / 1024 ** 3:.1f} GiB memory limit. Run the large compute tier.")
+            f"{budgets.memory_bytes / 1024 ** 3:.1f} GiB memory limit. "
+            f"{resources.memory_advice(resources.compute_tier())}")
     except Exception as e:
         logger.exception(f"Failed to load file: {e}")
         return _error_response(stage, f"Failed to load 3D file ({ext}): {str(e)}")

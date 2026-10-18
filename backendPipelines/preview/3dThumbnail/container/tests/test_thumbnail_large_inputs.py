@@ -12,6 +12,8 @@
 * PTX parses every scan's header and applies its transform (the old reader parsed the next scan's ten
   header lines as points) and streams from S3 with no local copy.
 * Each phase's duration is logged.
+* The disk refusal never suggests another tier (every tier has the same work volume); the memory
+  refusal suggests the large tier only on the standard tier.
 
 The E57 and decimation tests need the real pye57 / pyvista / VTK and run inside the pipeline image.
 """
@@ -400,6 +402,62 @@ class TestStage:
         with caplog.at_level(logging.INFO):
             _run(_patches(tmp_path, 1024), _stage("asset1/model.glb", ".glb"))
         assert "VAMS_COMPUTE_TIER" not in caplog.text
+
+
+def _set_tier(monkeypatch, tier):
+    if tier is None:
+        monkeypatch.delenv("VAMS_COMPUTE_TIER", raising=False)
+    else:
+        monkeypatch.setenv("VAMS_COMPUTE_TIER", tier)
+
+
+def _assert_generic(message, tmp_path):
+    """Refusals reach the execution record, so they name no bucket, key or local path."""
+    assert "asset-bucket" not in message and "run-bucket" not in message
+    assert "asset1/" not in message and str(tmp_path) not in message
+
+
+@pytest.mark.unit
+class TestRefusalAdvice:
+    """The refusals' advice holds on the tier the job ran on: every tier has the same work volume,
+    and only the standard tier has a larger tier to move to."""
+
+    @pytest.mark.parametrize("tier", ["standard", "large", None])
+    def test_the_disk_refusal_advises_reducing_the_input_on_every_tier(self, tmp_path, monkeypatch, tier):
+        _set_tier(monkeypatch, tier)
+        with patch("shutil.disk_usage", return_value=MagicMock(free=200 * GIB)):
+            result = _run(_patches(tmp_path, 300 * GIB, download=MagicMock()),
+                          _stage("asset1/scan.e57", ".e57"))
+        assert result.status == PipelineStatus.FAILED
+        message = result.errorMessage
+        assert "reduce the input size or split it into smaller files" in message
+        assert "tier" not in message.lower()
+        assert "300.00 GiB" in message and "200.00 GiB free" in message
+        _assert_generic(message, tmp_path)
+
+    @pytest.mark.parametrize("tier, advice", [
+        ("standard", "Run the large compute tier."),
+        ("large", "The input exceeds the memory of the largest compute tier; reduce the input size."),
+        (None, "Reduce the input size, or use a larger compute size if the deployment offers one."),
+    ])
+    def test_the_memory_refusal_advice_follows_the_tier(self, tmp_path, monkeypatch, tier, advice):
+        _set_tier(monkeypatch, tier)
+
+        def _download(bucket, key, path):
+            open(path, "wb").write(b"x")
+            return path
+
+        patches = _patches(tmp_path, 1024, download=_download)
+        patches.append(patch.object(core, "_load_file", MagicMock(side_effect=MemoryError)))
+        result = _run(patches, _stage("asset1/model.glb", ".glb"))
+        assert result.status == PipelineStatus.FAILED
+        message = result.errorMessage
+        assert "Out of memory" in message and advice in message
+        if tier != "standard":
+            assert "Run the large compute tier" not in message
+        if tier is None:
+            assert "tier" not in message.lower()
+        _assert_generic(message, tmp_path)
 
 
 @pytest.mark.unit

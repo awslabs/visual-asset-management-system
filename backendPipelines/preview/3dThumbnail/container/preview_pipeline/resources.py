@@ -27,6 +27,9 @@ logger = get_logger()
 CGROUP_ROOT = "/sys/fs/cgroup"
 
 COMPUTE_TIER_ENV = "VAMS_COMPUTE_TIER"
+# The values the state machine sets in COMPUTE_TIER_ENV.
+STANDARD_TIER = "standard"
+LARGE_TIER = "large"
 
 # Per-vCPU render budgets (measured, see the module docstring) and the ceilings above which more
 # geometry adds nothing visible to an 800x600 thumbnail.
@@ -52,6 +55,10 @@ FALLBACK_MEMORY_BYTES = 16 * 1024 ** 3
 
 # Free disk kept beyond the input for fetched dependencies' slack, the frames and the encoded output.
 OUTPUT_DISK_HEADROOM_BYTES = 1024 ** 3
+
+# Advice in the disk-fit refusal. It holds on every tier, since every tier has the same work volume.
+DISK_ADVICE = ("The input is larger than the task's work volume; reduce the input size or split it "
+               "into smaller files.")
 
 
 class InsufficientDiskError(Exception):
@@ -160,6 +167,18 @@ def compute_tier() -> Optional[str]:
     return value or None
 
 
+def memory_advice(tier: Optional[str]) -> str:
+    """What a run that ran out of memory on ``tier`` (``compute_tier()``) can do next. Only the
+    standard tier has a larger tier to move to; with no tier set (a local test, or a deployment
+    without compute tiers) no tier is named, since none may exist."""
+    tier = (tier or "").lower()
+    if tier == STANDARD_TIER:
+        return "Run the large compute tier."
+    if tier == LARGE_TIER:
+        return "The input exceeds the memory of the largest compute tier; reduce the input size."
+    return "Reduce the input size, or use a larger compute size if the deployment offers one."
+
+
 def configure_rasteriser_threads(cpus: int) -> None:
     """Run the CPU rasteriser on the task's CPUs. llvmpipe otherwise starts one thread per host CPU,
     which inside a CPU quota only adds contention. Set before the first GL context is created; a
@@ -179,11 +198,14 @@ def free_disk_bytes(path: str) -> int:
 def ensure_disk_space(path: str, need_bytes: int, headroom_bytes: int = OUTPUT_DISK_HEADROOM_BYTES,
                       what: str = "Input file") -> int:
     """Raise InsufficientDiskError when ``need_bytes`` plus the headroom does not fit on the volume
-    holding ``path``. Returns the free bytes."""
+    holding ``path``. Returns the free bytes.
+
+    Every compute tier runs on the same work volume (ephemeral storage is a job-definition property,
+    not a per-job override), so the refusal never suggests another tier."""
     free = free_disk_bytes(path)
     if need_bytes + headroom_bytes > free:
         raise InsufficientDiskError(
             f"{what} ({need_bytes / 1024 ** 3:.2f} GiB) does not fit on the work volume: "
             f"{free / 1024 ** 3:.2f} GiB free, {headroom_bytes / 1024 ** 3:.2f} GiB of which is kept "
-            f"for the output. Run the large compute tier or reduce the input size.")
+            f"for the output. {DISK_ADVICE}")
     return free
