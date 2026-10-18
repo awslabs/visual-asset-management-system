@@ -291,6 +291,12 @@ authorization, as a denial — and decide what to do with the leftover: read it 
 (`assetLinksService`), or log and degrade with `max_retries=0` where the data is a display-only
 hint (`workflowService`). A `ClientError` propagates; the caller owns its fallback.
 
+**Targeted updates.** `common.dynamodb.to_update_expr(record)` returns the names map, values map and
+`SET` expression for an `update_item`. The helper names its placeholders `#u<i>` / `:u<i>`, so a boto3
+condition object (`ConditionExpression=Attr("rev").eq(n)`) is safe in the same call: boto3 renders it with
+`#n<i>` / `:v<i>` and merges those into the maps, replacing any entry of the same name. A hand-built update
+expression combined with a condition object must avoid `#n<i>` / `:v<i>` for the same reason.
+
 ### **Rule 3: Paginate large GET responses; never return an unbounded in-memory set**
 
 A response that can exceed the AWS Lambda synchronous response limit (6 MB) must
