@@ -49,8 +49,8 @@ def _real_to_update_expr(record, op="SET"):
     handler issues the same one it issues in the deployed handler.
     """
     keys = record.keys()
-    keys_attr_names = ["#f{n}".format(n=x) for x in range(len(keys))]
-    values_attr_names = [":v{n}".format(n=x) for x in range(len(keys))]
+    keys_attr_names = ["#u{n}".format(n=x) for x in range(len(keys))]
+    values_attr_names = [":u{n}".format(n=x) for x in range(len(keys))]
     keys_map = {k: key for k, key in zip(keys_attr_names, keys)}
     values_map = {v1: record[v] for v, v1 in zip(keys, values_attr_names)}
     expr = "{op} ".format(op=op) + ", ".join(

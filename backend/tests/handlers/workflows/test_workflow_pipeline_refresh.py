@@ -50,9 +50,9 @@ def _ref(pipeline_id="pipe1", database_id="db1", job_name=""):
 def _real_to_update_expr(record, op="SET"):
     """The real `common.dynamodb.to_update_expr` (conftest replaces the module with a MagicMock)."""
     keys = list(record.keys())
-    names = {f"#f{i}": key for i, key in enumerate(keys)}
-    values = {f":v{i}": record[key] for i, key in enumerate(keys)}
-    expr = f"{op} " + ", ".join(f"#f{i} = :v{i}" for i in range(len(keys)))
+    names = {f"#u{i}": key for i, key in enumerate(keys)}
+    values = {f":u{i}": record[key] for i, key in enumerate(keys)}
+    expr = f"{op} " + ", ".join(f"#u{i} = :u{i}" for i in range(len(keys)))
     return names, values, expr
 
 

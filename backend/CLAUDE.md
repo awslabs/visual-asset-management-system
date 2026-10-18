@@ -669,6 +669,12 @@ your_table.update_item(
 )
 ```
 
+The helper names its placeholders `#u<i>` / `:u<i>`, so a boto3 condition object
+(`ConditionExpression=Attr("rev").eq(n)`) is safe in the same call: boto3 renders it with
+`#n<i>` / `:v<i>` and merges those into the maps, replacing any entry of the same name. A
+hand-built update expression combined with a condition object must avoid `#n<i>` / `:v<i>`
+for the same reason.
+
 ### Pagination Patterns
 
 Two different jobs with two different shapes. Decide which by asking who needs the complete
