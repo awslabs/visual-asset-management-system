@@ -237,7 +237,7 @@ The container sizes its work to the task it runs in, read from its cgroup (memor
 | Points    | 5 million | 120 bytes per point           | 1 million | 20 million |
 | Triangles | 5 million | 200 bytes per triangle        | 1 million | 30 million |
 
-On 4 vCPU and 16 GiB that is 20 million points or triangles. A point cloud above its budget is sampled; a mesh above its budget is decimated with VTK quadric clustering (a texture is baked to colours first). The rasteriser (Mesa llvmpipe) runs `LP_NUM_THREADS` = the task's vCPU count; on 4 vCPU a 36-frame 800x600 orbit of 20 million triangles renders in about 100 seconds.
+On 4 vCPU and 16 GiB that is 20 million points or triangles. A point cloud above its budget is sampled; a mesh above its budget is decimated with VTK quadric clustering (a texture is baked to colours first). VTK allocates the clustering grid densely, so the grid is also bounded to an eighth of the memory limit at 88 bytes per bin (at most 2^26 bins): a closed mesh far above the budget comes out with fewer triangles than the budget allows (a 20 million triangle sphere on 16 GiB becomes about 730,000). The rasteriser (Mesa llvmpipe) runs `LP_NUM_THREADS` = the task's vCPU count; on 4 vCPU a 36-frame 800x600 orbit of 20 million triangles renders in about 100 seconds.
 
 -   **Download**: parallel ranged GETs (64 MiB parts, four per vCPU, at most 32).
 -   **Disk**: before the download, the input's size plus 1 GiB of output headroom is checked against the work volume's free space; an input that does not fit fails at once with a message naming both. Referenced files are checked the same way as they are fetched. A streamed PTX needs no disk.

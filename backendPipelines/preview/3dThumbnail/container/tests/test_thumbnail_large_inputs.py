@@ -20,6 +20,7 @@ The E57 and decimation tests need the real pye57 / pyvista / VTK and run inside 
 
 import json
 import logging
+import math
 import os
 from unittest.mock import MagicMock, patch
 
@@ -307,6 +308,85 @@ class TestTriangleBudget:
 
         mesh = pv.Sphere()
         assert geometry_budget.limit_triangles(mesh, 10 ** 6) is mesh
+
+    @pytest.mark.parametrize("memory_gib, cpus", [(16, 4), (120, 16)], ids=["standard", "large"])
+    def test_a_closed_mesh_at_a_tier_budget_gets_a_grid_within_the_bin_limit(self, memory_gib, cpus):
+        import pyvista as pv
+
+        from preview_pipeline import geometry_budget
+
+        budgets = resources.compute_budgets(memory_bytes=memory_gib * GIB, cpus=cpus)
+        sphere = pv.Sphere()
+        points = np.asarray(sphere.points, dtype=np.float64)
+        faces = np.asarray(sphere.faces).reshape(-1, 4)[:, 1:]
+        extent = points.max(axis=0) - points.min(axis=0)
+        spacing = geometry_budget.cluster_spacing(geometry_budget._surface_area(points, faces),
+                                                  budgets.triangles)
+        assert math.prod(geometry_budget.grid_divisions(extent, spacing)) > 2 ** 31, \
+            "the grid the triangle budget alone asks for overflows a C int"
+
+        limit = geometry_budget.cluster_bin_limit(budgets.memory_bytes)
+        assert limit * geometry_budget.BYTES_PER_CLUSTER_BIN <= budgets.memory_bytes / 4
+        divisions = geometry_budget.grid_divisions(
+            extent, geometry_budget.bounded_spacing(extent, spacing, limit))
+        assert math.prod(divisions) <= limit < 2 ** 31
+        assert min(divisions) >= 250, "the bound coarsens the grid no further than it has to"
+
+    def test_a_closed_mesh_over_a_small_budget_is_decimated_on_a_bounded_grid_and_renders(self):
+        import pyvista as pv
+
+        from preview_pipeline import geometry_budget, renderer
+
+        mesh = pv.Sphere(theta_resolution=200, phi_resolution=200)
+        mesh.point_data["RGB"] = np.tile(np.array([[30, 160, 60]], dtype=np.uint8), (mesh.n_points, 1))
+        budgets = resources.Budgets(memory_bytes=64 * 1024 ** 2, cpus=1, points=1_000_000,
+                                    triangles=20_000, splats=250_000)
+        limit = 64 * 1024 ** 2 * 0.125 / 88
+        grids = []
+        cluster = geometry_budget._cluster
+
+        def recording_cluster(polydata, divisions):
+            grids.append([int(d) for d in divisions])
+            return cluster(polydata, divisions)
+
+        with patch.object(geometry_budget, "_cluster", recording_cluster):
+            reduced = geometry_budget.apply_budgets(mesh, budgets)
+        assert mesh.n_cells > 20_000 and grids
+        assert all(math.prod(grid) <= limit for grid in grids), grids
+        assert 2_000 < reduced.n_cells <= 20_000
+        assert np.allclose(np.asarray(reduced.cell_data["RGB"]).mean(axis=0), (30, 160, 60), atol=1)
+        frame = renderer.generate_static_frame(reduced, resolution=(160, 120))
+        assert (frame[..., 3] == 255).mean() > 0.1, "the decimated sphere fills part of the frame"
+
+
+@pytest.mark.unit
+class TestClusterGrid:
+    """The grid bound on plain numbers (no VTK)."""
+
+    def test_the_bin_limit_follows_memory_up_to_the_ceiling(self):
+        from preview_pipeline import geometry_budget
+
+        assert geometry_budget.cluster_bin_limit(16 * GIB) == int(16 * GIB * 0.125 / 88)
+        assert geometry_budget.cluster_bin_limit(1024 * GIB) == geometry_budget.MAX_CLUSTER_BINS < 2 ** 31
+        assert geometry_budget.cluster_bin_limit(0) == 1
+
+    @pytest.mark.parametrize("extent", [(1.0, 1.0, 1.0), (40.0, 30.0, 1e-12), (50.0, 50.0, 0.004),
+                                        (1000.0, 0.5, 0.5)],
+                             ids=["cube", "flat-sheet", "thin-slab", "long-bar"])
+    def test_the_bounded_grid_is_the_finest_within_the_limit(self, extent):
+        from preview_pipeline import geometry_budget
+
+        limit = 1_000_000
+        spacing = 1e-4
+        assert math.prod(geometry_budget.grid_divisions(extent, spacing)) > limit
+        bounded = geometry_budget.bounded_spacing(extent, spacing, limit)
+        assert math.prod(geometry_budget.grid_divisions(extent, bounded)) <= limit
+        assert math.prod(geometry_budget.grid_divisions(extent, bounded * 0.99)) > limit
+
+    def test_a_grid_already_within_the_limit_keeps_its_spacing(self):
+        from preview_pipeline import geometry_budget
+
+        assert geometry_budget.bounded_spacing((1.0, 1.0, 1.0), 0.1, 1_000_000) == 0.1
 
 
 # --------------------------------------------------------------------------------------------------
