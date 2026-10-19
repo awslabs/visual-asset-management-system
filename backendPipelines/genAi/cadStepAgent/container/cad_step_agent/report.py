@@ -1,8 +1,8 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The three outcome documents of a run: the Markdown report written beside the STEP file, the file
-metadata document the process-output step applies, and the bounded task-token payload.
+"""The outcome documents of a run: the Markdown report written beside the STEP file, the file metadata
+and file attribute documents the process-output step applies, and the bounded task-token payload.
 
 All builders are pure; every free-text field is bounded so a verbose model cannot grow the execution
 record or a metadata value past what VAMS accepts.
@@ -31,6 +31,23 @@ METADATA_KEY_MODEL = "cadAgentModel"
 METADATA_KEY_ATTEMPTS = "cadAgentAttempts"
 METADATA_KEY_GEOMETRY = "cadAgentGeometry"
 METADATA_KEY_RUN_ID = "cadAgentRunId"
+
+# File attributes: the measured figures as separate, filterable values. VAMS file attributes are
+# string-typed, so every figure is a decimal string; one the outcome lacks is omitted, never blank.
+ATTRIBUTE_KEY_STATUS = "cadAgentStatus"
+ATTRIBUTE_KEY_MODE = "cadAgentMode"
+ATTRIBUTE_KEY_VOLUME = "cadVolumeMm3"
+ATTRIBUTE_KEY_BBOX_X = "cadBboxXMm"
+ATTRIBUTE_KEY_BBOX_Y = "cadBboxYMm"
+ATTRIBUTE_KEY_BBOX_Z = "cadBboxZMm"
+ATTRIBUTE_KEY_SOLIDS = "cadSolidCount"
+ATTRIBUTE_KEY_HOLES = "cadHoleCount"
+ATTRIBUTE_KEY_FILLETS = "cadFilletCount"
+ATTRIBUTE_KEY_UNITS = "cadUnits"
+# cad_io measures every figure in millimetres: Open CASCADE converts a file's declared unit on import and
+# the agent writes its scripts in millimetres.
+GEOMETRY_UNITS = "mm"
+ATTRIBUTE_DECIMALS = 3
 
 
 @dataclass
@@ -87,6 +104,48 @@ def metadata_document(outcome, update_type="update"):
         entries.append({"metadataKey": METADATA_KEY_GEOMETRY,
                         "metadataValue": _clip(json.dumps(outcome.geometry, sort_keys=True), LIST_MAX_CHARS)})
     return {"type": "metadata", "updateType": update_type, "metadata": entries}
+
+
+def _decimal(value, places=ATTRIBUTE_DECIMALS):
+    """A number as a plain decimal string: rounded to ``places``, no exponent, no trailing zeros."""
+    text = f"{round(float(value), places):.{places}f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "") else text
+
+
+def _feature_total(features, key):
+    """The summed ``count`` of one feature list, or None when the feature summary is absent."""
+    if not isinstance(features, dict) or not isinstance(features.get(key), list):
+        return None
+    return sum(int(entry.get("count", 0)) for entry in features[key] if isinstance(entry, dict))
+
+
+def attribute_document(outcome, update_type="update"):
+    """The ``<file>.attribute.json`` body: the run's status and mode and its measured figures as file
+    attributes. A figure the outcome does not carry is left out rather than written empty."""
+    entries = [
+        {"metadataKey": ATTRIBUTE_KEY_STATUS, "metadataValue": outcome.status},
+        {"metadataKey": ATTRIBUTE_KEY_MODE, "metadataValue": outcome.mode},
+    ]
+    geometry = outcome.geometry if isinstance(outcome.geometry, dict) else {}
+    figures = []
+    if geometry.get("volume_mm3") is not None:
+        figures.append((ATTRIBUTE_KEY_VOLUME, _decimal(geometry["volume_mm3"])))
+    bbox = geometry.get("bounding_box_mm")
+    if isinstance(bbox, (list, tuple)) and len(bbox) == 6:
+        for key, axis in ((ATTRIBUTE_KEY_BBOX_X, 0), (ATTRIBUTE_KEY_BBOX_Y, 1), (ATTRIBUTE_KEY_BBOX_Z, 2)):
+            figures.append((key, _decimal(bbox[axis + 3] - bbox[axis])))
+    if geometry.get("solid_count") is not None:
+        figures.append((ATTRIBUTE_KEY_SOLIDS, str(int(geometry["solid_count"]))))
+    for key, feature in ((ATTRIBUTE_KEY_HOLES, "holes"), (ATTRIBUTE_KEY_FILLETS, "fillet_like_faces")):
+        total = _feature_total(geometry.get("features"), feature)
+        if total is not None:
+            figures.append((key, str(total)))
+    if figures:
+        figures.append((ATTRIBUTE_KEY_UNITS, GEOMETRY_UNITS))
+    entries += [{"metadataKey": key, "metadataValue": value} for key, value in figures]
+    return {"type": "attribute", "updateType": update_type, "metadata": entries}
 
 
 def markdown_report(outcome):

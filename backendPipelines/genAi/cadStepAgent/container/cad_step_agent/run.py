@@ -104,8 +104,9 @@ def output_key(definition):
     return f"{object_dir}{out.get('relativeSubdir', '') or ''}{out['fileName']}"
 
 
-def metadata_key(definition):
-    """The S3 key of the file-metadata document, named after the output's asset-relative path."""
+def metadata_key(definition, suffix=".metadata.json"):
+    """The S3 key of a file-level metadata document (``.metadata.json``, or ``.attribute.json`` for the
+    file attributes), named after the output's asset-relative path."""
     meta = definition.get("outputMetadata") or {}
     object_dir = meta.get("objectDir", "") or ""
     if not meta.get("bucketName") or not object_dir:
@@ -113,7 +114,12 @@ def metadata_key(definition):
     if not object_dir.endswith("/"):
         object_dir += "/"
     out = definition["outputFiles"]
-    return f"{object_dir}{out.get('relativeSubdir', '') or ''}{out['fileName']}.metadata.json"
+    return f"{object_dir}{out.get('relativeSubdir', '') or ''}{out['fileName']}{suffix}"
+
+
+def attribute_key(definition):
+    """The S3 key of the file-attribute document, beside the metadata document."""
+    return metadata_key(definition, ".attribute.json")
 
 
 def derive_outcome(state, definition, model_label, run_id, wall_seconds):
@@ -162,8 +168,12 @@ def upload_outputs(s3, definition, outcome, step_path):
                   ContentType="text/markdown")
     meta_key = metadata_key(definition)
     if meta_key:
-        s3.put_object(Bucket=definition["outputMetadata"]["bucketName"], Key=meta_key,
+        meta_bucket = definition["outputMetadata"]["bucketName"]
+        s3.put_object(Bucket=meta_bucket, Key=meta_key,
                       Body=json.dumps(report.metadata_document(outcome)).encode("utf-8"),
+                      ContentType="application/json")
+        s3.put_object(Bucket=meta_bucket, Key=attribute_key(definition),
+                      Body=json.dumps(report.attribute_document(outcome)).encode("utf-8"),
                       ContentType="application/json")
     return key
 

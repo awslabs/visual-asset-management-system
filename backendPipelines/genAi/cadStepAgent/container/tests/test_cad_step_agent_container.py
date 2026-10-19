@@ -378,6 +378,39 @@ class TestReport:
     def test_failure_cause_is_bounded(self):
         assert len(report.failure_cause("x" * 1000)) == report.CAUSE_MAX_CHARS
 
+    def test_attribute_document_carries_the_measured_figures_as_decimal_strings(self):
+        geometry = {"solid_count": 1, "volume_mm3": 59363.84312, "bounding_box_mm": [-50.0, -30.0, 0.0, 50.0, 30.0, 10.0000000004],
+                    "features": {"holes": [{"diameter_mm": 4.5, "through": True, "count": 4},
+                                           {"diameter_mm": 8.0, "through": False, "count": 2}],
+                                 "fillet_like_faces": [{"radius_mm": 3.0, "count": 4}]}}
+        doc = report.attribute_document(_outcome(status="succeeded", mode="generate", geometry=geometry))
+        assert doc["type"] == "attribute" and doc["updateType"] == "update"
+        values = {e["metadataKey"]: e["metadataValue"] for e in doc["metadata"]}
+        assert values == {"cadAgentStatus": "succeeded", "cadAgentMode": "generate", "cadVolumeMm3": "59363.843",
+                          "cadBboxXMm": "100", "cadBboxYMm": "60", "cadBboxZMm": "10", "cadSolidCount": "1",
+                          "cadHoleCount": "6", "cadFilletCount": "4", "cadUnits": "mm"}
+        # File attributes accept string values only: every figure is a plain decimal string, never an exponent.
+        numeric = ("cadVolumeMm3", "cadBboxXMm", "cadBboxYMm", "cadBboxZMm", "cadSolidCount", "cadHoleCount", "cadFilletCount")
+        assert all(isinstance(values[k], str) and float(values[k]) >= 0 and "e" not in values[k].lower() for k in numeric)
+
+    def test_attribute_document_omits_every_figure_the_outcome_lacks(self):
+        bare = report.attribute_document(_outcome(geometry=None))
+        assert [e["metadataKey"] for e in bare["metadata"]] == ["cadAgentStatus", "cadAgentMode"]
+        no_features = {e["metadataKey"] for e in report.attribute_document(
+            _outcome(geometry={"solid_count": 2, "volume_mm3": 10.0, "bounding_box_mm": [0, 0, 0, 1, 2, 3]}))["metadata"]}
+        assert {"cadHoleCount", "cadFilletCount"}.isdisjoint(no_features) and "cadUnits" in no_features
+        none_found = {e["metadataKey"]: e["metadataValue"] for e in report.attribute_document(
+            _outcome(geometry={"solid_count": 1, "features": {"holes": [], "fillet_like_faces": []}}))["metadata"]}
+        assert none_found["cadHoleCount"] == "0" and none_found["cadFilletCount"] == "0"
+        assert "cadVolumeMm3" not in none_found and "cadBboxXMm" not in none_found
+        assert all(e["metadataValue"] != "" for e in report.attribute_document(_outcome())["metadata"])
+
+    def test_decimal_rounds_to_three_places_without_a_negative_zero(self):
+        assert report._decimal(136445.10549) == "136445.105"
+        assert report._decimal(3.0379999999) == "3.038"
+        assert report._decimal(-0.0001) == "0"
+        assert report._decimal(1e9) == "1000000000"
+
 
 # ---------------------------------------------------------------------------------------------------
 # agent (model resolution)
@@ -1129,11 +1162,28 @@ class TestRunJob:
         assert ("abkt", "xasset1/sub/part.stp.cad-agent-report.md") in s3.objects
         meta = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.metadata.json")])
         assert {e["metadataKey"] for e in meta["metadata"]} >= {"cadAgentStatus", "cadAgentSummary", "cadAgentGeometry"}
+        attributes = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.attribute.json")])
+        assert {e["metadataKey"]: e["metadataValue"] for e in attributes["metadata"]}["cadVolumeMm3"] == "1000"
         sfn.send_task_success.assert_called_once()
         assert json.loads(sfn.send_task_success.call_args.kwargs["output"])["status"] == "succeeded"
         sfn.send_task_failure.assert_not_called()
         # The caller's instruction was screened before the agent ran.
         assert guard.screened[0] == ("instruction", "Add four M3 holes")
+
+    def test_upload_writes_the_attribute_document_beside_the_metadata(self, tmp_path):
+        s3 = _FakeS3()
+        step = tmp_path / "output.step"
+        step.write_text("ISO-10303-21;")
+        geometry = {"solid_count": 1, "volume_mm3": 1000.0, "bounding_box_mm": [0, 0, 0, 10, 10, 10],
+                    "features": {"holes": [], "fillet_like_faces": []}}
+        outcome = _outcome(status="succeeded", output_file_name="part.stp", geometry=geometry)
+        assert run.upload_outputs(s3, _definition(), outcome, str(step)) == "xasset1/sub/part.stp"
+        attributes = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.attribute.json")])
+        assert attributes == report.attribute_document(outcome)
+        assert {e["metadataKey"] for e in attributes["metadata"]} >= {"cadAgentStatus", "cadAgentMode", "cadVolumeMm3"}
+        # The eight metadata keys are written as before, to their own document.
+        meta = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.metadata.json")])
+        assert len(meta["metadata"]) == 8 and meta["type"] == "metadata"
 
     def test_an_instruction_the_guardrail_blocks_fails_the_run_before_the_agent_starts(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
