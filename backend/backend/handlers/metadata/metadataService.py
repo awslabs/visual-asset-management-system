@@ -24,6 +24,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.metadataSchemaValidation import (
     get_aggregated_schemas,
     validate_metadata_against_schema,
@@ -86,7 +87,7 @@ retry_config = Config(
 region = os.environ.get('AWS_REGION', 'us-east-1')
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
-s3 = boto3.client('s3', config=retry_config)
+s3 = region_routing_s3_client()
 logger = safeLogger(service_name="MetadataService")
 
 # Global variables for claims and roles
@@ -542,7 +543,8 @@ def get_bucket_details(bucket_id: str) -> dict:
         
         return {
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")

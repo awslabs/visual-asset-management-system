@@ -33,6 +33,7 @@ from common.s3MetadataKeys import (
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from common.workflows import triggerMatching as tm
+from common.s3 import region_routing_s3_client
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, success
 
@@ -45,7 +46,7 @@ retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 invoke_config = Config(retries={"total_max_attempts": 1}, read_timeout=900, connect_timeout=60)
 
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-s3_client = boto3.client("s3", config=retry_config)
+s3_client = region_routing_s3_client()
 lambda_client = boto3.client("lambda", config=invoke_config)
 logger = safeLogger(service_name="WorkflowTriggerDispatch")
 
