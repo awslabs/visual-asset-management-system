@@ -147,6 +147,10 @@ def lambda_handler(event, context):
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
         # Single input file per execution today (SFN/manifest layer is multi-file-ready).
         manifestHelper.enforce_single_input_file(resolved)
+        # This pipeline hands s3:// locations to a third-party container image whose SDK reads and
+        # writes Amazon S3 in the deployment Region only; a bucket in another Region is rejected
+        # before submission.
+        manifestHelper.enforce_same_region_io(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         # Starts excution of pipeline. The manifest pointer travels from the payload body (it locates

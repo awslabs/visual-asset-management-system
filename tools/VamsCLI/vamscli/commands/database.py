@@ -840,6 +840,11 @@ def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Option
             lines.append(f"ID: {bucket.get('bucketId', 'N/A')}")
             lines.append(f"Name: {bucket.get('bucketName', 'N/A')}")
             lines.append(f"Base Assets Prefix: {bucket.get('baseAssetsPrefix', 'N/A')}")
+            # A bucket may be in another Region (or account) than the deployment; a row that carries
+            # neither is in the deployment Region and account.
+            lines.append(f"Region: {bucket.get('bucketRegion') or 'deployment Region'}")
+            if bucket.get('bucketAccountId'):
+                lines.append(f"Account: {bucket.get('bucketAccountId')}")
             # The default bucket houses pipeline template data and execution run I/O, so call it out
             # rather than leaving the operator to infer it.
             lines.append(f"VAMS Default Bucket: {'Yes' if bucket.get('isDefault') else 'No'}")

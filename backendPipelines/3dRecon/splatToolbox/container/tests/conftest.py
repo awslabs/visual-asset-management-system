@@ -39,7 +39,7 @@ def container_main():
     ``main()``.
     """
     stubbed = {}
-    for name in ("boto3", "vams_utils", "vams_utils.manifest_io"):
+    for name in ("boto3", "vams_utils", "vams_utils.manifest_io", "vams_utils.aws", "vams_utils.aws.s3"):
         if name not in sys.modules:
             stubbed[name] = MagicMock()
     sys.modules.update(stubbed)
