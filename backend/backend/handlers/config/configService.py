@@ -4,7 +4,7 @@
 import os
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ConnectTimeoutError, EndpointConnectionError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
@@ -23,10 +23,16 @@ from models.config import SecureConfigResponseModel
 
 # Configure AWS clients with retry configuration
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+# The Location Service key lookup is best-effort and has to finish inside the API Gateway integration
+# timeout (29 s): on a VPC with no route to Amazon Location Service the default 60 s connect timeout
+# turns the whole /secure-config response into a 504, so this client is bounded (3 attempts in total,
+# worst case ≈ 3 × 7 s) and the handler degrades to an empty map URL instead.
+geo_lookup_config = Config(connect_timeout=2, read_timeout=5,
+                           retries={'max_attempts': 2, 'mode': 'adaptive'})
 
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 ssm_client = boto3.client('ssm', config=retry_config)
-geo_client = boto3.client('location', config=retry_config)
+geo_client = boto3.client('location', config=geo_lookup_config)
 deserializer = TypeDeserializer()
 logger = safeLogger(service_name="ConfigService")
 
@@ -141,8 +147,14 @@ def get_location_service_api_url():
                 logger.warning("Location Service API Key retrieved but has no value")
         except ClientError as geo_error:
             logger.error(f"Error retrieving API key value from Location Services: {geo_error}")
+        except (EndpointConnectionError, ConnectTimeoutError) as geo_unreachable:
+            # The lookup is best-effort: the response still succeeds with an empty map URL.
+            logger.warning(
+                "The Lambda has no network route to Amazon Location Service, so the map URL is empty. "
+                "On a deployment that runs all Lambdas in the VPC, a com.amazonaws.<region>.geo "
+                f"interface endpoint is required for the map URL: {geo_unreachable}")
         except Exception as geo_ex:
-            logger.error(f"Unexpected error retrieving API key value from Location Services: {geo_ex}")
+            logger.warning(f"Unexpected error retrieving API key value from Location Services: {geo_ex}")
 
     except ClientError as e:
         error_code = e.response.get('Error', {}).get('Code', '')

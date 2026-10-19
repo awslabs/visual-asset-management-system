@@ -27,7 +27,8 @@ export type InputKind =
     | "string-array" // e.g. NVIDIA instanceTypes
     | "ip-range-list" // allowedIpRanges: string[][]
     | "presigned-url-restrictions" // assetBuckets.presignedUrlNetworkRestrictions object
-    | "external-buckets"; // assetBuckets.externalAssetBuckets tuple | null
+    | "external-buckets" // assetBuckets.externalAssetBuckets tuple | null
+    | "external-bridges"; // pipelines.externalPipelineBridges array
 
 export interface SelectOption {
     value: string;

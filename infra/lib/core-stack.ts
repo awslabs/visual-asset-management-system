@@ -27,6 +27,7 @@ import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBui
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
 import { AddonBuilderNestedStack } from "./nestedStacks/addon/addonBuilder-nestedStack";
+import { CustomBuilderNestedStack } from "./nestedStacks/custom/customBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
 import { LogRetentionAspect } from "./aspects/log-retention.aspect";
 import * as s3AssetBuckets from "./helper/s3AssetBuckets";
@@ -62,19 +63,6 @@ export class CoreVAMSStack extends cdk.Stack {
 
     constructor(scope: Construct, id: string, props: EnvProps) {
         super(scope, id, { ...props, crossRegionReferences: true });
-
-        const adminUserId = new cdk.CfnParameter(this, "adminUserId", {
-            type: "String",
-            description: "Admin User ID for login",
-            default: props.config.app.adminUserId,
-        });
-
-        const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
-            type: "String",
-            description:
-                "Admin Email address for login and where your password is sent to. You will be sent a temporary password to authenticate to Cognito.",
-            default: props.config.app.adminEmailAddress,
-        });
 
         //Add tags to stack with cdk.json "environment" settings (if defined)
         //Modify roles with cdk.json "aws" settings (if defined)
@@ -319,12 +307,21 @@ export class CoreVAMSStack extends cdk.Stack {
             addonBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             addonBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
 
-            // The Physna add-on frontend features (viewer today, more planned)
-            // are gated by a single feature flag so the web UI only surfaces
-            // them when the add-on is deployed.
-            if (props.config.app.addons.usePhysnaSync.enabled) {
-                this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
-            }
+            this.enabledFeatures.push(...addonBuilderNestedStack.enabledFeatures);
+
+            ///Fork extension point (Nested Stack; resources defined in custom/customResources.ts)
+            const customBuilderNestedStack = new CustomBuilderNestedStack(this, "CustomBuilder", {
+                config: props.config,
+                storageResources: storageResourcesNestedStack.storageResources,
+                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                vpc: this.vpc,
+                isolatedSubnets: this.subnetsIsolated,
+                privateSubnets: this.subnetsPrivate,
+                registry: apiRouteRegistry,
+            });
+            customBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
+            customBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+            this.enabledFeatures.push(...customBuilderNestedStack.enabledFeatures);
 
             // Deadline Cloud pipeline execution-type support (createJob workflow task
             // states + the job-callback lambda deployed in the API builder stack).
@@ -351,6 +348,7 @@ export class CoreVAMSStack extends cdk.Stack {
             apiNestedStack.addStackDependency(apiBuilder2NestedStack);
             apiNestedStack.addStackDependency(searchBuilderNestedStack);
             apiNestedStack.addStackDependency(addonBuilderNestedStack);
+            apiNestedStack.addStackDependency(customBuilderNestedStack);
 
             //Deploy Static Website and any API proxies (nested stack; after REST API for apiUrl)
             if (props.config.app.useAlb.enabled || props.config.app.useCloudFront.enabled) {

@@ -13,8 +13,8 @@
  * leaving production behaviour identical.
  *
  * `new URL(..., import.meta.url)` is what makes the worker a tracked bundle asset rather than a runtime
- * path lookup; the emitted file keeps its `.mjs` extension, which is why the deployment has to declare
- * a JavaScript Content-Type for it (see ES_MODULE_CONTENT_TYPE in the static-web constructs).
+ * path lookup. The build emits it as `assets/pdf.worker.min-<hash>.js` (see `assetFileNames` in
+ * vite.config.ts), so it is uploaded with the other content-hashed assets and typed as JavaScript.
  */
 
 import { pdfjs } from "react-pdf";

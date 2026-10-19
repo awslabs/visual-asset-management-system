@@ -101,14 +101,14 @@ def _load_asset_export_service():
     auth_stub.request_to_claims = MagicMock(return_value={"tokens": ["tester"], "roles": []})
     sys.modules["handlers.auth"] = auth_stub
 
-    # The mock common.dynamodb the root conftest installs does not define the helper
-    # assetExportService imports at module level. Add it for the load only, bound to the
-    # real implementation so nothing behaviourally relevant is faked.
+    # The mock common.dynamodb the root conftest installs does not define every helper
+    # assetExportService imports at module level. Add any missing one for the load only, bound to
+    # the real implementation so nothing behaviourally relevant is faked.
     dynamodb_mod = sys.modules.get("common.dynamodb")
     added_attrs = []
     if dynamodb_mod is not None:
         real_dynamodb = _load_real_common_dynamodb()
-        for attr in ("query_all_items",):
+        for attr in ("query_all_items", "batch_get_items"):
             if not hasattr(dynamodb_mod, attr):
                 setattr(dynamodb_mod, attr, getattr(real_dynamodb, attr))
                 added_attrs.append(attr)
@@ -264,7 +264,7 @@ def _run_process_asset_batch(identifiers, claims_and_roles, enforcer):
             patch.object(m, "get_asset_file_versions", MagicMock(return_value=None)):
         # process_asset_batch returns (assets, page state); only the assets are under test here.
         result, _page_state = m.process_asset_batch(
-            identifiers, m.AssetExportRequestModel(), claims_and_roles)
+            identifiers, m.AssetExportRequestModel(), claims_and_roles, {'requestContext': {}})
 
     return result, {"bucket": bucket_spy, "files": files_spy, "metadata": metadata_spy}
 

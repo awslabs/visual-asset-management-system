@@ -95,9 +95,11 @@ export async function getExecutionLogs(
 /**
  * Abort an execution, or every active execution in a group. The abort itself always succeeds, but
  * the response carries a `warnings` array when a registered sub-process could not be stopped — a
- * Batch job or Deadline Cloud farm job left running after the execution is marked ABORTED. Read with
- * `toTupleWithWarnings` because the backend puts `warnings` beside `message`, which the plain
- * `toTuple` reader would drop; that array is the only signal the compute was not released.
+ * Batch job or Deadline Cloud farm job left running after the execution is marked ABORTED — and a
+ * `notAbortable` array naming each registered sub-process of a type VAMS cannot stop (a group
+ * abort's entries carry the member `executionId`). Read with `toTupleWithWarnings` naming
+ * `notAbortable` because the backend puts both arrays beside `message`, which the plain `toTuple`
+ * reader would drop; they are the only signal the compute was not released.
  */
 export async function abortExecution(
     executionId: string,
@@ -106,7 +108,7 @@ export async function abortExecution(
     return toTupleWithWarnings(() => {
         const opts = groupId ? { queryStringParameters: { groupId } } : {};
         return apiClient.del(`workflows/executions/${executionId}`, opts);
-    });
+    }, ["notAbortable"]);
 }
 
 export async function rerunExecution(

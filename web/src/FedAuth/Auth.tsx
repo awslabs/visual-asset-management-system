@@ -36,11 +36,12 @@ import {
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import loginBgImageSrc from "../resources/img/login_bg.png";
+import loginBgImageSrc from "../resources/img/login_bg.webp";
 import logoDarkImageSrc from "../../logo_dark.png";
 
 import LoadingScreen from "../components/loading/LoadingScreen";
 import { ErrorBoundary } from "../components/common/ErrorBoundary";
+import { APP_LOAD_SLOW_NOTICE_MS } from "../utils/chunkLoadRecovery";
 import { Alert } from "@cloudscape-design/components";
 import styles from "./loginbox.module.css";
 import "@aws-amplify/ui-react/styles.css";
@@ -304,15 +305,10 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({
                 </div>
             </div>
             <img
-                alt="background texture"
+                alt=""
+                aria-hidden="true"
                 src={loginBgImageSrc}
-                style={{
-                    position: "fixed",
-                    top: 0,
-                    width: "100vw",
-                    left: 0,
-                    zIndex: "-100",
-                }}
+                className={styles.loginBackground}
             />
         </>
     );
@@ -926,7 +922,10 @@ const Auth: React.FC<AuthProps> = (props) => {
     // Show error page if config failed to load
     if (config._configError) {
         return (
-            <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+            <div
+                className={styles.loginPage}
+                style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
+            >
                 <LoginHeader />
                 <div
                     style={{
@@ -982,15 +981,10 @@ const Auth: React.FC<AuthProps> = (props) => {
                         </div>
                     </div>
                     <img
-                        alt="background texture"
+                        alt=""
+                        aria-hidden="true"
                         src={loginBgImageSrc}
-                        style={{
-                            position: "fixed",
-                            top: 0,
-                            width: "100vw",
-                            left: 0,
-                            zIndex: "-100",
-                        }}
+                        className={styles.loginBackground}
                     />
                 </div>
                 <PageFooter />
@@ -1015,7 +1009,10 @@ const Auth: React.FC<AuthProps> = (props) => {
     //External OAUTH Login Page Return
     if (window.DISABLE_COGNITO === true && !isLoggedIn && ampInit) {
         return (
-            <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+            <div
+                className={styles.loginPage}
+                style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
+            >
                 <LoginHeader />
                 <GlobalHeader authorizationHeader={true} />
                 <div
@@ -1082,15 +1079,10 @@ const Auth: React.FC<AuthProps> = (props) => {
                         ) : null}
                     </div>
                     <img
-                        alt="background texture"
+                        alt=""
+                        aria-hidden="true"
                         src={loginBgImageSrc}
-                        style={{
-                            position: "fixed",
-                            top: 0,
-                            width: "100vw",
-                            left: 0,
-                            zIndex: "-100",
-                        }}
+                        className={styles.loginBackground}
                     />
                 </div>
                 <PageFooter />
@@ -1103,7 +1095,10 @@ const Auth: React.FC<AuthProps> = (props) => {
         if (window.COGNITO_FEDERATED === false) {
             //Non-federated login
             return (
-                <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+                <div
+                    className={styles.loginPage}
+                    style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
+                >
                     <LoginHeader />
                     <GlobalHeader authorizationHeader={true} />
                     <div
@@ -1139,7 +1134,10 @@ const Auth: React.FC<AuthProps> = (props) => {
         } else {
             //Federated Login
             return (
-                <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+                <div
+                    className={styles.loginPage}
+                    style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
+                >
                     <LoginHeader />
                     <GlobalHeader authorizationHeader={true} />
                     <div
@@ -1190,7 +1188,11 @@ const Auth: React.FC<AuthProps> = (props) => {
                 {/* Guards the shell itself (top navigation, router, footer). routes.tsx has a
                     second boundary around each page, so a page error stays inside the layout. */}
                 <ErrorBoundary componentName="The application">
-                    <Suspense fallback={<LoadingScreen />}>{props.children}</Suspense>
+                    <Suspense
+                        fallback={<LoadingScreen slowNoticeAfterMs={APP_LOAD_SLOW_NOTICE_MS} />}
+                    >
+                        {props.children}
+                    </Suspense>
                 </ErrorBoundary>
             </>
         );

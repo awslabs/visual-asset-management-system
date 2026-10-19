@@ -46,7 +46,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { apiContext } from "./support/fixtures";
 
-/** The Physna viewer's supported set, from visualizerPlugin/config/viewerConfig.json. */
+/** The Physna viewer's supported set, from visualizerPlugin/config/addonViewerConfig.json. */
 const PHYSNA_EXTENSIONS = [
     ".3ds",
     ".asm",

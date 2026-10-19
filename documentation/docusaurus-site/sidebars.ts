@@ -95,6 +95,7 @@ const sidebars: SidebarsConfig = {
                 "developer/audit-logging",
                 "developer/security",
                 "developer/permissions",
+                "developer/customizing-vams",
                 "developer/workflow-execution-data-model-handoff",
                 {
                     type: "category",
@@ -108,9 +109,13 @@ const sidebars: SidebarsConfig = {
                 },
                 {
                     type: "category",
-                    label: "Addons",
+                    label: "Add-ons",
                     collapsed: true,
-                    items: ["developer/garnet-framework", "developer/physna-integration"],
+                    items: [
+                        "developer/addons-overview",
+                        "developer/garnet-framework",
+                        "developer/physna-integration",
+                    ],
                 },
                 {
                     type: "category",

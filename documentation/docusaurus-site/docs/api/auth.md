@@ -107,15 +107,15 @@ POST /auth/constraints/{constraintId}
 
 #### Request body
 
-| Field              | Type   | Required | Description                                                                                                                                                        |
-| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `name`             | string | Yes      | Human-readable name for the constraint                                                                                                                             |
-| `description`      | string | Yes      | Description of the constraint's purpose                                                                                                                            |
-| `objectType`       | string | Yes      | Resource type this constraint applies to (e.g., `asset`, `database`, `pipeline`, `workflow`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`) |
-| `criteriaAnd`      | array  | No       | AND criteria for matching resources (all must match)                                                                                                               |
-| `criteriaOr`       | array  | No       | OR criteria for matching resources (at least one must match)                                                                                                       |
-| `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                |
-| `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                              |
+| Field              | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                      |
+| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`             | string | Yes      | Human-readable name for the constraint                                                                                                                                                                                                                                                                                                           |
+| `description`      | string | Yes      | Description of the constraint's purpose                                                                                                                                                                                                                                                                                                          |
+| `objectType`       | string | Yes      | Resource type this constraint applies to: a core type (`asset`, `database`, `pipeline`, `workflow`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`) or a permission object type the deployment registers. [List constraint permission objects](#list-constraint-permission-objects) returns the types a deployment accepts |
+| `criteriaAnd`      | array  | No       | AND criteria for matching resources (all must match)                                                                                                                                                                                                                                                                                             |
+| `criteriaOr`       | array  | No       | OR criteria for matching resources (at least one must match)                                                                                                                                                                                                                                                                                     |
+| `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                                                                                                                                                                                              |
+| `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                                                                                                                                                                                                            |
 
 At least one of `criteriaAnd` or `criteriaOr` must contain an entry.
 
@@ -260,21 +260,73 @@ POST /auth/constraintsTemplateImport
 
 #### Request body
 
-The request body should contain the full constraint template JSON. See the permission templates in `documentation/permissionsTemplates/` for examples.
+The request body is a permission template with a `variableValues` object added. A shipped template from `documentation/permissionsTemplates/` can be posted unmodified apart from that addition.
+
+| Field            | Type   | Required | Description                                                                                                                                                                                    |
+| ---------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `metadata`       | object | No       | Template header: `name` (required), `description`, `version`. The name appears in the response message and the audit record. `template` is accepted as an alternative key for the same object. |
+| `variables`      | array  | No       | Variable definitions: `name`, `required`, `description`, `default`. A required variable without a value in `variableValues` and without a `default` rejects the request.                       |
+| `variableValues` | object | Yes      | Values substituted for the `{{VARIABLE}}` placeholders in the constraints. `ROLE_NAME` is required and is used as the `groupId` of every created constraint.                                   |
+| `constraints`    | array  | Yes      | Constraint definitions: `name`, `description`, `objectType`, `criteriaAnd`, `criteriaOr`, `groupPermissions`. At least one constraint is required.                                             |
+
+```json
+{
+    "metadata": { "name": "Database Read-Only", "version": "1.0" },
+    "variables": [
+        {
+            "name": "DATABASE_ID",
+            "required": true,
+            "description": "The databaseId to scope permissions to"
+        },
+        {
+            "name": "ROLE_NAME",
+            "required": true,
+            "description": "The existing role to attach these constraints to"
+        }
+    ],
+    "variableValues": { "DATABASE_ID": "my-db", "ROLE_NAME": "my-db-reader" },
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-database-read",
+            "description": "Read access to {{DATABASE_ID}}",
+            "objectType": "database",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        }
+    ]
+}
+```
 
 #### Response
 
 ```json
 {
-    "message": "Template imported successfully"
+    "success": true,
+    "message": "Successfully imported 1 constraints from template 'Database Read-Only' for role 'my-db-reader'",
+    "constraintsCreated": 1,
+    "constraintIds": ["8d6c2b1e-6f8a-4a0e-9d2a-3f1b7c5e9a10"],
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
+
+#### Error responses
+
+| Status | Description                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid template: missing `ROLE_NAME`, a required variable without a value, an unknown object type or criteria field, or no constraints |
+| `403`  | Not authorized                                                                                                                          |
+| `500`  | Internal server error                                                                                                                   |
 
 ---
 
 ### List constraint permission objects
 
 Retrieves the master mapping used when authoring constraints: the object types (with the fields valid on each), the criteria operators, the permissions (HTTP actions), and the permission types. The constraints editor and CLI use this as the authoritative source for `objectType`, criteria `field`, `operator`, `permission`, and `permissionType` values.
+
+`objectTypes` lists the core types first, then any permission object types the deployment registers in its add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type is listed even though no constraint grants access to it yet; no role, admin included, has access to it until one does.
 
 ```
 GET /auth/constraints/permissionObjects

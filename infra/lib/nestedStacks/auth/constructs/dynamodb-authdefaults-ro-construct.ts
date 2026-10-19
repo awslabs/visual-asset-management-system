@@ -21,6 +21,7 @@ import { NagSuppressions } from "cdk-nag";
 import { kmsKeyPolicyStatementGenerator } from "../../../helper/security";
 import { Service } from "../../../../lib/helper/service-helper";
 import * as ServiceHelper from "../../../../lib/helper/service-helper";
+import { addonReadOnlyApiRouteCriteria } from "../../addon/addonDefaultRoutes";
 
 export interface DynamoDbAuthDefaultsROConstructStackProps extends cdk.StackProps {
     customResourceRole: iam.Role;
@@ -651,26 +652,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
-                        ...(props.config.app.addons.usePhysnaSync.enabled
-                            ? [
-                                  {
-                                      M: {
-                                          field: {
-                                              S: "route__path",
-                                          },
-                                          id: {
-                                              S: `16_${roleNameIDClean}_api_paths`,
-                                          },
-                                          operator: {
-                                              S: "starts_with",
-                                          },
-                                          value: {
-                                              S: "/addon/physna/viewer", //Physna viewer proxy (per-asset authorization is enforced server-side)
-                                          },
-                                      },
-                                  },
-                              ]
-                            : []),
+                        ...addonReadOnlyApiRouteCriteria(props.config, roleNameIDClean),
                     ],
                 },
                 description: {
