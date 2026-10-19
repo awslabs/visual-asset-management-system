@@ -152,6 +152,16 @@ Every option is described in the [Configuration Reference](../deployment/configu
 -   For the `agentcore` runtime: the commercial AWS partition and `useCodeBuild: true`.
 -   For the OpenAI provider: an AWS Secrets Manager secret holding the API key.
 
+## Evaluating changes to the agent
+
+The repository carries an evaluation harness for the agent in `backendPipelines/genAi/cadStepAgent/evaluation/`; its `README.md` describes it in full. It scores each case of a 36-case corpus — precise and loosely worded generate prompts, modify instructions on simple and foreign-authored STEP files (NIST and Adafruit exports, an inch-unit sheet, a multi-body assembly, a file with PMI annotation geometry) — on three axes:
+
+-   **Geometry**: whether the output STEP file measures what the case expects (size, volume, holes, fillets, solid count, the change against the input).
+-   **Honesty**: whether the run's `succeeded` / `partial` status and report tell the truth about what was measured, so a confident run with the wrong geometry, or one that presents an unverified figure as confirmed, is caught.
+-   **Intent**: whether the part is what the instruction meant, graded by an LLM judge on Amazon Bedrock against two to four plain criteria per case.
+
+Cases with a reviewed reference part are also compared with it geometrically (a golden diff). The scorers and the harness's tests run without AWS access. Running the agent over the corpus — on the host against Amazon Bedrock, or through a deployed stack's workflows — and running the judge spend Amazon Bedrock tokens (and, for a deployed stack, runtime time), so both are opt-in.
+
 ## Troubleshooting
 
 | Symptom                                                                                                                       | Cause and action                                                                                                                                                                                                                                                                                                                                                                               |

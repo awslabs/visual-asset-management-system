@@ -62,7 +62,7 @@ root/
 │   │   │   │   ├── reason/    # NVIDIA Cosmos Reason (video captioning)
 │   │   │   │   └── transfer/  # NVIDIA Cosmos Transfer (control-signal video restyle)
 │   │   │   └── gr00t/         # NVIDIA GR00T N1.5 fine-tuning
-│   │   ├── cadStepAgent/      # GenAI CAD STEP agent (Strands; AgentCore Runtime or Batch Fargate)
+│   │   ├── cadStepAgent/      # GenAI CAD STEP agent (Strands; AgentCore Runtime or Batch Fargate); evaluation/ = its quality harness
 │   │   └── metadata3dLabeling/
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
