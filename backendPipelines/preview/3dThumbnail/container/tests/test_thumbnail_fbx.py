@@ -94,7 +94,7 @@ def ascii_fbx(geometries=(), models=(), materials=(), connections=()):
     return "".join(out)
 
 
-# --- binary FBX 7.4 (32-bit offsets) ---------------------------------------------------------------
+# --- binary FBX: 7.4 (32-bit record offsets) and 7.5 and later (64-bit) ----------------------------
 
 def _binary_property(kind, value, compress=False):
     if kind == "L":
@@ -111,20 +111,21 @@ def _binary_property(kind, value, compress=False):
     return kind.encode() + struct.pack("<III", len(value), 1 if compress else 0, len(payload)) + payload
 
 
-def _binary_node(name, properties, children, start):
+def _binary_node(name, properties, children, start, wide):
+    header, layout = (25, "<QQQB") if wide else (13, "<IIIB")
     props = b"".join(properties)
-    body_start = start + 13 + len(name) + len(props)
+    body_start = start + header + len(name) + len(props)
     nested = b""
     for child in children:
-        nested += child(body_start + len(nested))
+        nested += child(body_start + len(nested), wide)
     if children:
-        nested += b"\x00" * 13
+        nested += b"\x00" * header
     end = body_start + len(nested)
-    return struct.pack("<IIIB", end, len(properties), len(props), len(name)) + name + props + nested
+    return struct.pack(layout, end, len(properties), len(props), len(name)) + name + props + nested
 
 
 def _node(name, properties=(), children=()):
-    return lambda start: _binary_node(name, list(properties), list(children), start)
+    return lambda start, wide: _binary_node(name, list(properties), list(children), start, wide)
 
 
 def _p70(name, kind, values):
@@ -132,9 +133,10 @@ def _p70(name, kind, values):
     return [_binary_property("S", s) for s in (name, kind, b"", b"A")] + [_binary_property("D", v) for v in values]
 
 
-def binary_fbx(geometries=(), models=(), materials=(), connections=(), compress=False):
-    """The binary FBX 7.4 equivalent of ``ascii_fbx`` (vertex colours are not written). Assimp needs a
-    nested scope on every Model and Material, so each gets its Version and Properties70."""
+def binary_fbx(geometries=(), models=(), materials=(), connections=(), compress=False, version=7400):
+    """The binary FBX equivalent of ``ascii_fbx`` (vertex colours are not written); ``version`` 7500 and
+    later use 64-bit record headers. Assimp needs a nested scope on every Model and Material, so each
+    gets its Version and Properties70."""
     objects = []
     for gid, vertices, polygons, _ in geometries:
         objects.append(_node(b"Geometry", [_binary_property("L", gid), _binary_property("S", b"g\x00\x01Geometry"),
@@ -162,15 +164,16 @@ def binary_fbx(geometries=(), models=(), materials=(), connections=(), compress=
             _node(b"Properties70", [], [_node(b"P", _p70(b"DiffuseColor", b"Color", (r, g, b)))])]))
     top = [
         _node(b"FBXHeaderExtension", [], [_node(b"FBXHeaderVersion", [_binary_property("I", 1003)]),
-                                          _node(b"FBXVersion", [_binary_property("I", 7400)])]),
+                                          _node(b"FBXVersion", [_binary_property("I", version)])]),
         _node(b"Objects", [], objects),
         _node(b"Connections", [], [_node(b"C", [_binary_property("S", b"OO"), _binary_property("L", child),
                                                 _binary_property("L", parent)]) for child, parent in connections]),
     ]
-    data = b"Kaydara FBX Binary  \x00\x1a\x00" + struct.pack("<I", 7400)
+    wide = version >= 7500
+    data = b"Kaydara FBX Binary  \x00\x1a\x00" + struct.pack("<I", version)
     for node in top:
-        data += node(len(data))
-    return data + b"\x00" * 13
+        data += node(len(data), wide)
+    return data + b"\x00" * (25 if wide else 13)
 
 
 # --- scenes ----------------------------------------------------------------------------------------
@@ -237,13 +240,15 @@ def _block_open3d(monkeypatch):
 
 
 def _fbx_file(path, scene, encoding):
-    """``scene`` written as ``ascii``, ``binary`` or ``binary-zlib`` (arrays deflated)."""
+    """``scene`` written as ``ascii``, ``binary`` (7.4), ``binary-zlib`` (7.4, arrays deflated) or
+    ``binary-7500`` (64-bit record headers, arrays deflated)."""
     if encoding == "ascii":
         return _write(path, ascii_fbx(**scene))
-    return _write(path, binary_fbx(**scene, compress=encoding == "binary-zlib"))
+    return _write(path, binary_fbx(**scene, compress=encoding != "binary",
+                                   version=7500 if encoding == "binary-7500" else 7400))
 
 
-ENCODINGS = ["ascii", "binary", "binary-zlib"]
+ENCODINGS = ["ascii", "binary", "binary-zlib", "binary-7500"]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -369,8 +374,9 @@ class TestFbxExpansion:
 
 @pytest.mark.unit
 class TestFbxSceneSize:
-    @pytest.mark.parametrize("compress", [False, True], ids=["raw", "zlib"])
-    def test_ascii_and_binary_files_count_alike(self, tmp_path, compress):
+    @pytest.mark.parametrize("compress, version", [(False, 7400), (True, 7400), (True, 7500)],
+                             ids=["raw", "zlib", "7500"])
+    def test_ascii_and_binary_files_count_alike(self, tmp_path, compress, version):
         from preview_pipeline.format_handlers import fbx_scene
 
         for name, scene, expected in [
@@ -381,7 +387,7 @@ class TestFbxSceneSize:
                            connections=[(20, 0), (10, 20)]), (1, 36, 20, 36, 20)),
         ]:
             text = _write(tmp_path / f"{name}.fbx", ascii_fbx(**scene))
-            binary = _write(tmp_path / f"{name}-bin.fbx", binary_fbx(**scene, compress=compress))
+            binary = _write(tmp_path / f"{name}-bin.fbx", binary_fbx(**scene, compress=compress, version=version))
             assert tuple(fbx_scene.scene_size(text, 1_000_000)) == expected, name
             assert tuple(fbx_scene.scene_size(binary, 1_000_000)) == expected, name
 
