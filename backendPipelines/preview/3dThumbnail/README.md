@@ -20,7 +20,8 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 
 | Category       | Extensions                                                      | Handler                                          |
 | :------------- | :-------------------------------------------------------------- | :----------------------------------------------- |
-| Mesh           | .ply, .stl, .obj, .glb, .gltf, .fbx, .drc, .off                 | trimesh                                          |
+| Mesh           | .ply, .stl, .obj, .glb, .gltf, .drc, .off                       | trimesh                                          |
+| Mesh (FBX)     | .fbx                                                            | open3d (Assimp)                                  |
 | Mesh (XML)     | .3mf, .dae                                                      | built-in, hardened XML parsing                   |
 | Point Cloud    | .las, .laz, .e57, .ptx, .pts, .pcd, vertex-only .ply            | laspy, pye57, open3d                             |
 | CAD            | .stp, .step                                                     | cadquery                                         |
@@ -189,6 +190,10 @@ All data is normalized to Y-up before rendering, from what the file or its forma
 3MF and COLLADA are XML. They are parsed with the standard library's expat parser with document type declarations, entity declarations and external entity references refused (ARCC BSC12), so a crafted file can neither expand entities nor read local files or URLs. A 3MF reads its build items, components (with their transforms) and `basematerials`/`colorgroup` colours; COLLADA reads the visual scene's node transforms, `triangles`, `polylist` and `polygons`, and each bound material's diffuse colour. Components and node instances are expanded until the placed geometry passes the run's triangle budget (or three vertices per triangle of it) or the walk has visited 1,000,000 nodes; the remaining placements are skipped with one warning, and each object or geometry is parsed once however often it is placed. A zip-based input (`.3mf`, `.sog`, and a texture read out of a `.usdz`) is checked from its central directory before anything is decompressed: the uncompressed total must fit the free disk and no member may be compressed more than 200:1 above 64 MiB.
 
 `.drc` files keep their vertex colours. `.pts` (Leica text) is streamed from Amazon S3 like PTX.
+
+### FBX Handling
+
+An FBX file (ASCII or binary, FBX 2011 / 7.1 and later) is read with Open3D's `read_triangle_model`, which uses Assimp: quad and n-gon faces are triangulated, every node's transform is applied, and the meshes are merged into one. A mesh keeps its vertex colours, or else takes its material's base colour; a scene in which no mesh has either (every mesh on Assimp's default material) is drawn in the default mesh colour, and a mesh without a colour beside coloured ones gets the default mesh colour. Textures are not sampled. Assimp places a model once under every parent it is connected to and copies a geometry for every model that uses it, all before it returns, so the placements are first counted from the file's `Objects` and `Connections` (`format_handlers/fbx_scene.py`, one pass): a file that places more than 1,000,000 models (a cycle counts as more), or whose placements add up to more triangles than the larger of the run's triangle budget and the triangles the file stores (or more vertices than three per triangle of the budget), fails before it is read.
 
 ### Point Cloud Handling
 

@@ -13,13 +13,13 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 | OBJ         | `.obj`    | Trimesh                                          |
 | GLB         | `.glb`    | Trimesh                                          |
 | GLTF        | `.gltf`   | Trimesh (with its referenced buffers and images) |
-| FBX         | `.fbx`    | Trimesh                                          |
+| FBX         | `.fbx`    | Open3D (Assimp)                                  |
 | DRC (Draco) | `.drc`    | Trimesh (with vertex colours)                    |
 | OFF         | `.off`    | Trimesh                                          |
 | 3MF         | `.3mf`    | built-in (hardened XML parsing)                  |
 | COLLADA     | `.dae`    | built-in (hardened XML parsing)                  |
 
-3MF and COLLADA files are parsed with DTDs and external entities disabled, so a crafted file cannot read local files or reach the network. The up axis comes from the file where it says (FBX `UpAxis`, COLLADA `<up_axis>`, 3MF and survey formats Z-up, glTF Y-up); other meshes, STL included, render as authored.
+3MF and COLLADA files are parsed with DTDs and external entities disabled, so a crafted file cannot read local files or reach the network. The up axis comes from the file where it says (FBX `UpAxis`, COLLADA `<up_axis>`, 3MF and survey formats Z-up, glTF Y-up); other meshes, STL included, render as authored. FBX quad and polygon faces are triangulated, each part is placed by its node transforms, and parts keep their vertex colours or material base colour; textures are not sampled.
 
 ### Point Cloud Formats
 
@@ -193,7 +193,7 @@ Parameters reach the pipeline through the template selected for the run. Deploym
 | Triangle budget             | 5 million per vCPU, at most 30 million (and 35% of the memory limit) |
 | Rendering method            | CPU-based (Mesa llvmpipe, one rasteriser thread per vCPU; no GPU)    |
 
-The container reads its memory limit and vCPU count from its cgroup and derives the budgets from them, so it stays within whichever task size runs it. A point cloud above the point budget is sampled while it is read (E57 scan by scan, PTX streamed from Amazon S3 with no local copy); a mesh above the triangle budget is decimated with VTK quadric clustering. A 3MF, COLLADA or STEP file that places the same part many times is expanded until its placed geometry reaches the triangle budget, and the remaining placements are skipped; a STEP assembly that places more than 1,000,000 components fails. An input larger than the free disk fails before the download with a message naming both sizes. The execution log records the input size, the budgets and each phase's duration (download, fetch, load, render, encode, upload).
+The container reads its memory limit and vCPU count from its cgroup and derives the budgets from them, so it stays within whichever task size runs it. A point cloud above the point budget is sampled while it is read (E57 scan by scan, PTX streamed from Amazon S3 with no local copy); a mesh above the triangle budget is decimated with VTK quadric clustering. A 3MF, COLLADA or STEP file that places the same part many times is expanded until its placed geometry reaches the triangle budget, and the remaining placements are skipped; a STEP assembly that places more than 1,000,000 components fails. An FBX scene is counted before it is read, since its reader expands every placement at once: one that places more than 1,000,000 models, or whose repeated parts add up to more triangles than the triangle budget beyond the file's own geometry, fails. An input larger than the free disk fails before the download with a message naming both sizes. The execution log records the input size, the budgets and each phase's duration (download, fetch, load, render, encode, upload).
 
 :::tip[Large Point Clouds]
 The original file is never modified; only the rendering input is reduced. Every scan of a multi-scan E57 or PTX file is read and placed by its pose or transform.
@@ -210,10 +210,10 @@ This pipeline runs on AWS Batch with AWS Fargate and requires the global VPC. Se
 The container image is built during CDK deployment from `backendPipelines/preview/3dThumbnail/container/Dockerfile`. It is based on Python 3.12 slim and includes:
 
 -   **PyVista / VTK** -- 3D rendering engine (MIT license)
--   **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, FBX, DRC (MIT license)
+-   **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, DRC (MIT license)
 -   **laspy** -- LAS/LAZ point cloud reading (BSD license)
 -   **pye57** -- E57 point cloud reading (MIT license)
--   **Open3D** -- PCD point clouds and the FBX fallback (MIT license)
+-   **Open3D** -- PCD point clouds and FBX meshes (MIT license)
 -   **CadQuery** -- STEP/STP CAD file support (LGPL license)
 -   **OpenUSD (pxr)** -- USD format support (Modified Apache 2.0 license)
 -   **PlayCanvas splat-transform** -- Gaussian splat format conversion on the CPU (MIT license), run on **Node.js** 22 (MIT license)
