@@ -9,7 +9,14 @@ import pytest
 from tinytag import TinyTag
 
 from media_extractors import audio
-from system_genai_media_fixtures import make_ctx, png_bytes, wav_bytes, write
+from system_genai_media_fixtures import (
+    FFMPEG_HEADER_M4A_WITH_POSITION,
+    FakeFfmpeg,
+    make_ctx,
+    png_bytes,
+    wav_bytes,
+    write,
+)
 
 
 @pytest.mark.unit
@@ -130,3 +137,91 @@ class TestTagText:
         tag = TinyTag()
         tag.other.update({f"custom{index}": [f"v{index}"] for index in range(200)})
         assert len(audio.tag_text(tag)) == audio.AUDIO_MAX_TAGS
+
+    def test_atom_index_names_are_dropped(self):
+        # How tinytag names an MP4 `keys`/`mdta` atom it cannot resolve: the 1-based index as four bytes.
+        tag = TinyTag()
+        tag.title = "Memo"
+        tag.other["\x00\x00\x00\x01"] = ["-33.8651+151.2099/"]
+        tag.other["\x00\x00\x00\x02"] = ["Lavf61.1.100"]
+        tag.other["comment"] = ["kept"]
+        assert audio.tag_text(tag) == {"title": "Memo", "comment": "kept"}
+
+
+@pytest.mark.unit
+class TestMp4FamilyHeader:
+    """Audio in an ISO base-media container reads the ffmpeg header for the tag names tinytag left as atom
+    indexes; every other container never runs ffmpeg."""
+
+    def _m4a_tag(self, real_get):
+        def with_indexed_atoms(target, **kwargs):
+            parsed = real_get(target, **kwargs)
+            parsed.mime_type = 'audio/mp4; codecs="mp4a.40.2"'
+            parsed.title = "Field memo"
+            parsed.other["\x00\x00\x00\x01"] = ["-33.8651+151.2099/"]
+            parsed.other["\x00\x00\x00\x02"] = ["Lavf61.1.100"]
+            return parsed
+        return with_indexed_atoms
+
+    def test_header_names_the_position_and_recording_time(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("IMAGEIO_FFMPEG_EXE", "ffmpeg-under-test")
+        path = write(tmp_path, "memo.m4a", wav_bytes())  # tinytag parses by the bytes; the mime is stubbed
+        monkeypatch.setattr(audio.TinyTag, "get", self._m4a_tag(audio.TinyTag.get))
+        ffmpeg = FakeFfmpeg(header=FFMPEG_HEADER_M4A_WITH_POSITION)
+        result = audio.extract_audio(path, make_ctx(tmp_path, "memo.m4a", extract_geo_location=True), run=ffmpeg)
+        sys_media = result.attributes["sys_media"]
+        assert len(ffmpeg.calls) == 1 and "-frames:a" in ffmpeg.calls[0]
+        assert sys_media["container"] == "MP4" and sys_media["decodable"] is True
+        assert sys_media["audioCodec"] == "aac" and sys_media["channelLayout"] == "mono"
+        assert sys_media["durationSeconds"] == 2.0  # tinytag's own reading wins over the header's
+        assert sys_media["tags"]["title"] == "Field memo"
+        assert sys_media["tags"]["location"] == "-33.8651+151.2099/"
+        assert sys_media["tags"]["creation_time"] == "2024-05-01T10:20:30.000000Z"
+        assert sys_media["tags"]["encoder"] == "Lavf61.1.100"
+        assert not any(key.startswith("\x00") for key in sys_media["tags"])
+        assert sys_media["streamTags"] == {"0:0": {"handler_name": "SoundHandler", "vendor_id": "[0][0][0][0]"}}
+        assert sys_media["hasGps"] is True
+        assert sys_media["gps"] == {"latitude": -33.8651, "longitude": 151.2099, "altitude": None}
+        assert result.facts["location"] == "-33.8651, 151.2099"
+        assert result.facts["recorded"] == "2024-05-01T10:20:30.000000Z"
+        assert "location: -33.8651+151.2099/" in result.text_excerpt
+        assert result.warnings == []
+
+    def test_header_position_is_withheld_when_the_gate_is_off(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("IMAGEIO_FFMPEG_EXE", "ffmpeg-under-test")
+        path = write(tmp_path, "memo.m4a", wav_bytes())
+        monkeypatch.setattr(audio.TinyTag, "get", self._m4a_tag(audio.TinyTag.get))
+        result = audio.extract_audio(path, make_ctx(tmp_path, "memo.m4a"),
+                                     run=FakeFfmpeg(header=FFMPEG_HEADER_M4A_WITH_POSITION))
+        sys_media = result.attributes["sys_media"]
+        assert sys_media["hasGps"] is True and "gps" not in sys_media
+        assert "location" not in sys_media["tags"] and "location-eng" not in sys_media["tags"]
+        assert sys_media["tags"]["creation_time"] == "2024-05-01T10:20:30.000000Z"
+        assert "location" not in result.text_excerpt and "location" not in result.facts
+
+    def test_header_recovers_an_m4a_tinytag_could_not_read(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("IMAGEIO_FFMPEG_EXE", "ffmpeg-under-test")
+        path = write(tmp_path, "memo.m4a", png_bytes(4, 4))  # the MP4 parser finds no atom it understands
+        result = audio.extract_audio(path, make_ctx(tmp_path, "memo.m4a", extract_geo_location=True),
+                                     run=FakeFfmpeg(header=FFMPEG_HEADER_M4A_WITH_POSITION))
+        sys_media = result.attributes["sys_media"]
+        assert sys_media["decodable"] is True and sys_media["container"] == "M4A"
+        assert sys_media["durationSeconds"] == 2.0 and sys_media["sampleRate"] == 44100 and sys_media["channels"] == 1
+        assert sys_media["gps"] == {"latitude": -33.8651, "longitude": 151.2099, "altitude": None}
+        # tinytag's own outcome (an empty tag object, or a parse error) is still reported beside the recovery.
+        assert len(result.warnings) == 1 and result.warnings[0].startswith("Audio header ")
+
+    def test_an_unparseable_m4a_with_no_header_stays_not_decodable(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("IMAGEIO_FFMPEG_EXE", "ffmpeg-under-test")
+        path = write(tmp_path, "memo.m4a", png_bytes(4, 4))
+        not_media = FakeFfmpeg(header="memo.m4a: Invalid data found when processing input\n", probe_returncode=1)
+        result = audio.extract_audio(path, make_ctx(tmp_path, "memo.m4a"), run=not_media)
+        assert result.attributes["sys_media"] == {"kind": "audio", "container": "M4A", "decodable": False}
+
+    def test_other_containers_never_run_ffmpeg(self, tmp_path):
+        def never(argv, **kwargs):
+            raise AssertionError(f"ffmpeg ran for a WAV: {argv}")
+
+        path = write(tmp_path, "tone.wav", wav_bytes())
+        result = audio.extract_audio(path, make_ctx(tmp_path, "tone.wav"), run=never)
+        assert result.attributes["sys_media"]["container"] == "WAVE"

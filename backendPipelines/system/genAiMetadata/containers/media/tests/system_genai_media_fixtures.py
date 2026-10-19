@@ -267,6 +267,31 @@ FFMPEG_HEADER_WITH_TAGS = FFMPEG_HEADER_SAMPLE.replace(
     "    date            : 2026-03-01\n",
 )
 
+# An audio-only MP4 (.m4a) whose `location` and `creation_time` were written under the `keys`/`mdta` scheme:
+# tinytag names those atoms by index, ffmpeg resolves the names. Taken from a real ffmpeg 7 header.
+FFMPEG_HEADER_M4A_WITH_POSITION = """Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'memo.m4a':
+  Metadata:
+    major_brand     : M4A 
+    minor_version   : 512
+    compatible_brands: M4A isomiso2
+    creation_time   : 2024-05-01T10:20:30.000000Z
+    location-eng    : -33.8651+151.2099/
+    encoder         : Lavf61.1.100
+    location        : -33.8651+151.2099/
+  Duration: 00:00:02.00, start: 0.000000, bitrate: 75 kb/s
+  Stream #0:0[0x1](und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 69 kb/s (default)
+      Metadata:
+        handler_name    : SoundHandler
+        vendor_id       : [0][0][0][0]
+Stream mapping:
+  Stream #0:0 -> #0:0 (aac (native) -> pcm_s16le (native))
+Output #0, null, to 'pipe:':
+  Metadata:
+    major_brand     : M4A 
+    encoder         : Lavf61.1.100
+  Stream #0:0(und): Audio: pcm_s16le, 44100 Hz, mono, s16, 705 kb/s (default)
+"""
+
 
 class FakeFfmpeg:
     """Stands in for subprocess.run. The `-f null -` probe is answered with a canned header on stderr; a `-ss`

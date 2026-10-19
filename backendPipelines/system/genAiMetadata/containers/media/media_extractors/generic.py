@@ -90,7 +90,7 @@ def _probe_media(path: str, ctx: ExtractContext, run: Callable = subprocess.run)
                                   f"extension; the bytes are a {facts.get('container', 'media')} container")
         return result
     if facts.get("audioStreams"):
-        result = audio.extract_audio(path, ctx)
+        result = audio.extract_audio(path, ctx, run=run)
         sys_media = dict(result.attributes.get("sys_media") or {})
         # tinytag knows the common audio containers; whatever it did not read, the ffmpeg header supplies.
         for key in ("durationSeconds", "bitrateKbps", "audioCodec", "sampleRate", "channels", "channelLayout",
