@@ -7,9 +7,12 @@ the facts are parsed from the header ffmpeg prints while decoding one frame per 
 cross-filled from imageio-ffmpeg's own parsed metadata.
 
 Every tag the container stores is recorded: the format-level Metadata block (title, artist, creation_time,
-location, com.apple.quicktime.*, encoder, ...) under `sys_media.tags`, and each stream's Metadata block under
-`sys_media.streamTags["<index>"]`, so a recording time or a GPS tag travels with the file whether or not the
-promotion catalogue names it."""
+com.apple.quicktime.*, encoder, ...) under `sys_media.tags`, and each stream's Metadata block under
+`sys_media.streamTags["<index>"]`, so a recording time travels with the file whether or not the promotion
+catalogue names it. A position tag (`location`, `com.apple.quicktime.location.ISO6709`) follows the image
+extractor's EXIF GPS gate: `hasGps` records that one exists, and the decoded `gps` is written only when the
+context's extract_geo_location flag (the state's extractGeoLocation) is true; with it false the position
+tags are withheld from the record."""
 
 import os
 import re
@@ -28,6 +31,7 @@ from .common import (
     BranchResult,
     ExtractContext,
     human_duration,
+    record_media_position,
     year_number,
 )
 from .imaging import normalise_for_vision, write_png
@@ -296,9 +300,16 @@ def extract_video(
     result.warnings.extend(warnings)
     duration = float(facts.get("durationSeconds") or 0.0)
     sys_media: Dict[str, object] = {"kind": "video", **facts}
+    for block in ("tags", "streamTags"):
+        if isinstance(sys_media.get(block), dict):
+            sys_media[block] = {key: (dict(value) if isinstance(value, dict) else value)
+                                for key, value in sys_media[block].items()}
     if int(facts.get("rotation") or 0) in (90, 270) and "width" in facts:
         sys_media["displayWidth"], sys_media["displayHeight"] = facts["height"], facts["width"]
     result.attributes["sys_media"] = sys_media
+    position_warning = record_media_position(sys_media, ctx.extract_geo_location)
+    if position_warning:
+        result.warnings.append(position_warning)
     if duration:
         result.facts["duration"] = human_duration(duration)
     if "width" in facts:
@@ -314,6 +325,9 @@ def extract_video(
     recorded = (facts.get("tags") or {}).get("creation_time") or (facts.get("tags") or {}).get("date")
     if recorded:
         result.facts["recorded"] = str(recorded)
+    gps = sys_media.get("gps")
+    if isinstance(gps, dict):
+        result.facts["location"] = f"{gps['latitude']}, {gps['longitude']}"
     if not ctx.render_images:
         return result
     frames, frame_warnings = extract_keyframes(path, duration, ctx.work_dir, run=run)

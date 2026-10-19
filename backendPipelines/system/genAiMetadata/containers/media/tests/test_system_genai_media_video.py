@@ -81,6 +81,36 @@ class TestParseHeader:
         result = video.extract_video(path, make_ctx(tmp_path, "clip.mp4"), run=FakeFfmpeg(header=header),
                                      read_frames=fake_read_frames)
         assert result.facts["recorded"] == "2024-05-01T10:20:30.000000Z"
+        # extractGeoLocation false: the position tag is acknowledged (hasGps) and withheld from the record.
+        sys_media = result.attributes["sys_media"]
+        assert sys_media["hasGps"] is True and "gps" not in sys_media and "location" not in result.facts
+        assert "com.apple.quicktime.location.iso6709" not in sys_media["tags"]
+        assert sys_media["tags"]["creation_time"] == "2024-05-01T10:20:30.000000Z"
+
+    def test_the_container_position_is_decoded_when_the_state_enables_it(self, tmp_path):
+        header = FFMPEG_HEADER_SAMPLE.replace(
+            "    encoder         : Lavf60.3.100\n",
+            "    encoder         : Lavf60.3.100\n"
+            "    com.apple.quicktime.location.ISO6709: +37.7749-122.4194+010.000/\n")
+        path = write(tmp_path, "clip.mp4", b"\x00")
+        result = video.extract_video(path, make_ctx(tmp_path, "clip.mp4", extract_geo_location=True),
+                                     run=FakeFfmpeg(header=header), read_frames=fake_read_frames)
+        sys_media = result.attributes["sys_media"]
+        assert sys_media["hasGps"] is True
+        assert sys_media["gps"] == {"latitude": 37.7749, "longitude": -122.4194, "altitude": 10.0}
+        assert sys_media["tags"]["com.apple.quicktime.location.iso6709"] == "+37.7749-122.4194+010.000/"
+        assert result.facts["location"] == "37.7749, -122.4194"
+        assert result.warnings == []
+
+    def test_a_position_tag_that_does_not_decode_warns(self, tmp_path):
+        header = FFMPEG_HEADER_SAMPLE.replace(
+            "    encoder         : Lavf60.3.100\n",
+            "    encoder         : Lavf60.3.100\n    location        : Seattle\n")
+        path = write(tmp_path, "clip.mp4", b"\x00")
+        result = video.extract_video(path, make_ctx(tmp_path, "clip.mp4", extract_geo_location=True),
+                                     run=FakeFfmpeg(header=header), read_frames=fake_read_frames)
+        assert "gps" not in result.attributes["sys_media"] and "location" not in result.facts
+        assert any("did not decode" in warning for warning in result.warnings)
 
     def test_no_keyframes_when_the_context_asks_for_no_renders(self, tmp_path):
         path = write(tmp_path, "clip.mp4", b"\x00")

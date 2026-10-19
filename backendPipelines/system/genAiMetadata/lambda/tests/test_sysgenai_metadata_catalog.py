@@ -300,6 +300,17 @@ class TestImage:
         attributes = {"sys_image": {"exif": {"gps": {"latitude": 95.0, "longitude": 8.54}}}}
         assert mc.location_geojson(attributes, "image") is None
 
+    def test_a_container_position_makes_a_point_for_video_and_audio(self):
+        # The media extractor decodes the ISO 6709 `location` tag into sys_media.gps, the shape EXIF GPS takes.
+        gps = {"latitude": 37.7749, "longitude": -122.4194, "altitude": 10.0}
+        video = {"sys_file": SYS_FILE, "sys_media": {**VIDEO["sys_media"], "gps": gps}}
+        assert mc.location_geojson(video, "video") == {"type": "Point", "coordinates": [-122.4194, 37.7749, 10.0]}
+        audio = {"sys_file": SYS_FILE, "sys_media": {**AUDIO["sys_media"], "gps": {**gps, "altitude": None}}}
+        assert mc.location_geojson(audio, "audio") == {"type": "Point", "coordinates": [-122.4194, 37.7749]}
+        # The source is class-bound: the same key on an image record is not read.
+        assert mc.location_geojson({"sys_media": {"gps": gps}}, "image") is None
+        assert mc.location_geojson({"sys_media": {"gps": {"latitude": 95.0, "longitude": 0.0}}}, "video") is None
+
     def test_camera_with_only_a_make_and_an_iso_capture_date(self):
         attributes = {"sys_image": {"exif": {"make": " Canon ", "dateTimeOriginal": "2026-01-02T03:04:05Z"}}}
         rows = _items(attributes, "image")

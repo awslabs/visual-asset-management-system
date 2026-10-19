@@ -54,8 +54,9 @@ REGISTRY_PROMOTION_SOURCES = {
     "sys_image.exif": ("make", "model", "dateTimeOriginal", "gps"),
     "sys_image.exif.gps": ("latitude", "longitude", "altitude"),
     "sys_media": ("kind", "durationSeconds", "width", "height", "frameRate", "videoCodec", "audioCodec",
-                  "bitrateKbps", "channels", "sampleRate", "tags"),
+                  "bitrateKbps", "channels", "sampleRate", "tags", "gps"),
     "sys_media.tags": ("title", "artist", "album", "year", "creation_time", "date"),
+    "sys_media.gps": ("latitude", "longitude", "altitude"),
     "sys_archive": ("entryCount", "uncompressedBytes", "containerFormat"),
     "sys_document": ("pageCount", "title", "author", "createdAt", "hasText"),
     "sys_text": ("encoding", "lineCount", "wordCount", "language"),
@@ -243,3 +244,84 @@ class TestBoundedTags:
     def test_render_images_defaults_on(self):
         ctx = common.ExtractContext("shot.jpg", ".jpg", "image/jpeg", 100, "/tmp")
         assert ctx.render_images is True
+
+
+@pytest.mark.unit
+class TestIso6709:
+    def test_degrees_with_altitude(self):
+        assert common.parse_iso6709("+47.6097-122.3331+056.000/") == {
+            "latitude": 47.6097, "longitude": -122.3331, "altitude": 56.0}
+
+    def test_degrees_without_altitude_or_slash(self):
+        assert common.parse_iso6709("-33.8651+151.2099") == {"latitude": -33.8651, "longitude": 151.2099,
+                                                              "altitude": None}
+
+    def test_degrees_minutes_and_degrees_minutes_seconds(self):
+        # +4736.58-12219.98/ is 47 deg 36.58 min N, 122 deg 19.98 min W.
+        dm = common.parse_iso6709("+4736.58-12219.98/")
+        assert dm["latitude"] == pytest.approx(47.609667, abs=1e-6)
+        assert dm["longitude"] == pytest.approx(-122.333, abs=1e-6)
+        dms = common.parse_iso6709("+473635-1221959/")
+        assert dms["latitude"] == pytest.approx(47.609722, abs=1e-6)
+        assert dms["longitude"] == pytest.approx(-122.333056, abs=1e-6)
+
+    def test_a_crs_suffix_is_accepted(self):
+        assert common.parse_iso6709("+35.6580+139.7016+035CRSWGS_84/")["altitude"] == 35.0
+
+    def test_not_a_position(self):
+        for value in ("Seattle", "", None, True, 47.6, "+47.6097", "+1234.5-12.3/", "+91.0+10.0/", "+10.0+181.0/",
+                      "+4799.0-12219.98/"):
+            assert common.parse_iso6709(value) is None, value
+
+    def test_location_tag_keys(self):
+        assert common.is_location_tag("location")
+        assert common.is_location_tag("location-eng")
+        assert common.is_location_tag("com.apple.quicktime.location.ISO6709")
+        assert not common.is_location_tag("com.apple.quicktime.location.accuracy.horizontal")
+        assert not common.is_location_tag("creation_time")
+
+
+@pytest.mark.unit
+class TestRecordMediaPosition:
+    def _record(self):
+        return {"kind": "video", "tags": {"creation_time": "2024-05-01T10:20:30Z", "encoder": "Lavf",
+                                         "com.apple.quicktime.location.iso6709": "+37.7749-122.4194+010.000/"},
+                "streamTags": {"0:0": {"handler_name": "VideoHandler", "location-eng": "+37.7749-122.4194/"}}}
+
+    def test_flag_on_decodes_the_first_position_tag_and_keeps_the_tags(self):
+        sys_media = self._record()
+        assert common.record_media_position(sys_media, True) is None
+        assert sys_media["hasGps"] is True
+        assert sys_media["gps"] == {"latitude": 37.7749, "longitude": -122.4194, "altitude": 10.0}
+        assert "com.apple.quicktime.location.iso6709" in sys_media["tags"]
+        assert sys_media["streamTags"]["0:0"]["location-eng"] == "+37.7749-122.4194/"
+
+    def test_flag_off_withholds_every_position_tag_and_writes_no_coordinate(self):
+        sys_media = self._record()
+        assert common.record_media_position(sys_media, False) is None
+        assert sys_media["hasGps"] is True and "gps" not in sys_media
+        assert sys_media["tags"] == {"creation_time": "2024-05-01T10:20:30Z", "encoder": "Lavf"}
+        assert sys_media["streamTags"] == {"0:0": {"handler_name": "VideoHandler"}}
+
+    def test_a_record_left_with_only_position_tags_drops_the_empty_blocks(self):
+        sys_media = {"kind": "audio", "tags": {"location": "+1.0+2.0/"}, "streamTags": {"0:0": {"location": "+1.0+2.0/"}}}
+        common.record_media_position(sys_media, False)
+        assert sys_media == {"kind": "audio", "hasGps": True}
+
+    def test_a_stream_position_is_used_when_the_format_block_has_none(self):
+        sys_media = {"kind": "video", "streamTags": {"0:0": {"location": "+01.5+002.5/"}}}
+        common.record_media_position(sys_media, True)
+        assert sys_media["gps"] == {"latitude": 1.5, "longitude": 2.5, "altitude": None}
+
+    def test_an_undecodable_position_tag_warns_with_the_flag_on(self):
+        sys_media = {"kind": "video", "tags": {"location": "Seattle, WA"}}
+        warning = common.record_media_position(sys_media, True)
+        assert "did not decode" in warning
+        assert sys_media["hasGps"] is True and "gps" not in sys_media
+        assert sys_media["tags"]["location"] == "Seattle, WA"
+
+    def test_no_position_tag_leaves_the_record_alone(self):
+        sys_media = {"kind": "video", "tags": {"encoder": "Lavf"}}
+        assert common.record_media_position(sys_media, True) is None
+        assert sys_media == {"kind": "video", "tags": {"encoder": "Lavf"}}
+        assert common.record_media_position({"kind": "audio"}, False) is None

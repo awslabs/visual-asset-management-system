@@ -86,6 +86,29 @@ class TestExtractAudio:
         # The raw record keeps the text; the promotion's number coercion is what drops it from ext_year.
         assert sys_media["tags"] == {"year": "unknown"}
 
+    def test_a_position_tag_follows_the_geo_gate_in_the_record_and_the_excerpt(self, tmp_path, monkeypatch):
+        path = write(tmp_path, "memo.wav", wav_bytes())
+        real_get = audio.TinyTag.get
+
+        def with_location(target, **kwargs):
+            parsed = real_get(target, **kwargs)
+            parsed.title = "Field memo"
+            parsed.other["location"] = ["+47.6097-122.3331+056.000/"]  # the ©xyz atom as tinytag surfaces it
+            return parsed
+
+        monkeypatch.setattr(audio.TinyTag, "get", with_location)
+        withheld = audio.extract_audio(path, make_ctx(tmp_path, "memo.wav"))
+        sys_media = withheld.attributes["sys_media"]
+        assert sys_media["hasGps"] is True and "gps" not in sys_media
+        assert sys_media["tags"] == {"title": "Field memo"}
+        assert withheld.text_excerpt == "title: Field memo" and "location" not in withheld.facts
+        decoded = audio.extract_audio(path, make_ctx(tmp_path, "memo.wav", extract_geo_location=True))
+        sys_media = decoded.attributes["sys_media"]
+        assert sys_media["gps"] == {"latitude": 47.6097, "longitude": -122.3331, "altitude": 56.0}
+        assert sys_media["tags"]["location"] == "+47.6097-122.3331+056.000/"
+        assert decoded.facts["location"] == "47.6097, -122.3331"
+        assert decoded.text_excerpt == "title: Field memo\nlocation: +47.6097-122.3331+056.000/"
+
 
 @pytest.mark.unit
 class TestTagText:

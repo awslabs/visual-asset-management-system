@@ -507,6 +507,14 @@ def _location_from_gps(attributes: dict) -> Optional[dict]:
     return _point(gps.get("longitude"), gps.get("latitude"), gps.get("altitude"))
 
 
+def _location_from_media_gps(attributes: dict) -> Optional[dict]:
+    # The container's ISO 6709 position tag, decoded by the media extractor into the same shape as EXIF GPS.
+    gps = lookup(attributes, "sys_media.gps")
+    if not isinstance(gps, dict):
+        return None
+    return _point(gps.get("longitude"), gps.get("latitude"), gps.get("altitude"))
+
+
 def _location_from_site(attributes: dict) -> Optional[dict]:
     site = lookup(attributes, "sys_ifc.site")
     if not isinstance(site, dict):
@@ -580,6 +588,7 @@ def _location_from_footprint(attributes: dict) -> Optional[dict]:
 # (classes, derivation) tried in order; a class matches at most one row.
 LOCATION_SOURCES: Tuple[Tuple[FrozenSet[str], Callable[[dict], Optional[dict]]], ...] = (
     (frozenset({fc.CLASS_IMAGE}), _location_from_gps),
+    (frozenset({fc.CLASS_VIDEO, fc.CLASS_AUDIO}), _location_from_media_gps),
     (frozenset({fc.CLASS_IFC}), _location_from_site),
     (POINT_CLASSES, _location_from_pointcloud),
     (frozenset({fc.CLASS_TILES3D}), _location_from_region),

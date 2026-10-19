@@ -23,8 +23,12 @@ from system_genai_media_fixtures import (
 # The sys_media contract is served by two kinds; each writes the keys its container can carry, and the two
 # together must be exactly the contract (a key neither kind writes would be promoted from nowhere).
 VIDEO_KEYS = {"kind", "durationSeconds", "width", "height", "frameRate", "videoCodec", "audioCodec", "bitrateKbps",
-              "channels", "sampleRate", "tags"}
+              "channels", "sampleRate", "tags", "gps"}
 AUDIO_KEYS = {"kind", "durationSeconds", "bitrateKbps", "channels", "sampleRate", "tags"}
+# A format-level position tag, decoded to `gps` when the context's extract_geo_location flag is on.
+FFMPEG_HEADER_WITH_TAGS_AND_POSITION = FFMPEG_HEADER_WITH_TAGS.replace(
+    "    date            : 2026-03-01\n",
+    "    date            : 2026-03-01\n    location        : +47.6097-122.3331+056.000/\n")
 
 
 def _missing(required, section):
@@ -66,8 +70,8 @@ def test_sys_image_with_gps(tmp_path):
 def test_sys_media_video(tmp_path):
     path = write(tmp_path, "clip.mp4", b"\x00")
     sys_media = video.extract_video(
-        path, make_ctx(tmp_path, "clip.mp4"), run=FakeFfmpeg(header=FFMPEG_HEADER_WITH_TAGS),
-        read_frames=fake_read_frames).attributes["sys_media"]
+        path, make_ctx(tmp_path, "clip.mp4", extract_geo_location=True),
+        run=FakeFfmpeg(header=FFMPEG_HEADER_WITH_TAGS_AND_POSITION), read_frames=fake_read_frames).attributes["sys_media"]
     assert _missing(VIDEO_KEYS, sys_media) == set()
     assert sys_media["kind"] == "video"
     for key in ("durationSeconds", "width", "height", "frameRate", "bitrateKbps", "channels", "sampleRate"):
@@ -75,10 +79,12 @@ def test_sys_media_video(tmp_path):
     assert isinstance(sys_media["videoCodec"], str) and isinstance(sys_media["audioCodec"], str)
     # Every format-level tag is recorded; the contract keys the catalogue reads are among them.
     assert {"title", "artist", "album", "year", "date"} <= set(sys_media["tags"]) <= set(PROMOTION_SOURCE_KEYS["sys_media.tags"]) | {
-        "major_brand", "minor_version", "compatible_brands", "encoder"}
+        "major_brand", "minor_version", "compatible_brands", "encoder", "location"}
     assert _is_number(sys_media["tags"]["year"])
     assert all(isinstance(sys_media["tags"][key], str) for key in ("title", "artist", "album"))
     assert sys_media["streamTags"]["0:0"]["handler_name"] == "VideoHandler"
+    assert set(sys_media["gps"]) == set(PROMOTION_SOURCE_KEYS["sys_media.gps"])
+    assert all(_is_number(sys_media["gps"][key]) for key in ("latitude", "longitude", "altitude"))
 
 
 @pytest.mark.unit

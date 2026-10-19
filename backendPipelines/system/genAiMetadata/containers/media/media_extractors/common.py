@@ -64,8 +64,9 @@ PROMOTION_SOURCE_KEYS: Dict[str, Tuple[str, ...]] = {
     "sys_image.exif": ("make", "model", "dateTimeOriginal", "gps"),
     "sys_image.exif.gps": ("latitude", "longitude", "altitude"),
     "sys_media": ("kind", "durationSeconds", "width", "height", "frameRate", "videoCodec", "audioCodec",
-                  "bitrateKbps", "channels", "sampleRate", "tags"),
+                  "bitrateKbps", "channels", "sampleRate", "tags", "gps"),
     "sys_media.tags": ("title", "artist", "album", "year", "creation_time", "date"),
+    "sys_media.gps": ("latitude", "longitude", "altitude"),
     "sys_archive": ("entryCount", "uncompressedBytes", "containerFormat"),
     "sys_document": ("pageCount", "title", "author", "createdAt", "hasText"),
     "sys_text": ("encoding", "lineCount", "wordCount", "language"),
@@ -195,6 +196,103 @@ def year_number(value) -> Optional[int]:
         return value if 0 < value < 10000 else None
     match = _YEAR_PREFIX.match(str(value))
     return int(match.group(1)) if match else None
+
+
+# A container's position travels as an ISO 6709 string: ffmpeg maps the QuickTime `©xyz` atom and the 3GPP
+# `loci` box to the `location` tag (with a language suffix for 3GPP, `location-eng`), and Apple devices also
+# write `com.apple.quicktime.location.ISO6709`. The string is `±latitude±longitude[±altitude][/]`, each angle
+# in degrees (`+47.6097-122.3331+056.000/`), degrees-minutes (`+4736.58-12219.98/`) or
+# degrees-minutes-seconds (`+473635-1221959/`), told apart by the integer digit count.
+_ISO6709 = re.compile(
+    r"^\s*([+-]\d{2,6}(?:\.\d+)?)([+-]\d{3,7}(?:\.\d+)?)([+-]\d+(?:\.\d+)?)?(?:CRS[^/]*)?/?\s*$")
+_GPS_DECIMALS = 6
+
+
+def is_location_tag(key: str) -> bool:
+    """Whether a container tag key carries a position (an ISO 6709 string)."""
+    lowered = str(key).lower()
+    return lowered == "location" or lowered.startswith("location-") or lowered.endswith(".location.iso6709")
+
+
+def _iso6709_angle(token: str, degree_digits: int) -> Optional[float]:
+    sign = -1.0 if token[0] == "-" else 1.0
+    whole, _, fraction = token[1:].partition(".")
+    extra = len(whole) - degree_digits
+    if extra not in (0, 2, 4):
+        return None
+    fraction_value = float("0." + fraction) if fraction else 0.0
+    degrees = float(whole[:degree_digits])
+    minutes = float(whole[degree_digits:degree_digits + 2]) if extra >= 2 else 0.0
+    seconds = float(whole[degree_digits + 2:degree_digits + 4]) if extra == 4 else 0.0
+    if extra == 0:
+        degrees += fraction_value
+    elif extra == 2:
+        minutes += fraction_value
+    else:
+        seconds += fraction_value
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return sign * (degrees + minutes / 60 + seconds / 3600)
+
+
+def parse_iso6709(value) -> Optional[Dict[str, Optional[float]]]:
+    """`{latitude, longitude, altitude}` in decimal degrees from an ISO 6709 string, or None when the text is
+    not one or its angles are out of range. Altitude is None when the string carries none."""
+    if value is None or isinstance(value, bool):
+        return None
+    match = _ISO6709.match(str(value))
+    if not match:
+        return None
+    latitude = _iso6709_angle(match.group(1), 2)
+    longitude = _iso6709_angle(match.group(2), 3)
+    if latitude is None or longitude is None or abs(latitude) > 90 or abs(longitude) > 180:
+        return None
+    altitude = float(match.group(3)) if match.group(3) else None
+    return {"latitude": round(latitude, _GPS_DECIMALS), "longitude": round(longitude, _GPS_DECIMALS),
+            "altitude": altitude}
+
+
+def record_media_position(sys_media: Dict[str, object], extract_geo_location: bool) -> Optional[str]:
+    """Apply the `extractGeoLocation` gate to a `sys_media` record whose `tags` (and `streamTags`) are already
+    filled, the way `sys_image.exif` is gated: when a position-bearing tag is present, `hasGps` is recorded;
+    with the flag on, the first tag that decodes becomes `gps` (`latitude`, `longitude`, `altitude`); with the
+    flag off, the position-bearing tags are withheld from the record so no coordinate is written. Returns a
+    warning when the flag is on and a position tag is present but none decodes."""
+    tags = sys_media.get("tags")
+    tags = tags if isinstance(tags, dict) else {}
+    stream_tags = sys_media.get("streamTags")
+    stream_tags = stream_tags if isinstance(stream_tags, dict) else {}
+    located = [key for key in tags if is_location_tag(key)]
+    located_streams = {stream: [key for key in block if is_location_tag(key)]
+                       for stream, block in stream_tags.items() if isinstance(block, dict)}
+    if not located and not any(located_streams.values()):
+        return None
+    sys_media["hasGps"] = True
+    if extract_geo_location:
+        for key in located:
+            gps = parse_iso6709(tags[key])
+            if gps is not None:
+                sys_media["gps"] = gps
+                return None
+        for stream, keys in located_streams.items():
+            for key in keys:
+                gps = parse_iso6709(stream_tags[stream][key])
+                if gps is not None:
+                    sys_media["gps"] = gps
+                    return None
+        return "Container location tag present but it did not decode as ISO 6709; no gps recorded"
+    for key in located:
+        del tags[key]
+    if not tags:
+        sys_media.pop("tags", None)
+    for stream, keys in located_streams.items():
+        for key in keys:
+            del stream_tags[stream][key]
+        if not stream_tags[stream]:
+            del stream_tags[stream]
+    if not stream_tags:
+        sys_media.pop("streamTags", None)
+    return None
 
 
 def other_fallback(ctx: ExtractContext, reason: str) -> BranchResult:

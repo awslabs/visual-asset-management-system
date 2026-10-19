@@ -15,6 +15,8 @@ from .common import (
     BranchResult,
     ExtractContext,
     human_duration,
+    is_location_tag,
+    record_media_position,
     truncate_text,
     year_number,
 )
@@ -122,6 +124,9 @@ def extract_audio(path: str, ctx: ExtractContext) -> BranchResult:
             recorded_tags["year"] = year
         sys_media["tags"] = recorded_tags
     result.attributes["sys_media"] = sys_media
+    position_warning = record_media_position(sys_media, ctx.extract_geo_location)
+    if position_warning:
+        result.warnings.append(position_warning)
     if sys_media.get("durationSeconds"):
         result.facts["duration"] = human_duration(float(sys_media["durationSeconds"]))
     if sys_media.get("sampleRate"):
@@ -131,6 +136,12 @@ def extract_audio(path: str, ctx: ExtractContext) -> BranchResult:
     for name in _FACT_FIELDS:
         if name in tags:
             result.facts[name] = tags[name]
+    gps = sys_media.get("gps")
+    if isinstance(gps, dict):
+        result.facts["location"] = f"{gps['latitude']}, {gps['longitude']}"
+    # The tag text is the model's input, so a withheld position tag stays out of it as well.
+    excerpt_tags = {key: value for key, value in tags.items()
+                    if ctx.extract_geo_location or not is_location_tag(key)}
     result.text_excerpt = truncate_text(
-        "\n".join(f"{key}: {value}" for key, value in tags.items()), ctx.max_text_chars)
+        "\n".join(f"{key}: {value}" for key, value in excerpt_tags.items()), ctx.max_text_chars)
     return result
