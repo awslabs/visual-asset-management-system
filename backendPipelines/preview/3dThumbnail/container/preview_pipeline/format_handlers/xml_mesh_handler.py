@@ -15,6 +15,10 @@ A 3MF archive is checked before it is read (``utils/archive.py``): its uncompres
 central directory must fit the free disk, the model part must stay under ``MAX_XML_BYTES``, and no
 member may have an implausible compression ratio.
 
+A 3MF component or a COLLADA ``instance_node`` may reference the same child many times from every
+level, so both walks count their nodes and placed geometry against a ``scene_limits.SceneLimit`` and
+stop once it is reached; each object or geometry is parsed once, however often it is placed.
+
 Both loaders return a Y-up PolyData with per-cell ``RGB`` when the file sets colours: 3MF is Z-up by
 specification; a COLLADA file states its axis in ``<asset><up_axis>``.
 """
@@ -28,6 +32,7 @@ import numpy as np
 import pyvista as pv
 
 from ..utils.logging import get_logger
+from .scene_limits import SceneLimit
 
 logger = get_logger()
 
@@ -167,7 +172,9 @@ def _transform(text) -> np.ndarray:
     return matrix
 
 
-def load_3mf(file_path: str) -> pv.PolyData:
+def load_3mf(file_path: str, max_triangles: int = None) -> pv.PolyData:
+    """A 3MF build as one Y-up mesh. The component walk stops at a ``SceneLimit`` of
+    ``max_triangles``; each object's own mesh is parsed once however often it is placed."""
     import os
 
     from ..utils.archive import check_archive, check_member
@@ -189,6 +196,8 @@ def load_3mf(file_path: str) -> pv.PolyData:
 
     objects = {obj.get("id"): obj for obj in _children(resources, "object")}
     coloured = bool(materials)
+    limit = SceneLimit("3MF build", max_triangles)
+    meshes = {}
     points_out, cells_out, colours_out = [], [], []
     offset = [0]
 
@@ -198,33 +207,50 @@ def load_3mf(file_path: str) -> pv.PolyData:
             return palette[index]
         return None
 
+    def object_mesh(obj, mesh):
+        """(vertices, triangles, colours or None) of the object's ``<mesh>``, or None when unusable."""
+        vertices = _child(mesh, "vertices")
+        triangles = _child(mesh, "triangles")
+        if vertices is None or triangles is None:
+            return None
+        xyz = np.array([[float(v.get("x", 0)), float(v.get("y", 0)), float(v.get("z", 0))]
+                        for v in _children(vertices, "vertex")], dtype=np.float64)
+        rows = _children(triangles, "triangle")
+        tri = np.array([[int(t.get("v1")), int(t.get("v2")), int(t.get("v3"))] for t in rows], dtype=np.int64)
+        if not len(xyz) or not len(tri) or tri.max() >= len(xyz) or tri.min() < 0:
+            return None
+        colours = None
+        if coloured:
+            default_pid, default_index = obj.get("pid"), obj.get("pindex")
+            default = colour_for(default_pid, int(default_index) if default_index else 0)
+            colours = np.array([colour_for(t.get("pid", default_pid), int(t.get("p1")) if t.get("p1") else None)
+                                or default or DEFAULT_RGB for t in rows], dtype=np.uint8)
+        return xyz, tri, colours
+
     def emit(obj, matrix, depth):
         if depth > 32:
             raise ValueError("3MF component nesting deeper than 32 levels")
+        if not limit.visit():
+            return
         mesh = _child(obj, "mesh")
         if mesh is not None:
-            vertices = _child(mesh, "vertices")
-            triangles = _child(mesh, "triangles")
-            if vertices is None or triangles is None:
+            key = obj.get("id")
+            if key not in meshes:
+                meshes[key] = object_mesh(obj, mesh)
+            if meshes[key] is None:
                 return
-            xyz = np.array([[float(v.get("x", 0)), float(v.get("y", 0)), float(v.get("z", 0))]
-                            for v in _children(vertices, "vertex")], dtype=np.float64)
-            rows = _children(triangles, "triangle")
-            tri = np.array([[int(t.get("v1")), int(t.get("v2")), int(t.get("v3"))] for t in rows], dtype=np.int64)
-            if not len(xyz) or not len(tri) or tri.max() >= len(xyz) or tri.min() < 0:
-                return
+            xyz, tri, colours = meshes[key]
             points_out.append(xyz @ matrix[:3, :3] + matrix[3, :3])
             cells_out.append(tri + offset[0])
             offset[0] += len(xyz)
             if coloured:
-                default_pid, default_index = obj.get("pid"), obj.get("pindex")
-                default = colour_for(default_pid, int(default_index) if default_index else 0)
-                colours = [colour_for(t.get("pid", default_pid), int(t.get("p1")) if t.get("p1") else None)
-                           or default or DEFAULT_RGB for t in rows]
-                colours_out.append(np.array(colours, dtype=np.uint8))
+                colours_out.append(colours)
+            limit.add(len(xyz), len(tri))
         components = _child(obj, "components")
         if components is not None:
             for component in _children(components, "component"):
+                if limit.reached:
+                    return
                 child = objects.get(component.get("objectid"))
                 if child is not None:
                     emit(child, _transform(component.get("transform")) @ matrix, depth + 1)
@@ -232,6 +258,8 @@ def load_3mf(file_path: str) -> pv.PolyData:
     build = _child(model, "build")
     items = _children(build, "item") if build is not None else []
     for item in items:
+        if limit.reached:
+            break
         obj = objects.get(item.get("objectid"))
         if obj is not None:
             emit(obj, _transform(item.get("transform")), 0)
@@ -359,7 +387,9 @@ def _geometry_triangles(geometry):
     return out
 
 
-def load_dae(file_path: str) -> pv.PolyData:
+def load_dae(file_path: str, max_triangles: int = None) -> pv.PolyData:
+    """A COLLADA scene as one Y-up mesh. The node walk stops at a ``SceneLimit`` of
+    ``max_triangles``; each geometry is parsed once however often it is instanced."""
     import os
 
     size = os.path.getsize(file_path)
@@ -373,18 +403,25 @@ def load_dae(file_path: str) -> pv.PolyData:
     library_nodes = {n.get("id"): n for n in (nodes_library.iter() if nodes_library is not None else [])
                      if _local(n.tag) == "node" and n.get("id")}
     coloured = bool(materials)
+    limit = SceneLimit("COLLADA scene", max_triangles)
+    primitives = {}
     points_out, cells_out, colours_out = [], [], []
     offset = [0]
 
     def add_geometry(instance, matrix):
-        geometry = geometries.get((instance.get("url") or "").lstrip("#"))
-        if geometry is None:
+        geometry_id = (instance.get("url") or "").lstrip("#")
+        geometry = geometries.get(geometry_id)
+        if geometry is None or limit.reached:
             return
+        if geometry_id not in primitives:
+            primitives[geometry_id] = _geometry_triangles(geometry)
         bindings = {}
         for bound in instance.iter():
             if _local(bound.tag) == "instance_material":
                 bindings[bound.get("symbol")] = (bound.get("target") or "").lstrip("#")
-        for positions, triangles, symbol in _geometry_triangles(geometry):
+        for positions, triangles, symbol in primitives[geometry_id]:
+            if limit.reached:
+                return
             homogeneous = np.column_stack([positions, np.ones(len(positions))])
             points_out.append((homogeneous @ matrix.T)[:, :3])
             cells_out.append(triangles + offset[0])
@@ -392,12 +429,15 @@ def load_dae(file_path: str) -> pv.PolyData:
             if coloured:
                 colour = materials.get(bindings.get(symbol, symbol)) or DEFAULT_RGB
                 colours_out.append(np.tile(np.array(colour, dtype=np.uint8), (len(triangles), 1)))
+            limit.add(len(positions), len(triangles))
 
     def walk(node, parent, depth):
-        if depth > 64:
+        if depth > 64 or not limit.visit():
             return
         matrix = parent @ _node_matrix(node)
         for child in node:
+            if limit.reached:
+                return
             name = _local(child.tag)
             if name == "instance_geometry":
                 add_geometry(child, matrix)
@@ -435,9 +475,9 @@ def load_dae(file_path: str) -> pv.PolyData:
     return mesh
 
 
-def load(file_path: str, ext: str) -> pv.PolyData:
+def load(file_path: str, ext: str, max_triangles: int = None) -> pv.PolyData:
     if ext == ".3mf":
-        return load_3mf(file_path)
+        return load_3mf(file_path, max_triangles)
     if ext == ".dae":
-        return load_dae(file_path)
+        return load_dae(file_path, max_triangles)
     raise ValueError(f"Unsupported XML mesh format: {ext}")

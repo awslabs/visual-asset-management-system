@@ -159,6 +159,158 @@ class TestXmlMeshes:
 
 
 # --------------------------------------------------------------------------------------------------
+# Scene expansion bounds (BSC1): each level references the same child twice
+# --------------------------------------------------------------------------------------------------
+
+_TRIANGLE_3MF_OBJECT = ('<object id="1" type="model"><mesh><vertices><vertex x="0" y="0" z="0"/>'
+                        '<vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices>'
+                        '<triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object>')
+
+
+def _fan_out_3mf(path, depth):
+    """A 3MF whose object at each level places the level below twice: 2^depth triangles."""
+    objects = [_TRIANGLE_3MF_OBJECT] + [
+        f'<object id="{level}" type="model"><components><component objectid="{level - 1}"/>'
+        f'<component objectid="{level - 1}" transform="1 0 0 0 1 0 0 0 1 {level} 0 0"/></components></object>'
+        for level in range(2, depth + 2)]
+    model = ('<?xml version="1.0" encoding="UTF-8"?><model unit="millimeter" '
+             'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources>'
+             + "".join(objects) + f'</resources><build><item objectid="{depth + 1}"/></build></model>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("3D/3dmodel.model", model)
+    return str(path)
+
+
+def _fan_out_dae(path, depth, geometry=True):
+    """A COLLADA scene whose node at each level instances the level below twice."""
+    leaf = '<instance_geometry url="#g"/>' if geometry else ""
+    nodes = [f'<node id="n0">{leaf}</node>'] + [
+        f'<node id="n{level}"><instance_node url="#n{level - 1}"/><node><translate>{level} 0 0</translate>'
+        f'<instance_node url="#n{level - 1}"/></node></node>' for level in range(1, depth + 1)]
+    document = f"""<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+ <library_geometries><geometry id="g"><mesh>
+  <source id="g-pos"><float_array id="g-arr" count="9">0 0 0 1 0 0 0 1 0</float_array>
+   <technique_common><accessor source="#g-arr" count="3" stride="3"/></technique_common></source>
+  <vertices id="g-v"><input semantic="POSITION" source="#g-pos"/></vertices>
+  <triangles count="1"><input semantic="VERTEX" source="#g-v" offset="0"/><p>0 1 2</p></triangles>
+ </mesh></geometry></library_geometries>
+ <library_nodes>{"".join(nodes)}</library_nodes>
+ <library_visual_scenes><visual_scene id="s"><node><instance_node url="#n{depth}"/></node></visual_scene>
+ </library_visual_scenes>
+ <scene><instance_visual_scene url="#s"/></scene>
+</COLLADA>"""
+    path.write_text(document)
+    return str(path)
+
+
+class _Unbounded(BaseException):
+    """Raised by a counting wrapper once a walk passes any plausible bound. A BaseException, so a
+    loader's ``except Exception`` cannot turn it into a fallback that keeps expanding."""
+
+
+def _counting(function, limit=50_000):
+    calls = [0]
+
+    def wrapper(*args, **kwargs):
+        calls[0] += 1
+        if calls[0] > limit:
+            raise _Unbounded(f"{function.__name__} called more than {limit:,} times: the walk is unbounded")
+        return function(*args, **kwargs)
+
+    wrapper.calls = calls
+    return wrapper
+
+
+def _small_budgets(triangles=1_000):
+    from preview_pipeline import resources
+
+    return resources.Budgets(memory_bytes=16 * 1024 ** 3, cpus=4, points=1_000_000, triangles=triangles,
+                             splats=250_000)
+
+
+@pytest.mark.unit
+@requires_real("pyvista")
+class TestSceneExpansion:
+    def test_a_3mf_doubling_30_levels_stops_at_the_triangle_budget(self, tmp_path, caplog):
+        path = _fan_out_3mf(tmp_path / "fan.3mf", depth=30)
+        transform = _counting(xml_mesh_handler._transform)
+        with patch.object(xml_mesh_handler, "_transform", transform), caplog.at_level("WARNING"):
+            mesh = core._load_file(path, ".3mf", budgets=_small_budgets())
+        assert 1_000 < mesh.n_cells <= 1_001, "the placement that crosses the budget is the last one"
+        assert transform.calls[0] < 5_000
+        assert caplog.text.count("expands past") == 1
+
+    def test_a_dae_doubling_30_levels_stops_at_the_triangle_budget_and_parses_the_geometry_once(
+            self, tmp_path, caplog):
+        path = _fan_out_dae(tmp_path / "fan.dae", depth=30)
+        node_matrix = _counting(xml_mesh_handler._node_matrix)
+        geometry = _counting(xml_mesh_handler._geometry_triangles)
+        with patch.object(xml_mesh_handler, "_node_matrix", node_matrix), \
+                patch.object(xml_mesh_handler, "_geometry_triangles", geometry), caplog.at_level("WARNING"):
+            mesh = core._load_file(path, ".dae", budgets=_small_budgets())
+        assert 1_000 < mesh.n_cells <= 1_001
+        assert node_matrix.calls[0] < 5_000
+        assert geometry.calls[0] == 1, "one geometry instanced 2^30 times is parsed once"
+        assert caplog.text.count("expands past") == 1
+
+    def test_a_dae_of_nodes_that_place_nothing_stops_at_the_node_bound(self, tmp_path, monkeypatch, caplog):
+        from preview_pipeline.format_handlers import scene_limits
+
+        monkeypatch.setattr(scene_limits, "MAX_SCENE_NODES", 2_000)
+        path = _fan_out_dae(tmp_path / "empty.dae", depth=40, geometry=False)
+        with caplog.at_level("WARNING"), pytest.raises(ValueError, match="no triangle geometry"):
+            core._load_file(path, ".dae", budgets=_small_budgets())
+        assert "2,000 nodes" in caplog.text
+
+    def test_a_scene_within_the_budget_loads_every_placement(self, tmp_path):
+        mesh = core._load_file(_fan_out_3mf(tmp_path / "small.3mf", depth=6), ".3mf",
+                               budgets=_small_budgets())
+        assert mesh.n_cells == 2 ** 6
+        mesh = core._load_file(_fan_out_dae(tmp_path / "small.dae", depth=6), ".dae", budgets=_small_budgets())
+        assert mesh.n_cells == 2 ** 6
+
+
+@pytest.mark.unit
+class TestSceneLimit:
+    def test_a_placement_that_crosses_the_triangle_bound_is_the_last(self, caplog):
+        from preview_pipeline.format_handlers.scene_limits import SceneLimit
+
+        limit = SceneLimit("scene", max_triangles=10)
+        with caplog.at_level("WARNING"):
+            limit.add(3, 8)
+            assert not limit.reached
+            limit.add(3, 8)
+            assert limit.reached and not limit.visit()
+            limit.add(3, 8)
+        assert caplog.text.count("expands past 10 triangles") == 1
+
+    def test_vertices_are_bounded_at_three_per_triangle_of_the_limit(self):
+        from preview_pipeline.format_handlers.scene_limits import SceneLimit
+
+        limit = SceneLimit("scene", max_triangles=10)
+        limit.add(30, 1)
+        assert not limit.reached
+        limit.add(1, 0)
+        assert limit.reached
+
+    def test_the_node_bound_and_a_count_known_in_advance(self, monkeypatch):
+        from preview_pipeline.format_handlers import scene_limits
+
+        monkeypatch.setattr(scene_limits, "MAX_SCENE_NODES", 3)
+        limit = scene_limits.SceneLimit("scene", max_triangles=10)
+        assert [limit.visit() for _ in range(4)] == [True, True, True, False]
+        assert scene_limits.SceneLimit("scene").expect(3)
+        assert not scene_limits.SceneLimit("scene").expect(4)
+
+    def test_the_default_triangle_bound_is_the_triangle_ceiling(self):
+        from preview_pipeline import resources
+        from preview_pipeline.format_handlers.scene_limits import SceneLimit
+
+        assert SceneLimit("scene").max_triangles == resources.MAX_TRIANGLES
+
+
+# --------------------------------------------------------------------------------------------------
 # PTS, OFF, DRC colours
 # --------------------------------------------------------------------------------------------------
 

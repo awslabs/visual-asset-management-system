@@ -510,13 +510,15 @@ def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
     Load a 3D file with the appropriate format handler.
     Returns a PyVista PolyData object. ``asset_root`` is the local directory the input's referenced
     files were fetched into (USD reads textures only from inside it). ``budgets`` bounds the points
-    a point-cloud reader and the splats a splat reader keep.
+    a point-cloud reader and the splats a splat reader keep, and the triangles a 3MF, COLLADA or STEP
+    scene expands to.
 
     A ``.ply`` is routed by its header: Gaussian splats, a mesh, or a point cloud (vertices only). A
     ``.compressed.ply`` is a compressed splat scene.
     """
     max_points = budgets.points if budgets is not None else pointcloud_handler.MAX_POINTS_FOR_RENDER
     max_splats = budgets.splats if budgets is not None else splat_handler.DEFAULT_MAX_SPLATS
+    max_triangles = budgets.triangles if budgets is not None else None
     work_dir = asset_root or os.path.dirname(os.path.abspath(file_path))
     if ext == ".ply":
         if splat_handler.is_compressed_ply(file_path):
@@ -534,7 +536,7 @@ def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
     if splat_handler.can_handle(ext):
         return splat_handler.load(file_path, max_splats=max_splats, work_dir=work_dir)
     if xml_mesh_handler.can_handle(ext):
-        return xml_mesh_handler.load(file_path, ext)
+        return xml_mesh_handler.load(file_path, ext, max_triangles=max_triangles)
     if mesh_handler.can_handle(ext):
         return mesh_handler.load(file_path)
     elif pointcloud_handler.can_handle(ext):
@@ -542,7 +544,7 @@ def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
             return pointcloud_handler.load(file_path)
         return pointcloud_handler.load(file_path, max_points=budgets.points)
     elif cad_handler.can_handle(ext):
-        return cad_handler.load(file_path)
+        return cad_handler.load(file_path, max_triangles=max_triangles)
     elif usd_handler.can_handle(ext):
         return usd_handler.load(file_path, asset_root=asset_root)
     else:

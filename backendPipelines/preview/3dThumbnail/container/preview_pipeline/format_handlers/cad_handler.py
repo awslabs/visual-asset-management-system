@@ -14,14 +14,25 @@ detail does not depend on the model's units. Each face's triangulation is placed
 Orientation is left as authored: STEP carries no up-axis metadata.
 
 A file XCAF cannot read falls back to ``STEPControl_Reader`` (geometry only, same tessellation).
+
+An assembly may place the same component many times from every level, so a file of a few kilobytes
+can describe 2^depth placements, and OCCT's transfer (either reader) visits every one of them: a
+30-level doubling runs for minutes inside ``Transfer`` before any Python runs. The placements
+are therefore counted from the file's ``NEXT_ASSEMBLY_USAGE_OCCURRENCE`` entities first
+(``assembly_occurrences``, one linear pass over the text), and a file over the ``SceneLimit`` node
+bound is refused before either reader transfers it. The walk counts its placements, and the
+tessellation its placed geometry, against the same limit.
 """
 
+import mmap
 import os
+import re
 
 import numpy as np
 import pyvista as pv
 
 from ..utils.logging import get_logger
+from .scene_limits import SceneLimit
 
 logger = get_logger()
 
@@ -34,27 +45,96 @@ ANGULAR_DEFLECTION = 0.35
 # The colour of a face no part, component or face colour reaches (the renderer's mesh colour).
 DEFAULT_RGB = (173, 216, 230)
 
+# NEXT_ASSEMBLY_USAGE_OCCURRENCE(id, name, description, relating, related, ...): the parent and the
+# child product definition of one component placement. Quoted strings may hold '' escapes.
+_STRING = rb"'(?:[^']|'')*'"
+_NAUO = re.compile(rb"NEXT_ASSEMBLY_USAGE_OCCURRENCE\s*\(\s*" + _STRING + rb"\s*,\s*" + _STRING
+                   + rb"\s*,\s*(?:" + _STRING + rb"|\$)\s*,\s*#(\d+)\s*,\s*#(\d+)", re.IGNORECASE)
+
 
 def can_handle(extension: str) -> bool:
     return extension.lower() in SUPPORTED_EXTENSIONS
 
 
-def load(file_path: str) -> pv.PolyData:
+def load(file_path: str, max_triangles: int = None) -> pv.PolyData:
     """
     Load a STEP file and return a PyVista PolyData object for rendering, with per-cell ``RGB`` when the
-    file sets any colour.
+    file sets any colour. A file whose assembly places more components than the ``SceneLimit`` node
+    bound is refused before it is transferred; the walk and the tessellation stop at that limit and
+    at ``max_triangles``.
     """
     ext = os.path.splitext(file_path)[1].lower()
     logger.info(f"Loading CAD file: {file_path} (format: {ext})")
 
+    limit = SceneLimit("STEP assembly", max_triangles)
+    if not limit.expect(assembly_occurrences(file_path, limit.max_nodes)):
+        raise ValueError(f"STEP assembly places more than {limit.max_nodes:,} components")
     try:
-        parts = read_step_parts(file_path)
+        parts = read_step_parts(file_path, limit)
     except Exception as e:
+        if limit.reached:
+            # The geometry-only reader would transfer the same assembly with no limit at all.
+            raise ValueError("STEP assembly expands past the scene limit before reaching a part") from e
         logger.warning(f"XCAF read failed ({e}); reading geometry only")
         from OCP.TopLoc import TopLoc_Location
 
         parts = [(read_step_shape(file_path), TopLoc_Location(), None, {})]
-    return tessellate_parts(parts)
+    return tessellate_parts(parts, limit)
+
+
+def assembly_occurrences(file_path: str, max_occurrences: int) -> int:
+    """The component placements a STEP file's assembly expands to: every
+    ``NEXT_ASSEMBLY_USAGE_OCCURRENCE`` counted once per placement of its parent, read from the
+    file's text in one pass. Counting stops at ``max_occurrences + 1``; a cycle counts as that."""
+    children = {}
+    related = set()
+    if os.path.getsize(file_path):
+        with open(file_path, "rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as text:
+            for match in _NAUO.finditer(text):
+                parent, child = int(match.group(1)), int(match.group(2))
+                children.setdefault(parent, []).append(child)
+                related.add(child)
+    over = max_occurrences + 1
+    counted = {}
+    total = 0
+    for root in children:
+        if root not in related:
+            total += _occurrences_below(root, children, counted, over)
+        if total >= over:
+            return over
+    if children and not total:
+        return over  # every definition is someone's child: the assembly is a cycle
+    return total
+
+
+def _occurrences_below(start, children, counted, over):
+    """Placements under the product definition ``start``, at most ``over``, memoised in ``counted``.
+    Iterative, so a deep chain cannot exhaust the interpreter's recursion limit; a definition met
+    again inside its own subtree is a cycle and counts as ``over``."""
+    in_progress = -1
+    counted[start] = in_progress
+    stack = [[start, 0, 0]]  # definition, next child index, placements so far
+    while stack:
+        frame = stack[-1]
+        definition, index, below = frame
+        kids = children.get(definition, ())
+        if below >= over or index >= len(kids):
+            stack.pop()
+            counted[definition] = min(below, over)
+            if stack:
+                stack[-1][2] += 1 + counted[definition]
+            continue
+        frame[1] += 1
+        child = kids[index]
+        known = counted.get(child)
+        if known is None:
+            counted[child] = in_progress
+            stack.append([child, 0, 0])
+        elif known == in_progress:
+            frame[2] = over
+        else:
+            frame[2] += 1 + known
+    return counted[start]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -98,11 +178,11 @@ def face_map(shape):
     return faces
 
 
-def read_step_parts(file_path: str):
+def read_step_parts(file_path: str, limit: SceneLimit = None):
     """The file's parts as ``(shape, location, colour, face_colours)``: each part's unplaced shape,
     the placement composed from every assembly level above it, the colour inherited from the nearest
     coloured component or part, and the colours its own sub-shapes (faces, or solids/shells holding
-    faces) set, keyed by the face's index in ``face_map(shape)``."""
+    faces) set, keyed by the face's index in ``face_map(shape)``. The walk stops at ``limit``."""
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.STEPCAFControl import STEPCAFControl_Reader
     from OCP.TCollection import TCollection_ExtendedString
@@ -125,6 +205,7 @@ def read_step_parts(file_path: str):
 
     shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(document.Main())
     colour_tool = XCAFDoc_DocumentTool.ColorTool_s(document.Main())
+    limit = limit if limit is not None else SceneLimit("STEP assembly")
     parts = []
 
     def walk(label, location, inherited, depth):
@@ -133,6 +214,8 @@ def read_step_parts(file_path: str):
             return
         colour = _colour_of(colour_tool, label) or inherited
         if XCAFDoc_ShapeTool.IsReference_s(label):
+            if not limit.visit():
+                return
             referred = TDF_Label()
             XCAFDoc_ShapeTool.GetReferredShape_s(label, referred)
             walk(referred, location.Multiplied(XCAFDoc_ShapeTool.GetLocation_s(label)), colour, depth + 1)
@@ -141,6 +224,8 @@ def read_step_parts(file_path: str):
             components = TDF_LabelSequence()
             XCAFDoc_ShapeTool.GetComponents_s(label, components, False)
             for index in range(1, components.Length() + 1):
+                if limit.reached:
+                    return
                 walk(components.Value(index), location, colour, depth + 1)
             return
         shape = XCAFDoc_ShapeTool.GetShape_s(label)
@@ -166,6 +251,8 @@ def read_step_parts(file_path: str):
     free = TDF_LabelSequence()
     shape_tool.GetFreeShapes(free)
     for index in range(1, free.Length() + 1):
+        if limit.reached:
+            break
         walk(free.Value(index), TopLoc_Location(), None, 0)
     if not parts:
         raise ValueError("No shapes found in STEP file")
@@ -226,13 +313,14 @@ def face_triangles(face):
     return nodes, triangles
 
 
-def tessellate_parts(parts) -> pv.PolyData:
+def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
     """One PolyData of every face of every part, each part placed by its location, with per-cell RGB
     when any colour is set. A part instanced several times is meshed once (the mesh lives on the
-    shared shape) and its triangles are placed per instance."""
+    shared shape) and its triangles are placed per instance, until ``limit`` is reached."""
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.TopoDS import TopoDS
 
+    limit = limit if limit is not None else SceneLimit("STEP assembly")
     deflection = linear_deflection(_diagonal(parts))
     logger.info(f"Tessellating with linear deflection {deflection:.6g} (diagonal x "
                 f"{RELATIVE_LINEAR_DEFLECTION}) and angular deflection {ANGULAR_DEFLECTION} rad")
@@ -241,10 +329,14 @@ def tessellate_parts(parts) -> pv.PolyData:
     points, cells, colours = [], [], []
     offset = 0
     for shape, location, colour, face_colours in parts:
+        if limit.reached:
+            break
         BRepMesh_IncrementalMesh(shape, deflection, False, ANGULAR_DEFLECTION, True)
         matrix = None if location.IsIdentity() else _transform_matrix(location)
         faces = face_map(shape)
         for index in range(1, faces.Extent() + 1):
+            if limit.reached:
+                break
             meshed = face_triangles(TopoDS.Face_s(faces.FindKey(index)))
             if meshed is None:
                 continue
@@ -257,6 +349,7 @@ def tessellate_parts(parts) -> pv.PolyData:
             if coloured:
                 rgb = face_colours.get(index) or colour or DEFAULT_RGB
                 colours.append(np.tile(np.asarray(rgb, dtype=np.uint8), (len(triangles), 1)))
+            limit.add(len(nodes), len(triangles))
 
     if not points:
         raise ValueError("No geometry found in STEP file after tessellation")
