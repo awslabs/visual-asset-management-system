@@ -77,6 +77,11 @@ vamscli execution details my-execution-id --include-sub-executions
 vamscli execution details my-execution-id --json-output
 ```
 
+`Workflow version` names the published workflow state machine version the run started on, marked
+`(current)` while the workflow still runs it or `(superseded)` once the workflow has been redeployed,
+in which case the live workflow and pipeline settings may be newer than the ones the run used. A run
+started before versions were recorded shows `not recorded`.
+
 Asset and file metadata and database metadata are reported as separate row counts, each marked
 independently when the response returned only part of that collection, and the metadata sources the run
 read are named. The metadata rows themselves, and the full list of collections the response trimmed,

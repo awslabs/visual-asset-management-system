@@ -508,6 +508,12 @@ workflow, trigger, start and stop times and duration — together with where it 
 **Output Path Prefix** the run wrote beneath. Knowing the prefix is what lets you find a particular run's
 output in the asset when several runs have written to the same place.
 
+The header also shows the **Workflow Version** the run started on: the published version of the
+workflow's state machine, the exact definition the run executed. It is marked **Superseded** once the
+workflow has been redeployed, for example after a change to one of its pipelines, which means the
+workflow settings on the **Settings** tab and the pipeline names, read as they stand now, may be newer
+than the ones the run used. A run started before versions were recorded shows **Not recorded**.
+
 The tabs below it break the run down:
 
 | Tab           | What it shows                                                                                                                                                                                                                                                                                                                   |
