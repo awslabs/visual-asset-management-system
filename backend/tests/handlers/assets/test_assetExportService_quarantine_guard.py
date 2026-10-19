@@ -188,7 +188,8 @@ def _run_batch(identifiers, claims_and_roles, enforcer, request_model, table, en
     for p in patches:
         p.start()
     try:
-        result, _page_state = m.process_asset_batch(identifiers, request_model, claims_and_roles)
+        result, _page_state = m.process_asset_batch(
+            identifiers, request_model, claims_and_roles, {"requestContext": {}})
     finally:
         for p in reversed(patches):
             p.stop()
@@ -237,7 +238,7 @@ class TestProcessAssetBatchQuarantineChokePoint:
             p.start()
         try:
             with pytest.raises(m.VAMSGeneralErrorResponse):
-                m.process_asset_batch(_root(), request, {"tokens": ["alice"]})
+                m.process_asset_batch(_root(), request, {"tokens": ["alice"]}, {"requestContext": {}})
         finally:
             for p in reversed(patches):
                 p.stop()
