@@ -16,7 +16,9 @@ The FBX files are generated here, as ASCII 7.4 and as binary 7.4 (raw and zlib-d
 that load geometry need the real Open3D and PyVista (pipeline image).
 """
 
+import re
 import struct
+import time
 import zlib
 
 import numpy as np
@@ -53,12 +55,14 @@ def _ascii_array(name, values, indent="\t\t"):
     return f"{indent}{name}: *{len(values)} {{\n{indent}\ta: {','.join(str(v) for v in values)}\n{indent}}}\n"
 
 
-def ascii_fbx(geometries=(), models=(), materials=(), connections=()):
+def ascii_fbx(geometries=(), models=(), materials=(), connections=(), connection_type="OO"):
     """An ASCII FBX 7.4 document.
 
     ``geometries``: (id, vertices, polygons, rgba per polygon corner or None). ``models``: (id,
-    (tx, ty, tz)). ``materials``: (id, (r, g, b)). ``connections``: (child id, parent id), 0 the root.
-    Each geometry names material 0 of its model, so a model's first connected material colours it.
+    (tx, ty, tz)). ``materials``: (id, (r, g, b)). ``connections``: (child id, parent id), 0 the root,
+    of type ``connection_type``; an entry (child, parent, type) or (child, parent, type, property)
+    sets its own. Each geometry names material 0 of its model, so a model's first connected material
+    colours it.
     """
     out = ["; FBX 7.4.0 project file\n",
            "FBXHeaderExtension:  {\n\tFBXHeaderVersion: 1003\n\tFBXVersion: 7400\n}\n",
@@ -89,9 +93,16 @@ def ascii_fbx(geometries=(), models=(), materials=(), connections=()):
                    f'\t\tShadingModel: "lambert"\n\t\tMultiLayer: 0\n\t\tProperties70:  {{\n'
                    f'\t\t\tP: "DiffuseColor", "Color", "", "A",{r},{g},{b}\n\t\t}}\n\t}}\n')
     out.append("}\nConnections:  {\n")
-    out.extend(f'\tC: "OO",{child},{parent}\n' for child, parent in connections)
+    for child, parent, kind, prop in _connections(connections, connection_type):
+        out.append(f'\tC: "{kind}",{child},{parent}' + ("" if prop is None else f', "{prop}"') + "\n")
     out.append("}\n")
     return "".join(out)
+
+
+def _connections(connections, connection_type):
+    """(child, parent, type, property or None) of each connection entry."""
+    for child, parent, *rest in connections:
+        yield child, parent, rest[0] if rest else connection_type, rest[1] if len(rest) > 1 else None
 
 
 # --- binary FBX: 7.4 (32-bit record offsets) and 7.5 and later (64-bit) ----------------------------
@@ -111,13 +122,13 @@ def _binary_property(kind, value, compress=False):
     return kind.encode() + struct.pack("<III", len(value), 1 if compress else 0, len(payload)) + payload
 
 
-def _binary_node(name, properties, children, start, wide):
+def _binary_node(name, properties, children, start, wide, zero_words):
     header, layout = (25, "<QQQB") if wide else (13, "<IIIB")
     props = b"".join(properties)
     body_start = start + header + len(name) + len(props)
-    nested = b""
+    nested = b"\x00" * (8 if wide else 4) if children and zero_words else b""
     for child in children:
-        nested += child(body_start + len(nested), wide)
+        nested += child(body_start + len(nested), wide, zero_words)
     if children:
         nested += b"\x00" * header
     end = body_start + len(nested)
@@ -125,7 +136,8 @@ def _binary_node(name, properties, children, start, wide):
 
 
 def _node(name, properties=(), children=()):
-    return lambda start, wide: _binary_node(name, list(properties), list(children), start, wide)
+    return lambda start, wide, zero_words: _binary_node(name, list(properties), list(children), start, wide,
+                                                        zero_words)
 
 
 def _p70(name, kind, values):
@@ -133,10 +145,12 @@ def _p70(name, kind, values):
     return [_binary_property("S", s) for s in (name, kind, b"", b"A")] + [_binary_property("D", v) for v in values]
 
 
-def binary_fbx(geometries=(), models=(), materials=(), connections=(), compress=False, version=7400):
+def binary_fbx(geometries=(), models=(), materials=(), connections=(), compress=False, version=7400,
+               connection_type="OO", zero_words=False):
     """The binary FBX equivalent of ``ascii_fbx`` (vertex colours are not written); ``version`` 7500 and
     later use 64-bit record headers. Assimp needs a nested scope on every Model and Material, so each
-    gets its Version and Properties70."""
+    gets its Version and Properties70. ``zero_words`` starts every nested record list with a zero
+    word, which Assimp's binary tokenizer skips."""
     objects = []
     for gid, vertices, polygons, _ in geometries:
         objects.append(_node(b"Geometry", [_binary_property("L", gid), _binary_property("S", b"g\x00\x01Geometry"),
@@ -166,13 +180,16 @@ def binary_fbx(geometries=(), models=(), materials=(), connections=(), compress=
         _node(b"FBXHeaderExtension", [], [_node(b"FBXHeaderVersion", [_binary_property("I", 1003)]),
                                           _node(b"FBXVersion", [_binary_property("I", version)])]),
         _node(b"Objects", [], objects),
-        _node(b"Connections", [], [_node(b"C", [_binary_property("S", b"OO"), _binary_property("L", child),
-                                                _binary_property("L", parent)]) for child, parent in connections]),
+        _node(b"Connections", [], [
+            _node(b"C", [_binary_property("S", kind.encode()), _binary_property("L", child),
+                         _binary_property("L", parent)]
+                  + ([] if prop is None else [_binary_property("S", prop.encode())]))
+            for child, parent, kind, prop in _connections(connections, connection_type)]),
     ]
     wide = version >= 7500
     data = b"Kaydara FBX Binary  \x00\x1a\x00" + struct.pack("<I", version)
     for node in top:
-        data += node(len(data), wide)
+        data += node(len(data), wide, zero_words)
     return data + b"\x00" * (25 if wide else 13)
 
 
@@ -205,6 +222,14 @@ def doubling(depth):
         connections += [(child, parent) for child in (a, b) for parent in parents]
     connections += [(10, 1000 + 2 * depth), (10, 1001 + 2 * depth)]
     return dict(geometries=[(10, CUBE_VERTICES, CUBE_QUADS, None)], models=models, connections=connections)
+
+
+def property_links(scene):
+    """``scene`` with every connection repeated as an "OP" link naming a property and as a "PP" link.
+    Assimp reads neither as a placement."""
+    pairs = [connection[:2] for connection in scene["connections"]]
+    return dict(scene, connections=list(scene["connections"]) + [(c, p, "OP", "Lcl Translation") for c, p in pairs]
+                + [(c, p, "PP") for c, p in pairs])
 
 
 def _write(path, text_or_bytes):
@@ -249,6 +274,76 @@ def _fbx_file(path, scene, encoding):
 
 
 ENCODINGS = ["ascii", "binary", "binary-zlib", "binary-7500"]
+
+# scene_size of doubling(4): models, vertices, triangles, stored vertices, stored triangles.
+DOUBLING_4 = (62, 768, 384, 24, 12)
+
+
+def _ascii_doubling(edit=lambda text: text, **options):
+    return lambda depth: edit(ascii_fbx(**doubling(depth), **options))
+
+
+def _binary_doubling(edit=lambda data: data, **options):
+    return lambda depth: edit(binary_fbx(**doubling(depth), **options))
+
+
+def _entries_on_separate_lines(text):
+    return re.sub(r"(PolygonVertexIndex: \*\d+ \{\n\t\t\ta: )([^\n]*)",
+                  lambda m: m.group(1) + m.group(2).replace(",", "\n\t\t\t"), text)
+
+
+# A doubling written the ways Assimp 5.4.2 (Open3D 0.19) reads it: (id, file for a depth, scene_size at
+# depth 4). At depth 4 Assimp builds the third number's triangles from each file.
+READINGS = [
+    # Document::ReadConnections reads every connection type but "PP".
+    ("ascii-type-ZZ", _ascii_doubling(connection_type="ZZ"), DOUBLING_4),
+    ("ascii-type-empty", _ascii_doubling(connection_type=""), DOUBLING_4),
+    ("binary-type-ZZ", _binary_doubling(connection_type="ZZ"), DOUBLING_4),
+    ("binary-7500-type-empty", _binary_doubling(connection_type="", compress=True, version=7500), DOUBLING_4),
+    ("ascii-type-PP", _ascii_doubling(connection_type="PP"), (0, 0, 0, 24, 12)),
+    ("binary-type-PP", _binary_doubling(connection_type="PP"), (0, 0, 0, 24, 12)),
+    # The node and geometry walks skip an "OP" link that names a property, and only that one.
+    ("ascii-property-links", lambda depth: ascii_fbx(**property_links(doubling(depth))), DOUBLING_4),
+    ("binary-property-links", lambda depth: binary_fbx(**property_links(doubling(depth))), DOUBLING_4),
+    ("ascii-op-without-property", lambda depth: ascii_fbx(**dict(doubling(depth), connections=[
+        (c, p, "OP", "") for c, p in doubling(depth)["connections"]])), DOUBLING_4),
+    # ParseTokenAsID reads an id's leading digits, and an id that overflows 64 bits as 0, the root.
+    ("ascii-ids-with-trailing-characters",
+     _ascii_doubling(lambda t: re.sub(r'(C: "OO",\d+),(\d+)', r"\1x,\2y", t)), DOUBLING_4),
+    ("ascii-overflowing-root-id",
+     _ascii_doubling(lambda t: re.sub(r'(C: "OO",\d+),0\n', r"\1,99999999999999999999\n", t)), DOUBLING_4),
+    # The ASCII tokenizer: comments and strings hold no structure, the text ends at a NUL, and entries
+    # may be split by line breaks instead of commas.
+    ("ascii-comment-holds-a-header",
+     _ascii_doubling(lambda t: t.replace("Connections:  {", '; Model: 10, "x", "y"\nConnections:  {', 1)),
+     DOUBLING_4),
+    ("ascii-comment-in-a-geometry",
+     _ascii_doubling(lambda t: t.replace("\t\tPolygonVertexIndex:", "\t\t; Model: 77,\n\t\tPolygonVertexIndex:", 1)),
+     DOUBLING_4),
+    ("ascii-string-holds-a-header",
+     _ascii_doubling(lambda t: t.replace("\t\tVersion: 232\n", '\t\tVersion: 232\n\t\tName: "Model: 10, x"\n', 1)),
+     DOUBLING_4),
+    ("ascii-text-after-a-nul",
+     _ascii_doubling(lambda t: t + '\x00Objects: {\n\tModel: 10, "x", "y" {\n\t}\n}\n'), DOUBLING_4),
+    ("ascii-entries-on-separate-lines", _ascii_doubling(_entries_on_separate_lines), DOUBLING_4),
+    # Assimp keeps one object per id and reads the first Objects section; both count as all of them.
+    ("ascii-id-reused-by-a-geometry", _ascii_doubling(lambda t: t.replace(
+        "}\nConnections:", '\tGeometry: 1000, "Geometry::reused", "Mesh" {\n\t}\n}\nConnections:', 1)), DOUBLING_4),
+    ("ascii-second-objects-section", _ascii_doubling(
+        lambda t: t + 'Objects:  {\n\tModel: 10, "Model::x", "Mesh" {\n\t\tVersion: 232\n\t}\n}\n'),
+     (94, 768, 384, 24, 12)),
+    # MeshGeometry: a one-corner polygon adds a vertex and no triangle.
+    ("ascii-one-corner-polygons", _ascii_doubling(lambda t: t.replace(
+        "PolygonVertexIndex: *24 {\n\t\t\ta: ", "PolygonVertexIndex: *48 {\n\t\t\ta: " + "-1," * 24, 1)),
+     (62, 1536, 384, 48, 12)),
+    # The binary tokenizer: any file starting "Kaydara FBX Binary" is binary, and a zero word inside a
+    # nested record list is skipped.
+    ("binary-magic-tail", _binary_doubling(lambda d: d[:18] + b"XY\x00" + d[21:]), DOUBLING_4),
+    ("binary-zero-words", _binary_doubling(zero_words=True), DOUBLING_4),
+    ("binary-7500-zero-words", _binary_doubling(zero_words=True, compress=True, version=7500), DOUBLING_4),
+]
+READING_IDS = [reading[0] for reading in READINGS]
+EXPANDING_READINGS = [reading for reading in READINGS if not reading[0].endswith("-PP")]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -356,8 +451,39 @@ class TestFbxExpansion:
         assert mesh.n_cells == 20
 
     @pytest.mark.parametrize("encoding", ENCODINGS)
-    @pytest.mark.parametrize("scene", [two_quad_cubes(), one_cube_placed(3), doubling(4)],
-                             ids=["two-cubes", "shared-geometry", "doubling-4"])
+    @pytest.mark.parametrize("connection_type", ["ZZ", ""], ids=["ZZ", "empty"])
+    def test_a_doubling_linked_by_any_connection_type_is_refused_before_open3d_reads_it(
+            self, tmp_path, monkeypatch, encoding, connection_type):
+        """Assimp links a connection's child to its parent whatever its type string except "PP"."""
+        path = _fbx_file(tmp_path / "doubling.fbx", dict(doubling(30), connection_type=connection_type), encoding)
+        _block_open3d(monkeypatch)
+        with pytest.raises(ValueError, match="places more than 1,000,000 models"):
+            core._load_file(path, ".fbx", budgets=_budgets())
+
+    @pytest.mark.parametrize("name, build, expected", EXPANDING_READINGS,
+                             ids=[reading[0] for reading in EXPANDING_READINGS])
+    def test_a_30_level_doubling_is_refused_however_assimp_would_read_it(
+            self, tmp_path, monkeypatch, name, build, expected):
+        path = _write(tmp_path / "doubling.fbx", build(30))
+        _block_open3d(monkeypatch)
+        with pytest.raises(ValueError, match="places more than 1,000,000 models"):
+            core._load_file(path, ".fbx", budgets=_budgets())
+
+    @pytest.mark.parametrize("name, build, expected", EXPANDING_READINGS,
+                             ids=[reading[0] for reading in EXPANDING_READINGS])
+    def test_instances_past_the_triangle_budget_are_refused_however_assimp_would_read_them(
+            self, tmp_path, monkeypatch, name, build, expected):
+        """An 8-level doubling: 1,022 models placing 512 cubes, 6,144 triangles."""
+        path = _write(tmp_path / "doubling.fbx", build(8))
+        _block_open3d(monkeypatch)
+        with pytest.raises(ValueError, match="places more than 1,000 triangles"):
+            core._load_file(path, ".fbx", budgets=_budgets(triangles=1_000))
+
+    @pytest.mark.parametrize("encoding", ENCODINGS)
+    @pytest.mark.parametrize("scene", [two_quad_cubes(), one_cube_placed(3), doubling(4),
+                                       dict(doubling(4), connection_type="ZZ"), property_links(two_quad_cubes())],
+                             ids=["two-cubes", "shared-geometry", "doubling-4", "doubling-4-type-ZZ",
+                                  "two-cubes-property-links"])
     def test_the_counted_triangles_are_the_triangles_open3d_reads(self, tmp_path, scene, encoding):
         import open3d as o3d
         from preview_pipeline.format_handlers import fbx_scene
@@ -366,6 +492,16 @@ class TestFbxExpansion:
         model = o3d.io.read_triangle_model(path)
         read = sum(len(m.mesh.triangles) for m in model.meshes)
         assert read and fbx_scene.scene_size(path, 1_000_000).triangles == read
+
+    @pytest.mark.parametrize("name, build, expected", READINGS, ids=READING_IDS)
+    def test_open3d_reads_the_counted_triangles_however_the_file_is_written(self, tmp_path, name, build, expected):
+        import open3d as o3d
+        from preview_pipeline.format_handlers import fbx_scene
+
+        path = _write(tmp_path / "doubling.fbx", build(4))
+        model = o3d.io.read_triangle_model(path)
+        read = sum(len(m.mesh.triangles) for m in model.meshes)
+        assert read == expected[2] == fbx_scene.scene_size(path, 1_000_000).triangles
 
 
 # --------------------------------------------------------------------------------------------------
@@ -391,6 +527,30 @@ class TestFbxSceneSize:
             assert tuple(fbx_scene.scene_size(text, 1_000_000)) == expected, name
             assert tuple(fbx_scene.scene_size(binary, 1_000_000)) == expected, name
 
+    @pytest.mark.parametrize("name, build, expected", READINGS, ids=READING_IDS)
+    def test_the_file_is_counted_as_assimp_reads_it(self, tmp_path, name, build, expected):
+        from preview_pipeline.format_handlers import fbx_scene
+
+        assert tuple(fbx_scene.scene_size(_write(tmp_path / "doubling.fbx", build(4)), 1_000_000)) == expected
+
+    @pytest.mark.parametrize("line, count", [("PolygonVertexIndex: *1 {\n", 20_000),
+                                             (";PolygonVertexIndex: *1 {\n", 4_000)],
+                             ids=["open-index-arrays", "commented-index-arrays"])
+    def test_the_ascii_scan_reads_the_file_once(self, tmp_path, line, count):
+        """A geometry block packed with index-array headers, left open or commented out. A scan that
+        re-reads the rest of the block from each header takes more than 10 s on these files; one pass
+        takes milliseconds, so the bound is generous."""
+        from preview_pipeline.format_handlers import fbx_scene
+
+        anchor = '"Geometry::g10", "Mesh" {\n'
+        text = ascii_fbx(**one_cube_placed(1)).replace(anchor, anchor + line * count, 1)
+        path = _write(tmp_path / "packed.fbx", text)
+        started = time.perf_counter()
+        size = fbx_scene.scene_size(path, 1_000_000)
+        assert time.perf_counter() - started < 2.0
+        if line.startswith(";"):
+            assert tuple(size) == (1, 24, 12, 24, 12)
+
     def test_a_deep_doubling_stops_counting_at_the_bound(self, tmp_path):
         from preview_pipeline.format_handlers import fbx_scene
 
@@ -413,6 +573,22 @@ class TestFbxSceneSize:
         scene = one_cube_placed(2)
         scene["connections"] += [(100, 101), (101, 100)]
         assert fbx_scene.scene_size(_write(tmp_path / "c.fbx", ascii_fbx(**scene)), 1_000).models == 1_001
+
+    @pytest.mark.parametrize("edit", [
+        lambda t: t.replace('\n\tC: "OO"', ' C: "OO"'),
+        lambda t: t.replace('\n\tC: "OO"', '\n\t; a note\n\tC: "OO"'),
+        lambda t: t.replace('\n\tC: "OO"', '\n\tNote: 1, "x"\n\tC: "OO"'),
+        lambda t: t.replace('\n\tC: "OO",10,', '\n\tC: "OO",10,\n'),
+        lambda t: t.replace("\tModel: 10", "\tNote: 1, 2 Model: 10"),
+        lambda t: t.replace("\t\tVersion: 232\n", '\t\tVersion: 232\n\t\tX: "}", {\n\t\t\tY: { }\n\t\t}\n'),
+    ], ids=["connections-on-one-line", "comments-between-connections", "other-elements-between-connections",
+            "connection-split-over-lines", "other-element-runs-into-a-model", "nested-scopes-in-a-model"])
+    def test_the_ascii_layout_does_not_change_the_count(self, tmp_path, edit):
+        from preview_pipeline.format_handlers import fbx_scene
+
+        text = edit(ascii_fbx(**one_cube_placed(3)))
+        assert text != ascii_fbx(**one_cube_placed(3))
+        assert tuple(fbx_scene.scene_size(_write(tmp_path / "laid-out.fbx", text), 100)) == (3, 72, 36, 24, 12)
 
     def test_the_ascii_scan_needs_no_line_breaks_and_skips_comments_inside_arrays(self, tmp_path):
         from preview_pipeline.format_handlers import fbx_scene
