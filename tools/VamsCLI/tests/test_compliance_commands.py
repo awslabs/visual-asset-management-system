@@ -414,6 +414,41 @@ class TestComplianceErrorMapping:
             client.revoke_quarantine_exception('my-database', 'my-asset')
         assert 'No active exception' in str(raised.value)
 
+    def test_a_rejected_read_names_the_action_and_failed_once(self):
+        # `_compliance_request` renders every error as "<action> failed: <message>", so an action
+        # phrased "Failed to ..." read "Failed to ... failed: ...". A read's action is a gerund
+        # phrase like the mutations' ("Evaluating asset ..."), and "failed" appears once.
+        client = _client_with_transport(_ErrorResponse(400, {'message': 'Invalid pagination token'}))
+        with pytest.raises(InvalidComplianceDataError) as raised:
+            client.query_compliance_audit(starting_token='not-a-token')
+        message = str(raised.value)
+        assert message == 'Querying the compliance audit trail failed: Invalid pagination token'
+        assert message.lower().count('failed') == 1
+
+    def test_no_compliance_action_argument_begins_with_failed(self):
+        # Scans the source for every `_compliance_request(` call: the helper appends " failed:",
+        # so an action beginning "Failed" doubles the word for that one route only, which no
+        # per-route test catches.
+        import ast
+        import inspect
+
+        from vamscli.utils import api_client as api_client_module
+
+        tree = ast.parse(inspect.getsource(api_client_module))
+        actions = []
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == '_compliance_request' and len(node.args) >= 3):
+                action = node.args[2]
+                if isinstance(action, ast.Constant):
+                    actions.append(action.value)
+                elif isinstance(action, ast.JoinedStr) and action.values:
+                    first = action.values[0]
+                    actions.append(first.value if isinstance(first, ast.Constant) else '')
+        assert len(actions) >= 20, actions
+        offending = [a for a in actions if a.lower().startswith('failed')]
+        assert offending == [], offending
+
 
 # --- Commands -------------------------------------------------------------------
 
@@ -1550,7 +1585,7 @@ class TestComplianceAuditCommand:
     def test_a_malformed_token_is_reported(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].query_compliance_audit.side_effect = InvalidComplianceDataError(
-                'Failed to query the compliance audit trail failed: Invalid pagination token')
+                'Querying the compliance audit trail failed: Invalid pagination token')
             result = cli_runner.invoke(cli, ['compliance', 'audit', '--starting-token', 'not-a-token'])
             assert result.exit_code != 0
             assert 'Invalid pagination token' in result.output

@@ -6612,7 +6612,7 @@ class APIClient:
         """
         params = {'databaseId': database_id} if database_id else None
         return self._compliance_request(
-            'GET', API_COMPLIANCE_SCHEMAS, "Failed to list compliance schemas", params=params)
+            'GET', API_COMPLIANCE_SCHEMAS, "Listing compliance schemas", params=params)
 
     def get_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
         """
@@ -6627,7 +6627,7 @@ class APIClient:
         """
         endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
         return self._compliance_request(
-            'GET', endpoint, f"Failed to get compliance schema '{schema_name}'")
+            'GET', endpoint, f"Getting compliance schema '{schema_name}'")
 
     def create_compliance_schema(self, schema_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -6726,7 +6726,7 @@ class APIClient:
         """
         endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
         return self._compliance_request(
-            'GET', endpoint, f"Failed to get compliance bindings for '{database_id}'",
+            'GET', endpoint, f"Getting compliance bindings for '{database_id}'",
             params=self._compliance_page_params(max_items, starting_token))
 
     def bind_compliance_schema(self, database_id: str, schema_name: str,
@@ -6846,7 +6846,7 @@ class APIClient:
         """
         endpoint = API_COMPLIANCE_EVALUATIONS_ASSET.format(databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
-            'GET', endpoint, f"Failed to list evaluations for asset '{asset_id}'",
+            'GET', endpoint, f"Listing evaluations for asset '{asset_id}'",
             params=self._compliance_page_params(max_items, starting_token))
 
     def get_compliance_state(self, database_id: str, asset_id: str) -> Dict[str, Any]:
@@ -6865,7 +6865,7 @@ class APIClient:
         """
         endpoint = API_COMPLIANCE_STATE_ASSET.format(databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
-            'GET', endpoint, f"Failed to get compliance state for asset '{asset_id}'")
+            'GET', endpoint, f"Getting compliance state for asset '{asset_id}'")
 
     def get_database_compliance_state(self, database_id: str, max_items: Optional[int] = None,
                                       starting_token: Optional[str] = None) -> Dict[str, Any]:
@@ -6889,7 +6889,7 @@ class APIClient:
         """
         endpoint = API_COMPLIANCE_STATE_DATABASE.format(databaseId=database_id)
         return self._compliance_request(
-            'GET', endpoint, f"Failed to get compliance state for database '{database_id}'",
+            'GET', endpoint, f"Getting compliance state for database '{database_id}'",
             params=self._compliance_page_params(max_items, starting_token))
 
     # ---- Quarantine ---------------------------------------------------
@@ -6913,7 +6913,7 @@ class APIClient:
             InvalidComplianceDataError: When the pagination token is malformed
         """
         return self._compliance_request(
-            'GET', API_COMPLIANCE_QUARANTINE, "Failed to list quarantined assets",
+            'GET', API_COMPLIANCE_QUARANTINE, "Listing quarantined assets",
             params=self._compliance_page_params(max_items, starting_token))
 
     def release_quarantine(self, database_id: str, asset_id: str,
@@ -6997,7 +6997,7 @@ class APIClient:
             a row is listed only when the caller may read the trigger asset's database.
         """
         return self._compliance_request(
-            'GET', API_COMPLIANCE_CASCADES, "Failed to list compliance cascades")
+            'GET', API_COMPLIANCE_CASCADES, "Listing compliance cascades")
 
     def get_compliance_cascade(self, cascade_id: str) -> Dict[str, Any]:
         """
@@ -7012,7 +7012,7 @@ class APIClient:
         """
         endpoint = API_COMPLIANCE_CASCADE_BY_ID.format(cascadeId=cascade_id)
         return self._compliance_request(
-            'GET', endpoint, f"Failed to get compliance cascade '{cascade_id}'")
+            'GET', endpoint, f"Getting compliance cascade '{cascade_id}'")
 
     def create_compliance_cascade(self, database_id: str, asset_id: str,
                                   reason: Optional[str] = None,
@@ -7126,7 +7126,7 @@ class APIClient:
         if event_type:
             params['eventType'] = event_type
         return self._compliance_request(
-            'GET', API_COMPLIANCE_AUDIT, "Failed to query the compliance audit trail",
+            'GET', API_COMPLIANCE_AUDIT, "Querying the compliance audit trail",
             params=params or None)
 
     def get_asset_compliance_audit(self, database_id: str, asset_id: str,
@@ -7154,5 +7154,5 @@ class APIClient:
         endpoint = API_COMPLIANCE_AUDIT_ASSET.format(databaseId=database_id, assetId=asset_id)
         params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
         return self._compliance_request(
-            'GET', endpoint, f"Failed to read the audit history for asset '{asset_id}'",
+            'GET', endpoint, f"Reading the audit history for asset '{asset_id}'",
             params=params or None)
