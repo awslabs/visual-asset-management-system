@@ -112,6 +112,8 @@ The `cdk destroy` command prompts for confirmation before proceeding. Type `y` t
 
 The destroy operation typically takes 15-30 minutes depending on the number of resources and enabled features. Monitor progress in the AWS CloudFormation console.
 
+`--all` also destroys the WAF stacks and, for every external asset bucket registered in another Region, the per-Region notification stack `<name>-xregion-<baseStackName>-<bucketRegion>` in that Region. Destroying it removes the bucket's VAMS notification entries and leaves any other consumer's entries in place; the bucket itself is never touched. With `useKmsCmkEncryption.enabled`, the VAMS-generated key in that stack is retained like the deployment-Region key ([Step 8](#step-8-delete-the-aws-kms-key)).
+
 ### Common destroy failures
 
 If the stack destroy fails, check for the following common causes:
@@ -448,7 +450,7 @@ Delete the key only after the other cleanup steps have removed the data encrypte
 
 ### Identify the key
 
-Every VAMS-generated key carries the same description, `VAMS Generated KMS Encryption key`, and VAMS creates no KMS alias, so the description does not distinguish the key of one deployment from the key of another. Resolve the key from the AWS CloudFormation record of the stack that created it: it is the single `AWS::KMS::Key` resource in the deployment's storage nested stack, and its logical ID begins with `VAMSEncryptionKMSKey`. If you completed [Record stack resource identifiers](#record-stack-resource-identifiers) before teardown, the key id is already in `vams-nested-stack-resources.txt`.
+Every VAMS-generated key carries the same description, `VAMS Generated KMS Encryption key`, and VAMS creates no KMS alias, so the description does not distinguish the key of one deployment from the key of another. A deployment with an external asset bucket in another Region also retains, in that Region, the key its per-Region notification stack generated for the bucket's notification topics (description `VAMS Generated KMS Encryption key for asset bucket notification topics in <bucketRegion>`, logical ID `CrossRegionTopicsKmsKey`, tagged `vams:stackname` with that stack's name); nothing retained is encrypted under it, so it can be scheduled for deletion with `--region <bucketRegion>` as soon as that stack is gone. An imported multi-Region key's replica is yours and is not deleted here. Resolve the key from the AWS CloudFormation record of the stack that created it: it is the single `AWS::KMS::Key` resource in the deployment's storage nested stack, and its logical ID begins with `VAMSEncryptionKMSKey`. If you completed [Record stack resource identifiers](#record-stack-resource-identifiers) before teardown, the key id is already in `vams-nested-stack-resources.txt`.
 
 AWS CloudFormation keeps the resource records of a deleted stack for 90 days, but a deleted stack is addressed by its unique stack ID rather than its name, so resolve the stack ID first. Successive deployments of the same stack name each have their own stack ID and creation time, which is what tells their keys apart:
 

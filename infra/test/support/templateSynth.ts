@@ -46,6 +46,7 @@ import * as path from "path";
 import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
 import * as Infra from "../../lib/core-stack";
+import { buildCrossRegionBucketNotificationStacks } from "../../lib/crossRegionBucketNotifications-stack";
 import { s3AssetBucketRecords } from "../../lib/helper/s3AssetBuckets";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
@@ -350,16 +351,23 @@ export function synthTemplate(
 
     Service.SetConfig(config);
 
+    // Same wiring as bin/infra.ts: one notification stack per cross-Region bucket Region, created
+    // before the core stack and feeding it the topic ARNs. Emits nothing for the shipped templates.
+    const crossRegionBuckets = buildCrossRegionBucketNotificationStacks(app, config);
+
     // Construct id MUST equal stackName — see the header note on Nag suppression paths.
     const stack = new Infra.CoreVAMSStack(app, stackName, {
         env: { account: ACCOUNT, region: t.region },
         stackName,
         ssmWafArnRegional: "",
         ssmWafArnCloudfront: "",
+        crossRegionBucketTopics: crossRegionBuckets.topics,
         config,
         description: `T1 synth assertion stack (${name})`,
     } as any);
-    void stack;
+    for (const crossRegionStack of crossRegionBuckets.stacks) {
+        stack.addStackDependency(crossRegionStack);
+    }
 
     const asm = app.synth();
     const templates: Record<string, any> = {};

@@ -159,11 +159,16 @@ function ViewFileForAsset() {
     const urlVersion = getVersionFromQuery();
     const urlAssetVersion = getAssetVersionFromQuery();
     const isDirectPathAccess = urlFilePath && !state;
+    // The URL file path and version that a direct-path load answers.
+    const directPathRequest = `${urlFilePath ?? ""}?${urlVersion ?? ""}`;
 
     // State for direct path loading
     const [isLoadingDirectPath, setIsLoadingDirectPath] = useState(isDirectPathAccess);
     const [directPathError, setDirectPathError] = useState<string | null>(null);
     const [loadedFileInfo, setLoadedFileInfo] = useState<FileInfo | null>(null);
+    // The direct-path request that loadedFileInfo answers. Until it equals directPathRequest, the
+    // loaded file is the one the URL named before.
+    const [loadedFileRequest, setLoadedFileRequest] = useState<string | null>(null);
     // State for on-demand version loading when state is passed without versionId
     const [isLoadingVersionInfo, setIsLoadingVersionInfo] = useState(false);
 
@@ -372,8 +377,12 @@ function ViewFileForAsset() {
 
     // Handle direct path access - fetch file info from URL
     useEffect(() => {
+        // A response for a URL the page has since left is dropped, so it cannot replace the file
+        // the URL names now.
+        let cancelled = false;
         const loadFileFromDirectPath = async () => {
             if (!isDirectPathAccess || !databaseId || !assetId || !urlFilePath) {
+                setIsLoadingDirectPath(false);
                 return;
             }
 
@@ -391,6 +400,9 @@ function ViewFileForAsset() {
                     fileKey: urlFilePath,
                     includeVersions: true,
                 });
+                if (cancelled) {
+                    return;
+                }
 
                 if (!success) {
                     setDirectPathError(
@@ -466,9 +478,13 @@ function ViewFileForAsset() {
 
                 console.log("Loaded file info:", loadedFile);
                 setLoadedFileInfo(loadedFile);
+                setLoadedFileRequest(directPathRequest);
                 setIsLoadingDirectPath(false);
                 setReload(true); // Trigger asset data fetch
             } catch (error: any) {
+                if (cancelled) {
+                    return;
+                }
                 console.error("Error loading file from direct path:", error);
 
                 // Check for specific error types. The apiClient throws an ApiError
@@ -489,7 +505,10 @@ function ViewFileForAsset() {
         };
 
         loadFileFromDirectPath();
-    }, [isDirectPathAccess, databaseId, assetId, urlFilePath, urlVersion]);
+        return () => {
+            cancelled = true;
+        };
+    }, [isDirectPathAccess, databaseId, assetId, urlFilePath, urlVersion, directPathRequest]);
 
     // Fetch version info when state is passed but versionId is missing
     useEffect(() => {
@@ -641,6 +660,12 @@ function ViewFileForAsset() {
             return;
         }
 
+        // The file in hand is the one the URL named before until the direct-path load answers the
+        // current URL; writing it into the URL would send the URL, and the next load, back to it.
+        if (isDirectPathAccess && loadedFileRequest !== directPathRequest) {
+            return;
+        }
+
         // Get the relative path from the file key
         // The key format is typically: assetId/relativePath
         // We need to extract just the relativePath part
@@ -683,6 +708,9 @@ function ViewFileForAsset() {
         assetId,
         isMultiFileMode,
         isLoadingDirectPath,
+        isDirectPathAccess,
+        loadedFileRequest,
+        directPathRequest,
         navigate,
         location.pathname,
         location.search,
