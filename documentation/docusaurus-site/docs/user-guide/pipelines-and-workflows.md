@@ -119,11 +119,19 @@ archived pipeline. Remove the pipeline from every workflow that uses it first.
 
 ### Updating a pipeline
 
-Editing a pipeline updates the pipeline itself. The workflows that reference it keep running against the
-execution configuration they were last saved with, so after changing where a pipeline sends its work — its
-execution type, its target function, queue, event bus or farm, or its callback and timeout settings — open
-each workflow that uses it and save it again to bring it up to date. Saving such a change reports a warning
-naming the workflows that reference the pipeline, so you know which ones to revisit.
+Editing a pipeline updates the pipeline itself. When the edit changes a setting compiled into workflow state
+machines — the execution type, the target function, queue, event bus or farm, the callback mode, the timeouts,
+or the AWS Deadline Cloud job settings — VAMS redeploys every non-archived workflow that references the
+pipeline in the background, so the workflows do not need to be opened or saved again. The save returns a
+warning with the number of referencing workflows being redeployed. If the background redeploy cannot be
+scheduled, the warning says so, and each workflow is redeployed at its next save or launch.
+
+A workflow launch checks that the workflow's state machine was built from its pipelines' current settings.
+When the background redeploy has not reached the workflow yet, the launch redeploys it first; when the
+workflow cannot be brought up to date, nothing starts and the launch returns a `409` error that can be retried.
+Archived workflows are left out of the background redeploy: restoring one brings its state machine up to date
+as part of the restoring save, and its next launch is checked like any other. A workflow whose redeploy fails
+is marked `deploymentStale` with the reason.
 
 ### Configuration templates
 
