@@ -18,7 +18,11 @@ infra/
 │   ├── saml-config.ts        # SAML authentication configuration
 │   └── policy/               # IAM policy templates and configurations
 ├── common/
-│   └── vamsAppFeatures.ts    # Feature switch constants and enums
+│   ├── vamsAppFeatures.ts    # Feature switch constants and enums (core)
+│   ├── addonAppFeatures.ts   # Add-on feature switches (ADDON_APP_FEATURES)
+│   ├── addonResourceParamKeys.ts   # Add-on SSM resource-name keys (shipped empty)
+│   ├── customAppFeatures.ts  # FORK EXTENSION POINT: custom feature switches (shipped empty)
+│   └── customResourceParamKeys.ts  # FORK EXTENSION POINT: custom SSM resource-name keys (shipped empty)
 ├── lib/
 │   ├── core-stack.ts         # Main orchestration stack
 │   ├── cf-waf-stack.ts       # Web Application Firewall stack
@@ -36,7 +40,8 @@ infra/
 │   ├── helper/               # Service helpers and utility functions
 │   │   ├── const.ts          # Partition-aware service endpoints
 │   │   ├── s3AssetBuckets.ts # Global asset bucket registry
-│   │   └── security.ts       # KMS, CDK Nag, CSP, TLS enforcement, presigned URL bucket policy restrictions
+│   │   ├── security.ts       # KMS, CDK Nag, CSP, TLS enforcement, presigned URL bucket policy restrictions
+│   │   └── webAppDeployment.ts # Web bundle upload (hashed assets / *.mjs / rest) with per-set Cache-Control
 │   ├── aspects/              # CDK aspects for cross-cutting concerns
 │   └── artefacts/            # Build artifacts and templates
 ├── test/                     # CDK unit and integration tests
@@ -54,7 +59,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 64 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
@@ -64,9 +69,11 @@ CoreVAMSStack (root)
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
   |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
   |     +-- AddonBuilder (Garnet, Physna Sync)               -> storage, resourceNames
+  |     +-- CustomBuilder (fork extension point)             -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)
   |     |                                                    -> storage, AuthBuilder, ApiBuilder,
-  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder
+  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder,
+  |     |                                                       CustomBuilder
   |     +-- StaticWeb (CloudFront or ALB hosting)            -> storage
   |
   +-- LocationService (conditional: useLocationService.enabled)
@@ -74,6 +81,12 @@ CoreVAMSStack (root)
 ```
 
 `RestApi` materializes the routes every API stack registered into `RouteRegistry`, which is why it depends on all of them rather than the reverse.
+
+### **Fork Extension Points (core + add-on + custom)**
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+Every aggregated list is composed from a core part, an add-on part beside it (`lib/nestedStacks/addon/addonCsp.ts`, `addonDefaultRoutes.ts`, `addonStackHelpers.ts`; `common/addonAppFeatures.ts` (`ADDON_APP_FEATURES`, `PHYSNA_ADDON`, pushed by `AddonBuilderNestedStack.enabledFeatures`, which refuses a core value); `common/addonResourceParamKeys.ts`, mirrored in `backend/backend/common/addonResourceNames.py` and published with `publishAddonResourceName()`) and a fork-owned custom part shipped empty. Merge order is core, add-on, custom; `infra/test/addon/appFeatureLanes.test.ts` keeps the three feature enums disjoint. Core files name no add-on (`infra/test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts` (`buildCustomResources(scope, props)`), called inside the `CustomBuilder` stack with `config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets` and the shared `registry`. Its Lambdas use the standard builder pattern and five security calls; its routes go through `attachFunctionToApi` and cannot be anonymous, nor make an earlier route anonymous (synth fails; `RouteRegistry` stores frozen descriptors); it publishes resource names with `publishCustomResourceName()` (a core key or an add-on key throws; both publish helpers share `nestedStacks/resourceNames/laneResourceNames.ts`), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py`, and those parameters hold names only (a secret goes in a `secretsmanager.Secret` with the KMS key imported by ARN); it returns `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`; a `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value fails synth); and it reads fork settings with `loadCustomConfig()` from `config/custom/customConfig.json`, which is outside `ConfigPublic`. `infra/test/api/apiRouteBackendCdkParity.test.ts` synthesizes with the committed `customConfig.json`, so every custom route must be registered under it. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### **Cross-Stack Shared Interfaces**
 
@@ -220,7 +233,7 @@ The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration 
 #### **Step 1: Configuration Interface Design**
 
 -   [ ] **Add Configuration Types**: Add new interfaces to `ConfigPublic` in `config.ts`
--   [ ] **Add Feature Constants**: Add feature switches to `vamsAppFeatures.ts`
+-   [ ] **Add Feature Constants**: Add feature switches to `vamsAppFeatures.ts` (in a fork: `customAppFeatures.ts`, returned from `buildCustomResources()`)
 -   [ ] **Add Validation Logic**: Include configuration validation in `getConfig()`
 -   [ ] **Update Templates**: Update **all** configuration templates — `config.template.commercial.json`, `config.template.govcloud.json`, **and** `config.template.eusovereign.json` — plus the active `config.json`. A missed template silently falls back to `getConfig()` defaults and drops any operator-set value.
 
@@ -356,8 +369,8 @@ or the second template silently inherits the first one's state.
 
 #### **Step 8: Validation**
 
--   [ ] **CDK Synth**: Ensure `cdk synth` completes without errors
--   [ ] **CDK Diff**: Review changes with `cdk diff` before deployment
+-   [ ] **CDK Synth**: Ensure `npx cdk synth` completes without errors
+-   [ ] **CDK Diff**: Review changes with `npx cdk diff` before deployment
 -   [ ] **Security Review**: Complete security review of new resources
 -   [ ] **Performance Impact**: Assess performance impact of changes
 
@@ -384,6 +397,14 @@ export interface ConfigPublic {
         // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
         // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
         // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
+        // pipelines.externalPipelineBridges: [{accountId, roleArnPattern, invokeTargets?}] — one
+        // events:PutEvents statement per entry on the orchestration bus resource policy (bridge account
+        // root + aws:PrincipalArn condition on the pattern) and the exact invokeTargets ARNs on the shared
+        // workflow role; validateExternalPipelineBridges() rejects any other wildcard
+        // pipelines.executionLogReadPrefixes: string[] of /aws/<service>/... log-group names used verbatim
+        // as the executionService log-read resources (trailing * = prefix); default
+        // DEFAULT_EXECUTION_LOG_READ_PREFIXES; validateExecutionLogReadPrefixes() rejects *, / and
+        // anything outside /aws/
     };
 }
 
@@ -411,6 +432,8 @@ if (props.config.app.newFeature.enabled) {
     this.enabledFeatures.push(VAMS_APP_FEATURES.NEW_FEATURE);
 }
 ```
+
+In a fork, the switch goes in `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`) and is returned from `buildCustomResources()` (`lib/nestedStacks/custom/customResources.ts`), gated on the fork's settings in `infra/config/custom/customConfig.json`. `vamsAppFeatures.ts` stays core-owned and add-on switches go in `addonAppFeatures.ts`; a core or add-on value returned from the custom stack fails synth. Permission object types for fork or add-on entities are backend constants (`backend/backend/custom/customConstants.py`, `common/addonConstants.py`) with no seeded constraint: never extend the `dynamodb-authdefaults-*` constructs for one.
 
 ### **Nested Stack Implementation Standards**
 
@@ -783,6 +806,8 @@ def send_response(event: Dict[str, Any], context: Any, status: str, reason: str 
 ```
 
 ## 🔧 **Pipeline Development Patterns**
+
+**In a fork, or for an external solution.** Pipelines have no custom lane and are not add-ons. A fork adds a pipeline without editing these core files by deploying it as its own stack and registering it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges`); the custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam. An upstream pipeline that calls a vendor's service is still a core pipeline behind its own `app.pipelines.*` switch. The `/add-pipeline` skill's fork mode and `documentation/docusaurus-site/docs/developer/customizing-vams.md` (Known Limits) say the same; the add-on definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
 ### **Reporting Failure on a Task-Token Pipeline**
 
@@ -1789,8 +1814,11 @@ export interface WafPolicyConfig {
         priority: number;
         block?: boolean; // true => group's own block actions apply; false => count-only
         // Per-rule overrides within the group: set one rule to count/allow/block without
-        // disabling the group (e.g. SizeRestrictions_BODY -> count so large upload bodies pass,
-        // SizeRestrictions_QUERYSTRING -> count so long presigned-URL query strings pass).
+        // disabling the group. The shipped policy counts eight Common Rule Set rules that
+        // match ordinary VAMS requests (the two size rules for upload bodies / presigned-URL
+        // query strings, plus SizeRestrictions_URIPATH, RestrictedExtensions_URIPATH /
+        // _QUERYARGUMENTS and GenericLFI_URIPATH / _QUERYARGUMENTS / _BODY, which fire on the
+        // asset file keys VAMS carries in paths, query strings and bodies).
         ruleActionOverrides?: Array<{ name: string; action: "count" | "block" | "allow" }>;
     }>;
     rateBasedRules?: Array<{
@@ -1799,7 +1827,7 @@ export interface WafPolicyConfig {
         limit: number; // per 5-min window per aggregate key
         aggregateKeyType?: string; // accepted for compatibility; every rule is emitted with "IP"
         forwardedIPConfig?: { headerName?: string; fallbackBehavior?: string }; // accepted, not emitted
-        blockResponseCode?: number; // default 429 (throttle), with a JSON custom-response body
+        blockResponseCode?: number; // default 429 (throttle), with a JSON custom-response body + Retry-After (exposed cross-origin); no CORS allow headers
     }>;
 }
 
@@ -1867,9 +1895,9 @@ export class Wafv2BasicConstruct extends Construct {
 }
 ```
 
-The shipped `wafPolicyConfig.json` overrides two Common Rule Set rules to `count`. `SizeRestrictions_BODY` is the only Common Rule Set rule that blocks purely on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking. `SizeRestrictions_QUERYSTRING` is likewise overridden to `count`: it blocks query strings over 2048 bytes, and the SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter. A presigned URL carrying a session security token already approaches that limit, and the viewer requires the value double-encoded to survive its own two decode passes, which roughly doubles it again — so the iframe request for the static viewer page was blocked with a 403 before it ever reached S3.
+The shipped `wafPolicyConfig.json` overrides eight Common Rule Set rules to `count`; every other Common Rule Set rule and the whole Known Bad Inputs and Amazon IP Reputation List groups keep blocking. VAMS carries asset file keys URL-encoded in the URI path (`.../download/stream/{proxy+}`, `.../auxiliaryPreviewAssets/stream/{proxy+}`), in query strings (`listFiles`, `fileInfo`) and in JSON bodies (move/copy/upload/download), and the backend validates every key, so these rules fire on legitimate requests without adding protection. `SizeRestrictions_BODY` is the only Common Rule Set rule that blocks purely on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass. `SizeRestrictions_QUERYSTRING` blocks query strings over 2048 bytes, and the SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter — double-encoded to survive the viewer's two decode passes — so the iframe request for the static viewer page exceeds it. `SizeRestrictions_URIPATH` blocks URI paths over 1024 bytes, which an encoded key in a deep folder tree exceeds on the stream routes. `RestrictedExtensions_URIPATH` / `RestrictedExtensions_QUERYARGUMENTS` block file names ending `.log`, `.ini`, `.cfg`, `.conf`, `.config`, …; the backend upload blocklist `UNALLOWED_FILE_EXTENSION_LIST` (`backend/common/constants.py`) admits these, so a blocked read path leaves a file that uploads but never views or downloads, and VAMS executes nothing it serves from S3. `GenericLFI_URIPATH` / `GenericLFI_QUERYARGUMENTS` / `GenericLFI_BODY` block any encoded `../`; every backend path validator rejects `..` segments (`backend/common/validators.py`) and keys resolve against S3 object keys, not a local filesystem. `count` (never `allow`) keeps a matching request flowing through the rate rule and recorded in CloudWatch metrics and the WAF log. The override set is pinned exactly by `infra/test/waf/wafCommonRuleSetOverrides.test.ts` — widening or narrowing it is a deliberate edit of both the policy and that test.
 
-The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP`, the address AWS WAF observes on the connection, for both the CloudFront-scoped and regional web ACLs. A `FORWARDED_IP` key is accepted in the policy file but not emitted, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and AWS WAF omits a request that carries no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. Unit test: `infra/test/waf/wafRateLimit.test.ts`.
+The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP`, the address AWS WAF observes on the connection, for both the CloudFront-scoped and regional web ACLs. A `FORWARDED_IP` key is accepted in the policy file but not emitted, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and AWS WAF omits a request that carries no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. The custom response carries static `responseHeaders` (`WAF_RATE_LIMIT_RESPONSE_HEADERS` in the construct): `Retry-After: 1` and `Access-Control-Expose-Headers: Retry-After`, and nothing else. The REGIONAL ACL is associated with the REST API stage, and API Gateway renders a WAF block — custom response included — through its `WAF_FILTERED` gateway response, which `GatewayResponseDefault4XX` (`rest-api-gateway-construct.ts`) decorates with `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers` on every 4XX it renders. A browser can therefore read the 429 in every topology (same-origin on CloudFront `/api/*`, cross-origin on the ALB topology or for a direct `execute-api` caller), and the WAF response must not repeat the CORS allow headers: API Gateway appends WAF's copy to its own and the browser rejects `Access-Control-Allow-Origin: *, *` outright. `Access-Control-Allow-Methods` is likewise left off — it matters only on a preflight, and a throttled `OPTIONS` is answered by WAF before the API's MOCK integration, so it can never be a successful preflight. What API Gateway does not add is `Retry-After`, which the web `apiClient` sleeps on before its single retry, and `Access-Control-Expose-Headers`, without which a cross-origin caller cannot read it (`Retry-After` is not CORS-safelisted). Header values are literal strings (WAF expands no variables) and `Content-Type` must not be listed (WAF sets it from the body's `contentType`). Managed-group blocks keep the WAF default 403 (no custom body or headers of their own — a group-level `overrideAction` cannot carry a custom response, and a per-rule `block.customResponse` override for every rule in every group is not maintained); on the REST API they are rendered through the same gateway response and carry the API's CORS allow headers. Unit tests: `infra/test/waf/wafRateLimit.test.ts` (rule, body, the exact two headers, and a guard that the three CORS allow headers stay absent), `infra/test/waf/wafCommonRuleSetOverrides.test.ts` (override set).
 
 ### **Security Helper Integration**
 
@@ -2742,6 +2770,8 @@ if (props.config.app.newFeature.enabled) {
 const newFeatureStack = new NewFeatureStack(); // VIOLATION - should check config
 ```
 
+In a fork, the same holds for `CUSTOM_APP_FEATURES` values returned from `buildCustomResources()`, gated on `infra/config/custom/customConfig.json`.
+
 ### **Rule 3: CDK Nag Suppressions MUST Be Justified**
 
 ```typescript
@@ -3121,7 +3151,7 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 
 7. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
 
-8. **IAM resource matching is case-sensitive.** Log-group grants are explicit allow-lists: the `/aws/vendedlogs/*` prefixes (pipeline constructs are split across `VAMSStateMachine-*` and `VAMSstateMachine-*`, both granted) plus AWS Batch's default container group `/aws/batch/job`, which the executionService reads because the built-in Batch pipelines register it as a per-stage log source (`infra/lib/helper/batchJobLogGroup.ts` names it; no VAMS job definition sets a log configuration). A new pipeline inventing a third casing silently loses log-read access.
+8. **IAM resource matching is case-sensitive, and the log-read grant is config-driven.** The executionService reads registered sub-process logs only from the groups in `app.pipelines.executionLogReadPrefixes`, used verbatim as IAM resource names (`workflowFunctions.ts` `buildExecutionServiceFunction`), plus the shared workflow log group and the `*<name>*` pattern. The default list carries both state-machine casings (`/aws/vendedlogs/VAMSStateMachine-*`, `/aws/vendedlogs/VAMSstateMachine-*`), `/aws/vendedlogs/Pipelines/*`, AWS Batch's default container group `/aws/batch/job` (`infra/lib/helper/batchJobLogGroup.ts` names it) and `/aws/sagemaker/TrainingJobs`. A pipeline writing to a group outside the list still runs but its log source reads `denied` — reuse an existing casing or `/aws/vendedlogs/Pipelines/*`, or add the group to the configured list (templates and `DEFAULT_EXECUTION_LOG_READ_PREFIXES` together). `getConfig()` rejects `*`, `/`, `/aws/*` and anything outside `/aws/`.
 
 ### **Verifying a partition change**
 
@@ -3152,9 +3182,9 @@ npm install
 npm run build
 
 # CDK commands
-cdk synth --all                    # Synthesize all stacks
-cdk diff --all                     # Show differences
-cdk deploy --all --require-approval never  # Deploy all stacks
+npx cdk synth --all                    # Synthesize all stacks
+npx cdk diff --all                     # Show differences
+npx cdk deploy --all --require-approval never  # Deploy all stacks
 
 # Testing
 npm test                           # Run unit tests

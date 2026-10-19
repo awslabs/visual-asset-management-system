@@ -4,7 +4,6 @@
  */
 
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
-import viewerConfig from "../config/viewerConfig.json";
 import { CompareContext } from "./compareShape";
 import {
     admitsCompareSelection,
@@ -12,7 +11,11 @@ import {
     availableViewerModes,
     ViewerModeAvailability,
 } from "./viewerSelection";
-import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
+import {
+    ALL_DEPENDENCY_MANAGERS,
+    ALL_VIEWER_COMPONENTS,
+    ALL_VIEWER_CONFIGS,
+} from "./viewerSources";
 import { appCache } from "../../services/appCache";
 import { StylesheetManager } from "./StylesheetManager";
 import React from "react";
@@ -83,7 +86,7 @@ export class PluginRegistry {
     private async loadViewerComponent(
         componentPath: string
     ): Promise<React.ComponentType<ViewerPluginProps>> {
-        const relativePath = VIEWER_COMPONENTS[componentPath as keyof typeof VIEWER_COMPONENTS];
+        const relativePath = ALL_VIEWER_COMPONENTS[componentPath];
 
         if (!relativePath) {
             throw new Error(
@@ -117,8 +120,7 @@ export class PluginRegistry {
 
     // Dynamic dependency manager loader using manifest constants
     private async loadDependencyManager(dependencyPath: string): Promise<any> {
-        const relativePath =
-            DEPENDENCY_MANAGERS[dependencyPath as keyof typeof DEPENDENCY_MANAGERS];
+        const relativePath = ALL_DEPENDENCY_MANAGERS[dependencyPath];
 
         if (!relativePath) {
             console.warn(
@@ -149,8 +151,8 @@ export class PluginRegistry {
         if (this.initialized) return;
 
         try {
-            // Load configuration
-            this.config = viewerConfig as ViewerConfig;
+            // Load configuration: core, add-on and custom viewers (./viewerSources)
+            this.config = { viewers: ALL_VIEWER_CONFIGS };
 
             // Register plugin metadata only (no component loading)
             for (const viewerConfig of this.config.viewers) {

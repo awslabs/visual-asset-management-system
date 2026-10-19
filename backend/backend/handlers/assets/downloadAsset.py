@@ -16,7 +16,7 @@ from common.s3MetadataKeys import (
     VAMS_STATUS_ARCHIVED,
     VAMS_STATUS_DELETED,
 )
-from common.validators import validate
+from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -307,7 +307,7 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
 
     Raises:
         VAMSGeneralErrorResponse for per-file failures (missing, archived, disallowed
-        type, key outside the asset's own prefix)
+        type, key outside the asset's own prefix, resolved key over the S3 key limit)
     """
     # The asset's own prefix, always slash-terminated. A bucket-root key is only
     # inside this asset when it sits under '<base>/', so the base 'assets/pfx'
@@ -332,6 +332,13 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
     else:
         # If no key provided, use base key directly
         final_key = asset_base_key
+
+    # The request model bounded the asset-relative key; the resolved key carries the
+    # asset prefix as well and is what S3 measures. Refuse it here so an over-long
+    # key never reaches head_object or the presigner. Raised through the same
+    # per-file channel as the other refusals, so a bulk request skips just this key.
+    if exceeds_s3_object_key_limit(final_key):
+        raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
 
     # Resolve version ID first -- an asset-version pin (whole-set) resolves the
     # per-file S3 version from the snapshot; otherwise version_id is either the

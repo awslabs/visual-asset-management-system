@@ -1,5 +1,6 @@
 #  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
+import time
 import boto3
 from botocore.config import Config
 from typing import Tuple
@@ -95,6 +96,83 @@ def query_has_match(table, **query_kwargs) -> bool:
         if 'LastEvaluatedKey' not in response:
             return False
         query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
+# Keys per BatchGetItem request. 100 is the DynamoDB hard limit for a single BatchGetItem; a larger
+# key set is split across sequential requests.
+BATCH_GET_CHUNK_SIZE = 100
+
+# Re-requests of a BatchGetItem's UnprocessedKeys (throttling / a response that hit the 16 MB size
+# limit) before the remainder is handed back to the caller as unresolved.
+BATCH_GET_MAX_RETRIES = 3
+
+# Base seconds for the exponential backoff between UnprocessedKeys retries.
+BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
+
+
+def batch_get_items(dynamodb_resource, table_name, keys, *,
+                    max_retries=BATCH_GET_MAX_RETRIES,
+                    backoff_seconds=BATCH_GET_RETRY_BACKOFF_SECONDS) -> Tuple[List[Dict], List[Dict]]:
+    """BatchGetItem `keys` (full primary-key dicts) from one table.
+
+    Chunks at the per-call key limit and re-requests UnprocessedKeys with exponential backoff, up
+    to `max_retries` times per chunk. batch_get_item answers a partially throttled request, or one
+    whose response reached the 16 MB size limit, with HTTP 200 and the leftover keys in
+    UnprocessedKeys — outside the botocore retry config, so a caller that reads only `Responses`
+    silently loses those items. `max_retries=0` is one call per chunk and no retry.
+
+    Keys are deduplicated before sending: DynamoDB rejects a request whose key list carries a
+    duplicate, so a key set collected from a tree or a page of references would otherwise lose its
+    whole chunk to a ValidationException.
+
+    Returns (rows, unresolved_keys). A key absent from both is an item that does not exist; a key in
+    `unresolved_keys` is one the read did not complete within the retry budget. Keeping the two apart
+    is the point: a caller that reads every missing row as "no such item" would report a throttled
+    read as a deletion — or, after authorization, as a denial. A failed call (ClientError) propagates;
+    the caller owns its fallback.
+
+    Args:
+        dynamodb_resource: The caller's boto3 DynamoDB service resource.
+        table_name: Table the keys belong to.
+        keys: Full primary-key dicts, e.g. {'databaseId': ..., 'assetId': ...}.
+        max_retries: UnprocessedKeys re-requests per chunk; 0 disables retrying.
+        backoff_seconds: Base of the exponential backoff between retries.
+
+    Returns:
+        (rows, unresolved_keys): the items that came back, and the keys still unprocessed after
+        the retry budget.
+    """
+    unique_keys = []
+    seen = set()
+    for key in keys:
+        marker = tuple(sorted(key.items()))
+        if marker not in seen:
+            seen.add(marker)
+            unique_keys.append(key)
+
+    rows: List[Dict] = []
+    unresolved_keys: List[Dict] = []
+    for start in range(0, len(unique_keys), BATCH_GET_CHUNK_SIZE):
+        pending = unique_keys[start:start + BATCH_GET_CHUNK_SIZE]
+        attempt = 0
+        while True:
+            response = dynamodb_resource.batch_get_item(RequestItems={table_name: {'Keys': pending}})
+            rows.extend(response.get('Responses', {}).get(table_name, []))
+            pending = response.get('UnprocessedKeys', {}).get(table_name, {}).get('Keys', [])
+            if not pending:
+                break
+            attempt += 1
+            if attempt > max_retries:
+                logger.info(f"Batch read of {table_name} left {len(pending)} keys unprocessed after "
+                            f"{max_retries} retries")
+                unresolved_keys.extend(pending)
+                break
+            # Exponential backoff before resending the keys batch_get_item left unprocessed. Must be
+            # the last comment line before the call -- semgrep attaches `nosemgrep` to the next line
+            # only.
+            # nosemgrep: arbitrary-sleep
+            time.sleep(backoff_seconds * (2 ** (attempt - 1)))
+    return rows, unresolved_keys
 
 
 def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], str]:

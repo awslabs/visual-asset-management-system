@@ -67,14 +67,15 @@ On-demand mode has no provisioned throughput to configure. Amazon DynamoDB autom
 
 ### Amazon S3
 
-| Parameter                  | Value                                           |
-| -------------------------- | ----------------------------------------------- |
-| Maximum object size        | 5 TB (Amazon S3 service limit)                  |
-| Multipart upload threshold | 5 GB (parts required above this size)           |
-| Maximum parts per upload   | 10,000 (Amazon S3 service limit)                |
-| Part size range            | 5 MB to 5 GB                                    |
-| VAMS upload part size      | 150 MB                                          |
-| Bucket encryption          | AWS KMS (when CMK enabled) or Amazon S3-managed |
+| Parameter                  | Value                                                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Maximum object size        | 5 TB (Amazon S3 service limit)                                                                             |
+| Maximum object key length  | 1,024 bytes of UTF-8 (Amazon S3 service limit); an asset file key over this limit is rejected with a `400` |
+| Multipart upload threshold | 5 GB (parts required above this size)                                                                      |
+| Maximum parts per upload   | 10,000 (Amazon S3 service limit)                                                                           |
+| Part size range            | 5 MB to 5 GB                                                                                               |
+| VAMS upload part size      | 150 MB                                                                                                     |
+| Bucket encryption          | AWS KMS (when CMK enabled) or Amazon S3-managed                                                            |
 
 ### Amazon OpenSearch
 

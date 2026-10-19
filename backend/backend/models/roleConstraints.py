@@ -498,13 +498,24 @@ class TemplateMetadata(BaseModel, extra='ignore'):
 
 
 class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
-    """Request model for importing constraints from a permission template"""
+    """Request model for importing constraints from a permission template.
+
+    The template header is read from ``metadata`` (the key the shipped template files
+    use, so a file can be posted unmodified) or from ``template``; ``resolved_metadata``
+    returns whichever the caller supplied.
+    """
+    metadata: Optional[TemplateMetadata] = None
     template: Optional[TemplateMetadata] = None
     variables: Optional[List[TemplateVariableDefinition]] = Field(default=[], max_items=MAX_TEMPLATE_VARIABLES)
     # {"DATABASE_ID": "my-db", "ROLE_NAME": "my-admin"} -- keys and values are
     # bounded and type-checked in validate_template_import.
     variableValues: dict
     constraints: List[TemplateConstraintDefinition] = Field(max_items=MAX_CONSTRAINTS_PER_TEMPLATE)
+
+    @property
+    def resolved_metadata(self) -> Optional[TemplateMetadata]:
+        """The template header, from ``metadata`` or ``template``."""
+        return self.metadata or self.template
 
     @root_validator
     def validate_template_import(cls, values):

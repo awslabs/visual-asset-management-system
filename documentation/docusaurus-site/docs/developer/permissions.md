@@ -10,7 +10,7 @@ For an introduction to how the authorization system works, see [Permissions Mode
 
 The following patterns cover the most common access configurations. VAMS provides pre-built permission templates for each of these patterns.
 
-The valid fields per object type, the criteria operators, the permissions, and the permission types can be retrieved from `GET /auth/constraints/permissionObjects` or `vamscli role constraint permission-objects`. This is the same mapping the backend validates constraints against.
+The valid fields per object type, the criteria operators, the permissions, and the permission types can be retrieved from `GET /auth/constraints/permissionObjects` or `vamscli role constraint permission-objects`. This is the same mapping the backend validates constraints against. The object types it returns include any the deployment registers in its add-on or fork constants files; a template for such a type stays with the deployment that registers it, since the shipped templates cover the core types only ([Extending VAMS in a Fork](customizing-vams.md#4-permissions) has one).
 
 ### Database administrator
 
@@ -266,7 +266,7 @@ View-only access scoped to a single database. Can browse assets, view files, and
 **Key constraints (12 constraints):**
 
 -   `web` -- Allow GET on viewing pages only (no `/upload`, no `/metadataschema`)
--   `api` -- Allow GET on all read routes; allow POST only on `/auth/routes`, `/auth/loginProfile`, `/search`, `/check-subscription`; allow self-service API key management on `/auth/user/api-keys`
+-   `api` -- Allow GET on all read routes; allow POST only on `/auth/routes`, `/auth/loginProfile`, `/search`, `/check-subscription`; allow GET only on `/auth/user/api-keys` (the user can view their own API keys but cannot create, extend, or delete them)
 -   `api` (deny) -- Deny GET on paths ending in `/logs`, withholding the detailed execution-logs route that the broad `/workflows` GET allow would otherwise reach
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
@@ -274,6 +274,10 @@ View-only access scoped to a single database. Can browse assets, view files, and
 -   `tag`, `tagType` -- Allow GET globally
 
 Key differences from the admin and user roles: web routes are a narrower set of pages, and the UI respects the lack of write permissions. API routes only allow `GET` method, plus `POST` on non-mutating operations. Data constraints have only `GET` permission on all object types.
+
+:::note[Existing read-only roles keep the grants they were imported with]
+Importing a template creates constraints; it does not modify the constraints of an existing role, and each import creates new constraint identifiers. A role imported from an earlier version of this template holds a `<role>-user-api-keys` constraint that allows `POST`, `PUT` and `DELETE` on `/auth/user/api-keys`. To narrow it, edit that constraint to `GET` only (`vamscli role constraint update`) or delete it (`vamscli role constraint delete`); re-importing the template adds a second constraint alongside the first. The same applies to the Global read-only template below.
+:::
 
 ### Global read-only
 
@@ -473,19 +477,21 @@ python tools/permissionsSetup/apply_template.py \
 
 **Using the API directly:**
 
+The request body is the template JSON with a `variableValues` object added. The template header is read from `metadata` (the key the shipped template files use); `template` is accepted as an alternative key.
+
 ```bash
 curl -X POST https://your-api/auth/constraintsTemplateImport \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "template": {
+    "metadata": {
       "name": "Database Admin",
       "description": "Administrative access for my-project-db",
       "version": "1.0"
     },
     "variables": [
       {"name": "DATABASE_ID", "required": true, "description": "The databaseId to scope permissions to"},
-      {"name": "ROLE_NAME", "required": true, "description": "The role name to create"}
+      {"name": "ROLE_NAME", "required": true, "description": "The existing role to attach these constraints to"}
     ],
     "variableValues": {
       "DATABASE_ID": "my-project-db",
@@ -531,7 +537,7 @@ Templates are self-describing JSON files containing metadata, variable definitio
         {
             "name": "ROLE_NAME",
             "required": true,
-            "description": "The role name to create"
+            "description": "The existing role to attach these constraints to"
         }
     ],
     "constraints": [

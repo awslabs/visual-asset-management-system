@@ -4,7 +4,6 @@
 import os
 import boto3
 import json
-import time
 import uuid
 from typing import Dict, List, Set, Optional, Tuple
 from botocore.config import Config
@@ -12,6 +11,7 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.dynamodb import batch_get_items
 from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -44,7 +44,8 @@ retry_config = Config(
 )
 
 # batch_get_item answers a partially throttled request with HTTP 200 and an UnprocessedKeys map,
-# which the botocore retry config does not cover, so those keys are re-requested here.
+# which the botocore retry config does not cover. The shared `batch_get_items` re-requests them;
+# these are this handler's budget for it, as total attempts and the base of the backoff.
 MAX_BATCH_GET_ATTEMPTS = 5
 BATCH_GET_RETRY_BASE_SECONDS = 0.05
 
@@ -121,53 +122,37 @@ def batch_get_asset_details(asset_keys: List[tuple]) -> Tuple[Dict[str, Dict], L
     asset_details = {}
     unresolved_keys: List[tuple] = []
 
-    # Process in batches of 100 (DynamoDB batch_get_item limit)
-    batch_size = 100
-    for i in range(0, len(asset_keys), batch_size):
-        batch = asset_keys[i:i + batch_size]
+    keys = [
+        {
+            'databaseId': database_id,
+            'assetId': asset_id
+        }
+        for database_id, asset_id in asset_keys
+    ]
 
-        try:
-            pending = [
-                {
-                    'databaseId': database_id,
-                    'assetId': asset_id
-                }
-                for database_id, asset_id  in batch
-            ]
+    try:
+        rows, pending = batch_get_items(
+            dynamodb, asset_storage_table_name, keys,
+            max_retries=MAX_BATCH_GET_ATTEMPTS - 1,
+            backoff_seconds=BATCH_GET_RETRY_BASE_SECONDS)
 
-            for attempt in range(MAX_BATCH_GET_ATTEMPTS):
-                response = dynamodb.batch_get_item(
-                    RequestItems={asset_storage_table_name: {'Keys': pending}}
-                )
+        for item in rows:
+            key = f"{item['databaseId']}:{item['assetId']}"
+            asset_details[key] = item
 
-                for item in response.get('Responses', {}).get(asset_storage_table_name, []):
-                    key = f"{item['databaseId']}:{item['assetId']}"
-                    asset_details[key] = item
+        if pending:
+            logger.warning(
+                f"{len(pending)} asset keys unretrieved after {MAX_BATCH_GET_ATTEMPTS} batch get attempts")
+            unresolved_keys.extend((key['databaseId'], key['assetId']) for key in pending)
 
-                pending = response.get('UnprocessedKeys', {}).get(
-                    asset_storage_table_name, {}).get('Keys', [])
-                if not pending:
-                    break
-                if attempt < MAX_BATCH_GET_ATTEMPTS - 1:
-                    # Exponential backoff before resending the keys batch_get_item left
-                    # unprocessed. Must be the last comment line before the call -- semgrep
-                    # attaches `nosemgrep` to the next line only.
-                    # nosemgrep: arbitrary-sleep
-                    time.sleep(BATCH_GET_RETRY_BASE_SECONDS * (2 ** attempt))
-
-            if pending:
-                logger.warning(
-                    f"{len(pending)} asset keys unretrieved after {MAX_BATCH_GET_ATTEMPTS} batch get attempts")
-                unresolved_keys.extend((key['databaseId'], key['assetId']) for key in pending)
-
-        except Exception as e:
-            logger.exception(f"Error in batch get asset details: {e}")
-            # Fall back to individual gets for this batch
-            for database_id, asset_id  in batch:
-                asset = get_asset_details(asset_id, database_id)
-                if asset:
-                    key = f"{database_id}:{asset_id}"
-                    asset_details[key] = asset
+    except Exception as e:
+        logger.exception(f"Error in batch get asset details: {e}")
+        # Fall back to individual gets
+        for database_id, asset_id in asset_keys:
+            asset = get_asset_details(asset_id, database_id)
+            if asset:
+                key = f"{database_id}:{asset_id}"
+                asset_details[key] = asset
 
     return asset_details, unresolved_keys
 

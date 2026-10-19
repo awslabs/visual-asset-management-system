@@ -134,9 +134,8 @@ exists in the pool:
     replacement's create step fails with `AlreadyExists`, the nested authorization stack fails, and the
     **whole core stack rolls back** — roughly 15 minutes, across every nested stack.
 
-Synthesis warns whenever `app.adminUserId` and `app.adminEmailAddress` differ, restating that both are
-immutable — it cannot detect that a value has _changed_, because it has no view of what is deployed. It
-also rejects a username Amazon Cognito itself would refuse (whitespace, or over 128 characters), so that
+Synthesis cannot detect that either value has _changed_, because it has no view of what is deployed. It
+does reject a username Amazon Cognito itself would refuse (whitespace, or over 128 characters), so that
 failure arrives as a configuration message rather than as a rolled-back deployment.
 
 Treat both values as fixed for the life of the deployment. To change who administers VAMS, leave the
@@ -221,13 +220,17 @@ Use A/B deployment when the update involves changes that cannot be safely applie
     npx cdk deploy --all --require-approval never
     ```
 
-4. **Migrate DynamoDB data.** Use the A/B migration scripts provided in `infra/deploymentDataMigration/`:
+4. **Migrate DynamoDB data.** VAMS does not ship a Stack A to Stack B table copy script. Copy each Amazon DynamoDB table from Stack A into the matching table in Stack B with the tooling of your choice -- an AWS Glue job, an AWS Database Migration Service task, or a scan-and-batch-write script built on the AWS SDK. Both stacks publish their table names as AWS Systems Manager Parameter Store parameters under the prefix in the `ResourceNamesSSMParamPrefixOutput` CloudFormation output, so the source and destination names can be read from there instead of the console:
 
     ```bash
-    cd infra/deploymentDataMigration
-    pip install boto3
-    python tools/VAMSDataMigration.py config/<YOUR_MIGRATION_CONFIG>.json
+    aws ssm get-parameters-by-path --recursive \
+      --path "<ResourceNamesSSMParamPrefixOutput>/dynamoTables" \
+      --query 'Parameters[].[Name,Value]' --output table
     ```
+
+    Copy the tables with Stack B's data tier idle. Most Stack B tables are empty until the copy writes them, so no key collides there. Six are not: Stack B's own deployment writes them before any copy and rewrites those rows on every deploy. Do not copy `appFeatureEnabledStorage` -- it holds Stack B's feature switches, derived from Stack B's configuration, and a copy would replace them with Stack A's until the next deploy. `rolesStorage` (the `admin` and `basicReadOnly` roles), `constraintsStorage` (the `initial_admin_*` and `initial_basicro_*` constraints), `userStorage` and `userRolesStorage` (the `SYSTEM_USER` and `app.adminUserId` records and their `admin` role assignments) carry the deployment's bootstrap rows, and `metadataSchemaStorageV2` carries the default schemas when an `app.metadataSchema.autoLoad*` flag is on; copy those five with a writer that overwrites or skips an existing key rather than one that requires an empty destination.
+
+    If Stack B is a newer VAMS version than Stack A, copy the tables first and then run the same-stack upgrade scripts for each version step against Stack B (see [Version-specific migration instructions](#version-specific-migration-instructions)); the per-version `run_migration.sh` / `run_migration.ps1` scripts under `infra/deploymentDataMigration/` transform the schema in place and do not copy between stacks.
 
 5. **Migrate S3 data.** Sync asset buckets from Stack A to Stack B:
 
@@ -762,6 +765,15 @@ Before switching, delete the WAF stack that the new configuration does not use, 
 still associated with a distribution or load balancer first — AWS WAF refuses to delete an associated ACL.
 Then deploy. The web ACL carries no data, so nothing is lost.
 
+### v2.6 to v2.7
+
+v2.7 moves add-on code out of the core list files into add-on files beside them, and adds fork extension points ([Extending VAMS in a Fork](../developer/customizing-vams.md)). No data migration is needed. A default deployment needs no action. The changes below affect a deployment that enabled a licensed viewer and a fork that references the moved names.
+
+-   **Licensed viewers are configured in the add-on viewer file.** The `vntana-viewer` and `veerum-viewer` entries move, unchanged and still disabled, from `web/src/visualizerPlugin/config/viewerConfig.json` to `web/src/visualizerPlugin/config/addonViewerConfig.json`. A deployment that enabled one by setting `"enabled": true` in `viewerConfig.json` sets it on the same entry in `addonViewerConfig.json` instead. If a merge leaves a copy of the entry in `viewerConfig.json`, delete that copy and keep only the add-on entry. The install scripts in `web/customInstalls/vntana/` and `web/customInstalls/veerum/` and their `postinstall` entries are unchanged, and they now read the add-on file to decide whether to fetch the vendor package.
+-   **`PHYSNA_ADDON` is an add-on feature switch.** It moves from `VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`) to `ADDON_APP_FEATURES` (`infra/common/addonAppFeatures.ts`). The published value is unchanged, so `/api/secure-config` and the web interface see the same `featuresEnabled` list. CDK code that referenced `VAMS_APP_FEATURES.PHYSNA_ADDON` imports `ADDON_APP_FEATURES` instead. In the CLI, `FEATURE_PHYSNA_ADDON` moves to `vamscli/addon_constants.py` and is re-exported from `vamscli.constants`, so existing imports keep working.
+-   **The Physna viewer request model moves.** `backend/backend/models/physnaViewer.py` is now `backend/backend/models/addon/physnaViewer.py`, with no re-export at the old path. Code that imports `models.physnaViewer` imports `models.addon.physnaViewer`.
+-   **Permission object types are listed by the API, not fixed.** `objectType` in the constraint APIs and in `documentation/VAMS_API.yaml` is no longer a closed list of the core types, because a deployment can register more. A client that validated it against the old list reads the accepted types from `GET /auth/constraints/permissionObjects`.
+
 ## Breaking changes checklist
 
 Use this checklist to determine if additional actions are needed after updating.
@@ -782,6 +794,8 @@ Use this checklist to determine if additional actions are needed after updating.
 | External asset bucket default                                 | v2.5 to v2.6 (`createNewBucket: false`)           | Set `isDefault: true` on exactly one `app.assetBuckets.externalAssetBuckets` entry; configuration validation otherwise fails `cdk synth`.                                                                                                                                                                                                |
 | Pipeline constraint field audit                               | v2.5 to v2.6                                      | Re-author any role constraint criterion that uses `pipelineType` against `category`; no script rewrites constraints.                                                                                                                                                                                                                     |
 | Bucket listing route scoped to admins                         | v2.5 to v2.6                                      | Remove the `/buckets` `api` criterion from non-administrator roles built from an earlier template; stored constraints are not reconciled.                                                                                                                                                                                                |
+| Licensed viewer enable location                               | v2.6 to v2.7 (VNTANA or VEERUM enabled)           | Set `"enabled": true` on the viewer's entry in `addonViewerConfig.json`; delete any copy of the entry a merge leaves in `viewerConfig.json`.                                                                                                                                                                                             |
+| Add-on names moved                                            | v2.6 to v2.7 (forks that reference them)          | Import `ADDON_APP_FEATURES.PHYSNA_ADDON` from `infra/common/addonAppFeatures.ts` and `models.addon.physnaViewer`; the CLI's `FEATURE_PHYSNA_ADDON` is still importable from `vamscli.constants`.                                                                                                                                         |
 | Permission constraint migration                               | v2.3 to v2.4, v2.4 to v2.5                        | Run constraint migration script if custom constraints exist.                                                                                                                                                                                                                                                                             |
 | API Gateway authorizer change                                 | v2.2 to v2.3                                      | Reset authorizer cache after deployment.                                                                                                                                                                                                                                                                                                 |
 | Pipeline CDK construct rename                                 | v2.2 to v2.3                                      | Deploy without pipelines, then redeploy with pipelines enabled.                                                                                                                                                                                                                                                                          |

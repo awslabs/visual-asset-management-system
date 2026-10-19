@@ -23,7 +23,9 @@ web/src/visualizerPlugin/
 │   ├── PluginRegistry.ts         # Generic plugin registry (no modifications needed)
 │   └── types.ts                  # TypeScript interfaces
 ├── config/
-│   └── viewerConfig.json         # Complete plugin configuration
+│   ├── viewerConfig.json         # Core plugin configuration
+│   ├── addonViewerConfig.json    # Add-on viewers (Physna; licensed VNTANA, VEERUM)
+│   └── customViewerConfig.json   # Fork extension point (shipped empty)
 ├── components/                    # UI components
 │   ├── DynamicViewer.tsx         # Main viewer component
 │   ├── ViewerSelector.tsx        # Viewer selection UI
@@ -233,7 +235,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Priority**: 2
 -   **Category**: 3d
 -   **Enabled**: false (disabled by default)
--   **Note**: ⚠️ **VNTANA is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VNTANA license. To enable this viewer and obtain licensing information, visit [https://www.vntana.com](https://www.vntana.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` in the viewer configuration.
+-   **Note**: ⚠️ **VNTANA is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VNTANA license. To enable this viewer and obtain licensing information, visit [https://www.vntana.com](https://www.vntana.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` on its entry in the add-on viewer configuration (`config/addonViewerConfig.json`).
 
 ### 14. VeerumViewerPlugin
 
@@ -245,7 +247,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Priority**: 2
 -   **Category**: 3d
 -   **Enabled**: false (disabled by default)
--   **Note**: ⚠️ **VEERUM is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VEERUM license. To obtain licensing information, visit [https://veerum.com](https://veerum.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` in the viewer configuration. See `web/customInstalls/veerum/README.md` for detailed installation instructions. **VEERUM requires Potree Pipeline to be enabled to view point cloud files**
+-   **Note**: ⚠️ **VEERUM is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VEERUM license. To obtain licensing information, visit [https://veerum.com](https://veerum.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` on its entry in the add-on viewer configuration (`config/addonViewerConfig.json`). See `web/customInstalls/veerum/README.md` for detailed installation instructions. **VEERUM requires Potree Pipeline to be enabled to view point cloud files**
 
 ### 15. PreviewViewerPlugin
 

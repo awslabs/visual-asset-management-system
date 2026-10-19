@@ -8,7 +8,7 @@ For the complete list of viewers, supported extensions, and extension-to-viewer 
 
 ## Viewer Configuration
 
-Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.json`. Each viewer entry supports the following fields:
+Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.json` (core viewers) and `web/src/visualizerPlugin/config/addonViewerConfig.json` (add-on viewers: the Physna viewer and the licensed VNTANA and VEERUM viewers, which ship disabled). A licensed viewer is enabled by setting `"enabled": true` on its entry in `addonViewerConfig.json`. Each viewer entry supports the following fields:
 
 | Field                        | Type     | Description                                                                |
 | ---------------------------- | -------- | -------------------------------------------------------------------------- |

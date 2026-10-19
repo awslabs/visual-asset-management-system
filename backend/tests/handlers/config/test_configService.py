@@ -97,6 +97,66 @@ class TestConfigService:
         assert body["webDeployedUrl"] == "https://example.com"
         mock_geo_client.describe_key.assert_called_once_with(KeyName="test-key")
 
+    def test_location_client_lookup_is_bounded_inside_the_api_gateway_budget(self):
+        """The Location Service client carries its own bounded config (#440).
+
+        On a VPC with no route to Amazon Location Service the shared retry_config's default 60 s
+        connect timeout outlives the 29 s API Gateway integration timeout, so the except branch
+        below never runs and the whole /secure-config response is a 504. Asserted on what botocore
+        resolved for the live client, which is what governs the call: botocore rewrites
+        max_attempts into total_max_attempts (max_attempts + 1) while building the client.
+        """
+        resolved = configService.geo_client.meta.config
+        assert resolved.connect_timeout == 2
+        assert resolved.read_timeout == 5
+        assert resolved.retries["total_max_attempts"] == 3
+        assert resolved.retries["mode"] == "adaptive"
+        # Worst case across every attempt stays well inside the 29 s integration timeout.
+        attempts = resolved.retries["total_max_attempts"]
+        assert attempts * (resolved.connect_timeout + resolved.read_timeout) < 29
+
+    def test_location_service_without_a_route_degrades_to_an_empty_url(self, config_event):
+        """A no-route lookup answers 200 with an empty map URL instead of surfacing (#440).
+
+        EndpointConnectionError is a BotoCoreError, not a ClientError, so it reaches the branch that
+        names the operator remedy and the handler still returns the rest of the secure config.
+        """
+        from botocore.exceptions import EndpointConnectionError
+
+        mock_dynamodb_client = MagicMock()
+        mock_dynamodb_client.get_paginator.return_value = _make_paginator([])
+
+        mock_ssm_client = MagicMock()
+        mock_ssm_client.get_parameter.return_value = {
+            "Parameter": {"Value": "arn:aws:geo:us-east-1:123456789012:api-key/test-key"}}
+        mock_geo_client = MagicMock()
+        mock_geo_client.describe_key.side_effect = EndpointConnectionError(
+            endpoint_url="https://cp.metadata.geo.us-east-1.amazonaws.com")
+
+        mock_enforcer = MagicMock()
+        mock_enforcer.enforceAPI.return_value = True
+
+        with patch.object(configService, "dynamodb_client", mock_dynamodb_client), \
+             patch.object(configService, "ssm_client", mock_ssm_client), \
+             patch.object(configService, "geo_client", mock_geo_client), \
+             patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
+             patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}), \
+             patch.object(configService, "location_service_api_key_arn_ssm_param", "/test/location-key-arn"), \
+             patch.object(configService, "location_service_url_format", "https://maps.test/<apiKey>"), \
+             patch.object(configService, "web_deployed_url_ssm_param", None), \
+             patch.object(configService, "logger") as mock_logger:
+            assert configService.get_location_service_api_url() == ""
+            response = configService.lambda_handler(config_event, MagicMock())
+
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["locationServiceApiUrl"] == ""
+        assert body["webDeployedUrl"] == ""
+        # Logged as a WARNING that names the remedy, not as an ERROR.
+        mock_logger.error.assert_not_called()
+        warnings = " ".join(str(call.args[0]) for call in mock_logger.warning.call_args_list)
+        assert "com.amazonaws.<region>.geo" in warnings
+
     def test_get_secure_config_unauthorized(self, config_event):
         """API-level authorization denial returns 403"""
         mock_enforcer = MagicMock()

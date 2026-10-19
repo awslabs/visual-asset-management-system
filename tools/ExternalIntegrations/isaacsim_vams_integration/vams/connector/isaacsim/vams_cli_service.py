@@ -6,7 +6,7 @@ via subprocess and parsing their JSON output.
 
 Prerequisites:
     - VAMS CLI installed and on PATH (pip install vamscli or pip install -e path/to/VamsCLI)
-    - Profile configured via: vamscli setup <api-gateway-url>
+    - Profile configured via: vamscli --profile <profile> setup <api-gateway-url>
 """
 
 import fnmatch
@@ -545,7 +545,7 @@ class VamsCliService:
         except VamsCliError:
             raise VamsProfileNotSetupError(
                 "VAMS CLI profile may not be configured. "
-                f"Run 'vamscli setup <api-gateway-url>' to configure the '{self._profile}' profile."
+                f"Run 'vamscli --profile {self._profile} setup <api-gateway-url>' to configure the '{self._profile}' profile."
             )
 
     def login(self, username: str, credential: str) -> str:
