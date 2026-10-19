@@ -122,6 +122,16 @@ def attribute_key(definition):
     return metadata_key(definition, ".attribute.json")
 
 
+def results_prefix(definition):
+    """(bucket, prefix) of the execution's results folder, or None when the definition names none (a
+    definition built from a manifest that predates the results output)."""
+    results = definition.get("outputResults") or {}
+    object_dir = results.get("objectDir", "") or ""
+    if not results.get("bucketName") or not object_dir:
+        return None
+    return results["bucketName"], object_dir if object_dir.endswith("/") else object_dir + "/"
+
+
 def derive_outcome(state, definition, model_label, run_id, wall_seconds):
     """The RunOutcome a finished agent run stands for; raises RunFailed when no STEP was produced."""
     if not state.best_output:
@@ -164,8 +174,8 @@ def upload_outputs(s3, definition, outcome, step_path):
     s3.upload_file(step_path, bucket, key)
     logger.info("uploaded STEP s3://%s/%s", bucket, key)
     report_key = f"{key[: -len(definition['outputFiles']['fileName'])]}{report.report_file_name(definition['outputFiles']['fileName'])}"
-    s3.put_object(Bucket=bucket, Key=report_key, Body=report.markdown_report(outcome).encode("utf-8"),
-                  ContentType="text/markdown")
+    report_body = report.markdown_report(outcome).encode("utf-8")
+    s3.put_object(Bucket=bucket, Key=report_key, Body=report_body, ContentType="text/markdown")
     meta_key = metadata_key(definition)
     if meta_key:
         meta_bucket = definition["outputMetadata"]["bucketName"]
@@ -175,6 +185,16 @@ def upload_outputs(s3, definition, outcome, step_path):
         s3.put_object(Bucket=meta_bucket, Key=attribute_key(definition),
                       Body=json.dumps(report.attribute_document(outcome)).encode("utf-8"),
                       ContentType="application/json")
+    results = results_prefix(definition)
+    if results:
+        results_bucket, prefix = results
+        s3.put_object(Bucket=results_bucket, Key=f"{prefix}{report.RESULT_FILE_NAME}",
+                      Body=json.dumps(report.result_document(outcome), indent=2).encode("utf-8"),
+                      ContentType="application/json")
+        s3.put_object(Bucket=results_bucket, Key=f"{prefix}{report.RESULT_REPORT_FILE_NAME}", Body=report_body,
+                      ContentType="text/markdown")
+    else:
+        logger.info("the definition names no results folder; the structured result is not written")
     return key
 
 

@@ -153,6 +153,7 @@ def _build_execution_params(event):
     output_bucket, output_key = _split_s3_uri(
         'outputS3AssetFilesPath', event.get('outputS3AssetFilesPath'))
     output_s3_asset_metadata_uri = event.get('outputS3AssetMetadataPath', '') or ''
+    output_s3_asset_results_uri = event.get('outputS3AssetResultsPath', '') or ''
     aux_uri = event.get('inputOutputS3AssetAuxiliaryFilesPath', '') or ''
     asset_id = event.get('assetId', '') or ''
 
@@ -207,6 +208,9 @@ def _build_execution_params(event):
             "fileName": file_name,
         },
         "outputMetadata": _dir_of(output_s3_asset_metadata_uri),
+        # The execution's results folder; empty when the manifest names none, and the container then
+        # skips the structured-result mirror.
+        "outputResults": _dir_of(output_s3_asset_results_uri),
         "auxiliary": _dir_of(aux_uri),
         "assetId": asset_id,
         "databaseId": event.get("databaseId", "") or "",

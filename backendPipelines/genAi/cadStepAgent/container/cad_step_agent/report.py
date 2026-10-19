@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The outcome documents of a run: the Markdown report written beside the STEP file, the file metadata
-and file attribute documents the process-output step applies, and the bounded task-token payload.
+and file attribute documents the process-output step applies, the structured result written to the
+execution's results folder, and the bounded task-token payload.
 
 All builders are pure; every free-text field is bounded so a verbose model cannot grow the execution
 record or a metadata value past what VAMS accepts.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -48,6 +50,15 @@ ATTRIBUTE_KEY_UNITS = "cadUnits"
 # the agent writes its scripts in millimetres.
 GEOMETRY_UNITS = "mm"
 ATTRIBUTE_DECIMALS = 3
+
+# The structured result mirrored into the execution's results folder. The process-output step stores each
+# result file as one row of at most MAX_TEXT_FIELD_BYTES (backend executionRecords: 400 KiB less a 20 KiB
+# reserve); a document is bounded below that so a row is never cut.
+RESULT_FILE_NAME = "cad-agent-result.json"
+RESULT_REPORT_FILE_NAME = "cad-agent-report.md"
+RESULT_MAX_BYTES = 400 * 1024 - 20 * 1024
+_ASSUMPTIONS_RE = re.compile(r"\bassumptions?\s*:", re.IGNORECASE)
+_NO_ASSUMPTIONS = {"", "none", "n/a", "-"}
 
 
 @dataclass
@@ -146,6 +157,44 @@ def attribute_document(outcome, update_type="update"):
         figures.append((ATTRIBUTE_KEY_UNITS, GEOMETRY_UNITS))
     entries += [{"metadataKey": key, "metadataValue": value} for key, value in figures]
     return {"type": "attribute", "updateType": update_type, "metadata": entries}
+
+
+def assumptions_of(summary):
+    """The items of the summary's last "Assumptions:" line: split on semicolons when it has any, else on
+    commas followed by a space (a decimal comma such as "5,5 mm" is not split). Empty for "none"."""
+    text = summary or ""
+    matches = list(_ASSUMPTIONS_RE.finditer(text))
+    if not matches:
+        return []
+    tail = text[matches[-1].end():].strip().splitlines()
+    line = tail[0].strip() if tail else ""
+    parts = line.split(";") if ";" in line else re.split(r",\s+", line)
+    items = [p.strip().rstrip(".").strip() for p in parts]
+    return [i for i in items if i.lower() not in _NO_ASSUMPTIONS]
+
+
+def result_document(outcome):
+    """The ``cad-agent-result.json`` body for the execution's results folder: the task-token payload's
+    fields plus the run's identity, its assumptions, the bounded lists the report carries and the
+    measured geometry."""
+    doc = {
+        "status": outcome.status,
+        "mode": outcome.mode,
+        "outputFile": outcome.output_file_name,
+        "model": _clip(outcome.model, 256),
+        "runId": _clip(outcome.run_id, 128),
+        "attempts": len(outcome.attempts),
+        "unresolvedCount": len(outcome.unresolved),
+        "summary": _clip(outcome.summary, SUMMARY_MAX_CHARS),
+        "assumptions": json.loads(_bounded_list(assumptions_of(outcome.summary))),
+        "unresolved": json.loads(_bounded_list(outcome.unresolved)),
+        "checks": json.loads(_bounded_list(outcome.checks)),
+        "sources": json.loads(_bounded_list(outcome.sources)),
+        "geometry": outcome.geometry or None,
+    }
+    if len(json.dumps(doc).encode("utf-8")) > RESULT_MAX_BYTES:
+        doc["geometry"] = {"clipped": True}
+    return doc
 
 
 def markdown_report(outcome):

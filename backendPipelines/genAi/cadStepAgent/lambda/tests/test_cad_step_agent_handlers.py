@@ -64,6 +64,7 @@ def _resolved(with_input=True):
         "outputS3AssetFilesPath": "s3://abkt/xasset1/",
         "outputS3AssetPreviewPath": "s3://abkt/xasset1/previews/",
         "outputS3AssetMetadataPath": "s3://abkt/xasset1/metadata/",
+        "outputS3AssetResultsPath": "s3://abkt/pipelines/cad/job/output/E1/results/",
         "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux/xasset1/pipeline/",
         "assetId": "xasset1",
         "databaseId": "db1",
@@ -93,7 +94,7 @@ class TestVamsExecute:
         assert resp["statusCode"] == 200
         payload = json.loads(invoke.call_args.kwargs["Payload"])
         for key in ("inputS3AssetFilePath", "outputS3AssetFilesPath", "outputS3AssetPreviewPath",
-                    "outputS3AssetMetadataPath", "inputOutputS3AssetAuxiliaryFilesPath"):
+                    "outputS3AssetMetadataPath", "outputS3AssetResultsPath", "inputOutputS3AssetAuxiliaryFilesPath"):
             assert payload[key] == _resolved()[key], key
         assert payload["assetId"] == "xasset1" and payload["databaseId"] == "db1"
         assert payload["sfnExternalTaskToken"] == _TOKEN
@@ -170,6 +171,7 @@ def _open_event(file_uri):
         "outputS3AssetFilesPath": "s3://abkt/xasset1/",
         "outputS3AssetPreviewPath": "s3://abkt/xasset1/previews/",
         "outputS3AssetMetadataPath": "s3://abkt/xasset1/metadata/",
+        "outputS3AssetResultsPath": "s3://abkt/pipelines/cad/job/output/E1/results/",
         "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux/xasset1/pipeline/",
         "inputMetadataS3Location": "s3://run/meta.json",
         "inputConfigurationS3Location": "s3://run/config.json",
@@ -204,6 +206,7 @@ class TestOpenPipeline:
         sfn_input = json.loads(start.call_args.kwargs["input"])
         assert sfn_input["inputS3AssetFilePath"] == ""
         assert sfn_input["jobName"].startswith("CadStepAgent_")
+        assert sfn_input["outputS3AssetResultsPath"] == "s3://abkt/pipelines/cad/job/output/E1/results/"
 
     def test_the_sub_execution_is_registered_with_the_state_machine_log_source(self):
         mod = _load("openPipeline.py", {
@@ -256,6 +259,7 @@ def _construct_event(with_input=True):
         "inputS3AssetFilePath": "s3://abkt/xasset1/sub/dir/part.stp" if with_input else "",
         "outputS3AssetFilesPath": "s3://abkt/xasset1/",
         "outputS3AssetMetadataPath": "s3://abkt/xasset1/metadata/",
+        "outputS3AssetResultsPath": "s3://abkt/pipelines/cad/job/output/E1/results/",
         "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux/xasset1/pipeline/",
         "inputConfigurationS3Location": "s3://run/config.json",
         "assetId": "xasset1",
@@ -294,9 +298,18 @@ class TestConstructPipeline:
         assert definition["outputFiles"] == {
             "bucketName": "abkt", "objectDir": "xasset1/", "relativeSubdir": "sub/dir/", "fileName": "part.stp"}
         assert definition["outputMetadata"] == {"bucketName": "abkt", "objectDir": "xasset1/metadata/"}
+        assert definition["outputResults"] == {"bucketName": "abkt", "objectDir": "pipelines/cad/job/output/E1/results/"}
         assert definition["agent"]["maxRunSeconds"] == 3600
         assert resp["externalSfnTaskToken"] == _TOKEN
         assert resp["orchestrationEventPrefix"] == "vams.test.execution.E1.pipeline.P1"
+
+    def test_an_event_without_a_results_folder_builds_an_empty_results_block(self):
+        mod = _load("constructPipeline.py")
+        event = _construct_event()
+        event.pop("outputS3AssetResultsPath")
+        resp, send_failure, exc = self._run(mod, event, _config())
+        assert exc is None and send_failure.call_count == 0
+        assert json.loads(resp["definition"][0])["outputResults"] == {"bucketName": "", "objectDir": ""}
 
     def test_the_outer_token_stays_out_of_the_container_bound_definition(self):
         mod = _load("constructPipeline.py")
@@ -379,10 +392,18 @@ class TestConstructPipeline:
 # ---------------------------------------------------------------------------------------------------
 # executeBatchJob
 # ---------------------------------------------------------------------------------------------------
+# What both run tasks receive from constructPipeline, trimmed to the blocks they must pass on unchanged.
+_FORWARDED_DEFINITION = {
+    "mode": "modify", "agent": {},
+    "outputMetadata": {"bucketName": "abkt", "objectDir": "xasset1/metadata/"},
+    "outputResults": {"bucketName": "abkt", "objectDir": "pipelines/cad/job/output/E1/results/"},
+}
+
+
 @pytest.mark.unit
 class TestExecuteBatchJob:
     def _event(self):
-        return {"jobName": "CadStepAgent_x", "definition": [json.dumps({"mode": "modify", "agent": {}})],
+        return {"jobName": "CadStepAgent_x", "definition": [json.dumps(_FORWARDED_DEFINITION)],
                 "taskToken": _TOKEN, "orchestrationEventPrefix": "vams.test.execution.E1.pipeline.P1"}
 
     def test_the_definition_travels_in_the_environment_not_the_command_line(self):
@@ -397,7 +418,8 @@ class TestExecuteBatchJob:
         overrides = submit.call_args.kwargs["containerOverrides"]
         assert overrides["command"] == ["python3", "-m", "cad_step_agent.batch_main"]
         env = {e["name"]: e["value"] for e in overrides["environment"]}
-        assert json.loads(env["CAD_AGENT_DEFINITION"]) == {"mode": "modify", "agent": {}}
+        # Forwarded as built, results folder included.
+        assert json.loads(env["CAD_AGENT_DEFINITION"]) == _FORWARDED_DEFINITION
         assert env["TASK_TOKEN"] == _TOKEN
         assert "mode" not in " ".join(overrides["command"])
 
@@ -422,7 +444,7 @@ class TestExecuteBatchJob:
 @pytest.mark.unit
 class TestInvokeAgentRuntime:
     def _event(self):
-        return {"jobName": "CadStepAgent_x", "definition": [json.dumps({"mode": "modify"})], "taskToken": _TOKEN}
+        return {"jobName": "CadStepAgent_x", "definition": [json.dumps(_FORWARDED_DEFINITION)], "taskToken": _TOKEN}
 
     def _response(self, body):
         stream = MagicMock()
@@ -439,7 +461,7 @@ class TestInvokeAgentRuntime:
         kwargs = invoke.call_args.kwargs
         assert kwargs["agentRuntimeArn"] == _ENV["AGENT_RUNTIME_ARN"]
         payload = json.loads(kwargs["payload"])
-        assert payload["taskToken"] == _TOKEN and payload["definition"] == {"mode": "modify"}
+        assert payload["taskToken"] == _TOKEN and payload["definition"] == _FORWARDED_DEFINITION
         assert len(kwargs["runtimeSessionId"]) >= 33
         send_failure.assert_not_called()
 

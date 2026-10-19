@@ -411,6 +411,36 @@ class TestReport:
         assert report._decimal(-0.0001) == "0"
         assert report._decimal(1e9) == "1000000000"
 
+    def test_assumptions_are_read_from_the_summary_s_last_assumptions_line(self):
+        assert report.assumptions_of("Box 152.4 x 101.6 x 25.4 mm. Assumptions: wall thickness 2.5 mm, corner radius 4 mm.") == \
+            ["wall thickness 2.5 mm", "corner radius 4 mm"]
+        assert report.assumptions_of("Plate.\nAssumptions: hole 5,5 mm; margin 5 mm\nmore text") == ["hole 5,5 mm", "margin 5 mm"]
+        assert report.assumptions_of("No assumption: stated. Assumptions: none") == []
+        assert report.assumptions_of("Everything specified.") == []
+
+    def test_result_document_mirrors_the_outcome_with_bounded_lists(self):
+        outcome = _outcome(summary="Added holes. Assumptions: depth 5 mm", unresolved=["u" * 300] * 40,
+                           checks=["holes: expected 4 - measured 4 - ok"], sources=["https://example.test/a"])
+        doc = report.result_document(outcome)
+        assert set(doc) == {"status", "mode", "outputFile", "model", "runId", "attempts", "unresolvedCount", "summary",
+                            "assumptions", "unresolved", "checks", "sources", "geometry"}
+        assert doc["status"] == "partial" and doc["mode"] == "modify" and doc["runId"] == "abc123"
+        assert doc["unresolvedCount"] == 40 and 0 < len(doc["unresolved"]) < 40
+        assert len(json.dumps(doc["unresolved"])) <= report.LIST_MAX_CHARS
+        assert doc["assumptions"] == ["depth 5 mm"] and doc["geometry"] == {"solid_count": 1}
+        payload = report.success_payload(outcome)
+        assert {k: doc[k] for k in ("status", "attempts", "unresolvedCount")} == \
+            {k: payload[k] for k in ("status", "attempts", "unresolvedCount")}
+
+    def test_both_result_files_fit_the_row_the_process_output_step_stores(self):
+        attempts = [report.AttemptRecord(n, False, "s" * 5000, "t" * 20000) for n in range(1, 11)]
+        worst = _outcome(prompt="p" * 20000, summary="s" * 20000, attempts=attempts, unresolved=["u" * 5000] * 100,
+                         checks=["c" * 5000] * 100, sources=["https://example.test/" + "x" * 5000] * 100,
+                         geometry={"solid_count": 20, "features": {"holes": [{"diameter_mm": 1.0, "count": 1,
+                                                                             "centres_mm": [{"plane": "xy", "from_bbox_min": [1.0, 2.0]}] * 24}] * 50}})
+        assert len(json.dumps(report.result_document(worst)).encode("utf-8")) <= report.RESULT_MAX_BYTES
+        assert len(report.markdown_report(worst).encode("utf-8")) <= report.RESULT_MAX_BYTES
+
 
 # ---------------------------------------------------------------------------------------------------
 # agent (model resolution)
@@ -1102,6 +1132,7 @@ def _definition(mode="modify", **agent_overrides):
         "outputFiles": {"bucketName": "abkt", "objectDir": "xasset1/", "relativeSubdir": "sub/" if mode == "modify" else "",
                         "fileName": "part.stp" if mode == "modify" else "board-20260922-185500.step"},
         "outputMetadata": {"bucketName": "abkt", "objectDir": "xasset1/metadata/"},
+        "outputResults": {"bucketName": "abkt", "objectDir": "pipelines/cad/job/output/E1/results/"},
         "auxiliary": {"bucketName": "aux", "objectDir": "xasset1/pipeline/"},
         "assetId": "xasset1", "databaseId": "db1",
         "agent": agent_cfg,
@@ -1164,6 +1195,8 @@ class TestRunJob:
         assert {e["metadataKey"] for e in meta["metadata"]} >= {"cadAgentStatus", "cadAgentSummary", "cadAgentGeometry"}
         attributes = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.attribute.json")])
         assert {e["metadataKey"]: e["metadataValue"] for e in attributes["metadata"]}["cadVolumeMm3"] == "1000"
+        result = json.loads(s3.objects[("abkt", "pipelines/cad/job/output/E1/results/cad-agent-result.json")])
+        assert result["status"] == payload["status"] and result["summary"] == payload["summary"]
         sfn.send_task_success.assert_called_once()
         assert json.loads(sfn.send_task_success.call_args.kwargs["output"])["status"] == "succeeded"
         sfn.send_task_failure.assert_not_called()
@@ -1184,6 +1217,32 @@ class TestRunJob:
         # The eight metadata keys are written as before, to their own document.
         meta = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.metadata.json")])
         assert len(meta["metadata"]) == 8 and meta["type"] == "metadata"
+
+    def test_upload_mirrors_the_outcome_into_the_results_folder(self, tmp_path):
+        s3 = _FakeS3()
+        step = tmp_path / "output.step"
+        step.write_text("ISO-10303-21;")
+        outcome = _outcome(status="succeeded", summary="Done. Assumptions: margin 5 mm")
+        run.upload_outputs(s3, _definition(), outcome, str(step))
+        prefix = "pipelines/cad/job/output/E1/results/"
+        result = json.loads(s3.objects[("abkt", prefix + "cad-agent-result.json")])
+        assert result == json.loads(json.dumps(report.result_document(outcome)))
+        assert result["assumptions"] == ["margin 5 mm"]
+        mirrored = s3.objects[("abkt", prefix + "cad-agent-report.md")]
+        assert mirrored == s3.objects[("abkt", "xasset1/sub/part.stp.cad-agent-report.md")]
+
+    def test_a_definition_without_a_results_folder_skips_the_mirror_with_one_info_line(self, tmp_path, caplog):
+        s3 = _FakeS3()
+        step = tmp_path / "output.step"
+        step.write_text("ISO-10303-21;")
+        definition = _definition()
+        definition.pop("outputResults")
+        with caplog.at_level(logging.INFO, logger="cad_step_agent"):
+            run.upload_outputs(s3, definition, _outcome(), str(step))
+        assert not [k for (_, k) in s3.objects if "/results/" in k]
+        assert ("abkt", "xasset1/metadata/sub/part.stp.attribute.json") in s3.objects
+        notes = [r for r in caplog.records if "results folder" in r.getMessage()]
+        assert len(notes) == 1 and notes[0].levelno == logging.INFO
 
     def test_an_instruction_the_guardrail_blocks_fails_the_run_before_the_agent_starts(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")

@@ -111,6 +111,7 @@ def lambda_handler(event, context):
     output_s3_asset_files_uri = event['outputS3AssetFilesPath']
     output_s3_asset_preview_uri = event.get('outputS3AssetPreviewPath', '')
     output_s3_asset_metadata_uri = event.get('outputS3AssetMetadataPath', '')
+    output_s3_asset_results_uri = event.get('outputS3AssetResultsPath', '')
     inputOutput_s3_assetAuxiliary_files_uri = event.get('inputOutputS3AssetAuxiliaryFilesPath', '')
 
     if input_s3_asset_files_uri:
@@ -144,6 +145,7 @@ def lambda_handler(event, context):
         "outputS3AssetFilesPath": output_s3_asset_files_uri,
         "outputS3AssetPreviewPath": output_s3_asset_preview_uri,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_uri,
+        "outputS3AssetResultsPath": output_s3_asset_results_uri,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "assetId": event.get('assetId', ''),
         "databaseId": event.get('databaseId', ''),
