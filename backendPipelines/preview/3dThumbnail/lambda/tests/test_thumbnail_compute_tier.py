@@ -4,9 +4,9 @@
 """Compute-tier selection for the preview/3dThumbnail pipeline.
 
 openPipeline picks the tier before it starts the state machine -- from the run's input configuration,
-a direct invoke's inline inputParameters, or the input's size against the large-tier threshold -- passes
-it in the state machine input, and registers the container log source of the Batch state that tier
-routes to. constructPipeline returns it for the state machine's Choice."""
+or the input's size against the large-tier threshold -- passes it in the state machine input, and
+registers the container log source of the Batch state that tier routes to. constructPipeline returns
+it for the state machine's Choice."""
 
 import datetime
 import importlib
@@ -126,26 +126,20 @@ class TestThumbnailTierOverride:
         s3.head_object.assert_called_once()
 
     @pytest.mark.parametrize("inline", [{"computeTier": "large"}, '{"computeTier": "large"}'])
-    def test_inline_input_parameters_force_a_tier_on_a_direct_invoke(self, inline):
-        s3 = _s3(size=10, configuration=None)
-        event = _event(inputConfigurationS3Location="", inputParameters=inline)
-        assert computeTier.select_compute_tier(s3, event, THRESHOLD) == "large"
-        s3.head_object.assert_not_called()
-
-    def test_the_configuration_wins_over_inline_input_parameters(self):
-        s3 = _s3(size=10, configuration={"computeTier": "standard"})
-        event = _event(inputParameters={"computeTier": "large"})
-        assert computeTier.select_compute_tier(s3, event, THRESHOLD) == "standard"
-
-    def test_an_auto_configuration_leaves_inline_input_parameters_in_force(self):
+    def test_a_compute_tier_on_the_invoke_event_does_not_choose_the_tier(self, inline):
+        """The input configuration is the one place a run sets computeTier, the same file the container
+        reads its parameters from. vamsExecute forwards only that file's location, so an
+        inputParameters field on the event is not read."""
         s3 = _s3(size=10, configuration={"computeTier": "auto"})
-        event = _event(inputParameters={"computeTier": "large"})
-        assert computeTier.select_compute_tier(s3, event, THRESHOLD) == "large"
+        event = _event(inputParameters=inline)
+        assert computeTier.select_compute_tier(s3, event, THRESHOLD) == "standard"
+        s3.head_object.assert_called_once()
 
-    def test_malformed_inline_input_parameters_are_ignored(self):
+    def test_a_run_without_an_input_configuration_chooses_by_size(self):
         s3 = _s3(size=THRESHOLD, configuration=None)
-        event = _event(inputConfigurationS3Location="", inputParameters="{not json")
+        event = _event(inputConfigurationS3Location="")
         assert computeTier.select_compute_tier(s3, event, THRESHOLD) == "large"
+        s3.get_object.assert_not_called()
 
     def test_a_malformed_configuration_falls_back_to_size(self):
         """The container reports a malformed configuration as the run's failure; tier selection

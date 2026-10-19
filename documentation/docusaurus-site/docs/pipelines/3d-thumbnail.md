@@ -181,7 +181,7 @@ Each run executes on one of two AWS Fargate sizes, both submitted from one AWS B
 | `standard` | inputs below `largeTierThresholdGiB` (default 2 GiB) | 4              | 16 GiB           | 1 hour           |
 | `large`    | inputs at or above `largeTierThresholdGiB`           | 16             | 120 GiB          | 3 hours          |
 
--   **Choosing the tier.** A run's `computeTier` parameter forces a tier; `auto` (the default) leaves the choice to the input size. A direct invoke of the pipeline Lambda can also pass `computeTier` in its `inputParameters`. When the input size cannot be read, the run uses the standard tier and logs a warning.
+-   **Choosing the tier.** A run's `computeTier` parameter forces a tier; `auto` (the default) leaves the choice to the input size. When the input size cannot be read, the run uses the standard tier and logs a warning.
 -   **Sizing.** vCPU and memory are configured per tier (see [Configuration Options](#configuration-options)). Deployment validates each pair against the AWS Fargate Linux task sizes (4 vCPU: 8–30 GiB in 1 GiB steps; 8 vCPU: 16–60 GiB in 4 GiB steps; 16 vCPU: 32–120 GiB in 8 GiB steps), because AWS Batch checks an override only when a job is submitted.
 -   **Time bounds.** The attempt durations are fixed. The pipeline's state machine times out after 4 hours and the registered pipeline's task timeout is 14,400 seconds, so neither gives up on a large-tier job that AWS Batch still allows to run.
 -   **Ephemeral storage.** Both tiers have 200 GiB, the AWS Fargate maximum; ephemeral storage is a property of the job definition and cannot be overridden per job.
