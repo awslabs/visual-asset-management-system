@@ -1064,11 +1064,14 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
 
     `workflowVersion` is the published workflow state machine version the run started on, and
     `workflowVersionCurrent` says whether the workflow still runs that version: true when it does,
-    false when the workflow has been redeployed since. False means the workflow and pipeline settings
-    read live (`workflowSystemConfig`, pipeline names and descriptions) may be newer than the ones the
-    run used; each step's `effectiveSystemConfig` is the snapshot it ran under. Both are null for a
-    run started before versions were recorded, and `workflowVersionCurrent` is also null when the
-    workflow records no current version.
+    false once its state machine has been redeployed since the run (its step list changed, or one of
+    its pipelines changed a setting the state machine encodes: execution type, target, callback mode,
+    timeouts, Deadline Cloud job settings). The flag does not track `workflowSystemConfig` or the
+    pipeline names and descriptions: they are read live and can change without a redeploy, so they
+    may differ from what the run used whatever the flag says; each step's `effectiveSystemConfig` is
+    the snapshot it ran under. Both are null for a run started before versions were recorded, and
+    `workflowVersionCurrent` is also null when the workflow no longer records a current version (for
+    example, the workflow was deleted).
 
     Metadata the run read arrives in two SEPARATE collections: `inputMetadata` (asset- and
     file-scope rows) and `inputDatabaseMetadata` (database-scope rows, which belong to no asset).

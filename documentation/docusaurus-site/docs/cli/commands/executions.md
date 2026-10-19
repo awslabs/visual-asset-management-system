@@ -78,9 +78,14 @@ vamscli execution details my-execution-id --json-output
 ```
 
 `Workflow version` names the published workflow state machine version the run started on, marked
-`(latest)` while the workflow still runs it or `(superseded)` once the workflow has been redeployed,
-in which case the live workflow and pipeline settings may be newer than the ones the run used. A run
-started before versions were recorded shows `not recorded`.
+`(latest)` while the workflow still runs it or `(superseded)` once the workflow's state machine has
+been redeployed since the run: its step list changed, or one of its pipelines changed a setting the
+state machine encodes (execution type, target, callback mode, timeouts, Deadline Cloud job settings).
+The marker does not track the workflow-level settings or the pipeline names and descriptions: they are
+read live and can change without a redeploy, so they may differ from what the run used whatever the
+marker says. A number with no marker means the workflow no longer records a current version (for
+example, the workflow was deleted), and a run started before versions were recorded shows
+`not recorded`.
 
 Asset and file metadata and database metadata are reported as separate row counts, each marked
 independently when the response returned only part of that collection, and the metadata sources the run

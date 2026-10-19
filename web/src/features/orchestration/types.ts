@@ -385,8 +385,9 @@ export interface ExecutionDetail extends Execution {
      */
     workflowVersion?: number | null;
     /**
-     * Whether the workflow still runs that version. False when it has been redeployed since, so the
-     * workflow and pipeline settings read live may be newer than the ones this run used; null when
+     * Whether the workflow still runs that version. False once its state machine has been redeployed
+     * since the run (its steps changed, or a pipeline changed a setting the state machine encodes);
+     * workflowSystemConfig and the pipeline names are read live and are not tracked by it. Null when
      * either version is unrecorded.
      */
     workflowVersionCurrent?: boolean | null;

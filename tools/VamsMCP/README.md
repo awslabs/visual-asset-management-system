@@ -184,8 +184,12 @@ derivation reads Step Functions history.
 
 `get_execution_details` also reports `workflowVersion`, the published workflow
 state machine version the run started on, and `workflowVersionCurrent`, false
-when the workflow has been redeployed since — the workflow and pipeline settings
-shown beside it may then be newer than the ones the run used. Both are null for a
+once the workflow's state machine has been redeployed since the run: its step
+list changed, or one of its pipelines changed a setting the state machine
+encodes (execution type, target, callback mode, timeouts, Deadline Cloud job
+settings). The flag does not track `workflowSystemConfig` or the pipeline names
+and descriptions, which are read live and can change without a redeploy; each
+step's `effectiveSystemConfig` is the snapshot it ran under. Both are null for a
 run started before versions were recorded.
 
 `get_execution_logs` full mode takes `limit` (default 100, server cap 1000),

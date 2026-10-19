@@ -1353,7 +1353,7 @@ describe("ExecutionDetailPage sub-processes", () => {
 
 /**
  * The header names the published workflow version a run started on, and badges a version the workflow
- * no longer runs: the settings the page reads live may then be newer than the ones the run used.
+ * no longer runs because its state machine has been redeployed since the run.
  */
 describe("ExecutionDetailPage workflow version", () => {
     let queryClient: QueryClient;

@@ -317,9 +317,11 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
     """Get an execution's full detail and traceability (pipelines, inputs, outputs, metadata).
 
     Workflow version is the published workflow state machine version the run started on: latest while
-    the workflow still runs that version, superseded when it has been redeployed since (so the live
-    workflow and pipeline settings may be newer than the ones the run used), not recorded for a run
-    started before versions were recorded.
+    the workflow still runs that version, superseded once its state machine has been redeployed (its
+    step list changed, or a pipeline changed a setting the state machine encodes), a bare number when
+    the workflow no longer records a current version, and not recorded for a run started before
+    versions were recorded. Workflow settings and pipeline names are read live and can change without
+    a redeploy, so they may differ from what the run used whatever the version shows.
 
     Asset/file metadata (inputMetadata) and database metadata (inputDatabaseMetadata) are separate
     collections, and each is reported as a row count here — use --json-output for the rows themselves.

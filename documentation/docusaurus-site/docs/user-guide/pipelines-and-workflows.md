@@ -509,10 +509,16 @@ workflow, trigger, start and stop times and duration — together with where it 
 output in the asset when several runs have written to the same place.
 
 The header also shows the **Workflow Version** the run started on: the published version of the
-workflow's state machine, the exact definition the run executed. It is marked **Superseded** once the
-workflow has been redeployed, for example after a change to one of its pipelines, which means the
-workflow settings on the **Settings** tab and the pipeline names, read as they stand now, may be newer
-than the ones the run used. A run started before versions were recorded shows **Not recorded**.
+workflow's state machine, the exact definition the run executed. It reads **(latest)** while the
+workflow still runs that version, and is marked **Superseded** once the workflow's state machine has
+been redeployed since the run: its steps changed, or one of its pipelines changed a setting the state
+machine encodes (execution type, target, callback mode, timeouts, Deadline Cloud job settings).
+Running the workflow again then runs the newer definition. The version does not track the workflow
+settings on the **Settings** tab or the pipeline names and descriptions: they are read as they stand
+now and can change without a redeploy, so they may differ from what the run used whatever the version
+shows. Each step's own settings on the **Settings** tab are the ones it ran under. A number with no
+marker means the workflow no longer records a current version (for example, the workflow was
+deleted), and a run started before versions were recorded shows **Not recorded**.
 
 The tabs below it break the run down:
 
