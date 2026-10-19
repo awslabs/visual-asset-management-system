@@ -400,8 +400,9 @@ def _run_stages(ctx):
 
 def run(definition, media, clients, *, work_dir=None, state=None, sleep=time.sleep):
     """Run every stage; returns "SUCCEEDED" or "FAILED". Every failure is reported on the inner token with
-    a code in `error` and a sentence in `cause`; a handled failure leaves the aux transcribe/ and
-    analysis/ objects in place for diagnosis."""
+    a code in `error` and a sentence in `cause`; the container itself deletes the aux prefix only on
+    success, and the pipeline's end step deletes whatever a failure leaves there once the token is
+    released, so the cause sentence and the container log are the diagnostics that outlive a run."""
     state = state if state is not None else RunState()
     state.clients = clients
     if work_dir is None:

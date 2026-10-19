@@ -18,7 +18,8 @@
  *   3. The state-machine role can describe and terminate the .sync job it submitted, or an abort stops
  *      the sub-execution and leaves the container running to its attempt bound.
  *   4. Each Lambda can fail and succeed the workflow callback token, holds the grants its handler's one
- *      job needs, and pipelineEnd holds nothing else.
+ *      job needs, and pipelineEnd holds only the scratch cleanup beside the release: a list on the
+ *      auxiliary bucket conditioned to this pipeline's prefix root and a delete on objects under it.
  *   5. Each Lambda's environment is exactly the registry's key set for its handler stem, the caps are
  *      String()-wrapped config constants, and every `os.environ[...]` read in the handler's own source is
  *      a key its builder sets — a missing key is a KeyError at import that no synth, lint or
@@ -46,7 +47,10 @@ import * as Service from "../../lib/helper/service-helper";
 import * as s3AssetBuckets from "../../lib/helper/s3AssetBuckets";
 import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
-import { resolveVideoSopBomBedrockModelId } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/lambdaBuilder/videoSopBomFunctions";
+import {
+    resolveVideoSopBomBedrockModelId,
+    VIDEO_SOP_BOM_AUX_PREFIX_ROOT,
+} from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/lambdaBuilder/videoSopBomFunctions";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
 
@@ -480,7 +484,7 @@ describe("the four pipeline Lambdas", () => {
         vamsExecuteVideoSopBomPipeline: ["lambda:InvokeFunction", "s3:GetObject*", "kms:Decrypt"],
         openPipeline: ["states:StartExecution", "events:PutEvents"],
         constructPipeline: ["s3:GetObject*", "s3:PutObject", "kms:Decrypt"],
-        pipelineEnd: [],
+        pipelineEnd: ["s3:ListBucket", "s3:DeleteObject"],
     };
 
     test.each(STEMS)("%s can fail and succeed the workflow callback token", (stem) => {
@@ -494,12 +498,52 @@ describe("the four pipeline Lambdas", () => {
         expect(actions).toContain("states:SendTaskSuccess");
         expect(actions).toEqual(expect.arrayContaining(MUST_GRANT[stem]));
         if (stem === "pipelineEnd") {
-            // Nothing beyond the token release and the SSM resource-name read every VAMS Lambda gets
-            // from globalLambdaEnvironmentsAndPermissions.
+            // Nothing beyond the token release, the scratch cleanup asserted below, and the SSM
+            // resource-name read every VAMS Lambda gets from globalLambdaEnvironmentsAndPermissions.
             expect(
-                actions.filter((a) => !a.startsWith("states:SendTask") && !a.startsWith("ssm:"))
+                actions.filter(
+                    (a) =>
+                        !a.startsWith("states:SendTask") &&
+                        !a.startsWith("ssm:") &&
+                        a !== "s3:ListBucket" &&
+                        a !== "s3:DeleteObject"
+                )
             ).toEqual([]);
         }
+    });
+
+    test("pipelineEnd's scratch cleanup is bounded to this pipeline's prefix root on the auxiliary bucket", () => {
+        // The handler deletes a failed run's `pipelines/genai-video-sop-bom/<executionId>/` objects. The
+        // list is conditioned to that root and the delete names objects under it only: a locator the
+        // handler's own guard let through could still not reach another pipeline's working files, the
+        // previews, or the viewer data that share the bucket. No kms grant: a delete needs none.
+        const statements = attachedStatements("pipelineEnd");
+        const list = statements.filter((s) => actionsOf(s).includes("s3:ListBucket"));
+        expect(list).toHaveLength(1);
+        expect(actionsOf(list[0])).toEqual(["s3:ListBucket"]);
+        expect(resourcesOf(list[0]).map(flatten)).toEqual([`<${auxBucketLogicalId}.Arn>`]);
+        expect(list[0].Condition).toEqual({
+            StringLike: { "s3:prefix": ["pipelines/genai-video-sop-bom/*"] },
+        });
+
+        const del = statements.filter((s) => actionsOf(s).includes("s3:DeleteObject"));
+        expect(del).toHaveLength(1);
+        expect(actionsOf(del[0])).toEqual(["s3:DeleteObject"]);
+        expect(resourcesOf(del[0]).map(flatten)).toEqual([
+            `<${auxBucketLogicalId}.Arn>/pipelines/genai-video-sop-bom/*`,
+        ]);
+        expect(del[0].Condition).toBeUndefined();
+
+        // The three spellings of the root agree: the role's condition, the storage stack's lifecycle
+        // rule and the handler's own refusal guard. A drift in any one silently un-scopes the others.
+        expect(VIDEO_SOP_BOM_AUX_PREFIX_ROOT).toBe("pipelines/genai-video-sop-bom/");
+        const handler = fs.readFileSync(path.join(LAMBDA_SOURCE_DIR, "pipelineEnd.py"), "utf-8");
+        expect(handler).toContain(`AUX_PREFIX_ROOT = "${VIDEO_SOP_BOM_AUX_PREFIX_ROOT}"`);
+        const storage = fs.readFileSync(
+            path.resolve(__dirname, "../../lib/nestedStacks/storage/storageBuilder-nestedStack.ts"),
+            "utf-8"
+        );
+        expect(storage).toContain(`prefix: "${VIDEO_SOP_BOM_AUX_PREFIX_ROOT}"`);
     });
 
     test("openPipeline starts THIS state machine and vamsExecute invokes THIS openPipeline", () => {

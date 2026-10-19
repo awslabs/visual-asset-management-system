@@ -351,6 +351,7 @@ export class VideoSopBomConstruct extends Construct {
         const pipelineEndFunction = buildPipelineEndFunction(
             this,
             props.lambdaCommonBaseLayer,
+            props.assetAuxiliaryBucket,
             props.config,
             props.vpc,
             props.pipelineSubnets

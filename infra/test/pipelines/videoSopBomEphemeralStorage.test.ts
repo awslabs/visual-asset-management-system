@@ -127,13 +127,20 @@ describe("video SOP/BOM Fargate ephemeral storage", () => {
 /**
  * The run's second scratch volume is the auxiliary bucket's `pipelines/<pipelineName>/<executionId>/`
  * prefix: the definition document, FLAC audio (gigabytes), Transcribe output and analysis artefacts. The
- * container deletes the audio once Transcribe is terminal and the whole prefix on success, and keeps the
- * transcript and analysis on a handled failure for diagnosis — but a crashed or aborted run deletes
- * nothing, and the bucket carried no expiration at all. This rule is the backstop for those leftovers.
+ * container deletes the audio once Transcribe is terminal and the whole prefix on success, and pipelineEnd
+ * deletes the prefix on a failed outcome — but a crashed run deletes nothing, and the bucket carried no
+ * expiration at all. The 30-day rule is the backstop for those leftovers.
  *
- * The rule covers THIS pipeline's prefix root only — `pipelines/genai-video-sop-bom/`, the folder the
+ * The bucket is VERSIONED, which changes what a delete does: it writes a delete marker and keeps the
+ * object as a noncurrent version. Measured on a sandbox after a smoke round, 23 successful runs that had
+ * "cleaned" their prefix had left 157 noncurrent versions (43 MB) behind, invisible to a current-version
+ * listing and untouched by `ExpirationInDays`, which acts on current versions only. The rule therefore
+ * also expires noncurrent versions, and a second rule removes the delete markers once no version remains —
+ * S3 rejects `ExpiredObjectDeleteMarker` in a rule that also carries an `Expiration` with days.
+ *
+ * Both rules cover THIS pipeline's prefix root only — `pipelines/genai-video-sop-bom/`, the folder the
  * bundle-registered workflow's execution writes under (executionRecords.aux_pipeline_prefix with the
- * pipeline id as its name) — and exists only when the pipeline is enabled, so a deployment without it
+ * pipeline id as its name) — and exist only when the pipeline is enabled, so a deployment without it
  * keeps the bucket's lifecycle exactly as it was.
  */
 describe("auxiliary bucket scratch-prefix expiry", () => {
@@ -148,6 +155,13 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         return ((buckets[0].properties as any).LifecycleConfiguration?.Rules ?? []) as any[];
     };
 
+    /** True when a rule expires anything: current versions, noncurrent versions, or delete markers. */
+    const expiresSomething = (rule: any): boolean =>
+        rule.ExpirationInDays !== undefined ||
+        rule.ExpirationDate !== undefined ||
+        rule.NoncurrentVersionExpiration !== undefined ||
+        rule.ExpiredObjectDeleteMarker !== undefined;
+
     test("[control] the pre-existing incomplete-multipart abort rule is still there", () => {
         // Without this, a change that dropped `lifecycleRules` entirely would make "no rule expires
         // outside the prefix" pass over an empty list.
@@ -157,21 +171,43 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         expect(abort).toHaveLength(1);
     });
 
-    test("expires objects under this pipeline's aux prefix after 30 days when the pipeline is enabled", () => {
+    test("[control] the auxiliary bucket is versioned, which is why a delete alone frees nothing", () => {
+        const buckets = synth
+            .ofType("AWS::S3::Bucket")
+            .filter((b) => /AssetAuxiliaryBucket/.test(b.logicalId));
+        expect((buckets[0].properties as any).VersioningConfiguration?.Status).toBe("Enabled");
+    });
+
+    test("expires objects under this pipeline's aux prefix after 30 days, and their noncurrent versions after 1, when the pipeline is enabled", () => {
         const expiry = auxBucketRules(synth).filter(
-            (rule) => rule.Prefix === VIDEO_SOP_BOM_AUX_PREFIX
+            (rule) =>
+                rule.Prefix === VIDEO_SOP_BOM_AUX_PREFIX && rule.ExpirationInDays !== undefined
         );
         expect(expiry).toHaveLength(1);
         expect(expiry[0].ExpirationInDays).toBe(30);
+        expect(expiry[0].NoncurrentVersionExpiration).toEqual({ NoncurrentDays: 1 });
         expect(expiry[0].Status).toBe("Enabled");
+        // A rule may not carry both an Expiration with days and ExpiredObjectDeleteMarker.
+        expect(expiry[0].ExpiredObjectDeleteMarker).toBeUndefined();
+    });
+
+    test("removes the delete markers left under this pipeline's aux prefix once no version remains", () => {
+        const markers = auxBucketRules(synth).filter(
+            (rule) =>
+                rule.Prefix === VIDEO_SOP_BOM_AUX_PREFIX && rule.ExpiredObjectDeleteMarker === true
+        );
+        expect(markers).toHaveLength(1);
+        expect(markers[0].Status).toBe("Enabled");
+        expect(markers[0].ExpirationInDays).toBeUndefined();
+        expect(markers[0].NoncurrentVersionExpiration).toBeUndefined();
     });
 
     test("expires nothing outside this pipeline's aux prefix", () => {
         // Viewer data, other pipelines' working files and the non-versioned auxiliary objects live under
-        // other prefixes and are not this pipeline's to expire.
+        // other prefixes and are not this pipeline's to expire — current versions, noncurrent versions
+        // or delete markers alike.
         const unscoped = auxBucketRules(synth).filter(
-            (rule) =>
-                rule.ExpirationInDays !== undefined && rule.Prefix !== VIDEO_SOP_BOM_AUX_PREFIX
+            (rule) => expiresSomething(rule) && rule.Prefix !== VIDEO_SOP_BOM_AUX_PREFIX
         );
         expect(unscoped).toEqual([]);
     });
@@ -218,9 +254,7 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         });
 
         test("no expiration rule is added", () => {
-            const expirations = auxBucketRules(disabledSynth).filter(
-                (rule) => rule.ExpirationInDays !== undefined
-            );
+            const expirations = auxBucketRules(disabledSynth).filter(expiresSomething);
             expect(expirations).toEqual([]);
         });
     });

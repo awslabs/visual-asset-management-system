@@ -21,10 +21,22 @@ sfn = boto3.client(
     region_name=os.environ["AWS_REGION"],
     config=retry_config
 )
+s3 = boto3.client(
+    's3',
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
+)
 
 # The container's SendTaskSuccess payload names itself; a job that exited 0 without calling back
 # returns Batch's job description instead and must not read as success.
 REPORTER_MARKER = "video_sop_bom_pipeline"
+# The run's scratch prefix on the auxiliary bucket is `pipelines/<pipelineId>/<executionId>/`; the
+# cleanup refuses any locator that does not sit under this pipeline's root, so a malformed event
+# cannot aim the delete at another prefix.
+AUX_PREFIX_ROOT = "pipelines/genai-video-sop-bom/"
+DEFINITION_FILENAME = "definition.json"
+# One list page; delete_objects takes at most 1000 keys per call.
+DELETE_BATCH = 1000
 ERROR_PIPELINE = "VideoSopBomPipelineError"
 KNOWN_ERROR_CODES = frozenset({
     "VideoSopBomInputRejected", "VideoSopBomLimitExceeded", "VideoSopBomTranscribeFailed",
@@ -112,6 +124,66 @@ def failure_for(error_block):
     return ERROR_PIPELINE, text[:MAX_CAUSE_CHARS]
 
 
+def aux_prefix_location(event):
+    """(bucket, prefix) of the run's auxiliary scratch prefix, or None.
+
+    constructPipeline hands the state machine `definitionCommand` = ["--definition-s3-uri",
+    "s3://<auxBucket>/<auxTempPrefix>definition.json"], and that is the one value on the event that
+    names the prefix — the manifest fields do not survive the task's outputPath replacement. The
+    prefix is accepted only when it sits under this pipeline's root and names an execution folder,
+    so a missing, foreign or truncated locator yields None rather than a delete somewhere else."""
+    command = event.get("definitionCommand")
+    if not isinstance(command, list) or len(command) < 2 or command[0] != "--definition-s3-uri":
+        return None
+    uri = str(command[1])
+    if not uri.startswith("s3://"):
+        return None
+    bucket, _, key = uri[len("s3://"):].partition("/")
+    if not bucket or not key.endswith("/" + DEFINITION_FILENAME):
+        return None
+    prefix = key[:-len(DEFINITION_FILENAME)]
+    execution_folder = prefix[len(AUX_PREFIX_ROOT):]
+    if not prefix.startswith(AUX_PREFIX_ROOT) or not execution_folder.strip("/") \
+            or "/" in execution_folder.rstrip("/"):
+        return None
+    return bucket, prefix
+
+
+def delete_aux_prefix(event):
+    """Delete the run's scratch objects on a failed or unreported outcome. The container deletes
+    the prefix itself on success; a rejection before the job started, a handled container failure,
+    an unreported exit or an aborted job leave the definition document, extracted audio, Transcribe
+    output and analysis artefacts behind until the bucket's lifecycle rule expires them. Returns the
+    number of keys deleted. Best-effort: a failure here is logged and never delays the token
+    release, which is this handler's one job."""
+    location = aux_prefix_location(event)
+    if location is None:
+        logger.warning("No auxiliary scratch prefix on the event; nothing to clean up")
+        return 0
+    bucket, prefix = location
+    deleted = 0
+    try:
+        token = None
+        while True:
+            kwargs = {"Bucket": bucket, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            page = s3.list_objects_v2(**kwargs)
+            keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+            for start in range(0, len(keys), DELETE_BATCH):
+                chunk = keys[start:start + DELETE_BATCH]
+                s3.delete_objects(Bucket=bucket, Delete={"Objects": chunk, "Quiet": True})
+                deleted += len(chunk)
+            if not page.get("IsTruncated"):
+                break
+            token = page.get("NextContinuationToken")
+    except Exception as e:
+        logger.error(f"Auxiliary scratch cleanup failed after {deleted} objects: {e}")
+        return deleted
+    logger.info(f"Auxiliary scratch cleanup deleted {deleted} objects")
+    return deleted
+
+
 def _send(callback, **kwargs):
     """Run a task-token callback; an already-reported token is logged and treated as done, any
     other client error propagates so the state machine records it."""
@@ -129,7 +201,8 @@ def _send(callback, **kwargs):
 def lambda_handler(event, context):
     """
     PipelineEnd - Video SOP/BOM Extraction
-    Releases the external task token with the run's outcome and returns the event unchanged.
+    Releases the external task token with the run's outcome, deletes the run's auxiliary scratch
+    prefix on a failed outcome, and returns the event unchanged.
     """
 
     logger.info("Event", event=event)
@@ -141,6 +214,7 @@ def lambda_handler(event, context):
         logger.error(f"Pipeline failure: {code}: {cause}")
         if external_sfn_task_token:
             _send(sfn.send_task_failure, taskToken=external_sfn_task_token, error=code, cause=cause)
+        delete_aux_prefix(event)
         return event
 
     batch_result = event.get("batchResult")
@@ -160,4 +234,5 @@ def lambda_handler(event, context):
     if external_sfn_task_token:
         _send(sfn.send_task_failure, taskToken=external_sfn_task_token, error=ERROR_PIPELINE,
               cause=cause[:MAX_CAUSE_CHARS])
+    delete_aux_prefix(event)
     return event

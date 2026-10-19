@@ -424,7 +424,8 @@ class TestRunRejections:
         assert bedrock.calls == []
         assert len(transcribe.start_calls) == 1, "the rejection is decided after transcription, from the transcript"
         keys = s3.keys("aux-bucket")
-        assert any("/transcribe/" in key for key in keys), "the transcript stays in the aux prefix for diagnosis"
+        assert any("/transcribe/" in key for key in keys), \
+            "the container leaves the transcript in the aux prefix; pipelineEnd deletes the prefix once the token is released"
         assert not any("/audio/" in key for key in keys)
 
     def test_duration_cap_is_a_limit_rejection_and_nothing_is_ingested(self, tmp_path, monkeypatch, vsb_task_token):

@@ -15,6 +15,7 @@ import * as cdk from "aws-cdk-lib";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
+import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
@@ -33,6 +34,13 @@ const LAMBDA_CODE_PATH = path.join(
     __dirname,
     "../../../../../../../backendPipelines/genAi/videoSopBom/lambda"
 );
+
+/**
+ * Root of this pipeline's scratch prefixes on the auxiliary bucket: `pipelines/<pipelineId>/`, under
+ * which `executionRecords.aux_pipeline_prefix` places one `<executionId>/` folder per run. The same
+ * string bounds the storage stack's lifecycle expiry and pipelineEnd's own refusal of a foreign locator.
+ */
+export const VIDEO_SOP_BOM_AUX_PREFIX_ROOT = "pipelines/genai-video-sop-bom/";
 
 /**
  * The Bedrock model id the pipeline invokes, read from `app.pipelines.useGenAiVideoSopBom.bedrockModelId`.
@@ -196,6 +204,7 @@ export function buildOpenPipelineFunction(
 export function buildPipelineEndFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
+    assetAuxiliaryBucket: s3.IBucket,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -222,7 +231,9 @@ export function buildPipelineEndFunction(
         environment: {},
     });
 
-    // pipelineEnd reads only the state machine's event; its one AWS call is the token release.
+    // pipelineEnd reads the state machine's event; its AWS calls are the token release and, on a
+    // failed outcome, the deletion of the run's scratch objects under this pipeline's auxiliary
+    // prefix (the container deletes them itself on success).
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     suppressCdkNagLambda(fun);
@@ -233,6 +244,42 @@ export function buildPipelineEndFunction(
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
             resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
         })
+    );
+
+    // Scratch cleanup: list only this pipeline's prefix root, delete only objects under it. The
+    // handler additionally refuses a locator outside that root, so the two bounds agree.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["s3:ListBucket"],
+            resources: [assetAuxiliaryBucket.bucketArn],
+            conditions: {
+                StringLike: { "s3:prefix": [`${VIDEO_SOP_BOM_AUX_PREFIX_ROOT}*`] },
+            },
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["s3:DeleteObject"],
+            resources: [assetAuxiliaryBucket.arnForObjects(`${VIDEO_SOP_BOM_AUX_PREFIX_ROOT}*`)],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Object ARNs under one named bucket and this pipeline's own key prefix: Amazon S3 " +
+                    "expresses object access only as the bucket ARN plus a key wildcard, and the " +
+                    "execution folder a run deletes is created per run.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::<.*Bucket.*\\.Arn>/pipelines/genai-video-sop-bom/\\*$/g",
+                    },
+                ],
+            },
+        ],
+        true
     );
 
     return fun;
