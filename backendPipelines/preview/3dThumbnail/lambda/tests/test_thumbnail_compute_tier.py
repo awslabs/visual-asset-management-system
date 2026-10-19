@@ -151,6 +151,85 @@ class TestThumbnailTierOverride:
         assert computeTier.select_compute_tier(s3, _event(), THRESHOLD) == "large"
 
 
+REMOTE_REGION = "eu-west-1"
+REMOTE_INPUT_URI = "s3://remote-bkt/xidM/test/scan.e57"
+
+
+def _cross_region_head_error():
+    """What a deployment-Region client gets from HeadObject on a bucket in another Region: a HEAD
+    response carries no body, so the redirect surfaces as a bare 400."""
+    return Exception("An error occurred (400) when calling the HeadObject operation: Bad Request")
+
+
+def _clients_by_region(clients):
+    """A stand-in for manifestHelper.s3_client_for_region that returns the double for each Region."""
+    return MagicMock(side_effect=lambda region="": clients[region])
+
+
+@pytest.mark.unit
+class TestThumbnailTierReadsEachBucketInItsRegion:
+    """An asset bucket may be in another Region than this function. The event names the input and
+    output buckets' Regions (inputBucketRegion / outputBucketRegion, resolved from the manifest by
+    vamsExecute); the HeadObject that sizes the input, and the read of the input configuration, are
+    signed with manifestHelper's client for the Region of the bucket they address, the way the other
+    pipeline lambdas address asset buckets. A deployment-Region client fails on a bucket in another
+    Region, which would put every cross-Region input on the standard tier."""
+
+    def test_a_cross_region_input_is_sized_with_a_client_for_its_region(self):
+        default = _s3(head_error=_cross_region_head_error(), configuration={})
+        remote = _s3(size=THRESHOLD)
+        regional = _clients_by_region({REMOTE_REGION: remote})
+        event = _event(inputS3AssetFilePath=REMOTE_INPUT_URI, inputBucketRegion=REMOTE_REGION)
+        with patch.object(computeTier.manifestHelper, "s3_client_for_region", regional):
+            assert computeTier.select_compute_tier(default, event, THRESHOLD) == "large"
+        remote.head_object.assert_called_once_with(Bucket="remote-bkt", Key="xidM/test/scan.e57")
+        default.head_object.assert_not_called()
+        regional.assert_called_once_with(REMOTE_REGION)
+
+    def test_the_configuration_in_a_cross_region_bucket_is_read_in_its_region(self):
+        default = _s3(size=10, configuration=None)
+        remote = _s3(size=10, configuration={"computeTier": "large"})
+        regional = _clients_by_region({REMOTE_REGION: remote})
+        event = _event(inputConfigurationS3Location="s3://run-bkt/pipelines/run/config.json",
+                       outputS3AssetFilesPath="s3://run-bkt/pipelines/p1/MJOB/output/E1/files/",
+                       outputBucketRegion=REMOTE_REGION)
+        with patch.object(computeTier.manifestHelper, "s3_client_for_region", regional):
+            assert computeTier.select_compute_tier(default, event, THRESHOLD) == "large"
+        remote.get_object.assert_called_once_with(Bucket="run-bkt", Key="pipelines/run/config.json")
+        default.get_object.assert_not_called()
+
+    def test_deployment_region_buckets_use_the_default_client(self):
+        """An empty Region (a deployment-Region bucket, or an event from an older vamsExecute) builds
+        no regional client."""
+        default = _s3(size=THRESHOLD, configuration={})
+        regional = MagicMock()
+        for event in (_event(), _event(inputBucketRegion="", outputBucketRegion="")):
+            default.reset_mock()
+            with patch.object(computeTier.manifestHelper, "s3_client_for_region", regional):
+                assert computeTier.select_compute_tier(default, event, THRESHOLD) == "large"
+            default.head_object.assert_called_once_with(Bucket="abkt", Key="xidM/test/scan.e57")
+            default.get_object.assert_called_once()
+        regional.assert_not_called()
+
+    def test_a_regional_client_that_cannot_be_built_runs_standard(self):
+        default = _s3(size=THRESHOLD, configuration={})
+        regional = MagicMock(side_effect=Exception("Provided region_name 'x y' doesn't match"))
+        event = _event(inputS3AssetFilePath=REMOTE_INPUT_URI, inputBucketRegion="x y")
+        with patch.object(computeTier.manifestHelper, "s3_client_for_region", regional):
+            assert computeTier.select_compute_tier(default, event, THRESHOLD) == "standard"
+        default.head_object.assert_not_called()
+
+    def test_bucket_regions_maps_the_input_and_output_buckets(self):
+        event = _event(inputS3AssetFilePath=REMOTE_INPUT_URI, inputBucketRegion=REMOTE_REGION,
+                       outputS3AssetFilesPath="s3://out-bkt/pipelines/p1/files/",
+                       outputBucketRegion="us-west-2")
+        assert computeTier.bucket_regions(event) == {"remote-bkt": REMOTE_REGION, "out-bkt": "us-west-2"}
+        assert computeTier.bucket_regions(_event(outputBucketRegion="us-west-2")) == {}
+        assert computeTier.bucket_regions(_event(
+            inputBucketRegion=None, outputS3AssetFilesPath="s3://out-bkt/files/", outputBucketRegion=7)) == {}
+        assert computeTier.bucket_regions(None) == {}
+
+
 @pytest.mark.unit
 class TestThumbnailTierThresholdEnv:
     @pytest.mark.parametrize("raw, expected", [
@@ -268,6 +347,20 @@ class TestThumbnailOpenPipelineTier:
         mod = self._load_module(threshold=THRESHOLD)
         sfn_input, _ = self._run(mod, _s3(head_error=Exception("AccessDenied"), configuration={}))
         assert sfn_input["computeTier"] == "standard"
+
+    def test_a_large_input_in_a_cross_region_bucket_runs_large(self):
+        mod = self._load_module(threshold=THRESHOLD)
+        remote = _s3(size=THRESHOLD)
+        regional = _clients_by_region({REMOTE_REGION: remote})
+        event = dict(self._event(), inputS3AssetFilePath=REMOTE_INPUT_URI, inputBucketRegion=REMOTE_REGION)
+        with patch.object(mod.computeTier.manifestHelper, "s3_client_for_region", regional):
+            sfn_input, detail = self._run(
+                mod, _s3(head_error=_cross_region_head_error(), configuration={}), event)
+        assert sfn_input["computeTier"] == "large"
+        assert sfn_input["inputBucketRegion"] == REMOTE_REGION
+        remote.head_object.assert_called_once_with(Bucket="remote-bkt", Key="xidM/test/scan.e57")
+        assert [log["stageName"] for log in detail["logs"] if log["sourceType"] == "batch"] == [
+            "Preview3dThumbnailLargeBatchJob"]
 
     def test_an_unsupported_extension_is_rejected_before_any_s3_call(self):
         mod = self._load_module(threshold=THRESHOLD)

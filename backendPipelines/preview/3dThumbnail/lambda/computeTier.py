@@ -9,6 +9,10 @@ tier and a large tier, each with fixed vCPU and memory overrides, behind a Choic
 large, otherwise standard. The run's input configuration (the template's `computeTier` field) forces
 either tier; `auto` leaves the choice to the size.
 
+An asset bucket may be in another Region than this function: the HeadObject on the input and the read
+of the input configuration each use the client for the Region of the bucket they address, from the
+event's `inputBucketRegion` / `outputBucketRegion`.
+
 Selection never fails a run. An input whose size cannot be read runs on the standard tier."""
 
 import os
@@ -56,6 +60,33 @@ def requested_tier(parameters):
     return ""
 
 
+def bucket_regions(event):
+    """Bucket name -> Region for the input and output asset buckets `event` names, from the
+    `inputBucketRegion` / `outputBucketRegion` the vamsExecute Lambda resolved from the manifest (the
+    same map constructPipeline hands the container). A bucket in the deployment Region (an empty
+    Region, or an event from an older Lambda) is left out, as is a value that is not a string."""
+    event = event or {}
+    regions = {}
+    for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
+                                 ("outputS3AssetFilesPath", "outputBucketRegion")):
+        uri, region = event.get(path_key), event.get(region_key)
+        if not isinstance(uri, str) or not isinstance(region, str) or not region:
+            continue
+        bucket, _ = manifestHelper.parse_s3_uri(uri)
+        if bucket:
+            regions[bucket] = region
+    return regions
+
+
+def s3_client_for(s3_client, regions, s3_uri):
+    """The client for the object `s3_uri` names: manifestHelper's client for its bucket's Region when
+    `regions` maps the bucket, else `s3_client` (the deployment Region). A bucket in another Region
+    answers only requests signed for that Region."""
+    bucket, _ = manifestHelper.parse_s3_uri(s3_uri)
+    region = regions.get(bucket, "") if bucket else ""
+    return manifestHelper.s3_client_for_region(region) if region else s3_client
+
+
 def input_size_bytes(s3_client, input_s3_uri):
     """The input object's size from HeadObject. Raises when the URI names no object or the call fails."""
     bucket, key = manifestHelper.parse_s3_uri(input_s3_uri)
@@ -66,11 +97,14 @@ def input_size_bytes(s3_client, input_s3_uri):
 
 def select_compute_tier(s3_client, event, threshold_bytes):
     """The tier for the run `event` describes: the tier its input configuration forces, else the one
-    the input's size falls in."""
+    the input's size falls in. Each object is read with the client for its bucket's Region
+    (`bucket_regions`); `s3_client` serves the buckets in the deployment Region."""
     event = event or {}
+    regions = bucket_regions(event)
+    configuration_location = event.get("inputConfigurationS3Location", "")
     try:
         configuration = manifestHelper.fetch_input_configuration(
-            s3_client, event.get("inputConfigurationS3Location", ""))
+            s3_client_for(s3_client, regions, configuration_location), configuration_location)
     except Exception as e:
         logger.warning(f"Input configuration unreadable for compute tier selection; "
                        f"choosing by input size: {e}")
@@ -81,8 +115,9 @@ def select_compute_tier(s3_client, event, threshold_bytes):
         logger.info(f"Compute tier {tier}: set by the input configuration")
         return tier
 
+    input_path = event.get("inputS3AssetFilePath", "")
     try:
-        size = input_size_bytes(s3_client, event.get("inputS3AssetFilePath", ""))
+        size = input_size_bytes(s3_client_for(s3_client, regions, input_path), input_path)
     except Exception as e:
         logger.warning(f"Could not read the input size; using the {TIER_STANDARD} compute tier: {e}")
         return TIER_STANDARD
