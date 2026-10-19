@@ -498,6 +498,37 @@ const Field: React.FC<{ label: string; children: React.ReactNode; mono?: boolean
     </div>
 );
 
+/**
+ * The published workflow version a run started on. A version the workflow no longer runs is badged
+ * "Superseded": the workflow and pipeline settings this page reads live may then be newer than the
+ * ones the run used.
+ */
+const WorkflowVersionValue: React.FC<{
+    version?: number | null;
+    current?: boolean | null;
+}> = ({ version, current }) => {
+    if (version === null || version === undefined) {
+        return <>Not recorded</>;
+    }
+    return (
+        <span className="inline-flex items-center gap-2">
+            <span className="font-mono">{version}</span>
+            {current === true && <span className="text-text-secondary">(current)</span>}
+            {current === false && (
+                <>
+                    <span className="orch-outline px-2 py-0.5 text-xs font-bold bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300 rounded">
+                        Superseded
+                    </span>
+                    <InfoTooltip
+                        label="About superseded versions"
+                        text="The workflow has been redeployed since this run started. Workflow and pipeline settings read live may be newer than the ones this run used; each step's recorded settings are on the Settings tab."
+                    />
+                </>
+            )}
+        </span>
+    );
+};
+
 const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }) => {
     // Sub-processes and their stages are resolved only on request; this page is the one view that
     // renders them. The poll cadence is the hook's own.
@@ -655,6 +686,16 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                     <Field label="Workflow ID" mono>
                         {execution.workflowId}
                     </Field>
+                    {/* Absent only from a service that does not report it; null is a run started
+                        before versions were recorded. */}
+                    {execution.workflowVersion !== undefined && (
+                        <Field label="Workflow Version">
+                            <WorkflowVersionValue
+                                version={execution.workflowVersion}
+                                current={execution.workflowVersionCurrent}
+                            />
+                        </Field>
+                    )}
                     <Field label="Database ID" mono>
                         {execution.workflowDatabaseId}
                     </Field>

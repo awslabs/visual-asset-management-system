@@ -379,6 +379,17 @@ export interface ExecutionDetail extends Execution {
     workflowSystemConfig?: Record<string, any>;
     workflowName?: string;
     workflowDescription?: string;
+    /**
+     * The published workflow state machine version this execution started on; null for a run started
+     * before versions were recorded.
+     */
+    workflowVersion?: number | null;
+    /**
+     * Whether the workflow still runs that version. False when it has been redeployed since, so the
+     * workflow and pipeline settings read live may be newer than the ones this run used; null when
+     * either version is unrecorded.
+     */
+    workflowVersionCurrent?: boolean | null;
     pipelines?: ExecutionDetailPipeline[];
     inputFiles?: any[];
     inputMetadata?: any[];
