@@ -31,6 +31,17 @@ from . import cad_step_naming, cancellation, guardrail as guardrail_module, repo
 # Amazon S3 and Step Functions for the length of a run.
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
+# An asset bucket may be in another Region than this container. The definition's ``bucketRegions``
+# (bucket name -> Region; constructPipeline builds it from the manifest's bucket Regions) names it, and
+# every request for a named bucket is signed with a client for that Region; a bucket the map leaves out
+# (one in the deployment Region, any bucket of a definition from an older Lambda) uses the run's default
+# client. Per-Region clients keep the adaptive retry mode and address the regional us-east-1 endpoint,
+# which an interface endpoint's private DNS covers where the global s3.amazonaws.com name is not.
+regional_retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                               s3={'us_east_1_regional_endpoint': 'regional'})
+_regional_clients = {}
+_regional_clients_lock = threading.Lock()
+
 logger = logging.getLogger("cad_step_agent")
 TASK_TOKEN_ENV = "TASK_TOKEN"  # nosec B105 - environment variable name, not a secret
 DEFAULT_MAX_RUN_SECONDS = 3600
@@ -77,6 +88,36 @@ def require_live_token(sfn, task_token):
 def _clients():
     return (boto3.client("s3", config=retry_config),
             boto3.client("stepfunctions", config=retry_config))
+
+
+def regional_s3_client(region):
+    """The S3 client for ``region``, built once per Region and reused by later runs in the session."""
+    with _regional_clients_lock:
+        client = _regional_clients.get(region)
+        if client is None:
+            client = boto3.client("s3", region_name=region, config=regional_retry_config)
+            _regional_clients[region] = client
+        return client
+
+
+def bucket_regions(definition):
+    """The definition's bucket name -> Region map, with empty names and Regions dropped; ``{}`` when the
+    definition carries none (a definition built by an older Lambda)."""
+    regions = definition.get("bucketRegions")
+    if not isinstance(regions, dict):
+        return {}
+    return {name: region for name, region in regions.items()
+            if isinstance(name, str) and name and isinstance(region, str) and region}
+
+
+def bucket_client(s3, definition, bucket_name):
+    """The S3 client for ``bucket_name``: one for the Region the definition's ``bucketRegions`` names for
+    it, or ``s3`` (the run's default client) when the map leaves the bucket out or names the default
+    client's own Region."""
+    region = bucket_regions(definition).get(bucket_name or "", "")
+    if not region or region == getattr(getattr(s3, "meta", None), "region_name", None):
+        return s3
+    return regional_s3_client(region)
 
 
 def parse_definition(raw):
@@ -169,30 +210,36 @@ def derive_outcome(state, definition, model_label, run_id, wall_seconds):
 
 
 def upload_outputs(s3, definition, outcome, step_path):
+    """Write the STEP file, its report, the metadata and attribute documents and the results-folder
+    mirror. Each write uses the client for its bucket's Region (``bucket_client``); in a manifest-driven
+    run all of them are in the one output bucket."""
     bucket = definition["outputFiles"]["bucketName"]
     key = output_key(definition)
-    s3.upload_file(step_path, bucket, key)
+    out_s3 = bucket_client(s3, definition, bucket)
+    out_s3.upload_file(step_path, bucket, key)
     logger.info("uploaded STEP s3://%s/%s", bucket, key)
     report_key = f"{key[: -len(definition['outputFiles']['fileName'])]}{report.report_file_name(definition['outputFiles']['fileName'])}"
     report_body = report.markdown_report(outcome).encode("utf-8")
-    s3.put_object(Bucket=bucket, Key=report_key, Body=report_body, ContentType="text/markdown")
+    out_s3.put_object(Bucket=bucket, Key=report_key, Body=report_body, ContentType="text/markdown")
     meta_key = metadata_key(definition)
     if meta_key:
         meta_bucket = definition["outputMetadata"]["bucketName"]
-        s3.put_object(Bucket=meta_bucket, Key=meta_key,
-                      Body=json.dumps(report.metadata_document(outcome)).encode("utf-8"),
-                      ContentType="application/json")
-        s3.put_object(Bucket=meta_bucket, Key=attribute_key(definition),
-                      Body=json.dumps(report.attribute_document(outcome)).encode("utf-8"),
-                      ContentType="application/json")
+        meta_s3 = bucket_client(s3, definition, meta_bucket)
+        meta_s3.put_object(Bucket=meta_bucket, Key=meta_key,
+                           Body=json.dumps(report.metadata_document(outcome)).encode("utf-8"),
+                           ContentType="application/json")
+        meta_s3.put_object(Bucket=meta_bucket, Key=attribute_key(definition),
+                           Body=json.dumps(report.attribute_document(outcome)).encode("utf-8"),
+                           ContentType="application/json")
     results = results_prefix(definition)
     if results:
         results_bucket, prefix = results
-        s3.put_object(Bucket=results_bucket, Key=f"{prefix}{report.RESULT_FILE_NAME}",
-                      Body=json.dumps(report.result_document(outcome), indent=2).encode("utf-8"),
-                      ContentType="application/json")
-        s3.put_object(Bucket=results_bucket, Key=f"{prefix}{report.RESULT_REPORT_FILE_NAME}", Body=report_body,
-                      ContentType="text/markdown")
+        results_s3 = bucket_client(s3, definition, results_bucket)
+        results_s3.put_object(Bucket=results_bucket, Key=f"{prefix}{report.RESULT_FILE_NAME}",
+                              Body=json.dumps(report.result_document(outcome), indent=2).encode("utf-8"),
+                              ContentType="application/json")
+        results_s3.put_object(Bucket=results_bucket, Key=f"{prefix}{report.RESULT_REPORT_FILE_NAME}",
+                              Body=report_body, ContentType="text/markdown")
     else:
         logger.info("the definition names no results folder; the structured result is not written")
     return key
@@ -203,7 +250,8 @@ def _download_input(s3, definition, work_root):
     if not input_file:
         return None
     local = os.path.join(work_root, INPUT_FILE_NAME)
-    s3.download_file(input_file["bucketName"], input_file["objectKey"], local)
+    bucket_client(s3, definition, input_file["bucketName"]).download_file(
+        input_file["bucketName"], input_file["objectKey"], local)
     return local
 
 

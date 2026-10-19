@@ -686,6 +686,11 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     the upstream `main.py`'s process (`VAMS_BUCKET_REGIONS`), where the launcher replaces a bare
     `boto3.client('s3')` with `vams_utils.aws.s3.region_routing_client()`; Isaac Lab carries the map in
     its job config and `openPipeline` reads the asset bucket with `manifestHelper.s3_client_for_region`.
+    The GenAI CAD STEP agent's one image serves its AgentCore runtime (outside the VPC) and its Fargate
+    runtime (private subnets): `cad_step_agent/run.py` reads the definition's map per run
+    (`bucket_regions`, `bucket_client`, `regional_s3_client`) and sends the input read and every output
+    write -- STEP file, report, metadata and attribute documents, results folder -- through the client
+    for that bucket's Region; its `vamsExecute` is in the Region-consuming class.
     The five NVIDIA containers (Cosmos 3, Predict v2.5, Reason, Transfer, GR00T) run the AWS CLI rather
     than boto3: their `manifest_io.py` carries the registry (`register_bucket_regions`, `bucket_region`,
     `s3_region_args`), `__main__.py` registers the definition's map right after loading it, and every

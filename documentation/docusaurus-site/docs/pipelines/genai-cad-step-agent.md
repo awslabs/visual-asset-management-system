@@ -95,6 +95,8 @@ The `constructPipeline` Lambda validates the run's settings and resolves the out
 
 One container image serves both runtimes; the AWS CodeBuild project builds the platform the selected runtime needs. The deployment waits for that build: the image-build custom resource completes only when CodeBuild has pushed the content-addressed tag, and the AgentCore Runtime (or the Batch job definition) is created after it. A first deploy, and any deploy that changes the container sources, is therefore longer by the build's duration (typically 10-20 minutes). The AgentCore Runtime accepts an image of at most 2048 MB (a fixed service quota); the CadQuery/Open CASCADE dependencies make this image large, so a change that adds dependencies should be checked against that cap (`aws ecr describe-images` reports `imageSizeInBytes`).
 
+An asset whose bucket is in another Region of the deployment's partition is supported on both runtimes: the definition carries each asset bucket's Region from the workflow manifest (`bucketRegions`), and the container reads the input file and writes every output with an Amazon S3 client for that bucket's Region ([External S3 setup](../deployment/external-s3-setup.md#pipelines-and-cross-region-inputs)).
+
 ## Configuration
 
 Enable the pipeline in `infra/config/config.json`:

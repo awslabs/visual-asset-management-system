@@ -1180,6 +1180,128 @@ VALID = cad_io.StepSummary(valid=True, solid_count=1, face_count=6, edge_count=1
                            bounding_box_mm=[0, 0, 0, 10, 10, 10], volume_mm3=1000.0)
 
 
+def _cross_region_definition(mode="modify"):
+    """A definition whose input bucket and output bucket are each in a Region other than the default's."""
+    definition = _definition(mode)
+    if definition["inputFile"]:
+        definition["inputFile"]["bucketName"] = "in-bkt"
+    definition["bucketRegions"] = {"in-bkt": "eu-west-1", "abkt": "eu-central-1"}
+    return definition
+
+
+class _RecordingS3(_FakeS3):
+    """A stub S3 client that also records which buckets it downloaded from."""
+
+    def __init__(self, region):
+        super().__init__()
+        self.meta = types.SimpleNamespace(region_name=region)
+        self.downloads = []
+
+    def download_file(self, bucket, key, local):
+        self.downloads.append((bucket, key))
+        super().download_file(bucket, key, local)
+
+
+@pytest.fixture
+def regional(monkeypatch):
+    """Per-Region stub clients in place of real ones; ``regional[region]`` is the client built for it."""
+    clients = {}
+
+    def factory(region):
+        return clients.setdefault(region, _RecordingS3(region))
+    monkeypatch.setattr(run, "regional_s3_client", factory)
+    return clients
+
+
+@pytest.mark.unit
+class TestBucketRegions:
+    """The definition's ``bucketRegions`` (bucket name -> Region) decides which S3 client signs each request:
+    a listed bucket gets a client for its Region, any other bucket the run's default client."""
+
+    def test_an_unlisted_bucket_and_a_definition_without_a_map_use_the_default_client(self):
+        default = _RecordingS3("us-east-1")
+        assert run.bucket_client(default, _definition(), "abkt") is default
+        listed_elsewhere = dict(_definition(), bucketRegions={"other-bkt": "eu-west-1"})
+        assert run.bucket_client(default, listed_elsewhere, "abkt") is default
+        assert run.bucket_client(default, listed_elsewhere, "") is default
+        assert run.bucket_client(default, listed_elsewhere, None) is default
+
+    def test_a_malformed_map_is_ignored_rather_than_failing_the_run(self):
+        for value in (None, "eu-west-1", ["abkt"], {"": "eu-west-1", "abkt": "", "bkt": None, "b2": 7}):
+            assert run.bucket_regions(dict(_definition(), bucketRegions=value)) == {}
+
+    def test_a_bucket_in_the_default_clients_region_keeps_the_default_client(self, regional):
+        default = _RecordingS3("eu-central-1")
+        assert run.bucket_client(default, _cross_region_definition(), "abkt") is default
+        assert regional == {}
+
+    def test_a_listed_bucket_gets_one_adaptive_regional_client_per_region(self, monkeypatch):
+        monkeypatch.setattr(run, "_regional_clients", {})
+        client = run.regional_s3_client("eu-west-1")
+        assert client is run.regional_s3_client("eu-west-1")
+        assert client.meta.region_name == "eu-west-1"
+        assert client.meta.endpoint_url == "https://s3.eu-west-1.amazonaws.com"
+        retries = client.meta.config.retries
+        # botocore normalises max_attempts=5 into total_max_attempts=6 (the first try plus 5 retries)
+        assert (retries["mode"], retries["total_max_attempts"]) == ("adaptive", 6)
+        assert client.meta.config.s3 == {"us_east_1_regional_endpoint": "regional"}
+        # us-east-1 resolves to its regional hostname, which an interface endpoint's private DNS covers.
+        assert run.regional_s3_client("us-east-1").meta.endpoint_url == "https://s3.us-east-1.amazonaws.com"
+        assert run.bucket_client(_RecordingS3("us-east-1"), _cross_region_definition(), "in-bkt") is client
+
+    def test_the_input_is_read_with_the_client_for_its_buckets_region(self, regional, tmp_path):
+        default = _RecordingS3("us-east-1")
+        local = run._download_input(default, _cross_region_definition(), str(tmp_path))
+        assert os.path.exists(local)
+        assert regional["eu-west-1"].downloads == [("in-bkt", "xasset1/sub/part.stp")]
+        assert default.downloads == []
+
+    def test_every_output_write_uses_the_client_for_the_output_buckets_region(self, regional, tmp_path):
+        default = _RecordingS3("us-east-1")
+        step = tmp_path / "output.step"
+        step.write_text("ISO-10303-21;")
+        run.upload_outputs(default, _cross_region_definition(), _outcome(), str(step))
+        written = {key for (bucket, key) in regional["eu-central-1"].objects if bucket == "abkt"}
+        prefix = "pipelines/cad/job/output/E1/results/"
+        assert written == {
+            "xasset1/sub/part.stp", "xasset1/sub/part.stp.cad-agent-report.md",
+            "xasset1/metadata/sub/part.stp.metadata.json", "xasset1/metadata/sub/part.stp.attribute.json",
+            prefix + "cad-agent-result.json", prefix + "cad-agent-report.md"}
+        assert default.objects == {}
+        assert "eu-west-1" not in regional  # the input bucket's client is not touched by the upload
+
+    @pytest.mark.parametrize("transport", ["batch-environment-json", "agentcore-payload-object"])
+    def test_a_cross_region_run_reads_and_writes_through_the_regional_clients_on_both_runtimes(
+            self, regional, monkeypatch, transport):
+        # AWS Batch hands run_job the definition as the JSON string of CAD_AGENT_DEFINITION; AgentCore hands
+        # it the payload's object. Either way the map travels inside the definition.
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        definition = _cross_region_definition()
+        raw = json.dumps(definition) if transport == "batch-environment-json" else definition
+        default, sfn = _RecordingS3("us-east-1"), MagicMock()
+        with patch.object(cad_io, "inspect_step", return_value=VALID):
+            payload = run.run_job(raw, "inner-token", s3=default, sfn=sfn, guardrail=_FakeGuardrail(),
+                                  agent_factory=_agent_that(finish_args=("Added holes", [], "succeeded",
+                                                                         ["holes: expected 4 - measured 4 - ok"])))
+        assert payload["status"] == "succeeded"
+        assert regional["eu-west-1"].downloads == [("in-bkt", "xasset1/sub/part.stp")]
+        assert ("abkt", "xasset1/sub/part.stp") in regional["eu-central-1"].objects
+        assert ("abkt", "pipelines/cad/job/output/E1/results/cad-agent-result.json") in regional["eu-central-1"].objects
+        assert default.objects == {} and default.downloads == []
+        sfn.send_task_success.assert_called_once()
+
+    def test_a_generate_run_writes_through_the_output_buckets_client(self, regional, tmp_path):
+        definition = _cross_region_definition("generate")
+        assert run._download_input(_RecordingS3("us-east-1"), definition, str(tmp_path)) is None
+        step = tmp_path / "output.step"
+        step.write_text("ISO-10303-21;")
+        default = _RecordingS3("us-east-1")
+        run.upload_outputs(default, definition, _outcome(output_file_name=definition["outputFiles"]["fileName"]),
+                           str(step))
+        assert ("abkt", "xasset1/board-20260922-185500.step") in regional["eu-central-1"].objects
+        assert default.objects == {}
+
+
 @pytest.mark.unit
 class TestRunJob:
     def test_successful_modify_run_uploads_step_report_metadata_and_reports_success(self, monkeypatch):
