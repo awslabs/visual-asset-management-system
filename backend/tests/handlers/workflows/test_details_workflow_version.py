@@ -87,6 +87,19 @@ class TestWorkflowVersionFields:
         assert details["workflowVersion"] == 3
         assert details["workflowVersionCurrent"] is None
 
+    @pytest.mark.parametrize("partition, region", [
+        ("aws-us-gov", "us-gov-west-1"),
+        ("aws-eusc", "eusc-de-east-1"),
+    ])
+    def test_a_version_arn_outside_the_commercial_partition_reports_its_number(self, partition,
+                                                                               region):
+        version_arn = ":".join(
+            ["arn", partition, "states", region, ACCOUNT, "stateMachine", "vams-wf-abc", "3"])
+        details, _read, _ddb, _sfn = _assemble({"workflowVersionArn": version_arn},
+                                               {"workflowVersionArn": version_arn})
+        assert details["workflowVersion"] == 3
+        assert details["workflowVersionCurrent"] is True
+
     @pytest.mark.parametrize("stored", [
         MACHINE,                                    # unqualified state machine ARN
         f"{MACHINE}:prod",                          # alias, not a version
