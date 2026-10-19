@@ -190,6 +190,7 @@ The workflow orchestrator generates specific S3 paths for each pipeline step. Un
 | `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.*`) | Yes       |
 | `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images (whole-asset representative image)   | Yes       |
 | `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                         | Yes       |
+| `outputS3AssetResultsPath`             | Asset bucket     | Result files recorded as the execution's output results         | Yes       |
 | `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data    | No        |
 
 :::note[Output Path Distinction]

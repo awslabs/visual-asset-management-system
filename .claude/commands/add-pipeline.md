@@ -48,6 +48,7 @@ Each pipeline step reads these paths from its manifest (`manifestHelper.resolve_
 | `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.  |
 | `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.     |
 | `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below. |
+| `outputS3AssetResultsPath`             | Asset     | Result files recorded as the execution's output results (not on the asset).  |
 | `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.           |
 
 **Metadata / attribute output naming.** The process-output step decides what a JSON file under

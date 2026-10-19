@@ -75,6 +75,7 @@ Each pipeline step reads the S3 paths below from its manifest, which `vamsExecut
 | `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned. |
 | `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.    |
 | `outputS3AssetMetadataPath`            | Asset     | Metadata output. Versioned.                                                 |
+| `outputS3AssetResultsPath`             | Asset     | Result files recorded as the execution's output results (not on the asset). |
 | `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.          |
 
 **Key distinction:** `outputS3AssetFilesPath` is for file-level outputs, including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images representing the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.

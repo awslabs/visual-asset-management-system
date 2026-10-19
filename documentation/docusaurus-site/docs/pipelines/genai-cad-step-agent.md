@@ -39,11 +39,30 @@ A name that VAMS does not accept is refused before any compute starts, and the e
 
 ## Outputs
 
-Every run that produced a valid STEP file writes three things to the asset:
+Every run that produced a valid STEP file writes four things to the asset:
 
 -   **The STEP file**, at the input file's asset-relative path (modify) or the asset root (generate).
 -   **A Markdown report** beside it, named `<file>.cad-agent-report.md`: the instruction, each attempt's outcome, the final geometry summary (solid count, bounding box, volume, features — all measured on the file's solids; the PMI annotation planes and curves an AP242 export carries are counted, not measured, and are dropped from the output file), the web sources consulted, and every requested element the agent could not complete.
 -   **File metadata** on the STEP file: `cadAgentStatus` (`succeeded` or `partial`), `cadAgentSummary`, `cadAgentUnresolved` (JSON list), `cadAgentSources` (JSON list), `cadAgentModel`, `cadAgentAttempts`, `cadAgentGeometry`, and `cadAgentRunId`. These are queryable like any other file metadata.
+-   **File attributes** on the STEP file: the measured figures as separate values that a search can filter on, listed in the table below.
+
+| Attribute                                | Value                    | Meaning                                                                                           |
+| :--------------------------------------- | :----------------------- | :------------------------------------------------------------------------------------------------ |
+| `cadAgentStatus`                         | `succeeded` or `partial` | The run's outcome (the same value as the `cadAgentStatus` metadata key).                          |
+| `cadAgentMode`                           | `generate` or `modify`   | The mode the run used.                                                                            |
+| `cadVolumeMm3`                           | decimal                  | Volume of the file's solids, in mm³.                                                              |
+| `cadBboxXMm`, `cadBboxYMm`, `cadBboxZMm` | decimal                  | Size of the solids' bounding box along X, Y and Z, in mm.                                         |
+| `cadSolidCount`                          | integer                  | Number of solids in the file.                                                                     |
+| `cadHoleCount`                           | integer                  | Number of holes the inspection counted, through and blind.                                        |
+| `cadFilletCount`                         | integer                  | Number of fillet-like faces the inspection counted (convex partial cylinders and tori).           |
+| `cadUnits`                               | `mm`                     | The unit of the figures above. The inspection measures in millimetres whatever the file declares. |
+
+VAMS file attributes are string-typed, so each figure is written as a decimal string rounded to three places, for example `59363.843` or `100`. A figure the run did not measure is left out rather than written empty: a run whose feature summary failed carries no `cadHoleCount` or `cadFilletCount`.
+
+The run also writes two files to the execution's results folder, which the execution's detail page lists under **Output Results** and shows as text:
+
+-   `cad-agent-result.json`: the outcome as one JSON object — `status`, `mode`, `outputFile`, `model`, `runId`, `attempts`, `unresolvedCount`, `summary`, `assumptions` (the items of the summary's "Assumptions:" line), `unresolved`, `checks` (the agent's per-feature checks), `sources` and `geometry` (the measured geometry summary). The lists are bounded the way the file metadata is (at most 25 items and 2000 characters per list), so the document always fits the row the execution record stores.
+-   `cad-agent-report.md`: the same Markdown report as the one beside the STEP file.
 
 A run is `partial` when the agent produced a valid STEP file but recorded elements it could not complete or verify — a reference design it could not find online, a stated dimension it could not meet — or completed the work on assumptions about figures the instruction specifies or implies (a named product's hole pattern taken from memory); `cadAgentUnresolved` names each one. A value the instruction leaves open and the agent chose (a wall thickness, a fillet radius) is listed under "Assumptions" in `cadAgentSummary` and does not by itself make a run `partial`. A run that produces no valid STEP file within its attempt or time budget fails and writes no report; the execution record carries the reason and the attempt count. The execution's success payload carries the outcome summary only, never the scripts' output.
 
@@ -60,7 +79,7 @@ flowchart LR
     F -->|fargate| I[executeBatchJob Lambda] --> J[AWS Batch on Fargate]
     H --> K[Strands agent + CadQuery sandbox]
     J --> K
-    K --> L[Amazon S3: STEP, report, metadata]
+    K --> L[Amazon S3: STEP, report, metadata, attributes, result]
     K --> M[Task token callback]
     M --> N[pipelineEnd Lambda]
 ```
