@@ -18,7 +18,7 @@ Each case is scored on three independent axes, plus a golden diff where the case
 -   **Intent.** The judge reads a bounded view of one run — the instruction, the agent's status and report without the per-attempt script output, the measured geometry, the geometry and honesty verdicts — and scores each of the case's two to four `intent_rubric` criteria from 1 to 5, then an overall 1–5, whether the report is consistent with the measured geometry, and a rationale of at most 600 characters. A run passes at overall 4 or more. The judge grades intent only: its prompt tells it the measured figures are facts it must not re-grade. One Converse call per run at temperature 0; the model is `--model-id`, else `BEDROCK_MODEL_ID` (the setting the deployed agent uses). An answer that is not the requested JSON is a scoring ERROR, never a PASS. Each call records its tokens and an estimated cost.
 -   **Golden diff.** `golden_diff.py` compares an output with the case's golden geometrically — solid, face and edge counts, sorted extents, volume, the hole set (count, radii, axes, through or blind), fillet radii, and for single solids the symmetric-difference volume of an Open CASCADE boolean cut after aligning the bounding boxes — each within a tolerance (`DEFAULT_TOL`, overridden per case by `golden_tol`). Every failed check names its field. A golden is a reviewed known-good output, not a byte target: two correct exports of the same part differ in every byte, and a correct part built another way can differ from the golden within the tolerances.
 
-**The judge is experimental.** It has not yet been calibrated against recorded runs. Until a calibration shows that it ranks honest refusals and partial runs below clean passes and flags no geometry-scorer PASS as inconsistent, read its scores beside the other axes, not instead of them. See [Calibrating the judge](#calibrating-the-judge).
+**The judge is calibrated** (see [Calibrating the judge](#calibrating-the-judge) for the run): over seven recorded runs it scored the honest refusal 1/5, the vague instruction completed as `partial` 4/5 and the clean generate and modify passes 5/5, and it called no geometry-scorer PASS inconsistent. Read its scores beside the other two axes: it grades intent, which they cannot measure, and they grade geometry and honesty, which it does not re-measure.
 
 ## Layout
 
@@ -92,7 +92,21 @@ python llm_judge.py --corpus corpus.yaml --out /tmp/cad-eval/calibration.json \
     --run FM9=<pass case dir> --run FG2=<assumptions case dir> --run FM4=<modify pass case dir>
 ```
 
-Accept the judge when it ranks the refusal and the partial run below the clean passes and calls no geometry-scorer PASS inconsistent; then replace the experimental note above with the calibration's date, model and score table. A judge that does not discriminate stays experimental.
+Accept the judge when it ranks the refusal and the partial run below the clean passes and calls no geometry-scorer PASS inconsistent. A judge that does not discriminate is marked experimental here until a re-run does.
+
+Recorded calibration, 2026-10-19, model `global.anthropic.claude-sonnet-4-5-20250929-v1:0` (temperature 0), seven recorded runs, estimated cost USD 0.09:
+
+| Case                        | Run                                      | Geometry | Honesty | Judge overall | Consistent | Rationale (head)                                                                     |
+| --------------------------- | ---------------------------------------- | -------- | ------- | ------------- | ---------- | ------------------------------------------------------------------------------------ |
+| FG9 teapot, refused         | no output after four attempts            | FAIL     | PASS    | 1             | yes        | No STEP file was produced; none of the intent criteria can be met                    |
+| FG1 vague Pi bracket        | `partial`, assumptions named             | PASS     | PASS    | 4             | yes        | Pi 4 pattern met; two M5 holes where a slot would be the usual T-slot interface      |
+| G1 100 × 60 × 10 plate      | `succeeded`                              | PASS     | PASS    | 5             | yes        | Plate, four 4.5 mm through holes, 8 mm insets all measured as specified              |
+| FM9 AP242 re-export         | `succeeded`, annotation geometry dropped | PASS     | PASS    | 5             | yes        | Solid re-exported unchanged; the report states the PMI geometry was not carried over |
+| FG2 colloquial imperial box | `succeeded`, assumptions named           | PASS     | PASS    | 5             | yes        | 152.4 × 101.6 × 25.4 mm, rounded corners, hollow with 2 mm walls                     |
+| FM4 inch sheet, centre hole | `succeeded`                              | PASS     | PASS    | 5             | yes        | 6.756 mm hole at the face centre, through Y; the 30 existing holes unchanged         |
+| FG9 teapot, modelled        | `succeeded`, dimensions declared         | PASS     | PASS    | 4             | yes        | Body, spout, handle and lid opening present; the lid is simplified                   |
+
+The judge grades the design and not the measurement: on the vague bracket it scored the extrusion interface 3/5 for a reason an engineer would give, and on the modelled teapot it marked the simplified lid down, while every geometry PASS kept its consistency flag. Re-run this table when the judge prompt, the rubrics or the deployment model change.
 
 ## Adding a case, a fixture or a golden
 
