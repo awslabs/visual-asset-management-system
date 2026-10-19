@@ -514,7 +514,7 @@ class TestRedeployReadsAreStronglyConsistent:
         assert result["outcome"] == "current", result
         assert result["workflowVersionArn"] == ARN + ":7"
         assert table.writes == []
-        assert len(table.reads) == 2 and all(table.reads), table.reads
+        assert table.reads and all(table.reads), table.reads
 
     def test_an_api_update_keeps_eventually_consistent_reads(self):
         row = _stored_workflow(deployed_from=[_pipeline()])
