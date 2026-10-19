@@ -171,6 +171,10 @@ def lambda_handler(event, context):
             "executingRequestContext": data.get('executingRequestContext', ''),
             "assetId": resolved['assetId'],
             "databaseId": resolved['databaseId'],
+            # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+            # is in the deployment Region), so the Batch container addresses each bucket in its Region.
+            "inputBucketRegion": resolved['inputBucketRegion'],
+            "outputBucketRegion": resolved['outputBucketRegion'],
             "cosmosPrompt": cosmos_prompt,
             "cosmosNegativePrompt": cosmos_negative_prompt,
             "cosmosSeed": cosmos_seed,

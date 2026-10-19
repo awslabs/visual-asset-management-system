@@ -28,6 +28,7 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.indexing import AssetDocumentModel, AssetIndexRequest, IndexOperationResponse
 from common.indexing.geoLocation import build_geo_location
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
+from common.s3 import bucket_region_fields
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -355,7 +356,8 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details for {bucket_id}: {e}")

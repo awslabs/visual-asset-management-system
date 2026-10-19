@@ -23,7 +23,7 @@ from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items
-from common.s3 import is_object_version_archived, list_all_object_versions
+from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
     VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
@@ -60,7 +60,7 @@ dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
 sns_client = boto3.client('sns', config=retry_config)
-s3 = boto3.client('s3', config=retry_config)
+s3 = region_routing_s3_client()
 logger = safeLogger(service_name="AssetService")
 
 # Worker pool size for per-object S3 operations (archive/unarchive loops);
@@ -183,7 +183,8 @@ def get_default_bucket_details(bucketId):
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
