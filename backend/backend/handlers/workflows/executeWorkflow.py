@@ -318,14 +318,19 @@ def _asset_bucket_details(bucket_id):
 # Record fetch
 #######################
 
+# The workflow and pipeline rows are read strongly consistent: the launch-time deployment check
+# compares the workflow's stored fingerprints with these pipeline records, so both must reflect a
+# pipeline save or a background redeploy that completed before this request.
 def _get_workflow(workflow_database_id, workflow_id):
     return _workflow_table().get_item(
-        Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item")
+        Key={"databaseId": workflow_database_id, "workflowId": workflow_id},
+        ConsistentRead=True).get("Item")
 
 
 def _get_pipeline(pipeline_database_id, pipeline_id):
     return _pipeline_table().get_item(
-        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id}).get("Item")
+        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id},
+        ConsistentRead=True).get("Item")
 
 
 def _get_asset(database_id, asset_id):

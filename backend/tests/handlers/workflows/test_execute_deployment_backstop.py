@@ -16,6 +16,7 @@ of each pipeline's settings, and a launch compares those with the pipeline recor
 
 import io
 import json
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -57,9 +58,13 @@ def _redeploy_response(outcome, pipelines=None, version_arn=NEW_VERSION_ARN, rea
     return {"Payload": io.BytesIO(json.dumps(payload).encode("utf-8"))}
 
 
-def _launch(workflow, pipeline, redeploy=None, workflow_service="t-workflow-service"):
+def _launch(workflow, pipeline, redeploy=None, workflow_service="t-workflow-service", tables=None):
     """Run the execute handler with `workflow` as stored and `pipeline` as the live record. Returns
     (response, sfn mock, the redeploy invoke calls, every item put to any table).
+
+    With `tables` = (workflow table, pipeline table), the record fetches run unpatched against those
+    tables instead of returning `workflow` and `pipeline`, so a test sees the read arguments the
+    handler sends.
 
     The handler's Lambda client also reaches the metadata service, so invokes are routed by function
     name: only the workflow service gets the scripted redeploy response."""
@@ -74,14 +79,21 @@ def _launch(workflow, pipeline, redeploy=None, workflow_service="t-workflow-serv
         return {"Payload": io.BytesIO(json.dumps(
             {"statusCode": 200, "body": json.dumps({"metadata": []})}).encode("utf-8"))}
 
-    with patch(f"{MOD}._get_workflow", return_value=dict(workflow)), \
-            p["get_pipeline"], p["get_asset"], p["default_bucket"], p["asset_bucket"], \
-            p["exists"], p["enforcer"], p["claims"], \
-            patch(f"{MOD}._running_execution_exists", return_value=False), \
-            patch(f"{MOD}.workflow_service_function", workflow_service), \
-            patch(f"{MOD}.lambda_client") as m_lambda, \
-            patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
-            patch(f"{MOD}.dynamodb") as m_dynamo:
+    with ExitStack() as stack:
+        if tables is None:
+            stack.enter_context(patch(f"{MOD}._get_workflow", return_value=dict(workflow)))
+            stack.enter_context(p["get_pipeline"])
+        else:
+            stack.enter_context(patch(f"{MOD}._workflow_table", return_value=tables[0]))
+            stack.enter_context(patch(f"{MOD}._pipeline_table", return_value=tables[1]))
+        for name in ("get_asset", "default_bucket", "asset_bucket", "exists", "enforcer", "claims"):
+            stack.enter_context(p[name])
+        stack.enter_context(patch(f"{MOD}._running_execution_exists", return_value=False))
+        stack.enter_context(patch(f"{MOD}.workflow_service_function", workflow_service))
+        m_lambda = stack.enter_context(patch(f"{MOD}.lambda_client"))
+        stack.enter_context(patch(f"{MOD}.s3c"))
+        m_sfn = stack.enter_context(patch(f"{MOD}.sfn_client"))
+        m_dynamo = stack.enter_context(patch(f"{MOD}.dynamodb"))
         m_lambda.invoke.side_effect = _invoke
         m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
         m_dynamo.Table.return_value = table
@@ -150,6 +162,58 @@ class TestStaleDeploymentIsRedeployedFirst:
             workflow, live, redeploy=_redeploy_response("current", [live]))
         assert resp["statusCode"] == 200, resp
         assert m_sfn.start_execution.call_args.kwargs["stateMachineArn"] == NEW_VERSION_ARN
+
+
+class _ReplicaLagTable:
+    """One row keyed on (databaseId, `sort_key`). An eventually consistent get_item returns
+    `previous`, the row a replica that has not caught up still holds; a ConsistentRead returns
+    `latest`. `reads` records the ConsistentRead flag of every get_item."""
+
+    def __init__(self, sort_key, previous, latest):
+        self.sort_key = sort_key
+        self.previous = previous
+        self.latest = latest
+        self.reads = []
+
+    def get_item(self, Key, ConsistentRead=False):
+        self.reads.append(ConsistentRead)
+        row = self.latest if ConsistentRead else self.previous
+        if Key == {"databaseId": row["databaseId"], self.sort_key: row[self.sort_key]}:
+            return {"Item": dict(row)}
+        return {}
+
+
+@pytest.mark.unit
+class TestLaunchReadsTheCurrentRecords:
+    """A launch right after a pipeline save or a background redeploy compares the records as they
+    now stand. An eventually consistent read can return the rows from before that write, which match
+    each other and would start the run on the version built from the previous settings."""
+
+    def test_a_launch_after_a_pipeline_save_redeploys_instead_of_running_the_previous_settings(self):
+        deployed = with_current_deployment(tew._WORKFLOW, [tew._PIPELINE], version_arn=OLD_VERSION_ARN)
+        live = _changed_pipeline()
+        workflows = _ReplicaLagTable("workflowId", deployed, deployed)
+        pipelines = _ReplicaLagTable("pipelineId", tew._PIPELINE, live)
+        resp, m_sfn, redeploys, _items = _launch(
+            deployed, live, redeploy=_redeploy_response("redeployed", [live]),
+            tables=(workflows, pipelines))
+        assert resp["statusCode"] == 200, resp
+        assert redeploys, "the launch compared a replica's previous pipeline row and did not redeploy"
+        assert m_sfn.start_execution.call_args.kwargs["stateMachineArn"] == NEW_VERSION_ARN
+        assert pipelines.reads and all(pipelines.reads), pipelines.reads
+
+    def test_a_launch_after_a_background_redeploy_starts_on_the_new_version(self):
+        live = _changed_pipeline()
+        previous = with_current_deployment(tew._WORKFLOW, [tew._PIPELINE], version_arn=OLD_VERSION_ARN)
+        redeployed = with_current_deployment(tew._WORKFLOW, [live], version_arn=NEW_VERSION_ARN)
+        workflows = _ReplicaLagTable("workflowId", previous, redeployed)
+        pipelines = _ReplicaLagTable("pipelineId", tew._PIPELINE, live)
+        resp, m_sfn, redeploys, _items = _launch(redeployed, live, tables=(workflows, pipelines))
+        assert resp["statusCode"] == 200, resp
+        assert redeploys == []
+        assert m_sfn.start_execution.call_args.kwargs["stateMachineArn"] == NEW_VERSION_ARN
+        assert workflows.reads and all(workflows.reads), workflows.reads
+        assert pipelines.reads and all(pipelines.reads), pipelines.reads
 
 
 @pytest.mark.unit
