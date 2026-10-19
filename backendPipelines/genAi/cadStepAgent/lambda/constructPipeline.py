@@ -75,6 +75,21 @@ def _split_s3_uri(field_name, s3_uri):
     return bucket, key
 
 
+def bucket_regions(event) -> dict:
+    """Bucket name -> Region for the asset buckets this job reads and writes, from the Regions the
+    vamsExecute Lambda resolved from the manifest. The container signs each bucket's requests with a
+    client for that Region. A bucket in the deployment Region (an empty Region, or an event from an
+    older Lambda) is left out: requests for it use the container's default client, as do the
+    auxiliary bucket's. A generate run has no input file, so only the output bucket can appear."""
+    regions = {}
+    for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
+                                 ("outputS3AssetFilesPath", "outputBucketRegion")):
+        uri, region = event.get(path_key) or "", event.get(region_key) or ""
+        if uri.startswith("s3://") and region:
+            regions[uri[len("s3://"):].split("/", 1)[0]] = region
+    return regions
+
+
 def agent_settings(input_configuration):
     """The validated agent settings of a run, from the resolved template configuration.
 
@@ -212,6 +227,9 @@ def _build_execution_params(event):
         # skips the structured-result mirror.
         "outputResults": _dir_of(output_s3_asset_results_uri),
         "auxiliary": _dir_of(aux_uri),
+        # Bucket name -> Region for the input and output buckets outside the deployment Region. The
+        # metadata and results prefixes sit in the manifest's one output bucket, so they share its entry.
+        "bucketRegions": bucket_regions(event),
         "assetId": asset_id,
         "databaseId": event.get("databaseId", "") or "",
         "agent": {

@@ -71,6 +71,9 @@ def _resolved(with_input=True):
         "inputMetadataS3Location": "s3://run/meta.json",
         "inputConfigurationS3Location": "s3://run/config.json",
         "orchestrationEventPrefix": "vams.test.execution.E1.pipeline.P1",
+        # resolve_inputs always sets both; "" is the deployment Region.
+        "inputBucketRegion": "",
+        "outputBucketRegion": "",
     }
 
 

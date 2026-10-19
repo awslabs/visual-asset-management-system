@@ -149,6 +149,10 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "assetId": event.get('assetId', ''),
         "databaseId": event.get('databaseId', ''),
+        # Regions of the input and output asset buckets (empty = deployment Region); constructPipeline
+        # hands them to the container, which signs each bucket's requests for its Region.
+        "inputBucketRegion": event.get('inputBucketRegion', ''),
+        "outputBucketRegion": event.get('outputBucketRegion', ''),
         # Metadata + config S3 locations only; consumers read content from S3
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
