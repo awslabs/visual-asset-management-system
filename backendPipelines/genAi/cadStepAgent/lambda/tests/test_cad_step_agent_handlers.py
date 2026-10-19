@@ -133,6 +133,35 @@ class TestVamsExecute:
 
 
 # ---------------------------------------------------------------------------------------------------
+# manifestHelper (vendored): the results output prefix
+# ---------------------------------------------------------------------------------------------------
+def _manifest_helper():
+    sys.modules.pop("manifestHelper", None)
+    spec = importlib.util.spec_from_file_location("cad_step_agent_manifest_helper_undertest",
+                                                  os.path.join(_LAMBDA_DIR, "manifestHelper.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.unit
+class TestManifestResultsPath:
+    def test_the_results_prefix_is_resolved_beside_the_other_output_paths(self):
+        manifest = {"inputFiles": [], "outputs": {"bucket": "run", "files": "p/out/E1/files/",
+                                                  "metadata": "p/out/E1/metadata/", "results": "p/out/E1/results/"}}
+        resolved = _manifest_helper().resolve_inputs({}, manifest)
+        assert resolved["outputS3AssetResultsPath"] == "s3://run/p/out/E1/results/"
+        assert resolved["outputS3AssetMetadataPath"] == "s3://run/p/out/E1/metadata/"
+
+    def test_a_manifest_without_a_results_prefix_and_a_legacy_payload_both_resolve(self):
+        helper = _manifest_helper()
+        older = helper.resolve_inputs({}, {"outputs": {"bucket": "run", "files": "p/out/E1/files/"}})
+        assert older["outputS3AssetResultsPath"] == ""
+        legacy = helper.resolve_inputs({"outputS3AssetResultsPath": "s3://run/legacy/results/"})
+        assert legacy["outputS3AssetResultsPath"] == "s3://run/legacy/results/"
+
+
+# ---------------------------------------------------------------------------------------------------
 # openPipeline
 # ---------------------------------------------------------------------------------------------------
 def _open_event(file_uri):
