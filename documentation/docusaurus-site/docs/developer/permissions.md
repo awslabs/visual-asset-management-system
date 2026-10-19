@@ -10,7 +10,7 @@ For an introduction to how the authorization system works, see [Permissions Mode
 
 The following patterns cover the most common access configurations. VAMS provides pre-built permission templates for each of these patterns.
 
-The valid fields per object type, the criteria operators, the permissions, and the permission types can be retrieved from `GET /auth/constraints/permissionObjects` or `vamscli role constraint permission-objects`. This is the same mapping the backend validates constraints against.
+The valid fields per object type, the criteria operators, the permissions, and the permission types can be retrieved from `GET /auth/constraints/permissionObjects` or `vamscli role constraint permission-objects`. This is the same mapping the backend validates constraints against. The object types it returns include any the deployment registers in its add-on or fork constants files; a template for such a type stays with the deployment that registers it, since the shipped templates cover the core types only ([Extending VAMS in a Fork](customizing-vams.md#4-permissions) has one).
 
 ### Database administrator
 

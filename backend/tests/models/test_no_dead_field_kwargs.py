@@ -15,6 +15,7 @@ across several lines is covered the same as a single-line one.
 """
 
 import importlib
+import os
 import pkgutil
 
 import pytest
@@ -67,19 +68,29 @@ NO_TRIM_FREE_TEXT = {
 _DEFAULT_BUCKET_ID = "11111111-2222-3333-4444-555555555555"
 
 
+def _module_key(module_info):
+    """`assetsV3`, `addon/physnaViewer` or `assets/__init__`: the module's file below models/."""
+    key = module_info.name[len("models."):].replace(".", "/")
+    return f"{key}/__init__" if module_info.ispkg else key
+
+
 def _model_classes():
     """Every model class declared in `backend/models/`, as (module, class) pairs."""
-    for module_info in pkgutil.iter_modules(models.__path__):
+    # walk_packages recurses into the subpackages (models/addon/, models/custom/, models/assets/),
+    # so a model declared below the top level is held to the same rule. The key is the module's
+    # path below models/ (`addon/physnaViewer`), so `models/<key>.py` names the declaring file.
+    for module_info in pkgutil.walk_packages(models.__path__, prefix="models."):
         try:
-            module = importlib.import_module(f"models.{module_info.name}")
+            module = importlib.import_module(module_info.name)
         except Exception:
             # A model module that cannot import under test env is covered by its own suite.
             continue
+        key = _module_key(module_info)
         for name in dir(module):
             candidate = getattr(module, name)
             fields = getattr(candidate, "__fields__", None)
             if isinstance(fields, dict) and getattr(candidate, "__module__", "") == module.__name__:
-                yield module_info.name, name, candidate
+                yield key, name, candidate
 
 
 def _swallowed(kwarg):
@@ -307,7 +318,7 @@ class TestNameAndIdFieldsTrimWhitespace:
         assert (copy.destinationAssetId, copy.destinationDatabaseId) == ("part.glb", "mydb")
 
     def test_the_physna_viewer_database_id_and_asset_id_trim(self):
-        from models.physnaViewer import PhysnaViewerRequestModel
+        from models.addon.physnaViewer import PhysnaViewerRequestModel
 
         model = PhysnaViewerRequestModel(
             databaseId=" mydb ", assetId=" part.glb ", relativePath="/part.glb")
@@ -327,7 +338,7 @@ class TestNameAndIdFieldsTrimWhitespace:
             CreateAssetRequestModel,
             InitializeUploadRequestModel,
         )
-        from models.physnaViewer import PhysnaViewerRequestModel
+        from models.addon.physnaViewer import PhysnaViewerRequestModel
 
         assert CreateAssetRequestModel(**_asset_body(assetId=" part.glb")).assetId == "part.glb"
         assert InitializeUploadRequestModel(
@@ -407,15 +418,21 @@ class TestTrimmingDoesNotReachBeyondNamesAndIds:
 
     def test_an_s3_key_keeps_its_surrounding_whitespace(self):
         """A trailing space is a legitimate S3 key character, so trimming a path would retarget
-        the operation at a different object."""
+        the operation at a different object. The source of a move or copy names an object that
+        already exists and is passed through verbatim; the destination names a key the request
+        creates, and since issue #420 a trailing dot or space there is REFUSED, never trimmed (a
+        trimmed destination would silently create a different object than the one asked for)."""
+        from aws_lambda_powertools.utilities.parser import ValidationError
         from models.assetsV3 import CopyFileRequestModel, MoveFileRequestModel
 
         for model_cls in (CopyFileRequestModel, MoveFileRequestModel):
-            model = model_cls(sourcePath="/a/b ", destinationPath="/a/c ")
-            assert (model.sourcePath, model.destinationPath) == ("/a/b ", "/a/c ")
+            model = model_cls(sourcePath="/a/b ", destinationPath="/a/c")
+            assert (model.sourcePath, model.destinationPath) == ("/a/b ", "/a/c")
+            with pytest.raises(ValidationError):
+                model_cls(sourcePath="/a/b", destinationPath="/a/c ")
 
     def test_the_physna_relative_path_keeps_its_surrounding_whitespace(self):
-        from models.physnaViewer import PhysnaViewerRequestModel
+        from models.addon.physnaViewer import PhysnaViewerRequestModel
 
         model = PhysnaViewerRequestModel(
             databaseId="mydb", assetId="part.glb", relativePath="/part.glb ")
@@ -554,3 +571,37 @@ class TestFreeTextTrimsOnTheWriteFieldsThatDeclaredIt:
         from models.tag import CreateTagRequestModel
 
         assert CreateTagRequestModel(**_tag_body(description=123)).description == "123"
+
+
+@pytest.mark.unit
+class TestTheModelWalkReachesEverySubpackage:
+    """`_model_classes()` is what puts a model under the rules in this file and its two siblings
+    (`test_id_rule_length_contract.py`, `test_name_and_id_trim_rule.py`), so it must reach every
+    model source file, the subpackages included: the add-on models in `models/addon/` and the
+    fork's models in `models/custom/`."""
+
+    def test_every_model_source_file_is_walked(self):
+        walked = {
+            _module_key(info) for info in pkgutil.walk_packages(models.__path__, prefix="models.")
+        }
+        on_disk = set()
+        for models_dir in models.__path__:
+            for root, _dirs, names in os.walk(models_dir):
+                if "__pycache__" in root.split(os.sep):
+                    continue
+                for name in names:
+                    if name.endswith(".py"):
+                        relative = os.path.relpath(os.path.join(root, name), models_dir)
+                        key = relative[: -len(".py")].replace(os.sep, "/")
+                        if key != "__init__":
+                            on_disk.add(key)
+        # A walk that matched nothing would make the comparison below pass vacuously.
+        assert len(on_disk) >= 20, f"found only {len(on_disk)} model source file(s)"
+        assert on_disk - walked == set(), (
+            f"model source files the walk does not reach: {sorted(on_disk - walked)}")
+
+    def test_the_add_on_viewer_model_is_held_to_the_rules(self):
+        """Positive control on a nested module: the Physna viewer model lives in models/addon/."""
+        keys = {key for key, _class_name, _cls in _model_classes()}
+        assert "addon/physnaViewer" in keys
+        assert "physnaViewer" not in keys

@@ -555,6 +555,34 @@ class TestStopRegisteredSubProcesses:
         assert eo.stop_registered_sub_process(
             {"resourceType": "stepFunctionsExecution", "executionArn": "arn:sub:1"}) == ""
 
+    def test_the_display_identifier_reduces_only_arns(self):
+        assert eo.display_identifier("arn:aws:states:us-east-1:123456789012:execution:sub:run-1") == "run-1"
+        assert eo.display_identifier("arn:aws:batch:us-east-1:123456789012:job/abc-123") == "abc-123"
+        assert eo.display_identifier("job-1") == "job-1"
+        assert eo.display_identifier("") == ""
+
+    def test_a_stop_failure_logs_the_full_arn_but_returns_the_execution_name(self):
+        execution_arn = "arn:aws:states:us-east-1:123456789012:execution:sub:run-1"
+        sfn = MagicMock()
+        sfn.stop_execution.side_effect = _client_error("AccessDeniedException")
+        with patch.object(eo, "logger") as log:
+            message = eo.stop_registered_sub_process(
+                {"resourceType": "stepFunctionsExecution", "executionArn": execution_arn},
+                sfn_client=sfn)
+        assert message == "Sub-process stop failed for run-1: AccessDeniedException"
+        assert execution_arn in log.warning.call_args.args[0]
+
+    def test_a_batch_terminate_failure_names_the_job_id_not_its_arn(self):
+        job_arn = "arn:aws:batch:us-east-1:123456789012:job/abc-123"
+        batch = MagicMock()
+        batch.terminate_job.side_effect = _client_error("AccessDeniedException")
+        with patch.object(eo, "logger") as log:
+            message = eo.stop_registered_sub_process(
+                {"resourceType": "batchJob", "jobArn": job_arn}, batch_client=batch)
+        assert message == "Sub-process stop failed for Batch job abc-123: AccessDeniedException"
+        assert batch.terminate_job.call_args.kwargs["jobId"] == job_arn
+        assert job_arn in log.warning.call_args.args[0]
+
 
 def _client_error(code):
     import botocore.exceptions
