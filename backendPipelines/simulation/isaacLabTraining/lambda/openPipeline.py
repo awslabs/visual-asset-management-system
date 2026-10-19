@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from customLogging.logger import safeLogger
 from botocore.config import Config
 from botocore.exceptions import ClientError
+import manifestHelper
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
 # runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
@@ -25,6 +26,18 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="OpenPipelineIsaacLabTraining")
 s3_client = boto3.client("s3", config=retry_config)
+
+# An asset bucket may be in another Region than this function. The event names the input and output
+# buckets' Regions (resolved from the manifest by the vamsExecute Lambda); a read of such a bucket is
+# signed with manifestHelper's client for that Region, and s3_client serves the rest.
+_bucket_regions = {}
+
+
+def _s3_client_for_bucket(bucket_name):
+    region = _bucket_regions.get(bucket_name)
+    if not region:
+        return s3_client
+    return manifestHelper.s3_client_for_region(region)
 sfn_client = boto3.client("stepfunctions", config=retry_config)
 
 # Sort floor for a checkpoint whose S3 object carries no LastModified.
@@ -86,8 +99,24 @@ def lambda_handler(event, context):
         raise
 
 
+def bucket_regions(event) -> dict:
+    """Bucket name -> Region for the asset buckets named by the event's input and output paths, from
+    the Regions the vamsExecute Lambda resolved from the manifest. A bucket in the deployment Region
+    (an empty Region, or an event from an older Lambda) is left out: requests for it use the default
+    client."""
+    regions = {}
+    for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
+                                 ("outputS3AssetFilesPath", "outputBucketRegion")):
+        uri, region = event.get(path_key) or "", event.get(region_key) or ""
+        if uri.startswith("s3://") and region:
+            regions[uri[len("s3://"):].split("/", 1)[0]] = region
+    return regions
+
+
 def build_job_config_payload(event):
     """The state machine payload carrying the Batch job's run configuration."""
+
+    _bucket_regions.update(bucket_regions(event))
 
     # Standing defaults a JSON input file may carry; the manifest configuration outranks them.
     file_config = load_config_from_s3(event.get("inputS3AssetFilePath"))
@@ -107,6 +136,10 @@ def build_job_config_payload(event):
         job_config = build_evaluation_config(event, training_config, task, rl_library)
     else:
         raise ValueError(f"Invalid mode: {mode}. Must be 'train' or 'evaluate'")
+
+    # Bucket name -> Region for the asset buckets this job reads and writes, so the container signs
+    # each bucket's requests with a client for that bucket's Region (see utils/aws/s3.py).
+    job_config["bucketRegions"] = bucket_regions(event)
 
     logger.info(f"Job config: {job_config}")
 
@@ -216,7 +249,7 @@ def load_config_from_s3(s3_uri: str) -> dict:
             logger.info(f"Input file is not JSON, skipping config parsing: {key}")
             return {}
 
-        response = s3_client.get_object(Bucket=bucket, Key=key)
+        response = _s3_client_for_bucket(bucket).get_object(Bucket=bucket, Key=key)
         content = response["Body"].read().decode("utf-8")
         config = json.loads(content)
         if not isinstance(config, dict):
@@ -279,7 +312,7 @@ def discover_policy_file(bucket: str, asset_location_key: str) -> str:
 
         # Per run folder (the checkpoint's parent prefix): its checkpoints and its newest write time.
         runs = {}
-        paginator = s3_client.get_paginator("list_objects_v2")
+        paginator = _s3_client_for_bucket(bucket).get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
                 key = obj["Key"]
@@ -385,7 +418,7 @@ def require_existing_object(field: str, s3_uri: str) -> str:
         return s3_uri
 
     try:
-        s3_client.head_object(Bucket=bucket, Key=key)
+        _s3_client_for_bucket(bucket).head_object(Bucket=bucket, Key=key)
     except ClientError as e:
         code = str(e.response.get("Error", {}).get("Code", ""))
         if code in ("404", "NoSuchKey"):

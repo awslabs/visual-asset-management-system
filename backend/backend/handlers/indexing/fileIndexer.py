@@ -34,7 +34,7 @@ from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse, MAX_S3_KEY_LENGTH
 from common.indexing.geoLocation import build_geo_location
-from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions
+from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN, join_asset_location_key
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 
@@ -55,7 +55,7 @@ excluded_patterns = [] # PREVIEW_FILE_PATTERN not included here as the fileIndex
 S3_NOT_FOUND_ERROR_CODES = ('NoSuchKey', '404', 'NotFound')
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
+s3_client = region_routing_s3_client()
 opensearch_client = boto3.client('opensearchserverless', config=retry_config) if os.environ.get('OPENSEARCH_TYPE') == 'serverless' else boto3.client('opensearch', config=retry_config)
 logger = safeLogger(service_name="FileIndexer")
 
@@ -450,7 +450,8 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details for {bucket_id}: {e}")
