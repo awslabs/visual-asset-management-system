@@ -1062,6 +1062,14 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
 
     This is the tool to reach for when asked why a run failed or what it produced.
 
+    `workflowVersion` is the published workflow state machine version the run started on, and
+    `workflowVersionCurrent` says whether the workflow still runs that version: true when it does,
+    false when the workflow has been redeployed since. False means the workflow and pipeline settings
+    read live (`workflowSystemConfig`, pipeline names and descriptions) may be newer than the ones the
+    run used; each step's `effectiveSystemConfig` is the snapshot it ran under. Both are null for a
+    run started before versions were recorded, and `workflowVersionCurrent` is also null when the
+    workflow records no current version.
+
     Metadata the run read arrives in two SEPARATE collections: `inputMetadata` (asset- and
     file-scope rows) and `inputDatabaseMetadata` (database-scope rows, which belong to no asset).
     Reading only the first understates what the run saw.

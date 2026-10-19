@@ -182,6 +182,12 @@ sub-process (a nested state machine or a container job) with per-stage status
 derived from its own execution history. The flag is off by default because that
 derivation reads Step Functions history.
 
+`get_execution_details` also reports `workflowVersion`, the published workflow
+state machine version the run started on, and `workflowVersionCurrent`, false
+when the workflow has been redeployed since — the workflow and pipeline settings
+shown beside it may then be newer than the ones the run used. Both are null for a
+run started before versions were recorded.
+
 `get_execution_logs` full mode takes `limit` (default 100, server cap 1000),
 `next_token`, `filter_pattern`, `start_time`, and `end_time` (epoch
 milliseconds), plus — with `pipeline_execution_id` — `log_id` and `stage_name`.
