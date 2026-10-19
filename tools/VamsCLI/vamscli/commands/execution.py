@@ -316,6 +316,11 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
 def details(ctx: click.Context, execution_id: str, include_sub_executions: bool, json_output: bool):
     """Get an execution's full detail and traceability (pipelines, inputs, outputs, metadata).
 
+    Workflow version is the published workflow state machine version the run started on: current when
+    the workflow still runs that version, superseded when it has been redeployed since (so the live
+    workflow and pipeline settings may be newer than the ones the run used), not recorded for a run
+    started before versions were recorded.
+
     Asset/file metadata (inputMetadata) and database metadata (inputDatabaseMetadata) are separate
     collections, and each is reported as a row count here — use --json-output for the rows themselves.
     The metadata sources the run read from are listed alongside them.
@@ -364,6 +369,17 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
             out = [
                 f"Execution ID: {message.get('workflowExecutionId', 'N/A')}",
                 f"Workflow: {message.get('workflowDatabaseId', 'N/A')}:{message.get('workflowId', 'N/A')}",
+            ]
+            # The published state machine version the run started on. Null for a run started before
+            # versions were recorded; the key is absent only from a service that does not report it.
+            if 'workflowVersion' in message:
+                version = message.get('workflowVersion')
+                state = {True: 'current', False: 'superseded'}.get(message.get('workflowVersionCurrent'))
+                if version is None:
+                    out.append("Workflow version: not recorded")
+                else:
+                    out.append(f"Workflow version: {version}" + (f" ({state})" if state else ""))
+            out += [
                 f"Status: {message.get('executionStatus', 'N/A')}",
                 f"Started: {message.get('executionStartDate', 'N/A')}",
                 f"Stopped: {message.get('executionStopDate', 'N/A')}",
