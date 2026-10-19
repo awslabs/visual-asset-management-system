@@ -15,13 +15,23 @@
 import fs from "fs";
 import path from "path";
 import viewerConfig from "./viewerConfig.json";
+import addonViewerConfig from "./addonViewerConfig.json";
 import { OCCT_FORMATS } from "../viewers/ThreeJSViewerPlugin/utils/fileLoaders";
 import { admitsCompareSelection, admitsVisualizeSelection } from "../core/viewerSelection";
+import { VIEWER_COMPONENTS } from "../viewers/manifest";
+import { ADDON_DEPENDENCY_MANAGERS, ADDON_VIEWER_COMPONENTS } from "../viewers/addonManifest";
+import {
+    ALL_DEPENDENCY_MANAGERS,
+    ALL_VIEWER_COMPONENTS,
+    ALL_VIEWER_CONFIGS,
+} from "../core/viewerSources";
 
-const viewers: any[] = (viewerConfig as any).viewers;
+// The upstream-shipped viewers: core (viewerConfig.json) plus add-on (addonViewerConfig.json).
+const viewers: any[] = [...(viewerConfig as any).viewers, ...(addonViewerConfig as any).viewers];
 const byId = (id: string) => {
     const found = viewers.find((viewer) => viewer.id === id);
-    if (!found) throw new Error(`No viewer with id ${id} in viewerConfig.json`);
+    if (!found)
+        throw new Error(`No viewer with id ${id} in viewerConfig.json or addonViewerConfig.json`);
     return found;
 };
 
@@ -109,6 +119,104 @@ describe("viewerConfig vs the browser's media element", () => {
             )
             .map((viewer) => viewer.id);
         expect(offering).toEqual([]);
+    });
+});
+
+describe("viewer manifests", () => {
+    // PluginRegistry resolves a viewer's componentPath through the manifest of the same tier, so
+    // an entry configured in one file and listed in the other manifest still loads but places a
+    // viewer on the wrong side of the core/add-on boundary.
+    it("lists every core viewer's component in manifest.ts", () => {
+        const missing = (viewerConfig as any).viewers
+            .map((viewer: any) => viewer.componentPath)
+            .filter((componentPath: string) => !(componentPath in VIEWER_COMPONENTS));
+        expect(missing).toEqual([]);
+    });
+
+    it("lists every add-on viewer's component in addonManifest.ts", () => {
+        const addonViewers = (addonViewerConfig as any).viewers;
+        expect(addonViewers.length).toBeGreaterThan(0);
+        const missing = addonViewers
+            .map((viewer: any) => viewer.componentPath)
+            .filter((componentPath: string) => !(componentPath in ADDON_VIEWER_COMPONENTS));
+        expect(missing).toEqual([]);
+    });
+});
+
+describe("licensed viewers are add-on viewers", () => {
+    // A licensed viewer (VNTANA, VEERUM) needs a vendor package the deployment owner licenses, so it
+    // ships disabled and lives in the add-on files rather than in the core ones. Moving it there
+    // must not change what the merged registry offers.
+    const LICENSED = /\(LICENSED VIEWER\)/;
+    const LICENSED_IDS = ["vntana-viewer", "veerum-viewer"];
+    const coreViewers: any[] = (viewerConfig as any).viewers;
+    const addonViewers: any[] = (addonViewerConfig as any).viewers;
+
+    it("the core config and manifest hold no licensed viewer", () => {
+        expect(coreViewers.filter((viewer) => LICENSED.test(viewer.description))).toEqual([]);
+        const coreText =
+            fs.readFileSync(path.join(__dirname, "viewerConfig.json"), "utf8") +
+            fs.readFileSync(path.join(__dirname, "..", "viewers", "manifest.ts"), "utf8");
+        expect(coreText).not.toMatch(/vntana|veerum/i);
+    });
+
+    it("[control] the licensed-viewer marker matches the licensed viewers", () => {
+        const marked = addonViewers.filter((viewer) => LICENSED.test(viewer.description));
+        expect(marked.map((viewer) => viewer.id).sort()).toEqual([...LICENSED_IDS].sort());
+    });
+
+    it.each(LICENSED_IDS)("%s is registered from the add-on files, disabled", (id) => {
+        const merged = ALL_VIEWER_CONFIGS.filter((viewer) => viewer.id === id);
+        expect(merged).toHaveLength(1);
+        const viewer: any = merged[0];
+        expect(addonViewers.map((entry) => entry.id)).toContain(id);
+        expect(viewer.enabled).toBe(false);
+        expect(viewer.priority).toBe(2);
+        expect(viewer.componentPath in ADDON_VIEWER_COMPONENTS).toBe(true);
+        expect(viewer.dependencyManager in ADDON_DEPENDENCY_MANAGERS).toBe(true);
+    });
+
+    it.each(LICENSED_IDS)(
+        "%s resolves its component and dependency manager through the merged maps",
+        (id) => {
+            // Enabling the viewer is flipping `enabled` in addonViewerConfig.json; PluginRegistry
+            // then loads it through these two merged maps, exactly as it did from the core files.
+            const viewer: any = ALL_VIEWER_CONFIGS.find((entry) => entry.id === id);
+            expect(ALL_VIEWER_COMPONENTS[viewer.componentPath]).toBe(
+                (ADDON_VIEWER_COMPONENTS as Record<string, string>)[viewer.componentPath]
+            );
+            expect(ALL_DEPENDENCY_MANAGERS[viewer.dependencyManager]).toBe(
+                (ADDON_DEPENDENCY_MANAGERS as Record<string, string>)[viewer.dependencyManager]
+            );
+        }
+    );
+
+    it("a core viewer that ties with an add-on viewer on extension and priority sorts first", () => {
+        // PluginRegistry sorts compatible viewers by priority with a stable sort, so a tie is
+        // decided by registration order. The add-on viewers register after every core viewer, so a
+        // tie keeps resolving to the core viewer (cesium-viewer ahead of veerum-viewer for .json).
+        const index = new Map(ALL_VIEWER_CONFIGS.map((viewer, i) => [viewer.id, i]));
+        const addonIds = new Set(addonViewers.map((viewer) => viewer.id));
+        const inverted: string[] = [];
+        for (const addon of addonViewers) {
+            for (const core of coreViewers) {
+                const tie =
+                    core.priority === addon.priority &&
+                    core.supportedExtensions.some((ext: string) =>
+                        addon.supportedExtensions.includes(ext)
+                    );
+                const coreAt = index.get(core.id) ?? -1;
+                const addonAt = index.get(addon.id) ?? -1;
+                if (tie && !addonIds.has(core.id) && coreAt > addonAt) {
+                    inverted.push(`${addon.id} before ${core.id}`);
+                }
+            }
+        }
+        expect(inverted).toEqual([]);
+        expect(index.get("cesium-viewer")).toBeDefined();
+        expect(index.get("cesium-viewer") ?? Infinity).toBeLessThan(
+            index.get("veerum-viewer") ?? -1
+        );
     });
 });
 

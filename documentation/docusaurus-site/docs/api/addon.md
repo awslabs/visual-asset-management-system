@@ -1,6 +1,6 @@
 # Add-on API Reference
 
-This page documents every VAMS REST API surface contributed by an optional add-on. Each add-on's endpoints live under `/addon/{addonName}/...` and are only deployed when the corresponding add-on is enabled in `infra/config/config.json`.
+This page documents every VAMS REST API surface contributed by an optional [add-on](../developer/addons-overview.md). Each add-on's endpoints live under `/addon/{addonName}/...` and are only deployed when the corresponding add-on is enabled in `infra/config/config.json`.
 
 Add-on endpoints enforce the same VAMS two-tier Casbin authorization as the core API: API-tier (can the role reach the route) and object-tier (can the role access the specific data entity). Both tiers must allow for a call to succeed.
 

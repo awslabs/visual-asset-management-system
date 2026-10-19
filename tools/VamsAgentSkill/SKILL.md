@@ -185,6 +185,12 @@ database, ID, category, and name). This is why a user can list a database and be
 refused every asset in it, which is a permission boundary rather than an empty
 database.
 
+**A deployment can add object types of its own.** A deployment that extends VAMS
+can register object types for the entities its extensions add;
+`vamscli role constraint permission-objects` lists every type the deployment
+accepts. No role, an administrator's included, has access to such a type until a
+constraint on it grants that access, so a `403` there is policy, not a fault.
+
 **`GLOBAL` is granted separately.** Because pipelines, workflows, and metadata
 schemas may be scoped to the literal `GLOBAL`, access to them is usually a second,
 distinct grant. A user permitted on their own database's workflows may still be
