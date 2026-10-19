@@ -775,7 +775,9 @@ def export_command(
             if not has_urls:
                 output_warning(
                     "No presigned URLs found in export result. Files cannot be downloaded. "
-                    "Ensure --generate-presigned-urls is enabled.",
+                    "Ensure --generate-presigned-urls is enabled and the exported assets are "
+                    "distributable: download URLs are withheld for an asset whose "
+                    "isdistributable is false.",
                     json_output
                 )
             else:

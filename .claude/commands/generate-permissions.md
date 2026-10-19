@@ -9,6 +9,8 @@ You are generating a VAMS permission template JSON file. The VAMS system uses a 
 -   **Tier 1**: API route authorization (`api` and `web` objectTypes)
 -   **Tier 2**: Data entity authorization (`database`, `asset`, `pipeline`, `workflow`, `metadataSchema`, `tag`, `tagType`, `role`, `userRole`)
 
+A deployment can register more Tier 2 object types for its own entities (fork or add-on constants files: `backend/backend/custom/customConstants.py`, `common/addonConstants.py`). `GET /auth/constraints/permissionObjects` (or `vamscli role constraint permission-objects`) lists the types and fields a deployment accepts; generate constraints for an extension type only from that list. An extension type gets no seeded constraint, so even the `admin` role has no access to it until a template like the one you generate grants it. A template for an extension type is kept with the deployment that registers it, not under `documentation/permissionsTemplates/`, because a core deployment rejects the unknown type at import. See the "Permission object types" section of `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
 Both tiers must allow an action for it to succeed. This creates a defense-in-depth model where Tier 1 controls which API endpoints are reachable and Tier 2 controls which data entities can be acted upon.
 
 ### Critical Rules
@@ -270,7 +272,7 @@ When building a new template, use these as a guide for expected constraint count
 -   **Tag admin (database-scoped)**: ~6 constraints (1 web + 1 api + 2 tag + 2 tagType)
 -   **Deny overlay**: 1 constraint per deny rule
 
-The api counts include the `{{ROLE_NAME}}-user-api-keys` constraint (all methods on `/auth/user/api-keys`, the caller's own API keys) that the admin, user and read-only templates each carry. The remaining api constraints are the route grants, the admin template's GET-only `/tags` and `/tag-types` constraint, and the execution-route denies described under Workflow Execution Routes: `executions-admin-deny` in the user template and `execution-logs-deny` in the two read-only templates.
+The api counts include the `{{ROLE_NAME}}-user-api-keys` constraint on `/auth/user/api-keys` (the caller's own API keys) that the admin, user and read-only templates each carry: the admin and user templates grant all methods on it, the two read-only templates grant GET only, so a read-only user can view their own keys but cannot create, extend, or delete them. The remaining api constraints are the route grants, the admin template's GET-only `/tags` and `/tag-types` constraint, and the execution-route denies described under Workflow Execution Routes: `executions-admin-deny` in the user template and `execution-logs-deny` in the two read-only templates.
 
 ## Workflow
 

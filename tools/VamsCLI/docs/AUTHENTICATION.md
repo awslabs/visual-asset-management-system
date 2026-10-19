@@ -217,18 +217,22 @@ vamscli auth set-override -u user@example.com --token "your_token" --expires-at 
 -   `--token`: The override token (required)
 -   `--expires-at`: Token expiration time (optional)
 
-#### One-Time Override Token
+#### Override Token via `auth login`
+
+`auth login` accepts the same token so a single command both stores and validates it:
 
 ```bash
-vamscli -u user@example.com --token-override "temp_token" <command>
-vamscli -u user@example.com --token-override "temp_token" --expires-at "+3600" <command>
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin --expires-at "+3600"
 ```
 
-**Global Options:**
+**Options:**
 
--   `-u, --user-id`: User ID for the token
--   `--token-override`: The override token
--   `--expires-at`: Token expiration time
+-   `--user-id`: User ID associated with the token (required with a token override)
+-   `--token-override-stdin`: Read the override token from standard input (preferred; `--token-override <token>` is accepted but exposes the token in the process table)
+-   `--expires-at`: Token expiration time (optional)
+
+There is no global `--token-override` option: the root `vamscli` group accepts only `--version`, `--verbose` and `--profile`, and each goes before the command.
 
 ### Override Token Features
 
@@ -475,16 +479,16 @@ Each profile maintains completely separate authentication state:
 
 ```bash
 # Authenticate to different environments
-vamscli auth login -u user@example.com --profile production
-vamscli auth login -u user@example.com --profile staging
+vamscli --profile production auth login -u user@example.com
+vamscli --profile staging auth login -u user@example.com
 
 # Check status for specific profiles
-vamscli auth status --profile production
-vamscli auth status --profile staging
+vamscli --profile production auth status
+vamscli --profile staging auth status
 
 # Set override tokens for different profiles
-vamscli auth set-override -u user@example.com --token "prod_token" --profile production
-vamscli auth set-override -u user@example.com --token "staging_token" --profile staging
+vamscli --profile production auth set-override -u user@example.com --token "prod_token"
+vamscli --profile staging auth set-override -u user@example.com --token "staging_token"
 ```
 
 ### Profile Authentication Features
@@ -500,32 +504,32 @@ vamscli auth set-override -u user@example.com --token "staging_token" --profile 
 
 ```bash
 # Setup and authenticate to production
-vamscli setup https://prod-api.example.com --profile production
-vamscli auth login -u user@example.com --profile production
+vamscli --profile production setup https://prod-api.example.com
+vamscli --profile production auth login -u user@example.com
 
 # Setup and authenticate to staging
-vamscli setup https://staging-api.example.com --profile staging
-vamscli auth login -u user@example.com --profile staging
+vamscli --profile staging setup https://staging-api.example.com
+vamscli --profile staging auth login -u user@example.com
 
 # Use different profiles
-vamscli assets list --profile production  # Uses production auth
-vamscli assets list --profile staging     # Uses staging auth
+vamscli --profile production assets list  # Uses production auth
+vamscli --profile staging assets list     # Uses staging auth
 ```
 
 #### Multi-User Authentication
 
 ```bash
 # Setup profiles for different users
-vamscli setup https://api.example.com --profile alice
-vamscli setup https://api.example.com --profile bob
+vamscli --profile alice setup https://api.example.com
+vamscli --profile bob setup https://api.example.com
 
 # Each user authenticates with their profile
-vamscli auth login -u alice@example.com --profile alice
-vamscli auth login -u bob@example.com --profile bob
+vamscli --profile alice auth login -u alice@example.com
+vamscli --profile bob auth login -u bob@example.com
 
 # Users work with their own profiles
-vamscli assets create -d my-db --name "Alice Asset" --profile alice
-vamscli assets create -d my-db --name "Bob Asset" --profile bob
+vamscli --profile alice assets create -d my-db --name "Alice Asset"
+vamscli --profile bob assets create -d my-db --name "Bob Asset"
 ```
 
 ## Troubleshooting

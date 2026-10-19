@@ -1228,9 +1228,26 @@ Aborting a single execution returns:
 }
 ```
 
-A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed.
+A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed, and a `notAbortable` array when a registered sub-process is of a type VAMS cannot stop (an externally owned pipeline's own compute, say). Each `notAbortable` entry is \{`resourceType`, `label`, `stageName`, `locator`\}, listed once per registered locator; `locator` is the registered id, or the final segment of a registered ARN (never the ARN itself). The sub-process is left running and its `warnings` sentence says so as well. Every `warnings` sentence names a sub-process the same way, by its registered id or the final segment of its registered ARN. Both arrays are absent from a clean abort.
 
-When `groupId` is supplied, every active execution in the group is aborted and the response reports each member's outcome:
+```json
+{
+    "message": "Execution aborted",
+    "warnings": [
+        "Sub-process of type 'slurmJob' (slurm-00001) could not be aborted: VAMS cannot stop this resource type; it may still be running."
+    ],
+    "notAbortable": [
+        {
+            "resourceType": "slurmJob",
+            "label": "Mock Slurm job",
+            "stageName": "MockTrain",
+            "locator": "slurm-00001"
+        }
+    ]
+}
+```
+
+When `groupId` is supplied, every active execution in the group is aborted and the response reports each member's outcome. If a member's sub-process abort is incomplete, the group abort response also includes a top-level `warnings` array; each warning is prefixed with that member's execution id (issue #445). When a member registered a sub-process of a type VAMS cannot stop, the response also includes a top-level `notAbortable` array: that member's own `notAbortable` entries, each with an added `executionId` naming the member. Both arrays are absent when every member stopped cleanly:
 
 ```json
 {
@@ -1242,7 +1259,19 @@ When `groupId` is supplied, every active execution in the group is aborted and t
         ],
         "skippedInaccessibleCount": 1,
         "moreRemaining": true
-    }
+    },
+    "warnings": [
+        "a1b2c3d4e5f60718293a4b5c6d7e8f90: Sub-process of type 'slurmJob' (slurm-00042) could not be aborted: VAMS cannot stop this resource type; it may still be running."
+    ],
+    "notAbortable": [
+        {
+            "executionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "resourceType": "slurmJob",
+            "label": "Cluster training job",
+            "stageName": "Train",
+            "locator": "slurm-00042"
+        }
+    ]
 }
 ```
 
@@ -1613,6 +1642,7 @@ With `includeSubExecutions=true`, each entry also carries `subExecutions` — on
             "resourceType": "stepFunctionsExecution",
             "label": "3D thumbnail processing",
             "stageName": "",
+            "abortable": true,
             "resourceName": "Preview3dThumbnailStateMachine",
             "status": "FAILED",
             "startDate": "2026-09-11T10:00:00Z",
@@ -1670,7 +1700,11 @@ Nothing about stages is stored. The stage frame is derived when the request is s
 
 A registered AWS Deadline Cloud job (`resourceType: "deadlineCloudJob"`) has no state machine and is reported with its summary only (`stageSource: "none"`), resolved live from the farm: `resourceName` is the job's name, `status` is the job's task-run status folded onto the same vocabulary — `RUNNING` while the job is pending, scheduled, running, suspended, or being interrupted; `SUCCEEDED`; `FAILED` for a failed or not-compatible job and for a job whose creation, update, or upload failed; `ABORTED` for a cancelled job; otherwise `UNKNOWN` — `startDate` and `stopDate` are the job's start and end, `cause` is its lifecycle status message, and `deadline` (\{`farmId`, `queueId`, `jobId`\}) names the job by id alone. The job's parameters are never returned.
 
-Every read behind this flag is best-effort and bounded: a sub-state-machine definition above 256 KiB is not parsed, at most 50 stages are reported to a depth of 3, and at most 5 history pages per sub-process (20 per request, terminal sub-processes first) are read — `stagesTruncated` and `historyTruncated` say when a bound was hit, and a Step Functions, Batch, or Deadline Cloud error yields `status: "UNKNOWN"` plus an entry in `subExecutionWarnings` rather than a failed request (a Deadline Cloud job in a partition without the service is reported the same way, with the warning `Deadline Cloud client unavailable`). All dates are ISO-8601 UTC strings. The flag is off by default because the derivation reads each sub-process's history; a client polling a running execution should request it only where it renders stages.
+A registered Amazon SageMaker training job (`resourceType: "sageMakerTrainingJob"`) or pipeline execution (`resourceType: "sageMakerPipelineExecution"`) is likewise reported with its summary only, resolved live from SageMaker in the deployment's account: `status` folds `InProgress` / `Executing` and `Stopping` onto `RUNNING`, `Completed` / `Succeeded` onto `SUCCEEDED`, `Failed` onto `FAILED` and `Stopped` onto `ABORTED` (otherwise `UNKNOWN`); `resourceName` is the training job name or the pipeline execution's display name; `cause` is the failure reason; and `sageMaker` names the job (\{`trainingJobName`\}) or the execution (\{`pipelineName`, `pipelineExecutionId`\}) by name and id tail only. ARNs, hyperparameters and pipeline parameters are never returned.
+
+Every sub-execution carries `abortable`: `true` for the types VAMS stops on abort (Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, and the two SageMaker types), `false` for any other registered type, which is reported with its `label`, `stageName`, and raw `resourceType`, `status: "UNKNOWN"`, and `stageSource: "none"`. Aborting the execution leaves such a sub-process running, and the abort response lists it under `notAbortable`.
+
+Every read behind this flag is best-effort and bounded: a sub-state-machine definition above 256 KiB is not parsed, at most 50 stages are reported to a depth of 3, and at most 5 history pages per sub-process (20 per request, terminal sub-processes first) are read — `stagesTruncated` and `historyTruncated` say when a bound was hit, and a Step Functions, Batch, Deadline Cloud, or SageMaker error yields `status: "UNKNOWN"` plus an entry in `subExecutionWarnings` rather than a failed request (a Deadline Cloud job or SageMaker job in a partition without the service is reported the same way, with the warning `Deadline Cloud client unavailable` or `SageMaker client unavailable`). All dates are ISO-8601 UTC strings. The flag is off by default because the derivation reads each sub-process's history; a client polling a running execution should request it only where it renders stages.
 
 Under the response byte ceiling, `stages` are dropped from every sub-execution (the summaries stay) and `truncatedCollections` names `pipelines.subExecutions`, before any inline configuration body is shortened.
 :::

@@ -547,15 +547,33 @@ s3_asset_resource = region_routing_s3_resource()
 
 
 def validateUnallowedFileExtensionAndContentType(keyPath: str, contentType: str):
-    #Check if the content type is in the list of unallowed MIME types
-    if contentType in UNALLOWED_MIME_LIST:
+    #Both comparisons are case-insensitive: file systems preserve ".EXE" and an uploader picks the
+    #case freely, and a media type is case-insensitive by definition (RFC 2045). The blocklists in
+    #common/constants.py are written lower-case, so the inputs are lower-cased to match them.
+
+    #Check if the content type is in the list of unallowed MIME types. Only the media type counts:
+    #S3 can report "application/x-msdownload; charset=binary", and a parameter must not let the
+    #type through.
+    mediaType = (contentType or "").split(";", 1)[0].strip().lower()
+    if mediaType in UNALLOWED_MIME_LIST:
         logger.error(f"Unallowed file content type detected in asset: {keyPath}")
         return False
     
-    #check if the file extension of the keyPath is in the list of unallowed file extensions
-    if os.path.splitext(keyPath)[1] and os.path.splitext(keyPath)[1] in UNALLOWED_FILE_EXTENSION_LIST:
-        logger.error(f"Unallowed file extension detected in asset: {keyPath}")
-        return False
+    #Check if the file extension of the keyPath is in the list of unallowed file extensions. The
+    #extension is everything from the last dot of the key's final non-empty segment, read after
+    #trailing dots and whitespace are removed: "payload.exe.", "payload.exe/", "..exe" -> ".exe".
+    #The segment is split on ':' and EVERY piece is checked, since a Windows client materializes
+    #whichever piece survives: on NTFS a ':' opens a stream name, so "payload.exe::$DATA" writes
+    #"payload.exe", while a browser that cannot write ':' substitutes it and keeps the whole name,
+    #so "a:b.exe" lands as "a_b.exe". A ':' in an ordinary name ("notes:v2.txt") is still accepted
+    #here for an object already in a bucket; only a created key refuses it.
+    for name in os.path.basename(keyPath.rstrip('/')).split(':'):
+        while name and (name[-1] == '.' or name[-1].isspace()):
+            name = name[:-1]
+        extension = name[name.rfind('.'):].lower() if '.' in name else ''
+        if extension and extension in UNALLOWED_FILE_EXTENSION_LIST:
+            logger.error(f"Unallowed file extension detected in asset: {keyPath}")
+            return False
     return True
 
 def validateS3AssetExtensionsAndContentType(bucket: str, prefixKey: str):

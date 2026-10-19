@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import loginBgImageSrc from "../resources/img/login_bg.png";
+import loginBgImageSrc from "../resources/img/login_bg.webp";
+import styles from "../FedAuth/loginbox.module.css";
 
 export function Header() {
     return (
@@ -20,14 +21,10 @@ export function Header() {
                 }}
             />
             <img
+                alt=""
+                aria-hidden="true"
                 src={loginBgImageSrc}
-                style={{
-                    position: "fixed",
-                    top: 0,
-                    width: "100vw",
-                    left: 0,
-                    zIndex: "-100",
-                }}
+                className={styles.loginBackground}
             />
         </>
     );

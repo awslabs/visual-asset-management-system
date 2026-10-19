@@ -12,6 +12,7 @@ import StringArrayField from "./StringArrayField";
 import IpRangeListField from "./IpRangeListField";
 import PresignedUrlRestrictionsField from "./PresignedUrlRestrictionsField";
 import ExternalBucketsField from "./ExternalBucketsField";
+import ExternalBridgesField from "./ExternalBridgesField";
 import styles from "../styles.module.css";
 
 interface Props {
@@ -43,6 +44,9 @@ export default function FieldRenderer({ field, config, fieldErrors, onChange }: 
             break;
         case "external-buckets":
             control = <ExternalBucketsField field={field} value={value} onChange={set} />;
+            break;
+        case "external-bridges":
+            control = <ExternalBridgesField field={field} value={value} onChange={set} />;
             break;
         case "text":
         case "number":

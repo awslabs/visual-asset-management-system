@@ -13,12 +13,12 @@ export function layerBundlingCommand(): string {
     //Note: The removals drastically reduce layer sizes
     //Note: The build tools are pinned so a layer build is reproducible; poetry is the version that wrote the layer lock files
     return [
-        "pip install --upgrade pip==26.2.1",
-        "pip install poetry==2.1.4",
-        "pip install poetry-plugin-export==1.9.0",
+        "pip install --root-user-action=ignore --upgrade pip==26.2.1",
+        "pip install --root-user-action=ignore poetry==2.1.4",
+        "pip install --root-user-action=ignore poetry-plugin-export==1.9.0",
         "if [ ! -f poetry.lock ]; then poetry lock; fi",
         "poetry export --without-hashes --format=requirements.txt > requirements.txt",
-        "pip install -r requirements.txt -t /asset-output/python",
+        "pip install --root-user-action=ignore -r requirements.txt -t /asset-output/python",
         "rsync -rLv ./ /asset-output/python",
         "cd /asset-output",
         "find . -type d -name __pycache__ -prune -exec rm -rf {} +",

@@ -222,6 +222,64 @@ describe("executions service", () => {
             expect(ok).toBe(true);
             expect((result as any).warnings).toEqual([]);
         });
+
+        // `notAbortable` sits beside `message` as well. The board reads `result.notAbortable` to
+        // lead its warning with what was left running, so the tuple must carry it unchanged.
+        const NOT_ABORTABLE = {
+            resourceType: "slurmJob",
+            label: "Mock Slurm job",
+            stageName: "MockTrain",
+            locator: "slurm-00001",
+        };
+        const NOT_ABORTABLE_WARNING =
+            "Sub-process of type 'slurmJob' (slurm-00001) could not be aborted: VAMS cannot stop " +
+            "this resource type; it may still be running.";
+
+        it("keeps notAbortable and warnings from a single abort", async () => {
+            (apiClient.del as jest.Mock).mockResolvedValue({
+                message: "Execution aborted",
+                warnings: [NOT_ABORTABLE_WARNING],
+                notAbortable: [NOT_ABORTABLE],
+            });
+            const [ok, result] = await abortExecution("e1");
+            expect(ok).toBe(true);
+            expect(result).toEqual({
+                message: "Execution aborted",
+                warnings: [NOT_ABORTABLE_WARNING],
+                notAbortable: [NOT_ABORTABLE],
+            });
+        });
+
+        it("keeps a group abort's member-attributed notAbortable and warnings", async () => {
+            const group = {
+                groupId: "g1",
+                results: [
+                    { executionId: "e1", status: "aborted" },
+                    { executionId: "e2", status: "aborted" },
+                ],
+            };
+            (apiClient.del as jest.Mock).mockResolvedValue({
+                message: group,
+                warnings: [`e2: ${NOT_ABORTABLE_WARNING}`],
+                notAbortable: [{ executionId: "e2", ...NOT_ABORTABLE }],
+            });
+            const [ok, result] = await abortExecution("e1", "g1");
+            expect(ok).toBe(true);
+            expect(result).toEqual({
+                message: group,
+                warnings: [`e2: ${NOT_ABORTABLE_WARNING}`],
+                notAbortable: [{ executionId: "e2", ...NOT_ABORTABLE }],
+            });
+        });
+
+        it("omits notAbortable from a clean abort", async () => {
+            (apiClient.del as jest.Mock).mockResolvedValue({
+                message: "Execution aborted",
+                notAbortable: [],
+            });
+            const [, result] = await abortExecution("e1");
+            expect(result).toEqual({ message: "Execution aborted", warnings: [] });
+        });
     });
 
     describe("rerunExecution", () => {

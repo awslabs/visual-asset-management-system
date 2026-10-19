@@ -487,7 +487,8 @@ class TestHandleExecutionError:
         body = {"workflowExecutionId": "EXEC1", "workflowDatabaseId": "wdb", "workflowId": "wf"}
         pipeline_rows = [
             {"pipelineExecutionId": "P1", "workflowExecutionId": "EXEC1", "executionStatus": "RUNNING",
-             "registeredSubExecutions": [{"resourceType": "ecsTask", "taskArn": "arn:task:9"}]},
+             "registeredSubExecutions": [
+                 {"resourceType": "ecsTask", "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/cluster/0123abcd"}]},
         ]
         logs_table = MagicMock()
         main_table = MagicMock(query=MagicMock(return_value={"Items": []}))
@@ -503,7 +504,8 @@ class TestHandleExecutionError:
             heh.lambda_handler({"body": body, "errorInfo": {"Error": "States.Timeout"}}, MagicMock())
 
         error_log = logs_table.put_item.call_args.kwargs["Item"]["errorLog"]
-        assert "arn:task:9" in error_log
+        assert "(0123abcd)" in error_log
+        assert "arn:" not in error_log and "123456789012" not in error_log
 
 
 @pytest.mark.unit
@@ -535,18 +537,51 @@ class TestStopRegisteredSubProcesses:
         sfn = MagicMock()
         sfn.stop_execution.side_effect = _client_error("AccessDeniedException")
         message = eo.stop_registered_sub_process(
-            {"resourceType": "stepFunctionsExecution", "executionArn": "arn:sub:1"},
+            {"resourceType": "stepFunctionsExecution",
+             "executionArn": "arn:aws:states:us-east-1:123456789012:execution:sub:run-1"},
             sfn_client=sfn)
-        assert "arn:sub:1" in message and "AccessDeniedException" in message
+        assert message == "Sub-process stop failed for run-1: AccessDeniedException"
+        sfn.stop_execution.assert_called_once_with(
+            executionArn="arn:aws:states:us-east-1:123456789012:execution:sub:run-1")
 
     def test_unsupported_resource_type_names_its_locator(self):
-        message = eo.stop_registered_sub_process({"resourceType": "ecsTask", "taskArn": "arn:task:1"})
-        assert "arn:task:1" in message
+        message = eo.stop_registered_sub_process(
+            {"resourceType": "ecsTask", "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/cluster/0123abcd"})
+        assert "Sub-process of type 'ecsTask' (0123abcd) could not be stopped" in message
+        assert "arn:" not in message and "123456789012" not in message
 
     def test_no_client_is_a_silent_no_op(self):
         # A caller without stop permissions still reconciles the rows rather than reporting noise.
         assert eo.stop_registered_sub_process(
             {"resourceType": "stepFunctionsExecution", "executionArn": "arn:sub:1"}) == ""
+
+    def test_the_display_identifier_reduces_only_arns(self):
+        assert eo.display_identifier("arn:aws:states:us-east-1:123456789012:execution:sub:run-1") == "run-1"
+        assert eo.display_identifier("arn:aws:batch:us-east-1:123456789012:job/abc-123") == "abc-123"
+        assert eo.display_identifier("job-1") == "job-1"
+        assert eo.display_identifier("") == ""
+
+    def test_a_stop_failure_logs_the_full_arn_but_returns_the_execution_name(self):
+        execution_arn = "arn:aws:states:us-east-1:123456789012:execution:sub:run-1"
+        sfn = MagicMock()
+        sfn.stop_execution.side_effect = _client_error("AccessDeniedException")
+        with patch.object(eo, "logger") as log:
+            message = eo.stop_registered_sub_process(
+                {"resourceType": "stepFunctionsExecution", "executionArn": execution_arn},
+                sfn_client=sfn)
+        assert message == "Sub-process stop failed for run-1: AccessDeniedException"
+        assert execution_arn in log.warning.call_args.args[0]
+
+    def test_a_batch_terminate_failure_names_the_job_id_not_its_arn(self):
+        job_arn = "arn:aws:batch:us-east-1:123456789012:job/abc-123"
+        batch = MagicMock()
+        batch.terminate_job.side_effect = _client_error("AccessDeniedException")
+        with patch.object(eo, "logger") as log:
+            message = eo.stop_registered_sub_process(
+                {"resourceType": "batchJob", "jobArn": job_arn}, batch_client=batch)
+        assert message == "Sub-process stop failed for Batch job abc-123: AccessDeniedException"
+        assert batch.terminate_job.call_args.kwargs["jobId"] == job_arn
+        assert job_arn in log.warning.call_args.args[0]
 
 
 def _client_error(code):

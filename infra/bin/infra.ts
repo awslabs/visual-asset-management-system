@@ -39,9 +39,7 @@ if (config.enableCdkNag) {
 }
 
 //Core VAMS stack stackname
-const vamsCoreStackName = `${config.name}-core-${
-    config.app.baseStackName || process.env.DEMO_LABEL || "dev"
-}`;
+const vamsCoreStackName = `${config.name}-core-${config.app.baseStackName}`;
 config.env.coreStackName = vamsCoreStackName;
 
 // One notification stack per Region that holds an external asset bucket outside the deployment
@@ -57,7 +55,7 @@ const crossRegionBuckets = buildCrossRegionBucketNotificationStacks(
 
 //Deploy with WAF?
 if (config.app.useWaf) {
-    const wafBaseName = config.app.baseStackName || process.env.DEPLOYMENT_ENV || "dev";
+    const wafBaseName = config.app.baseStackName;
 
     // A regional-scoped web ACL is ALWAYS created in the core region when WAF is enabled.
     // It is the ACL that attaches to the API Gateway stage (regional or private) and, for

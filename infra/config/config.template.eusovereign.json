@@ -88,6 +88,14 @@
         },
         "pipelines": {
             "deadlineCloudExecutionTypeEnabled": false,
+            "externalPipelineBridges": [],
+            "executionLogReadPrefixes": [
+                "/aws/vendedlogs/VAMSStateMachine-*",
+                "/aws/vendedlogs/VAMSstateMachine-*",
+                "/aws/vendedlogs/Pipelines/*",
+                "/aws/batch/job",
+                "/aws/sagemaker/TrainingJobs"
+            ],
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true

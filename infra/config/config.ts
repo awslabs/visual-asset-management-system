@@ -15,7 +15,7 @@ import { region_info } from "aws-cdk-lib";
 import { oidcSettings } from "./oidc-config";
 import { samlSettings } from "./saml-config";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // ============================================================================================
 // Constants that shape the deployment
@@ -25,7 +25,7 @@ dotenv.config();
 // CloudFormation receives.
 // ============================================================================================
 
-export const VAMS_VERSION = "2.6.4";
+export const VAMS_VERSION = "2.6.5";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
@@ -112,6 +112,19 @@ export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 // (backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json). The parent workflow waits this
 // long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
 export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
+
+// CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
+// from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
+// log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
+// case-sensitive, so both state-machine casings the pipeline constructs use are listed. The shared
+// workflow log group and the config-name pattern are granted by the builder regardless of this list.
+export const DEFAULT_EXECUTION_LOG_READ_PREFIXES: readonly string[] = [
+    "/aws/vendedlogs/VAMSStateMachine-*",
+    "/aws/vendedlogs/VAMSstateMachine-*",
+    "/aws/vendedlogs/Pipelines/*",
+    "/aws/batch/job",
+    "/aws/sagemaker/TrainingJobs",
+];
 
 // GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
 // on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
@@ -454,12 +467,17 @@ export function getConfig(app: cdk.App): Config {
     );
     config.env.partition = region_info.RegionInfo.get(config.env.region).partition!;
 
-    config.app.baseStackName =
-        (app.node.tryGetContext("stack-name") ||
-            config.app.baseStackName ||
-            process.env.STACK_NAME) +
-        "-" +
-        config.env.region;
+    // Required: it forms part of every stack name. CDK context `stack-name` and the STACK_NAME
+    // environment variable override the config.json value.
+    const baseStackName =
+        app.node.tryGetContext("stack-name") || config.app.baseStackName || process.env.STACK_NAME;
+    if (!baseStackName) {
+        throw new Error(
+            "Configuration Error: app.baseStackName is required (CDK context `stack-name` or the " +
+                "STACK_NAME environment variable may supply it). It forms part of every stack name."
+        );
+    }
+    config.app.baseStackName = baseStackName + "-" + config.env.region;
 
     config.app.adminEmailAddress = <string>(
         (app.node.tryGetContext("adminEmailAddress") ||
@@ -848,6 +866,27 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.deadlineCloudExecutionTypeEnabled == undefined) {
         config.app.pipelines.deadlineCloudExecutionTypeEnabled = false;
     }
+
+    // Externally owned pipeline bridges: each entry opens events:PutEvents on the orchestration bus to
+    // the roles matching its roleArnPattern (bus resource policy) and adds its exact invokeTargets to
+    // the shared workflow state-machine role. Empty by default — no cross-account grant exists unless
+    // the operator lists one.
+    if (config.app.pipelines.externalPipelineBridges == undefined) {
+        config.app.pipelines.externalPipelineBridges = [];
+    }
+    validateExternalPipelineBridges(
+        config.app.pipelines.externalPipelineBridges,
+        config.env.partition,
+        config.env.account
+    );
+
+    // Log-group name patterns the executionService Lambda may read registered sub-process logs from.
+    // Used verbatim as IAM resource names, so the list is an allow-list and `*`, `/` and anything
+    // outside `/aws/` are rejected.
+    if (config.app.pipelines.executionLogReadPrefixes == undefined) {
+        config.app.pipelines.executionLogReadPrefixes = [...DEFAULT_EXECUTION_LOG_READ_PREFIXES];
+    }
+    validateExecutionLogReadPrefixes(config.app.pipelines.executionLogReadPrefixes);
 
     if (config.app.addons.useGarnetFramework == undefined) {
         config.app.addons.useGarnetFramework = {
@@ -2156,24 +2195,8 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    // The admin user is a CloudFormation-managed resource keyed on its username, so changing either
-    // field after the first deployment REPLACES it. Which way that goes depends only on whether the new
-    // username already exists in the pool: if it does, the create fails with AlreadyExists and the core
-    // stack rolls back; if it does not, the new user is created and the previous admin identity is
-    // orphaned (the resource carries a retain policy so it is not deleted, but it is no longer managed
-    // and its role assignments do not follow). A warning rather than an error, because an operator who
-    // has read this and accepts the consequence must still be able to deploy — and because synthesis
-    // cannot see the deployed value to know whether it changed.
-    if (config.app.adminUserId !== config.app.adminEmailAddress) {
-        console.warn(
-            `Configuration Warning: app.adminUserId ('${config.app.adminUserId}') and ` +
-                `app.adminEmailAddress ('${config.app.adminEmailAddress}') differ. Both are immutable ` +
-                `after the first deployment: changing either replaces the Amazon Cognito admin user, ` +
-                `which fails the deployment if the new username already exists in the pool and ` +
-                `otherwise orphans the previous admin. Grant additional administrators through roles ` +
-                `instead of by editing these fields.`
-        );
-    }
+    // adminUserId and adminEmailAddress are immutable after the first deployment (the Amazon Cognito
+    // admin user is keyed on its username); see configuration-reference.md.
 
     //Error check when implementing openSearch
     if (
@@ -3081,6 +3104,204 @@ export function validatePresignedUrlRestrictions(
     }
 }
 
+// A role ARN pattern: the deployment partition, the entry's own account, and a role path or name made
+// of the characters IAM permits, with at most one trailing `*`. A bare `role/*` (every role in the
+// account) is rejected separately.
+const BRIDGE_ROLE_NAME_CHARS = "[A-Za-z0-9+=,.@_\\-/]+";
+
+/**
+ * Validates app.pipelines.externalPipelineBridges. Each entry names a 12-digit account, a role ARN
+ * pattern in that account (the aws:PrincipalArn condition the orchestration bus resource policy
+ * carries), and optionally the exact Lambda function, SQS queue and EventBridge bus ARNs in that
+ * account the shared workflow role may invoke. Every ARN must use the deployment partition; no
+ * wildcard is accepted anywhere except as the final character of roleArnPattern. Throws a
+ * Configuration Error on any violation; warns when an entry names the deployment account itself.
+ * Exported for unit testing.
+ */
+export function validateExternalPipelineBridges(
+    bridges: ConfigPublicExternalPipelineBridge[],
+    deploymentPartition: string,
+    deploymentAccount?: string
+): void {
+    if (!Array.isArray(bridges)) {
+        throw new Error(
+            "Configuration Error: app.pipelines.externalPipelineBridges must be an array of { accountId, roleArnPattern, invokeTargets? } entries."
+        );
+    }
+    // An unrecognized Region resolves to no partition; the restricted-partition check reports that on
+    // its own, so here any partition token is accepted and only a known partition is compared.
+    const partition = deploymentPartition
+        ? deploymentPartition.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        : "aws[a-z-]*";
+    const seenPairs = new Set<string>();
+    bridges.forEach((bridge, index) => {
+        const label = `app.pipelines.externalPipelineBridges[${index}]`;
+        if (!bridge || typeof bridge !== "object") {
+            throw new Error(
+                `Configuration Error: ${label} must be an object with accountId and roleArnPattern.`
+            );
+        }
+        if (typeof bridge.accountId !== "string" || !/^\d{12}$/.test(bridge.accountId)) {
+            throw new Error(
+                `Configuration Error: ${label}.accountId must be a 12-digit AWS account ID.`
+            );
+        }
+        if (deploymentAccount && bridge.accountId == deploymentAccount) {
+            console.warn(
+                `Configuration Warning: ${label}.accountId matches the deployment account; the bridge is not actually cross-account.`
+            );
+        }
+
+        const pattern = bridge.roleArnPattern;
+        if (typeof pattern !== "string" || pattern == "") {
+            throw new Error(`Configuration Error: ${label}.roleArnPattern is required.`);
+        }
+        if (pattern.includes("?")) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' must not contain '?'; only a single trailing '*' is accepted.`
+            );
+        }
+        const firstStar = pattern.indexOf("*");
+        if (firstStar !== -1 && firstStar !== pattern.length - 1) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' may carry '*' only as its final character.`
+            );
+        }
+        // The pattern's partition is checked on its own first so the message names the mismatch
+        // rather than reporting a shape failure.
+        const patternPartition = pattern.split(":")[1];
+        if (deploymentPartition && patternPartition && patternPartition != deploymentPartition) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' uses partition '${patternPartition}' which does not match the deployment partition '${deploymentPartition}'.`
+            );
+        }
+        const roleMarker = pattern.indexOf(":role/");
+        const roleSuffix = roleMarker === -1 ? "" : pattern.substring(roleMarker + ":role/".length);
+        if (roleSuffix == "*" || roleSuffix.endsWith("/*")) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' matches every role under a path; name the role or a role-name prefix (for example role/my-bridge-*).`
+            );
+        }
+        // Built from the escaped partition constant and the fixed IAM name character class; no operator
+        // value reaches the pattern.
+        // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+        const roleArnPattern = new RegExp(
+            `^arn:${partition}:iam::${bridge.accountId}:role/${BRIDGE_ROLE_NAME_CHARS}\\*?$`
+        );
+        if (!roleArnPattern.test(pattern)) {
+            throw new Error(
+                `Configuration Error: ${label}.roleArnPattern '${pattern}' must be an IAM role ARN in account ${bridge.accountId} of the form arn:${deploymentPartition}:iam::${bridge.accountId}:role/<path-or-name>, with at most one trailing '*'.`
+            );
+        }
+        const pairKey = `${bridge.accountId}|${pattern}`;
+        if (seenPairs.has(pairKey)) {
+            throw new Error(
+                `Configuration Error: ${label} repeats accountId ${bridge.accountId} with roleArnPattern '${pattern}'; each bridge entry must be unique.`
+            );
+        }
+        seenPairs.add(pairKey);
+
+        if (bridge.invokeTargets == undefined) {
+            return;
+        }
+        if (!Array.isArray(bridge.invokeTargets)) {
+            throw new Error(
+                `Configuration Error: ${label}.invokeTargets must be an array of exact ARNs when set.`
+            );
+        }
+        // Exact Lambda function, SQS queue or EventBridge bus ARNs — any Region, the entry's account,
+        // the deployment partition, and no wildcard character anywhere.
+        // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+        const invokeTargetPattern = new RegExp(
+            `^arn:${partition}:(lambda:[a-z0-9-]+:${bridge.accountId}:function:[A-Za-z0-9_\\-]+(:[A-Za-z0-9_\\-]+)?` +
+                `|sqs:[a-z0-9-]+:${bridge.accountId}:[A-Za-z0-9_\\-]+(\\.fifo)?` +
+                `|events:[a-z0-9-]+:${bridge.accountId}:event-bus/[A-Za-z0-9._\\-/]+)$`
+        );
+        const seenTargets = new Set<string>();
+        bridge.invokeTargets.forEach((target, targetIndex) => {
+            const targetLabel = `${label}.invokeTargets[${targetIndex}]`;
+            if (typeof target !== "string" || target == "") {
+                throw new Error(`Configuration Error: ${targetLabel} must be a non-empty ARN.`);
+            }
+            if (/[*?]/.test(target)) {
+                throw new Error(
+                    `Configuration Error: ${targetLabel} '${target}' contains a wildcard; invoke targets must be exact ARNs.`
+                );
+            }
+            const targetPartition = target.split(":")[1];
+            if (deploymentPartition && targetPartition && targetPartition != deploymentPartition) {
+                throw new Error(
+                    `Configuration Error: ${targetLabel} '${target}' uses partition '${targetPartition}' which does not match the deployment partition '${deploymentPartition}'.`
+                );
+            }
+            if (!invokeTargetPattern.test(target)) {
+                throw new Error(
+                    `Configuration Error: ${targetLabel} '${target}' must be an exact Lambda function, SQS queue or EventBridge event-bus ARN in account ${bridge.accountId}.`
+                );
+            }
+            if (seenTargets.has(target)) {
+                throw new Error(
+                    `Configuration Error: ${targetLabel} '${target}' is listed more than once.`
+                );
+            }
+            seenTargets.add(target);
+        });
+    });
+}
+
+// A log-group name under `/aws/`: a service segment, then at least one further segment, with at most
+// one trailing `*`. Rejects `*`, `/`, `/aws/`, `/aws/*`, `/aws/<service>/*` and anything outside
+// `/aws/`, so the grant can never widen to the whole vended-log namespace.
+const EXECUTION_LOG_READ_PREFIX_PATTERN =
+    /^\/aws\/[A-Za-z0-9\-._#]+\/[A-Za-z0-9\-._#][A-Za-z0-9\-._/#]*\*?$/;
+// CloudWatch Logs caps a log-group name at 512 characters.
+const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
+
+/**
+ * Validates app.pipelines.executionLogReadPrefixes: a non-empty array of distinct log-group name
+ * patterns under `/aws/`, each used verbatim as an IAM resource name on the executionService
+ * log-read grant. Throws a Configuration Error on any violation. Exported for unit testing.
+ */
+export function validateExecutionLogReadPrefixes(prefixes: string[]): void {
+    if (!Array.isArray(prefixes) || prefixes.length == 0) {
+        throw new Error(
+            "Configuration Error: app.pipelines.executionLogReadPrefixes must be a non-empty array of log-group name patterns under /aws/ (leave the field out to use the defaults)."
+        );
+    }
+    const seen = new Set<string>();
+    prefixes.forEach((prefix, index) => {
+        const label = `app.pipelines.executionLogReadPrefixes[${index}]`;
+        if (typeof prefix !== "string" || prefix == "") {
+            throw new Error(`Configuration Error: ${label} must be a non-empty string.`);
+        }
+        if (prefix.length > EXECUTION_LOG_READ_PREFIX_MAX_LENGTH) {
+            throw new Error(
+                `Configuration Error: ${label} exceeds ${EXECUTION_LOG_READ_PREFIX_MAX_LENGTH} characters.`
+            );
+        }
+        if (prefix.includes("?")) {
+            throw new Error(
+                `Configuration Error: ${label} '${prefix}' must not contain '?'; only a single trailing '*' is accepted.`
+            );
+        }
+        const firstStar = prefix.indexOf("*");
+        if (firstStar !== -1 && firstStar !== prefix.length - 1) {
+            throw new Error(
+                `Configuration Error: ${label} '${prefix}' may carry '*' only as its final character.`
+            );
+        }
+        if (!EXECUTION_LOG_READ_PREFIX_PATTERN.test(prefix)) {
+            throw new Error(
+                `Configuration Error: ${label} '${prefix}' must name a log group under /aws/<service>/ (for example /aws/vendedlogs/Pipelines/* or /aws/sagemaker/TrainingJobs); '*', '/', '/aws/*' and '/aws/<service>/*' are not accepted.`
+            );
+        }
+        if (seen.has(prefix)) {
+            throw new Error(`Configuration Error: ${label} '${prefix}' is listed more than once.`);
+        }
+        seen.add(prefix);
+    });
+}
+
 /**
  * Validates the externalAssetBuckets configuration. A single bucket ARN may be
  * registered under multiple prefixes, but the prefixes must not overlap (S3 permits
@@ -3323,6 +3544,17 @@ export function crossRegionS3EndpointRegions(config: ConfigPublic): string[] {
     );
 }
 
+// One externally owned pipeline bridge allowed to register sub-executions on the orchestration bus.
+// The bus resource policy grants events:PutEvents to the account root carrying an aws:PrincipalArn
+// condition on roleArnPattern, so only roles matching the pattern can publish. invokeTargets lists
+// the exact Lambda function, SQS queue and EventBridge bus ARNs in accountId that the shared workflow
+// state-machine role may call for pipelines bound to that bridge.
+export interface ConfigPublicExternalPipelineBridge {
+    accountId: string; // 12-digit AWS account id of the bridge
+    roleArnPattern: string; // arn:<partition>:iam::<accountId>:role/<path-or-name>, trailing * allowed
+    invokeTargets?: string[]; // exact ARNs in accountId the workflow role may invoke (no wildcards)
+}
+
 //Public config values that should go into a configuration file
 export interface ConfigPublic {
     name: string;
@@ -3419,6 +3651,8 @@ export interface ConfigPublic {
         };
         pipelines: {
             deadlineCloudExecutionTypeEnabled: boolean;
+            externalPipelineBridges: ConfigPublicExternalPipelineBridge[];
+            executionLogReadPrefixes: string[];
             useConversion3dBasic: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;

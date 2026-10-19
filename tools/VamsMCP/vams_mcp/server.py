@@ -11,7 +11,7 @@ import functools
 import logging
 import sys
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 
 def _force_logging_to_stderr() -> None:
@@ -38,6 +38,7 @@ from .client import (  # noqa: E402
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
 from .config import Config, ConfigError  # noqa: E402
+from .custom_tools import register_custom_tools  # noqa: E402
 
 _force_logging_to_stderr()
 
@@ -110,19 +111,22 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
 # callers depend on). Moving them onto the client would couple the two again.
 
 
-def _unwrap_message_with_warnings(page: Any) -> Any:
-    """Unwrap the ``message`` envelope, keeping a sibling top-level ``warnings`` array.
+def _unwrap_message_with_warnings(page: Any, siblings: Tuple[str, ...] = ("warnings",)) -> Any:
+    """Unwrap the ``message`` envelope, keeping the named sibling top-level arrays (``warnings`` by
+    default).
 
     A pipeline save reports its non-blocking warnings as a SIBLING of ``message`` — the response
     model carries no warnings field, so that array is the only copy and plain unwrapping drops it.
+    An abort passes ``("warnings", "notAbortable")``: a group abort nests its results under
+    ``message`` and reports both arrays beside it.
     """
     payload = CLIENT.unwrap_message(page)
-    if not isinstance(page, dict) or not isinstance(payload, dict):
+    if not isinstance(page, dict) or not isinstance(payload, dict) or payload is page:
         return payload
-    warnings = page.get("warnings")
-    if not warnings or payload is page:
+    kept = {key: page[key] for key in siblings if page.get(key)}
+    if not kept:
         return payload
-    return {**payload, "warnings": warnings}
+    return {**payload, **kept}
 
 
 def _bounded_message_list(
@@ -1752,9 +1756,22 @@ if CONFIG.enable_writes:
         fans out across every active execution in that group — so keep it out of `autoApprove`
         alongside execute_workflow and rerun_execution. Confirm a group abort with the user first.
 
-        Pass group_id to abort every active execution in that group.
+        Pass group_id to abort every active execution in that group. Any returned warnings
+        identify a member whose sub-process may still be running after the abort.
+
+        A single abort answers `message` plus, when something could not be stopped, two sibling
+        arrays: `warnings` (free text) and `notAbortable` — one {resourceType, label, stageName,
+        locator} per registered sub-process of a type VAMS has no stop API for (an externally owned
+        pipeline's own compute, for example). The execution still reads ABORTED, so do NOT conclude
+        that everything stopped: a non-empty `notAbortable` means that compute is still running until
+        the bridge's own heartbeat or timeout ends it, and the entry names what and where. Both arrays
+        are absent from a clean abort. A group abort returns the group's results with the same two
+        arrays beside them: each warning is prefixed with its member's execution id and each
+        `notAbortable` entry carries its member's `executionId`, so non-empty `warnings` or
+        `notAbortable` from a group abort likewise means not everything stopped.
         """
-        return CLIENT.unwrap_message(CLIENT.api.abort_execution(execution_id, group_id=group_id))
+        return _unwrap_message_with_warnings(
+            CLIENT.api.abort_execution(execution_id, group_id=group_id), siblings=("warnings", "notAbortable"))
 
     # ---------------------------------------------------------------------
     # Comment / subscription / metadata-schema writes
@@ -2186,6 +2203,13 @@ if CONFIG.enable_destructive:
         first: it revokes the same access and can be undone.
         """
         return CLIENT.api.delete_user_api_key(api_key_id)
+
+
+# =========================================================================
+# CUSTOM TOOLS (fork extension point: vams_mcp/custom_tools.py, shipped empty)
+# =========================================================================
+
+register_custom_tools(mcp, CLIENT, CONFIG, tool_result)
 
 
 def main() -> None:

@@ -8,10 +8,10 @@
  * for every fixed-name deployment resource distributed to backend Lambda functions.
  * The dynamoTables, s3Buckets, and cloudwatchLogGroups categories are mirrored by
  * backend/backend/common/resourceNames.py — keep those lists identical. The
- * dynamoTablesLegacy and lambdaFunctions categories are consumed only by deployment
- * and data-migration tooling (mirrored by
- * infra/deploymentDataMigration/tools/ssm_resource_lookup.py), never by backend
- * Lambda handlers.
+ * dynamoTablesLegacy, lambdaFunctions and integration categories are consumed only by
+ * deployment tooling, data-migration tooling and externally owned pipeline bridge stacks
+ * (mirrored by infra/deploymentDataMigration/tools/ssm_resource_lookup.py), never by
+ * backend Lambda handlers.
  */
 export const RESOURCE_PARAM_KEYS = {
     dynamoTables: {
@@ -76,9 +76,16 @@ export const RESOURCE_PARAM_KEYS = {
         tagStorage: "dynamoTables/legacy/tagStorage",
         tagTypeStorage: "dynamoTables/legacy/tagTypeStorage",
     },
-    // Lambda function names consumed by data-migration tooling
+    // Lambda function names consumed by data-migration tooling and external bridge stacks
     lambdaFunctions: {
         crOsReindexer: "lambdaFunctions/crOsReindexer",
+        importGlobalPipelineWorkflow: "lambdaFunctions/importGlobalPipelineWorkflow",
+    },
+    // Integration surface an externally owned pipeline bridge stack resolves at deploy time
+    integration: {
+        orchestrationBusArn: "integration/orchestrationBusArn",
+        orchestrationEventSourcePrefix: "integration/orchestrationEventSourcePrefix",
+        workflowExecutionRoleArn: "integration/workflowExecutionRoleArn",
     },
     s3Buckets: {
         assetAuxiliary: "s3Buckets/assetAuxiliary",

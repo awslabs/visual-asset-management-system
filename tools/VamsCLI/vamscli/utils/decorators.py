@@ -106,7 +106,7 @@ def requires_setup_and_auth(func):
             profile_name = profile_manager.profile_name
             raise SetupRequiredError(
                 f"Setup required for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+                f"Please run 'vamscli --profile {profile_name} setup <api-gateway-url>' first."
             )
         
         # API availability check (global infrastructure concern)

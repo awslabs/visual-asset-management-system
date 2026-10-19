@@ -29,7 +29,7 @@ web/
   customInstalls/           # Viewer plugin custom install scripts
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -48,7 +48,8 @@ web/
                             #   WorkflowSystemConfigFields, DagPreview, workflowValidation
       executions/           # ExecutionsBoard, ExecutionDetailPage, ExecutionLogViewer,
                             #   ExecutionQuickView, ExecuteWorkflowModal, SubProcessesSection, StageTimeline,
-                            #   logSearch
+                            #   logSearch, resourceTypeLabels (sub-process type labels; unknown types render
+                            #   raw with a not-abortable note when abortable === false)
       wizard/               # ExecuteWizard (+ExecuteWizardBody), WizardRail, RequirementsStrip, WorkflowPicker,
                             #   pipeline/input/review stages, InputFileSelector, MetadataSourceSelector,
                             #   SelectedInputFilesList, BulkFilePicker, selectedInputFiles (multi-file
@@ -59,8 +60,8 @@ web/
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
 
-    services/               # API and data services (with features/orchestration/api/, the ONLY
-                            #   places apiClient is imported)
+    services/               # API and data services (with features/orchestration/api/ and, in a
+                            #   fork, custom/services/, the ONLY places apiClient is imported)
       APIService.ts         # Main API service (~900+ lines, 40+ exports)
       apiClient.ts          # Custom fetch wrapper (internal, never import from components)
       appCache.ts           # localStorage cache (replaces Amplify Cache)
@@ -70,6 +71,12 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      addons/               # Add-on API calls (physnaAPIService.ts)
+
+    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
+                            #   — see WEB_FRONTEND.md 7.5
+    custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
+                            #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -126,6 +133,7 @@ web/
       Navigation.tsx        # Left sidebar navigation
     utils/
       apiEndpoint.ts        # Resolves the API base URL
+      chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
       sessionManager.ts     # Idle/expiry session handling
     styles/
@@ -200,7 +208,7 @@ web/
 
 ### **Rule 1: All API Calls Go Through Service Layer Files**
 
-Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` may import `apiClient`.
+Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` (including `src/services/addons/` for add-on calls), `src/features/orchestration/api/` and, in a fork, `src/custom/services/` may import `apiClient`.
 
 ```typescript
 // CORRECT -- import from a service file
