@@ -32,7 +32,8 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
                       output_s3_asset_metadata_path, inputOutput_s3_assetAuxiliary_files_path,
                       input_metadata_s3_location, input_configuration_s3_location, orchestration_event_prefix,
                       external_task_token, executing_userName, executing_requestContext, asset_id, database_id,
-                      cosmos_prompt):
+                      cosmos_prompt,
+                      input_bucket_region="", output_bucket_region=""):
     """
     Execute the Cosmos Text2World pipeline by invoking the openPipeline Lambda.
     Text2World does not require an input file, only a prompt.
@@ -54,6 +55,10 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "executingRequestContext": executing_requestContext,
         "assetId": asset_id,
         "databaseId": database_id,
+        # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+        # is in the deployment Region), so the Batch container addresses each bucket in its Region.
+        "inputBucketRegion": input_bucket_region,
+        "outputBucketRegion": output_bucket_region,
         "cosmosPrompt": cosmos_prompt
     }
 
@@ -160,7 +165,9 @@ def lambda_handler(event, context):
             executing_requestContext,
             resolved['assetId'],
             resolved['databaseId'],
-            cosmos_prompt
+            cosmos_prompt,
+            input_bucket_region=resolved['inputBucketRegion'],
+            output_bucket_region=resolved['outputBucketRegion'],
         )
 
         return {

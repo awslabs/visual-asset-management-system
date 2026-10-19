@@ -139,7 +139,8 @@ def resolve_checkpoint_folder(s3_asset_path: str, requested: str) -> str:
     prefix = prefix.rstrip("/") + "/" if prefix else ""
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
         ["aws", "s3api", "list-objects-v2", "--bucket", bucket, "--prefix", prefix,
-         "--delimiter", "/", "--query", "CommonPrefixes[].Prefix", "--output", "json"],
+         "--delimiter", "/", "--query", "CommonPrefixes[].Prefix", "--output", "json",
+         *manifest_io.s3_region_args(f"s3://{bucket}/")],
         capture_output=True, text=True,
     )  # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -173,7 +174,7 @@ def download_checkpoint_from_s3(s3_asset_path: str, checkpoint_folder: str, loca
     logger.info(f"Downloading checkpoint: {source} -> {local_dir}")
 
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "sync", source, str(local_dir)],
+        ["aws", "s3", "sync", source, str(local_dir), *manifest_io.s3_region_args(source)],
         capture_output=True, text=True,
     )  # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -211,6 +212,7 @@ def download_asset_from_s3(s3_asset_path: str, local_dir: Path) -> None:
             s3_asset_path, str(local_dir),
             "--exclude", "gr00tOutput_*/*",
             "--exclude", "gr00tOutput_*",
+            *manifest_io.s3_region_args(s3_asset_path),
         ],
         capture_output=True, text=True
     )  # nosemgrep: dangerous-subprocess-use-audit
@@ -228,7 +230,7 @@ def upload_output_to_s3(local_dir: Path, s3_output_path: str, output_folder_name
     logger.info(f"Uploading output to S3: {local_dir} -> {s3_dest}")
 
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "sync", str(local_dir), s3_dest],
+        ["aws", "s3", "sync", str(local_dir), s3_dest, *manifest_io.s3_region_args(s3_dest)],
         capture_output=True, text=True
     )  # nosemgrep: dangerous-subprocess-use-audit
 
@@ -564,6 +566,8 @@ def main():
         logger.info("=" * 80)
 
         definition = load_pipeline_definition()
+        # Each asset bucket's Region, so every S3 command below addresses the bucket where it is.
+        manifest_io.register_bucket_regions(definition.get("bucketRegions"))
         logger.info(f"Pipeline definition loaded: {json.dumps(definition, indent=2)}")
 
         # Extract required fields

@@ -175,6 +175,10 @@ Pipeline interface endpoints are placed in the isolated subnets, except the Amaz
 Enabling VPC-required pipelines creates several VPC interface endpoints, each of which incurs hourly charges. Review the [Configuration Guide](../deployment/configuration-reference.md) for details on VPC endpoint management.
 :::
 
+:::note[Inputs in an asset bucket in another Region]
+Whether a pipeline can process an asset whose bucket is in another Region depends on its compute placement and on who owns the code that reads Amazon S3. The Lambda pipelines (3D Basic Conversion, CAD/Mesh Metadata Extraction) and the VAMS-owned containers in **private** subnets (Gaussian Splatting, NVIDIA Cosmos, Cosmos 3, Gr00t, Isaac Lab Training) address each asset bucket in the Region the workflow manifest names (`bucketRegion`); the pipelines whose AWS Batch compute runs in **isolated** subnets (Coordinate Transform, Potree Point Cloud Viewer, 3D Preview Thumbnail, GenAI Metadata Labeling) read such inputs through the cross-Region Amazon S3 interface endpoint the VPC builder creates for each bucket Region (`app.useGlobalVpc.addCrossRegionS3Endpoints`, on by default), and their `vamsExecute` function fails the execution before submitting the job when an input is in a Region that has no such endpoint; RapidPipeline and ModelOps run third-party container images whose own SDK reads and writes Amazon S3, so they are same-Region only and their `vamsExecute` function rejects a cross-Region input or output bucket. The per-pipeline support table, and the procedure for moving an isolated-subnet pipeline to private subnets when the endpoint is unavailable, are described in [External S3 setup](../deployment/external-s3-setup.md#pipelines-and-cross-region-inputs).
+:::
+
 ## Pipeline S3 Output Paths
 
 ![Asset Auxiliary Pipeline Flow](/img/asset_auxiliary_pipeline.jpeg)
