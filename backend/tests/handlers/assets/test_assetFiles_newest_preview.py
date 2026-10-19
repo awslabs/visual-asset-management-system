@@ -154,3 +154,28 @@ class TestListingAttachesTheNewestPreview:
             newest = af.find_newest_preview_file_for_base("bucket", "asset1/a/m.glb")
         assert newest == "asset1/a/m.glb.previewFile.png"
         paginator.paginate.assert_called_once_with(Bucket="bucket", Prefix="asset1/a/m.glb.previewFile.")
+
+    def test_single_file_lookup_lists_a_remote_bucket_in_its_region(self, monkeypatch):
+        """The lookup lists through the module's Region-routing client, so an asset bucket in
+        another Region is listed with that Region's client (#410)."""
+        af = _af()
+        # The module the routing client's methods resolve names in (the conftest's common.s3 mock;
+        # sys.modules may hold a later copy of it).
+        routing = type(af.s3_client)._client_for.__globals__
+        regional, default = MagicMock(name="eu-west-1"), MagicMock(name="default")
+        regional.get_paginator.return_value.paginate.return_value = [{"Contents": [
+            {"Key": "asset1/a/m.glb.previewFile.png",
+             "LastModified": datetime(2026, 10, 16, tzinfo=timezone.utc)},
+        ]}]
+        monkeypatch.setitem(routing["_bucket_regions_by_name"], "remote-bucket", "eu-west-1")
+        monkeypatch.setitem(routing, "s3_client_for_region",
+                            lambda region=None: {"eu-west-1": regional}[region])
+        monkeypatch.setattr(af.s3_client, "_default_client", default)
+
+        newest = af.find_newest_preview_file_for_base("remote-bucket", "asset1/a/m.glb")
+
+        assert newest == "asset1/a/m.glb.previewFile.png"
+        regional.get_paginator.assert_called_once_with("list_objects_v2")
+        regional.get_paginator.return_value.paginate.assert_called_once_with(
+            Bucket="remote-bucket", Prefix="asset1/a/m.glb.previewFile.")
+        default.get_paginator.assert_not_called()
