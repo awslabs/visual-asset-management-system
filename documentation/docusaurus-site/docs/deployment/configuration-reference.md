@@ -996,6 +996,8 @@ Grant: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildExecutionServiceFun
 
 ## Addons (`app.addons`)
 
+Settings for the [add-ons](../developer/addons-overview.md) that integrate VAMS with an external solution. Each is off by default. The licensed VNTANA and VEERUM viewers are add-ons as well, but they are enabled in `web/src/visualizerPlugin/config/addonViewerConfig.json` rather than here.
+
 ### Garnet Framework (`app.addons.useGarnetFramework`)
 
 Integration with the Garnet Framework external knowledge graph for NGSI-LD data synchronization.
@@ -1159,6 +1161,7 @@ Beyond `config.json`, VAMS supports several supplementary configuration files:
 | `infra/config/policy/s3AdditionalBucketPolicyConfig.json`    | Additional IAM policy statements applied to all Amazon S3 buckets. Controls presigned URL and STS credential access restrictions.                                                                                                                             |
 | `infra/config/policy/iamRoleConfig.json`                     | Pre-created IAM role mappings for restricted environments. Read only when `app.iamRoleConfig.useCustomBootstrapRoles` or `app.iamRoleConfig.useCustomVamsStackRoles` is `true`.                                                                               |
 | `infra/config/csp/cspAdditionalConfig.json`                  | Additional Content Security Policy (CSP) sources for external APIs, scripts, images, media, fonts, and styles.                                                                                                                                                |
+| `infra/config/custom/customConfig.json`                      | Settings for the resources a fork adds through the fork extension points. Ships as `{}`; read only by `infra/lib/nestedStacks/custom/customResources.ts`, not by `getConfig()`. See [Extending VAMS in a Fork](../developer/customizing-vams.md).             |
 | `infra/config/saml-config.ts`                                | SAML identity provider settings for Amazon Cognito federation. Required when `authProvider.useCognito.useSaml` is `true`. See [Security Architecture](../architecture/security.md#saml-federation).                                                           |
 | `infra/config/oidc-config.ts`                                | OIDC identity provider settings for Amazon Cognito federation. Enable with `useCognito.useOidc: true` in `config.json` and configure provider details (client ID, issuer URL, attribute mapping, `displayName`). Client secret stored in AWS Secrets Manager. |
 | `infra/config/docker/Dockerfile-customDependencyBuildConfig` | Custom Docker build configuration for Lambda layer packaging. Useful for adding custom SSL certificates for HTTPS proxy environments.                                                                                                                         |
