@@ -159,16 +159,33 @@ def attribute_document(outcome, update_type="update"):
     return {"type": "attribute", "updateType": update_type, "metadata": entries}
 
 
+def _split_top_level(line, separator):
+    """``line`` split on ``separator`` where it stands outside brackets; a comma counts only when a space
+    follows it (a decimal comma such as "5,5 mm" is not a separator)."""
+    parts, depth, start = [], 0, 0
+    for i, char in enumerate(line):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char == separator and depth == 0 and (separator != "," or line[i + 1:i + 2].isspace()):
+            parts.append(line[start:i])
+            start = i + 1
+    return parts + [line[start:]]
+
+
 def assumptions_of(summary):
     """The items of the summary's last "Assumptions:" line: split on semicolons when it has any, else on
-    commas followed by a space (a decimal comma such as "5,5 mm" is not split). Empty for "none"."""
+    commas followed by a space, in both cases only outside brackets. Empty for "none"."""
     text = summary or ""
     matches = list(_ASSUMPTIONS_RE.finditer(text))
     if not matches:
         return []
     tail = text[matches[-1].end():].strip().splitlines()
     line = tail[0].strip() if tail else ""
-    parts = line.split(";") if ";" in line else re.split(r",\s+", line)
+    parts = _split_top_level(line, ";")
+    if len(parts) == 1:
+        parts = _split_top_level(line, ",")
     items = [p.strip().rstrip(".").strip() for p in parts]
     return [i for i in items if i.lower() not in _NO_ASSUMPTIONS]
 

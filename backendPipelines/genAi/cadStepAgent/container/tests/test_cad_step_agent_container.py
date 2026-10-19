@@ -417,6 +417,9 @@ class TestReport:
         assert report.assumptions_of("Plate.\nAssumptions: hole 5,5 mm; margin 5 mm\nmore text") == ["hole 5,5 mm", "margin 5 mm"]
         assert report.assumptions_of("No assumption: stated. Assumptions: none") == []
         assert report.assumptions_of("Everything specified.") == []
+        # A comma inside brackets belongs to its item.
+        assert report.assumptions_of("Assumptions: Pi 4 pattern (58 x 49 mm, M2.5), 2020 slot (5.5 mm, 40 mm apart)") == \
+            ["Pi 4 pattern (58 x 49 mm, M2.5)", "2020 slot (5.5 mm, 40 mm apart)"]
 
     def test_result_document_mirrors_the_outcome_with_bounded_lists(self):
         outcome = _outcome(summary="Added holes. Assumptions: depth 5 mm", unresolved=["u" * 300] * 40,
