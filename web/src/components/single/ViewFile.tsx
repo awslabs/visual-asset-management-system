@@ -88,7 +88,18 @@ interface Asset {
 
 // File format detection now handled by plugin system - no longer needed
 
+// React Router keeps this route's element mounted when only :databaseId or :assetId change, so a link
+// to another asset's file would re-render the previous asset's page with its loaded file still in
+// state. Keying on the asset gives each asset a fresh page instance.
 export default function ViewFile() {
+    const { databaseId, assetId } = useParams<{
+        databaseId: string;
+        assetId: string;
+    }>();
+    return <ViewFileForAsset key={`${databaseId}/${assetId}`} />;
+}
+
+function ViewFileForAsset() {
     const location = useLocation();
     const navigate = useNavigate();
     const { state } = location as { state: ViewFileState };
