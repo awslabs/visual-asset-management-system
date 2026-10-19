@@ -339,8 +339,24 @@ export async function selectTreePath(
         if (isLeaf && options.modifiers?.length) {
             await node.scrollIntoViewIfNeeded().catch(() => undefined);
             await node.click({ modifiers: options.modifiers, timeout: 8_000 });
-        } else {
+        } else if (isLeaf) {
             await clickWhenActionable(node, `tree node "${segment}"`);
+        } else {
+            // A click on a folder's label selects it; only its caret expands it. Expand a folder whose
+            // children are not rendered yet, and leave one that already is alone (the caret toggles).
+            const row = node.locator("xpath=ancestor::*[contains(@class, 'tree-item-content')][1]");
+            const children = row.locator(
+                "xpath=following-sibling::*[contains(@class, 'tree-item-children')]"
+            );
+            if ((await children.count()) === 0) {
+                await clickWhenActionable(
+                    row.locator(".tree-item-caret"),
+                    `caret of folder "${segment}"`
+                );
+            }
+            await expect(children, `folder "${segment}" did not expand`).toHaveCount(1, {
+                timeout: 15_000,
+            });
         }
         if (!isLeaf) {
             // Give the tree a moment to render the newly revealed children.
