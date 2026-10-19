@@ -347,7 +347,7 @@ class TestExecutionDetails:
             assert result.exit_code != 0
 
     @pytest.mark.parametrize("current, expected", [
-        (True, 'Workflow version: 3 (current)\n'),
+        (True, 'Workflow version: 3 (latest)\n'),
         (False, 'Workflow version: 3 (superseded)\n'),
         (None, 'Workflow version: 3\n'),
     ])

@@ -513,7 +513,7 @@ const WorkflowVersionValue: React.FC<{
     return (
         <span className="inline-flex items-center gap-2">
             <span className="font-mono">{version}</span>
-            {current === true && <span className="text-text-secondary">(current)</span>}
+            {current === true && <span className="text-text-secondary">(latest)</span>}
             {current === false && (
                 <>
                     <span className="orch-outline px-2 py-0.5 text-xs font-bold bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300 rounded">

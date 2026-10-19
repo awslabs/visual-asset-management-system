@@ -316,7 +316,7 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
 def details(ctx: click.Context, execution_id: str, include_sub_executions: bool, json_output: bool):
     """Get an execution's full detail and traceability (pipelines, inputs, outputs, metadata).
 
-    Workflow version is the published workflow state machine version the run started on: current when
+    Workflow version is the published workflow state machine version the run started on: latest while
     the workflow still runs that version, superseded when it has been redeployed since (so the live
     workflow and pipeline settings may be newer than the ones the run used), not recorded for a run
     started before versions were recorded.
@@ -374,7 +374,7 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
             # versions were recorded; the key is absent only from a service that does not report it.
             if 'workflowVersion' in message:
                 version = message.get('workflowVersion')
-                state = {True: 'current', False: 'superseded'}.get(message.get('workflowVersionCurrent'))
+                state = {True: 'latest', False: 'superseded'}.get(message.get('workflowVersionCurrent'))
                 if version is None:
                     out.append("Workflow version: not recorded")
                 else:

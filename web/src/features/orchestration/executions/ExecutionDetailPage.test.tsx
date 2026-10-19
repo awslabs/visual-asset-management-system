@@ -1390,11 +1390,11 @@ describe("ExecutionDetailPage workflow version", () => {
         jest.clearAllMocks();
     });
 
-    it("shows the version a run started on as current", () => {
+    it("shows the version a run started on as the latest", () => {
         renderVersion({ workflowVersion: 3, workflowVersionCurrent: true });
         const field = versionField();
         expect(within(field).getByText("3")).toBeInTheDocument();
-        expect(within(field).getByText("(current)")).toBeInTheDocument();
+        expect(within(field).getByText("(latest)")).toBeInTheDocument();
         expect(within(field).queryByText("Superseded")).not.toBeInTheDocument();
     });
 
@@ -1403,7 +1403,7 @@ describe("ExecutionDetailPage workflow version", () => {
         const field = versionField();
         expect(within(field).getByText("3")).toBeInTheDocument();
         expect(within(field).getByText("Superseded")).toBeInTheDocument();
-        expect(within(field).queryByText("(current)")).not.toBeInTheDocument();
+        expect(within(field).queryByText("(latest)")).not.toBeInTheDocument();
 
         await userEvent.hover(
             within(field).getByRole("button", { name: "About superseded versions" })
