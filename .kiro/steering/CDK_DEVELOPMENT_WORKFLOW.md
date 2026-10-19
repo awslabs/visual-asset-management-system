@@ -807,6 +807,28 @@ def send_response(event: Dict[str, Any], context: Any, status: str, reason: str 
 
 **In a fork, or for an external solution.** Pipelines have no custom lane and are not add-ons. A fork adds a pipeline without editing these core files by deploying it as its own stack and registering it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges`); the custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam. An upstream pipeline that calls a vendor's service is still a core pipeline behind its own `app.pipelines.*` switch. The `/add-pipeline` skill's fork mode and `documentation/docusaurus-site/docs/developer/customizing-vams.md` (Known Limits) say the same; the add-on definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
+### **Fetching Files an Input References**
+
+A container job role usually reads every asset bucket, so a path written inside an uploaded file (a glTF URI, a USD sublayer/reference/payload or texture path, an OBJ `mtllib`, an FBX texture name) is untrusted input that could pull another asset's content into this one's output. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/dependencies.py` is the worked example (ARCC BSC1, allowlist validation):
+
+-   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
+-   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
+-   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
+
+### **Parsing XML From Uploaded Files**
+
+An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`).
+
+### **Sizing a Container's Work to Its Task**
+
+A Batch/Fargate container reads its limits from its own cgroup rather than from a tier name or a constant, so it stays inside whichever job size started it. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
+
+-   Memory from `/sys/fs/cgroup/memory.max` (v1 `memory/memory.limit_in_bytes` fallback; "max" or a near-2^63 value means unlimited); CPUs from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
+-   Derive work budgets (points, triangles) from both, and set `LP_NUM_THREADS` (Mesa llvmpipe) to the CPU count before the first GL context exists.
+-   Check the input size plus output headroom against `shutil.disk_usage` before downloading, and fail with a message naming both sizes; do not keep a fixed maximum-size constant.
+-   Download with a `TransferConfig` (parallel ranged GETs); stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
+-   Log a compute-tier environment variable when the orchestration sets one, but never branch on it; log each phase's duration (`utils/timing.py`).
+
 ### **Reporting Failure on a Task-Token Pipeline**
 
 A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
