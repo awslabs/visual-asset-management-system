@@ -82,6 +82,10 @@ const KNOWN_NON_FORM_PATHS: ReadonlySet<string> = new Set([
     "app.assetBuckets.externalAssetBuckets.bucketAccountId",
     "app.assetBuckets.externalAssetBuckets.bucketRegion",
     "app.assetBuckets.externalAssetBuckets.bucketKmsKeyArn",
+    // Component: fields/ExternalBridgesField.tsx
+    "app.pipelines.externalPipelineBridges.accountId",
+    "app.pipelines.externalPipelineBridges.roleArnPattern",
+    "app.pipelines.externalPipelineBridges.invokeTargets",
 ]);
 
 function readJson(filePath: string): Record<string, unknown> {

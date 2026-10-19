@@ -16,6 +16,8 @@ import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
+import { addonRouteTable } from "./addons/addonRoutes";
+import { customRouteTable } from "./custom/customRoutes";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
@@ -48,13 +50,13 @@ const ComplianceCascades = React.lazy(() => import("./pages/ComplianceCascades")
 const ComplianceAuditLog = React.lazy(() => import("./pages/ComplianceAuditLog"));
 const DatabaseCompliance = React.lazy(() => import("./pages/DatabaseCompliance"));
 
-interface RouteOption {
+export interface RouteOption {
     path: string;
     Page: React.FC;
     active: string;
 }
 
-export const routeTable: RouteOption[] = [
+const coreRouteTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "/" },
     { path: "/search", Page: SearchPage, active: "/" },
     { path: "/search/:databaseId/assets", Page: SearchPage, active: "/" },
@@ -246,6 +248,13 @@ export const routeTable: RouteOption[] = [
         Page: LandingPage,
         active: "/",
     },
+];
+
+/** Core routes, then the add-ons' (addons/addonRoutes.tsx), then a fork's (custom/customRoutes.tsx). */
+export const routeTable: RouteOption[] = [
+    ...coreRouteTable,
+    ...addonRouteTable,
+    ...customRouteTable,
 ];
 
 interface AppRoutesProps {

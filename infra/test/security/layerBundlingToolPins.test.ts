@@ -45,6 +45,9 @@ describe("layer bundling tool pins", () => {
     });
 
     test("poetry is the version that wrote the layer lock files", () => {
-        expect(installSteps()).toContain("pip install poetry==2.1.4");
+        const pinned = installSteps()
+            .flatMap((step) => step.split(/\s+/))
+            .filter((token) => !token.startsWith("-"));
+        expect(pinned).toContain("poetry==2.1.4");
     });
 });

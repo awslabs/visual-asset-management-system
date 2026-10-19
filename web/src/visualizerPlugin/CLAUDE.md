@@ -9,8 +9,9 @@ Auto-loaded when working within `web/src/visualizerPlugin/`. See `web/CLAUDE.md`
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`core/PluginRegistry.ts`) — Singleton that manages all viewer plugins
--   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for all plugins
--   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports
+-   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for the core plugins; `addonViewerConfig.json` (add-on viewers: Physna and the licensed VNTANA and VEERUM viewers) and `customViewerConfig.json` (fork extension point) hold the rest
+-   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` for add-on and fork viewers
+-   **viewerSources.ts** (`core/viewerSources.ts`) — Merges the three configs and manifests for the registry (see "Add-on and fork viewers")
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
 
@@ -36,8 +37,8 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
 | `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
-| `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed)                             |
-| `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed)                             |
+| `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
+| `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
 | `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
@@ -282,6 +283,20 @@ export const VIEWER_COMPONENTS = {
 ```
 
 **Step 5:** If the viewer has external dependencies, create a custom install script in `web/customInstalls/myviewer/` and add it to the `postinstall` chain in `web/package.json`.
+
+### Add-on and fork viewers
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+The registry loads three tiers, merged in this order by `core/viewerSources.ts`:
+
+| Tier   | Config                           | Manifest                           | Owner                                                                   |
+| ------ | -------------------------------- | ---------------------------------- | ----------------------------------------------------------------------- |
+| Core   | `config/viewerConfig.json`       | `viewers/manifest.ts`              | upstream                                                                |
+| Add-on | `config/addonViewerConfig.json`  | `viewers/addonManifest.ts`         | upstream (the Physna viewer and the licensed VNTANA and VEERUM viewers) |
+| Custom | `config/customViewerConfig.json` | `viewers/custom/customManifest.ts` | fork extension point (shipped empty)                                    |
+
+An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), is registered in the add-on files, never in `viewerConfig.json` or `manifest.ts` (`infra/test/addon/addonCoreSeparation.test.ts`; `config/viewerConfig.test.ts` checks that the core files hold no `(LICENSED VIEWER)` entry). Its plugin directory stays under `viewers/` like a core viewer's (`viewers/VntanaViewerPlugin/`, `viewers/VeerumViewerPlugin/`, `viewers/PhysnaViewerPlugin/`). To enable a licensed viewer, set `"enabled": true` on its entry in `config/addonViewerConfig.json`; its install script (`web/customInstalls/vntana/`, `web/customInstalls/veerum/`, unchanged in the `postinstall` chain) decides whether to fetch the vendor package with `web/customInstalls/utility/checkViewerEnabled.js`, which reads the core, add-on and custom config files in the registry's order. A fork's viewer lives in `viewers/custom/<Name>Plugin/` and is registered in the custom files (Steps 1–4 apply with those paths); its install steps go in `web/customInstalls/custom/customInstall.js`, which `postinstall` already runs, so a fork does not edit the `postinstall` chain. A custom entry whose `id` repeats a core or add-on `id` is skipped with a console error, and a custom manifest key that repeats a shipped one is ignored, so a fork cannot replace a shipped viewer. Ids prefixed `custom-` are recommended, not enforced. The add-on viewers register after every core viewer, so a priority tie between a core and an add-on viewer resolves to the core one. The catalog table above lists core and add-on viewers only (`config/viewerConfig.test.ts` checks it against both files). `core/viewerSources.test.ts` covers the merge.
 
 ---
 

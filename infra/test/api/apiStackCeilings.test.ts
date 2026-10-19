@@ -395,7 +395,7 @@ describe("nested-stack CloudFormation Outputs ceiling", () => {
      * CloudFormation allows 200 Outputs per template and the limit is not adjustable. The storage stack is
      * the one anywhere near it: every table referenced from a sibling nested stack contributes a
      * `tableName` Output for its SSM parameter, plus a `tableArn` Output where a cross-stack grant needs
-     * one, and `ResourceNamesBuilder` consumes 64 of them as its own Parameters.
+     * one, and `ResourceNamesBuilder` consumes 66 of them as its own Parameters.
      *
      * Exceeding 200 is rejected at ValidateTemplate — the same class of ceiling that already forced the
      * apiBuilder / apiBuilder2 split. A threshold below the hard limit is what makes that discoverable

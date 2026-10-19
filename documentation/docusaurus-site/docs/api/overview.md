@@ -6,16 +6,25 @@ This section describes the VAMS REST API, which provides programmatic access to 
 
 ## Base URL
 
-All API endpoints are served through an Amazon API Gateway REST API. The base URL is determined by your deployment and follows this format:
+All API endpoints are served through an Amazon API Gateway REST API deployed to a stage named `api`. The base URL includes that stage:
 
 ```
-https://{api-id}.execute-api.{region}.amazonaws.com
+https://{api-id}.execute-api.{region}.amazonaws.com/api
 ```
 
-When deployed behind CloudFront or an Application Load Balancer (ALB), the base URL corresponds to your distribution or ALB domain.
+This is the value of the `APIGatewayEndpointOutput` stack output. The paths documented on the following pages are appended to it, so `GET /database` is `https://{api-id}.execute-api.{region}.amazonaws.com/api/database`.
+
+When deployed behind CloudFront, the distribution forwards `/api/*` on the web domain to that stage, so the same request is `https://{web-domain}/api/database`. An Application Load Balancer (ALB) deployment answers `/api/*` on the web domain with a redirect to the execute-api URL above instead.
+
+The two unauthenticated routes carry `/api` in their own path, so on the execute-api host the stage segment appears twice:
+
+| Route                     | On the execute-api host                                                      | On the web domain                         |
+| ------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------- |
+| `GET /api/version`        | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/version`        | `https://{web-domain}/api/version`        |
+| `GET /api/amplify-config` | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/amplify-config` | `https://{web-domain}/api/amplify-config` |
 
 :::info[Discovering the Base URL]
-After deployment, retrieve the API endpoint from the CDK stack outputs or from the `/api/amplify-config` endpoint, which returns the full API URL.
+After deployment, read `APIGatewayEndpointOutput` from the CDK stack outputs, or request `https://{web-domain}/api/amplify-config` from the web application's domain (`WebAppCloudFrontDistributionDomainName` or `webDistributionUrl` in the outputs): its `api` field is the base URL.
 :::
 
 ---
@@ -186,7 +195,7 @@ Several operations return presigned S3 URLs for direct file access. These includ
 
 -   **Asset downloads** (`POST /database/{databaseId}/assets/{assetId}/download`) -- Returns a time-limited presigned URL for downloading a file.
 -   **File uploads** (`POST /uploads`) -- Returns presigned URLs for uploading files directly to S3.
--   **Asset streaming** (`GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`) -- Streams file content through the API Gateway with byte-range support.
+-   **Asset streaming** (`GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`) -- Answers with a `307` redirect to a short-lived presigned URL; the client fetches the bytes directly from Amazon S3, with byte-range support. Do not forward the `Authorization` header to the redirect target.
 
 :::warning[Presigned URL Expiration]
 Presigned URLs remain valid for at most the deployment's `app.authProvider.presignedUrlTimeoutSeconds` (24 hours by default), and stop working earlier if the Lambda role credentials that signed them expire first. Plan to use generated URLs promptly after receiving them.

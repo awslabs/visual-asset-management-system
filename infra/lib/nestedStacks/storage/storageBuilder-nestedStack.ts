@@ -755,6 +755,9 @@ export function storageResourcesBuilder(
     // Deployment-unique bus name and event source prefix so multiple deployments can coexist in a region
     const orchestrationBusName = `${config.name}-${config.app.baseStackName}-orchestration`;
     const eventSourcePrefix = `${config.name}.${config.app.baseStackName}`;
+    // The one detail-type a pipeline publishes to register its sub-processes and log sources
+    // (handlers/workflows/sfn/registerPipelineExecution.py; the standing rule in workflowFunctions.ts).
+    const PIPELINE_REGISTER_DETAIL_TYPE = "pipeline.execution.register";
 
     const orchestrationBus = new events.EventBus(scope, "OrchestrationBus", {
         eventBusName: orchestrationBusName,
@@ -799,6 +802,37 @@ export function storageResourcesBuilder(
     orchestrationBusAuditRule.addTarget(
         new targets.CloudWatchLogGroup(orchestrationBusAuditLogGroup)
     );
+
+    // Externally owned pipeline bridges publish registration events onto this bus. IAM accepts no
+    // wildcard in a Principal and binds an exact role principal to that role's unique id (a bridge role
+    // recreated on its side would be silently denied), so the bridge account root is the principal
+    // carrying an aws:PrincipalArn condition on the operator-declared role ARN pattern — the condition
+    // is the grant. The same bus carries the deployment's own file-upload trigger events, so the grant
+    // is further bound to the one detail-type a bridge may publish and to the per-execution source
+    // pipelines register under (eventSourcePrefix.execution.<id>.pipeline.<id>); a listed role cannot
+    // start a workflow or publish under the deployment's own trigger source. One statement per entry;
+    // no entries, no policy resource.
+    const externalPipelineBridges = config.app.pipelines.externalPipelineBridges ?? [];
+    externalPipelineBridges.forEach((bridge, index) => {
+        orchestrationBus.addToResourcePolicy(
+            new iam.PolicyStatement({
+                sid: `ExternalPipelineBridge${index}`,
+                effect: iam.Effect.ALLOW,
+                principals: [
+                    new iam.ArnPrincipal(`arn:${Partition()}:iam::${bridge.accountId}:root`),
+                ],
+                actions: ["events:PutEvents"],
+                resources: [orchestrationBus.eventBusArn],
+                conditions: {
+                    StringEquals: { "events:detail-type": [PIPELINE_REGISTER_DETAIL_TYPE] },
+                    StringLike: {
+                        "aws:PrincipalArn": [bridge.roleArnPattern],
+                        "events:source": [`${eventSourcePrefix}.execution.*.pipeline.*`],
+                    },
+                },
+            })
+        );
+    });
 
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
@@ -3015,6 +3049,13 @@ export function storageResourcesBuilder(
             storageResources.cloudWatchAuditLogGroups.actions.logGroupName,
         [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditErrors]:
             storageResources.cloudWatchAuditLogGroups.errors.logGroupName,
+        // Integration surface — resolved by externally owned pipeline bridge stacks, not handlers. The
+        // workflow role ARN and import function name of the same surface are published late-bound by
+        // ApiBuilder2, which builds after this registry is materialized.
+        [RESOURCE_PARAM_KEYS.integration.orchestrationBusArn]:
+            storageResources.eventBridge.orchestrationBus.eventBusArn,
+        [RESOURCE_PARAM_KEYS.integration.orchestrationEventSourcePrefix]:
+            storageResources.eventBridge.eventSourcePrefix,
         // Deprecated tables — published for data-migration tooling only
         [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.assetVersionsStorageV1]:
             assetVersionsStorageTableV1.tableName,

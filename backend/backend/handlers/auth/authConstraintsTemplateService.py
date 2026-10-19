@@ -385,7 +385,8 @@ def import_template_constraints(template_data, claims_and_roles):
         created_constraint_ids.append(constraint_id)
 
     now = datetime.utcnow().isoformat()
-    template_name = template_data.get('template', {}).get('name', 'unknown') if template_data.get('template') else 'unknown'
+    template_header = template_data.get('metadata') or template_data.get('template') or {}
+    template_name = template_header.get('name') or 'unknown'
 
     return ImportConstraintsTemplateResponseModel(
         success=True,
@@ -454,8 +455,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         )
 
         # AUDIT LOG: Template import
+        template_header = request_model.resolved_metadata
         log_auth_changes(event, "constraintsTemplateImport", {
-            "templateName": request_model.template.name if request_model.template else "unknown",
+            "templateName": template_header.name if template_header else "unknown",
             "roleName": request_model.variableValues.get('ROLE_NAME', 'unknown'),
             "constraintsCreated": result.constraintsCreated,
             "constraintIds": result.constraintIds

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as s3deployment from "aws-cdk-lib/aws-s3-deployment";
 import * as cdk from "aws-cdk-lib";
 import { Duration, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -28,31 +27,7 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
-
-// The /tmp budget of the CDK BucketDeployment Lambda that uploads the built web bundle. That
-// function downloads the bundle archive into /tmp and expands it there, holding the archive and the
-// extracted tree at once — roughly twice the size of web/dist, which is ~255 MB (about half of it
-// viewer plugins) and so already near the 512 MiB Lambda default. 4 GiB carries several times the
-// current bundle and needs raising only once web/dist grows past ~2 GB (10 GiB is the Lambda
-// maximum); ephemeral storage is billed per GB-second of the function's own runtime, so one upload
-// per deployment costs a fraction of a cent. The CloudFront path deploys the same bundle — keep
-// this equal to the constant in cloudfront-s3-website-construct.ts.
-const WEB_DEPLOYMENT_EPHEMERAL_STORAGE = cdk.Size.gibibytes(4);
-
-// Content-Type for the bundle's `.mjs` files, which the main deployment cannot set.
-//
-// `BucketDeployment` applies `contentType` to EVERY object in that deployment, so the extension can
-// only be handled by a deployment of its own. Left to the default, the uploader derives the type from
-// the extension using Python's `mimetypes`, which has no `.mjs` entry and falls back to `text/plain`.
-// Browsers enforce strict MIME checking on module scripts and the bucket also sends
-// `X-Content-Type-Options: nosniff`, so such a file is refused with "Failed to load module script"
-// however valid its contents.
-//
-// This path is affected exactly as the CloudFront one is: the ALB forwards to an S3 VPC endpoint
-// rather than rewriting anything, so the object's stored Content-Type is what reaches the browser.
-// Keep this equal to the constant in cloudfront-s3-website-construct.ts, where the full reasoning is
-// recorded.
-const ES_MODULE_CONTENT_TYPE = "text/javascript";
+import { deployWebAppBundle } from "../../../helper/webAppDeployment";
 
 // Elastic Load Balancing caps a listener attribute value at 1 KB ("The value for the attribute can
 // not exceed 1K bytes in size"), and the whole Content-Security-Policy is delivered as one such
@@ -482,35 +457,11 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
             );
         }
 
-        // ES module workers, uploaded on their own so their Content-Type can be declared. See
-        // ES_MODULE_CONTENT_TYPE for why this cannot be folded into the main deployment.
-        const esModuleDeployment = new s3deployment.BucketDeployment(this, "DeployEsModules", {
-            sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
-            destinationBucket: props.webAppBucket,
-            contentType: ES_MODULE_CONTENT_TYPE,
-            exclude: ["*"],
-            include: ["*.mjs"],
-            prune: false,
-            memoryLimit: Config.LAMBDA_MEMORY_SIZE,
-            ephemeralStorageSize: WEB_DEPLOYMENT_EPHEMERAL_STORAGE,
+        // Uploads the bundle. The ALB has no edge cache, so there is nothing to invalidate.
+        deployWebAppBundle(this, {
+            webSiteBuildPath: props.webSiteBuildPath,
+            webAppBucket: props.webAppBucket,
         });
-
-        //Deploy website to Bucket
-        const mainDeployment = new s3deployment.BucketDeployment(this, "DeployWithInvalidation", {
-            sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
-            destinationBucket: props.webAppBucket,
-            memoryLimit: Config.LAMBDA_MEMORY_SIZE,
-            ephemeralStorageSize: WEB_DEPLOYMENT_EPHEMERAL_STORAGE,
-            exclude: ["*.mjs"],
-        });
-
-        // The two deployments write disjoint key sets and the only one that prunes excludes `*.mjs`,
-        // which per BucketDeployment's `exclude` contract also protects those objects from its
-        // `--delete` pass — so neither can remove the other's files whichever order they run in.
-        // Ordering them anyway keeps that outcome from depending on that subtlety, and stops two
-        // Lambdas expanding the same multi-hundred-MB bundle concurrently. Mirrors the CloudFront
-        // construct, where the order additionally has to precede the `/*` invalidation.
-        mainDeployment.node.addDependency(esModuleDeployment);
 
         // assign public properties
         this.endPointURL = `https://${props.config.app.useAlb.domainHost}`;

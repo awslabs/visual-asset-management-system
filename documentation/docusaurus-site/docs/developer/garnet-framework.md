@@ -343,7 +343,7 @@ matches the failure handling of the core VAMS indexers.
 ## Limitations
 
 -   **One-way synchronization only.** Data flows from VAMS to the Garnet Framework. Changes made directly in the Garnet Framework knowledge graph are not reflected back into VAMS.
--   **External Garnet deployment required.** VAMS does not deploy the Garnet Framework itself. You must have an existing Garnet Framework deployment and provide its ingestion queue URL. The `garnetApiEndpoint` and `garnetApiToken` fields must also be set, although the add-on does not use them (see [Configuration](#configuration)).
+-   **External Garnet deployment required.** VAMS does not deploy the Garnet Framework itself. You must have an existing Garnet Framework deployment and provide its ingestion queue URL. The `garnetApiEndpoint` and `garnetApiToken` fields must also be set, although the [add-on](addons-overview.md) does not use them (see [Configuration](#configuration)).
 -   **Metadata key prefixing.** Custom metadata fields are prefixed with `metadata_` in the NGSI-LD entities. Custom file attributes are prefixed with `attribute_`. This prevents conflicts with core NGSI-LD properties but means queries in Garnet must use the prefixed names.
 -   **Deletions are not propagated.** The Garnet ingestion queue upserts entities with `options=update`, which neither removes an entity nor drops an attribute. A permanently deleted database, asset, asset link, or file, and a removed metadata key, remain in the knowledge graph. Remove them through the Garnet Framework API (`DELETE /ngsi-ld/v1/entities/{entityId}`, or `POST /ngsi-ld/v1/entityOperations/delete` for a batch).
 

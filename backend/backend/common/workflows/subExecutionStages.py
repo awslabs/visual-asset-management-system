@@ -44,6 +44,19 @@ DEADLINE_TASK_RUN_STATUS_MAP = {
 }
 DEADLINE_FAILED_LIFECYCLE_STATUSES = frozenset(("CREATE_FAILED", "UPDATE_FAILED", "UPLOAD_FAILED"))
 
+# SageMaker training-job statuses folded onto the execution status vocabulary. A job that is Stopping
+# is still consuming its instance, so it stays RUNNING until SageMaker reports it Stopped.
+SAGEMAKER_TRAINING_STATUS_MAP = {
+    "InProgress": STATUS_RUNNING, "Stopping": STATUS_RUNNING,
+    "Completed": STATUS_SUCCEEDED, "Failed": STATUS_FAILED, "Stopped": STATUS_ABORTED,
+}
+
+# SageMaker pipeline-execution statuses folded onto the execution status vocabulary.
+SAGEMAKER_PIPELINE_STATUS_MAP = {
+    "Executing": STATUS_RUNNING, "Stopping": STATUS_RUNNING,
+    "Succeeded": STATUS_SUCCEEDED, "Failed": STATUS_FAILED, "Stopped": STATUS_ABORTED,
+}
+
 
 def iso_utc(value):
     """`value` as an ISO-8601 UTC string: an aware or naive datetime, or epoch milliseconds. Empty
@@ -133,6 +146,44 @@ def map_deadline_status(task_run_status, lifecycle_status=""):
     if (lifecycle_status or "") in DEADLINE_FAILED_LIFECYCLE_STATUSES:
         return STATUS_FAILED
     return DEADLINE_TASK_RUN_STATUS_MAP.get(task_run_status or "", STATUS_UNKNOWN)
+
+
+def map_sagemaker_training_status(status):
+    """A SageMaker training job's TrainingJobStatus on the execution vocabulary; UNKNOWN otherwise."""
+    return SAGEMAKER_TRAINING_STATUS_MAP.get(status or "", STATUS_UNKNOWN)
+
+
+def map_sagemaker_pipeline_status(status):
+    """A SageMaker pipeline execution's PipelineExecutionStatus on the execution vocabulary; UNKNOWN
+    otherwise."""
+    return SAGEMAKER_PIPELINE_STATUS_MAP.get(status or "", STATUS_UNKNOWN)
+
+
+def sagemaker_training_job_name_from_arn(arn):
+    """arn:p:sagemaker:r:a:training-job/<name> -> <name>; "" when the value is not a training-job ARN.
+    StopTrainingJob and DescribeTrainingJob take the NAME, and a registration records the ARN."""
+    marker = ":training-job/"
+    value = str(arn or "")
+    index = value.find(marker)
+    if index == -1:
+        return ""
+    name = value[index + len(marker):]
+    return name if name and "/" not in name else ""
+
+
+def sagemaker_pipeline_execution_ids_from_arn(arn):
+    """arn:p:sagemaker:r:a:pipeline/<name>/execution/<id> -> (<name>, <id>); ("", "") when the value is
+    not a pipeline-execution ARN. The summary names an execution by these two tails and never by the
+    ARN, which carries the account id and Region."""
+    marker = ":pipeline/"
+    value = str(arn or "")
+    index = value.find(marker)
+    if index == -1:
+        return "", ""
+    parts = value[index + len(marker):].split("/")
+    if len(parts) != 3 or parts[1] != "execution" or not parts[0] or not parts[2]:
+        return "", ""
+    return parts[0], parts[2]
 
 
 MAX_SUB_STAGES_REPORTED_DEFAULT = 50

@@ -13,7 +13,9 @@ tools/VamsCLI/
 ├── vamscli/
 │   ├── main.py              # CLI entry point with global options
 │   ├── version.py           # Version management
-│   ├── constants.py         # ALL API endpoints and configuration constants
+│   ├── constants.py         # ALL API endpoints and configuration constants (re-exports addon_constants)
+│   ├── addon_constants.py   # Add-on FEATURE_* names (FEATURE_PHYSNA_ADDON), mirrors infra/common/addonAppFeatures.ts
+│   ├── custom_constants.py  # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
 │   ├── auth/                # Authentication providers
 │   │   ├── __init__.py
 │   │   ├── base.py          # Base interfaces
@@ -52,7 +54,7 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
--   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
+-   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`; `--json-output` carries every top-level sibling of the handler's `message` — `warnings`, `notAbortable` — through `_payload_with_warnings`, so a field added upstream reaches scripts, the MCP server and the connectors without a CLI change), `execution rerun`, `execution permanent-delete`
 
 Comment and subscription cover the comments and subscriptions APIs:
 
@@ -179,6 +181,8 @@ Industry has nested sub-command groups:
 
 Three consumers sit **downstream of the CLI** and must be carried through in the same change. The VAMS MCP server (`tools/VamsMCP/`) imports `vamscli`'s `APIClient` and `ProfileManager` directly. The external connectors (`tools/ExternalIntegrations/`) instead shell out to the `vamscli` **executable** and parse its `--json-output`, so they are coupled to the command surface itself — command names, subcommands, flags, and response JSON keys.
 
+**In a fork**, the chain runs through the fork extension points instead of `constants.py`, `utils/api_client.py`, `commands/` and `server.py`; see [Fork Extension Points](#fork-extension-points-commands-client-methods-mcp-tools). The checklist below applies unchanged.
+
 **MCP server:**
 
 -   [ ] **Review MCP Impact**: Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed. A renamed method, new required parameter, or changed response shape breaks the MCP tool silently — it only surfaces at agent runtime.
@@ -227,6 +231,8 @@ def get_user_assets(self):
     return self.get("/api/user/assets")  # BAD
 ```
 
+In a fork, the fork's paths go in `vamscli/custom_constants.py` instead (see [Fork Extension Points](#fork-extension-points-commands-client-methods-mcp-tools)).
+
 #### **Rule 2: Import Constants in API Client**
 
 ```python
@@ -238,6 +244,19 @@ def call_login_profile(self, user_id: str):
     endpoint = f"{API_LOGIN_PROFILE}/{user_id}"
     return self.get(endpoint)
 ```
+
+#### **Fork Extension Points (commands, client methods, MCP tools)**
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+A fork adds CLI commands and MCP tools without editing `main.py`, `constants.py`, `utils/api_client.py` or `tools/VamsMCP/vams_mcp/server.py`. Each splices in a fork-owned file that upstream ships empty and never edits:
+
+-   `vamscli/custom_constants.py` — the fork's `API_*` paths and `FEATURE_CUSTOM_*` names. It imports nothing from `vamscli`, so the files below can import it without a cycle. `tests/test_constants_contract.py` checks each path against the backend route lists (including `backend/backend/custom/customApiRoutes.py`) and each feature name against `infra/common/customAppFeatures.ts`.
+-   `vamscli/utils/custom_api_client.py` — `CustomAPIClientMixin`, which `APIClient` inherits; its methods get the core retry/backoff and typed errors and the MCP server reaches them as `CLIENT.api.<method>`. It must not import from `vamscli.commands`.
+-   `vamscli/commands/custom/__init__.py` — `CUSTOM_COMMANDS`; `main.py` registers each entry on the root `cli` group after every core command, and raises at import on a name that is already registered, so a custom command never replaces a core one (`tests/test_custom_commands.py`).
+-   `tools/VamsMCP/vams_mcp/custom_tools.py` — `register_custom_tools(mcp, client, config, tool_result)`, called once by `server.py` after the destructive block; gate write/destructive tools on `config.enable_writes` / `config.enable_destructive`. A custom tool with a core tool's name is not registered: the MCP SDK keeps the core tool and logs `Tool already exists: <name>` (`tools/VamsMCP/tests/test_custom_tools.py`).
+
+A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name. Names prefixed `custom-` (commands) and `custom_` (tools) are recommended, not enforced. Add-on feature-switch names live in `vamscli/addon_constants.py` (mirroring `infra/common/addonAppFeatures.ts`) and are re-exported from `constants.py`; the contract test checks core, add-on and custom constants against their enums in both directions. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### **Command Implementation Standards**
 
@@ -299,6 +318,16 @@ is absent, so the callback cannot tell "omitted" from "explicitly asked for the 
 `profile switch` then silently becomes a no-op and every command runs against whatever deployment the
 default profile points at, while still reporting success. A bare `ProfileManager()` or
 `APIClient(url)` has the same effect. Guarded by `tests/test_active_profile_resolution.py`.
+
+A hint printed to the user names a command Click accepts. `--profile`, `--verbose` and `--version`
+are root-group options and go **before** the subcommand (`vamscli --profile <name> setup <url>`);
+token-override guidance names `auth set-override -u <user-id> --token-stdin` or
+`auth login --user-id <user-id> --token-override-stdin` — there is no root `--token-override`.
+`tests/test_setup_check.py` scans the CLI, MCP and connector sources for any `vamscli --<opt>` that
+is not a root option. The setup gate (`check_setup_required` in `main.py`) reads the invoked
+top-level command off `sys.argv`, skipping root options and the value of `--profile`, and exempts
+`setup`, `version` and the `profile` group — the commands its own hint sends the user to. A new
+command that must run before setup is added to `_SETUP_EXEMPT_COMMANDS`.
 
 ```python
 # ✅ CORRECT
@@ -664,6 +693,8 @@ API_WORKFLOW_STATUS = "/api/workflows/status"
 def get_assets(self):
     return self.get("/api/user/assets")  # VIOLATION
 ```
+
+In a fork, the fork's paths go in `vamscli/custom_constants.py`, which the contract test below checks the same way.
 
 **Every `API_*` path constant must also name a route the backend actually registers.** `constants.py` is the authority a new consumer trusts, so a path the backend never declared is a trap that fails only at runtime against a live deployment: API Gateway rejects an unmatched path before any handler runs, so neither import nor build catches it, and the caller sees a `403 Missing Authentication Token` that is indistinguishable from a permissions failure. `tests/test_constants_contract.py` cross-checks every constant against the `ApiRoute` declarations in `backend/backend/common/apiRoutes.py`.
 
@@ -1140,7 +1171,7 @@ When referencing feature switches in commands or logic, these MUST be defined as
 
 #### **Feature Switch Requirements:**
 
--   [ ] **Add Feature Constants**: Add all feature switch names to `constants.py`
+-   [ ] **Add Feature Constants**: Add all feature switch names to `constants.py` (in a fork: `FEATURE_CUSTOM_*` in `custom_constants.py`)
 -   [ ] **Import Feature Constants**: Import constants in command files
 -   [ ] **Use @requires_feature Decorator**: For commands that require specific features, passing a `FEATURE_*` constant (never a string literal). `vamscli features example-govcloud` and `vamscli features example-location` (`commands/features.py`) are the reference uses. The `user cognito` commands carry no feature gate: a deployment with Cognito disabled answers them with a `400`, which `APIClient` reports as `Cognito not enabled: ...` (`_is_cognito_unavailable` in `utils/api_client.py`)
 -   [ ] **Manual Feature Checks**: Use `is_feature_enabled()` for conditional logic

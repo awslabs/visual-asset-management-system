@@ -34,7 +34,7 @@ class CreateDatabaseRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate fields that require more scrutiny"""
         logger.info("Validating custom parameters")
@@ -142,7 +142,7 @@ class UpdateDatabaseRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate fields that require more scrutiny"""
         logger.info("Validating update parameters")

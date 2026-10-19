@@ -245,8 +245,26 @@ sys.modules['common.dynamodb'].MAX_PAGINATION_PAGE_SIZE = _real_ddb_module.MAX_P
 # moment a module executes `from common.dynamodb import ...` depends on what has already run. A suite
 # that is the sole coverage for a finding must not depend on its neighbours being collected first.
 sys.modules['common.dynamodb'].query_has_match = _real_ddb_module.query_has_match
+# batch_get_items is the shared BatchGetItem chunk + UnprocessedKeys loop, bound for the same reason
+# as the two pagers above: it returns a (rows, unresolved_keys) TUPLE that every caller unpacks, so a
+# MagicMock stand-in raises "not enough values to unpack" inside the handler. Its retry constants are
+# bound alongside so a test asserting a read count sees the deployed budget.
+sys.modules['common.dynamodb'].batch_get_items = _real_ddb_module.batch_get_items
+sys.modules['common.dynamodb'].BATCH_GET_CHUNK_SIZE = _real_ddb_module.BATCH_GET_CHUNK_SIZE
+sys.modules['common.dynamodb'].BATCH_GET_MAX_RETRIES = _real_ddb_module.BATCH_GET_MAX_RETRIES
+sys.modules['common.dynamodb'].BATCH_GET_RETRY_BACKOFF_SECONDS = \
+    _real_ddb_module.BATCH_GET_RETRY_BACKOFF_SECONDS
 # apiRoutes is pure constants (no AWS deps), so load the REAL module by path
-# rather than a MagicMock (same approach as s3MetadataKeys above).
+# rather than a MagicMock (same approach as s3MetadataKeys above). The route type module and
+# the add-on route list it imports are loaded first, for the same reason.
+for _apir_dep in ('apiRouteTypes', 'addonApiRoutes'):
+    _apir_dep_spec = _s3mk_importlib_util.spec_from_file_location(
+        f'common.{_apir_dep}',
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_apir_dep}.py')
+    )
+    _apir_dep_module = _s3mk_importlib_util.module_from_spec(_apir_dep_spec)
+    sys.modules[f'common.{_apir_dep}'] = _apir_dep_module
+    _apir_dep_spec.loader.exec_module(_apir_dep_module)
 _apir_spec = _s3mk_importlib_util.spec_from_file_location(
     'common.apiRoutes',
     os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'apiRoutes.py')
@@ -254,6 +272,17 @@ _apir_spec = _s3mk_importlib_util.spec_from_file_location(
 _apir_module = _s3mk_importlib_util.module_from_spec(_apir_spec)
 _apir_spec.loader.exec_module(_apir_module)
 sys.modules['common.apiRoutes'] = _apir_module
+# common.constants is a MagicMock here, but the per-directory conftests and the tests that need the
+# real Casbin field list load constants.py by path, and it imports the add-on constants lane
+# (common/addonConstants.py, pure data). `common` is a MagicMock, not a package, so register the real
+# lane module up front, as for the route modules above.
+_addon_constants_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.addonConstants',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'addonConstants.py')
+)
+_addon_constants_module = _s3mk_importlib_util.module_from_spec(_addon_constants_spec)
+_addon_constants_spec.loader.exec_module(_addon_constants_module)
+sys.modules['common.addonConstants'] = _addon_constants_module
 # The execution/pipeline/workflow helpers live in the common.workflows subpackage.
 # `common` is a MagicMock, so register a REAL package object for `common.workflows`
 # (and bind it as an attribute on the mock `common`) before loading its submodules,

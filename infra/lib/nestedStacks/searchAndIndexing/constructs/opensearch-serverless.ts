@@ -195,7 +195,7 @@ export class OpensearchServerlessConstruct extends Construct {
                 entry: path.join(__dirname, "./schemaDeploy/deployschema.ts"),
                 handler: "handler",
                 bundling: {
-                    externalModules: ["aws-sdk"],
+                    externalModules: ["@aws-sdk/*"],
                 },
                 runtime: LAMBDA_NODE_RUNTIME,
                 //A freshly created collection (and, for a private collection, its VPC endpoint) can take

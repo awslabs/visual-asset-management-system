@@ -71,6 +71,44 @@ def query_has_match(table, **query_kwargs):
         query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
 
+# Mirrors common.dynamodb's BatchGetItem budget, imported by name alongside the helper below.
+BATCH_GET_CHUNK_SIZE = 100
+BATCH_GET_MAX_RETRIES = 3
+BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
+
+
+def batch_get_items(dynamodb_resource, table_name, keys, *,
+                    max_retries=BATCH_GET_MAX_RETRIES,
+                    backoff_seconds=BATCH_GET_RETRY_BACKOFF_SECONDS):
+    """Mock of common.dynamodb.batch_get_items — the same chunk + UnprocessedKeys loop and the same
+    (rows, unresolved_keys) return, minus the backoff sleep. Callers unpack the tuple, so a narrower
+    stand-in fails inside the handler rather than here."""
+    unique_keys = []
+    seen = set()
+    for key in keys:
+        marker = tuple(sorted(key.items()))
+        if marker not in seen:
+            seen.add(marker)
+            unique_keys.append(key)
+
+    rows = []
+    unresolved_keys = []
+    for start in range(0, len(unique_keys), BATCH_GET_CHUNK_SIZE):
+        pending = unique_keys[start:start + BATCH_GET_CHUNK_SIZE]
+        attempt = 0
+        while True:
+            response = dynamodb_resource.batch_get_item(RequestItems={table_name: {'Keys': pending}})
+            rows.extend(response.get('Responses', {}).get(table_name, []))
+            pending = response.get('UnprocessedKeys', {}).get(table_name, {}).get('Keys', [])
+            if not pending:
+                break
+            attempt += 1
+            if attempt > max_retries:
+                unresolved_keys.extend(pending)
+                break
+    return rows, unresolved_keys
+
+
 def to_update_expr(record, op="SET"):
     """Mock of common.dynamodb.to_update_expr — builds the same placeholder-based
     update expression the real helper builds, so a handler that binds this name at

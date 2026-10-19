@@ -180,7 +180,12 @@ def setup_mock_imports():
     sys.modules['common.validators'] = validators_module
     
     # constants is pure data with no AWS dependencies, so load the real module
-    # (single source of truth) rather than a duplicate mock copy.
+    # (single source of truth) rather than a duplicate mock copy. The add-on constants lane it
+    # merges in loads first; `common` is a mock module here, so the import cannot find it by path.
+    sys.modules['common.addonConstants'] = import_module_from_path(
+        'common.addonConstants',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'addonConstants.py')
+    )
     constants_module = import_module_from_path(
         'common.constants',
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'constants.py')
@@ -216,6 +221,12 @@ def setup_mock_imports():
 
     # apiRoutes is pure constants with no AWS dependencies, so load the
     # real module (single source of truth) rather than a duplicate mock copy.
+    # The route type module and the add-on route list it imports load first.
+    for api_routes_dep in ('apiRouteTypes', 'addonApiRoutes'):
+        sys.modules[f'common.{api_routes_dep}'] = import_module_from_path(
+            f'common.{api_routes_dep}',
+            os.path.join(os.path.dirname(__file__), 'backend', 'common', f'{api_routes_dep}.py')
+        )
     api_routes_module = import_module_from_path(
         'common.apiRoutes',
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'apiRoutes.py')

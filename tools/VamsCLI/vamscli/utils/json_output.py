@@ -6,12 +6,32 @@ status messages and CLI formatting from polluting JSON output.
 """
 
 import json
+import re
 import sys
 from typing import Any, Dict, Optional, Callable
 import click
 
 # Import logging for file-only logging (not console)
 from .logging import log_debug, log_info, log_warning, log_error, redact_to_text
+
+# How many characters of a masked query value stay visible: enough to tell two keys apart.
+_MASKED_KEY_VISIBLE_CHARS = 8
+
+
+def mask_url_key(url: str, visible: int = _MASKED_KEY_VISIBLE_CHARS) -> str:
+    """Return ``url`` with the value of its ``key`` query parameter shortened to a prefix.
+
+    For human-readable output of URLs that carry an API key in the query string (the Amazon
+    Location Service style URL). ``--json-output`` prints the stored value unchanged.
+    """
+    if not isinstance(url, str) or not url:
+        return url
+    return re.sub(
+        r'([?&]key=)([^&#]*)',
+        lambda match: match.group(1) + (
+            match.group(2)[:visible] + '…' if len(match.group(2)) > visible else match.group(2)),
+        url,
+    )
 
 
 def output_result(result: Any, json_output: bool, success_message: Optional[str] = None,

@@ -31,14 +31,17 @@ Always deploy from a tagged release rather than a development branch. The `main`
 
 ## Step 2: Build the frontend
 
-Navigate to the `web/` directory, activate the correct Node.js version, install dependencies, and build the production bundle.
+Navigate to the `web/` directory, activate the correct Node.js version, install npm 11, install dependencies, and build the production bundle.
 
 ```bash
 cd web
 nvm use
+npm install -g npm@11
 npm install
 npm run build
 ```
+
+Node.js 22 bundles npm 10, and the `package.json` files require npm 11.10.0 or later (`engine-strict`), so `npm install` fails with `EBADENGINE` until npm 11 is installed. nvm keeps a separate npm per Node.js version, so run `npm install -g npm@11` after `nvm use`. The install also clones viewer repositories from `github.com`; they are listed on the [Prerequisites](prerequisites.md#network-requirements) page.
 
 The build output is written to `web/dist/`, which the CDK infrastructure references during deployment.
 
@@ -53,26 +56,32 @@ npm install
 
 ## Step 4: Bootstrap AWS CDK
 
-If you have not already bootstrapped your AWS account and Region for CDK, run the bootstrap command.
+If you have not already bootstrapped your AWS account and Region for CDK, run the bootstrap command from the `infra/` directory. `npx cdk` runs the AWS CDK CLI version pinned in `infra/package.json`.
 
 **Commercial AWS:**
 
 ```bash
-cdk bootstrap aws://ACCOUNT_ID/REGION
+npx cdk bootstrap aws://ACCOUNT_ID/REGION
+```
+
+A CloudFront deployment with AWS WAF enabled (the commercial template default) also creates the CloudFront web ACL stack, `{name}-waf-{baseStackName}-{region}`, in `us-east-1`. When `REGION` is not `us-east-1`, bootstrap `us-east-1` as well:
+
+```bash
+npx cdk bootstrap aws://ACCOUNT_ID/us-east-1
 ```
 
 **AWS GovCloud (US):**
 
 ```bash
 export AWS_REGION=us-gov-west-1
-cdk bootstrap aws://ACCOUNT_ID/us-gov-west-1
+npx cdk bootstrap aws://ACCOUNT_ID/us-gov-west-1
 ```
 
 **AWS European Sovereign Cloud:**
 
 ```bash
 export AWS_REGION=eusc-de-east-1
-cdk bootstrap aws://ACCOUNT_ID/eusc-de-east-1
+npx cdk bootstrap aws://ACCOUNT_ID/eusc-de-east-1
 ```
 
 :::warning[GovCloud and EU Sovereign Cloud endpoint resolution]
@@ -85,7 +94,7 @@ Replace `ACCOUNT_ID` with your 12-digit AWS account ID and `REGION` with your ta
 If you are importing an existing VPC by setting `app.useGlobalVpc.optionalExternalVpcId` in `config.json`, bootstrap also synthesizes the app and will fail with VPC or subnet lookup errors unless the `loadContextIgnoreVPCStacks` flag is set. Set it either as a context flag on the bootstrap command or as `env.loadContextIgnoreVPCStacks: true` in `config.json`:
 
 ```bash
-cdk bootstrap aws://ACCOUNT_ID/REGION --context loadContextIgnoreVPCStacks=true
+npx cdk bootstrap aws://ACCOUNT_ID/REGION --context loadContextIgnoreVPCStacks=true
 ```
 
 See [Step 7](#step-7-import-an-external-vpc-conditional) for the two-phase deployment that follows.
@@ -96,7 +105,7 @@ See [Step 7](#step-7-import-an-external-vpc-conditional) for the two-phase deplo
 Edit the configuration file at `infra/config/config.json` to set your deployment parameters.
 
 :::tip[Use the interactive configuration builder]
-The easiest way to assemble a valid `config.json` is the interactive [Configuration builder](config-builder.mdx). Choose a Commercial, GovCloud, or EU Sovereign Cloud starting template, fill in the fields you need, and download a ready-to-use `config.json` — it validates cross-field rules (such as the GovCloud and authentication constraints) as you go, before you ever run `cdk synth`. Place the downloaded file at `infra/config/config.json`.
+The easiest way to assemble a valid `config.json` is the interactive [Configuration builder](config-builder.mdx). Choose a Commercial, GovCloud, or EU Sovereign Cloud starting template, fill in the fields you need, and download a ready-to-use `config.json` — it validates cross-field rules (such as the GovCloud and authentication constraints) as you go, before you ever run `npx cdk synth`. Place the downloaded file at `infra/config/config.json`.
 :::
 
 If you prefer to edit by hand, template files are provided as starting points:
@@ -156,7 +165,7 @@ This step is only required if you are importing an existing VPC by setting `app.
 When importing an external VPC, a two-phase deployment is required. The first phase imports VPC context and deploys non-VPC-dependent stacks:
 
 ```bash
-cdk deploy --all --require-approval never --context loadContextIgnoreVPCStacks=true
+npx cdk deploy --all --require-approval never --context loadContextIgnoreVPCStacks=true
 ```
 
 After this command completes successfully, proceed to Step 8 to deploy all remaining stacks.
@@ -176,10 +185,14 @@ If you are using an alternative container engine such as [Finch](https://aws.git
 Run the CDK deploy command from the `infra/` directory:
 
 ```bash
-cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never
 ```
 
 This command synthesizes all AWS CloudFormation templates and deploys every nested stack. The `--require-approval never` flag auto-approves IAM and security-related changes.
+
+:::warning[There is no dry run]
+`npm run deploy.dev --dry-run` and `npm run deploy.vams --dry-run` run a real deployment: `--dry-run` is consumed by npm and never reaches the AWS CDK CLI, which has no such option. To preview the changes a deployment would make, run `npx cdk diff`.
+:::
 
 ### What happens during deployment
 
@@ -187,10 +200,10 @@ This command synthesizes all AWS CloudFormation templates and deploys every nest
 2. AWS CloudFormation creates resources in dependency order.
 3. An Amazon Cognito user account is created using the `adminEmailAddress` from your configuration.
 4. A temporary password is sent to the admin email address from `no-reply@verificationemail.com`.
-5. If WAF is enabled, a separate WAF stack is deployed first (in `us-east-1` for CloudFront deployments, or in-Region for ALB deployments).
+5. If WAF is enabled, the web ACL stacks are deployed first. A regional web ACL stack is always created in the deployment Region for the API Gateway stage (and the ALB on ALB deployments); it is named `{name}-waf-{baseStackName}-{region}` on ALB deployments and `{name}-waf-regional-{baseStackName}-{region}` on CloudFront deployments. A CloudFront deployment additionally creates the CloudFront web ACL stack, `{name}-waf-{baseStackName}-{region}`, in `us-east-1`.
 
 :::warning[Wait for every stack to complete before using the deployment]
-The solution is usable only after `cdk deploy` reports success for every stack. Resource names -- Amazon DynamoDB tables, the auxiliary and artefacts Amazon S3 buckets, and the audit log groups -- are published to AWS Systems Manager Parameter Store by the `ResourceNamesBuilder` nested stack, which AWS CloudFormation creates after the storage stack. The Amazon S3 bucket-sync functions live in that storage stack and resolve their names from those parameters, so on a first deployment into an account an invocation that arrives before the parameters exist fails at initialization. Its Amazon SQS message returns to the queue and is retried, and the event is processed once the remaining stacks finish. Upload files and call the API after the deployment completes.
+The solution is usable only after `npx cdk deploy` reports success for every stack. Resource names -- Amazon DynamoDB tables, the auxiliary and artefacts Amazon S3 buckets, and the audit log groups -- are published to AWS Systems Manager Parameter Store by the `ResourceNamesBuilder` nested stack, which AWS CloudFormation creates after the storage stack. The Amazon S3 bucket-sync functions live in that storage stack and resolve their names from those parameters, so on a first deployment into an account an invocation that arrives before the parameters exist fails at initialization. Its Amazon SQS message returns to the queue and is retried, and the event is processed once the remaining stacks finish. Upload files and call the API after the deployment completes.
 :::
 
 ## Step 9: Verify the deployment
@@ -227,11 +240,11 @@ You can deploy multiple independent instances of VAMS to the same AWS account by
 ```bash
 # First deployment
 # config.json: "baseStackName": "prod", "region": "us-east-1"
-cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never
 
 # Second deployment
 # config.json: "baseStackName": "dev", "region": "us-west-2"
-cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never
 ```
 
 Alternatively, use environment variables to override the stack name and Region:
@@ -239,7 +252,7 @@ Alternatively, use environment variables to override the stack name and Region:
 ```bash
 export AWS_REGION=us-west-2
 export STACK_NAME=staging
-cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never
 ```
 
 Each deployment creates a fully isolated set of resources with unique stack names derived from the `baseStackName` and Region combination.
@@ -251,7 +264,7 @@ To deploy customizations or updates to an existing VAMS deployment, rebuild the 
 ```bash
 cd web && npm install && npm run build
 cd ../infra && npm install
-cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never
 ```
 
 A CloudFormation changeset is created and applied to your existing stack. Only modified resources are updated.
@@ -307,7 +320,7 @@ To remove VAMS and all associated resources:
 
 ```bash
 cd infra
-cdk destroy --all
+npx cdk destroy --all
 ```
 
 Some resources (Amazon S3 buckets, Amazon DynamoDB tables, pipeline stacks) may not be automatically deleted due to retention policies. Remove these manually through the AWS Management Console or AWS CLI.

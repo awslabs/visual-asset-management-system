@@ -216,7 +216,8 @@ vamscli --help
 Configure a profile to connect to your deployed VAMS instance:
 
 ```bash
-vamscli auth login --profile my-env
+vamscli --profile my-env setup <api-gateway-url>
+vamscli --profile my-env auth login -u <username>
 ```
 
 ## Running Tests

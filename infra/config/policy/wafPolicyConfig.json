@@ -8,7 +8,13 @@
             "block": true,
             "ruleActionOverrides": [
                 { "name": "SizeRestrictions_BODY", "action": "count" },
-                { "name": "SizeRestrictions_QUERYSTRING", "action": "count" }
+                { "name": "SizeRestrictions_QUERYSTRING", "action": "count" },
+                { "name": "SizeRestrictions_URIPATH", "action": "count" },
+                { "name": "RestrictedExtensions_URIPATH", "action": "count" },
+                { "name": "RestrictedExtensions_QUERYARGUMENTS", "action": "count" },
+                { "name": "GenericLFI_URIPATH", "action": "count" },
+                { "name": "GenericLFI_QUERYARGUMENTS", "action": "count" },
+                { "name": "GenericLFI_BODY", "action": "count" }
             ]
         },
         {

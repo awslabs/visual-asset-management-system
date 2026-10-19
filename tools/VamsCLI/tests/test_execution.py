@@ -995,6 +995,16 @@ class TestExecutionAbort:
             assert result.exit_code == 0
             assert mocks['api_client'].abort_execution.call_args.kwargs['group_id'] == 'grp1'
 
+    def test_abort_group_displays_member_warnings(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': {'groupId': 'grp1', 'results': [{'executionId': 'e1', 'status': 'aborted'}]},
+                'warnings': ['e1: Sub-process may still be running']}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1', '--yes'])
+            assert result.exit_code == 0, result.output
+            assert 'Warnings:' in result.output
+            assert 'e1: Sub-process may still be running' in result.output
+
     def test_abort_group_requires_confirmation(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
             result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1'],
@@ -1009,6 +1019,97 @@ class TestExecutionAbort:
             result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--json-output'])
             assert result.exit_code == 0
             assert json.loads(result.output)['warnings'] == ['Sub-process abort failed']
+
+    NOT_ABORTABLE = [{'resourceType': 'slurmJob', 'label': 'Mock Slurm job',
+                      'stageName': 'MockTrain', 'locator': 'slurm-00001'}]
+
+    def test_abort_json_carries_not_abortable_beside_warnings(self, cli_runner, generic_command_mocks):
+        """D5. The abort projection kept only `message` + `warnings`, so the registered sub-processes an
+        abort left running (`notAbortable`, the structured half of the same answer) never reached the
+        CLI JSON — and so never reached the MCP server or the connectors, which read this output
+        (root CLAUDE.md Pattern 7)."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': 'Execution aborted',
+                'warnings': ["Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"],
+                'notAbortable': self.NOT_ABORTABLE}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload['message'] == 'Execution aborted'
+            assert payload['notAbortable'] == self.NOT_ABORTABLE
+            assert payload['warnings'] == [
+                "Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"]
+
+    def test_abort_cli_mode_names_what_was_left_running(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': 'Execution aborted', 'notAbortable': self.NOT_ABORTABLE}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1'])
+            assert result.exit_code == 0
+            assert 'Left running (VAMS cannot stop these sub-process types): ' \
+                   'Mock Slurm job (slurmJob, in MockTrain)' in result.output
+
+    def test_abort_carries_every_sibling_of_message_generically(self, cli_runner, generic_command_mocks):
+        """The projection carries whatever the handler returns beside `message`, so a field added
+        upstream reaches `--json-output` without a CLI release — the gap D5 closed must not reopen for
+        the next sibling. Empty siblings are dropped, so a clean abort keeps its historical shape."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': 'Execution aborted', 'warnings': [], 'notAbortable': [],
+                'futureField': {'k': 'v'}}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload['futureField'] == {'k': 'v'}
+            assert 'warnings' not in payload and 'notAbortable' not in payload
+
+    def test_abort_group_json_carries_siblings_onto_the_unwrapped_message(
+            self, cli_runner, generic_command_mocks):
+        """A group abort's `message` is a dict; siblings are merged onto it after unwrapping."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': {'groupId': 'grp1', 'results': [{'executionId': 'e1', 'status': 'aborted'}]},
+                'notAbortable': self.NOT_ABORTABLE}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1',
+                                             '--yes', '--json-output'])
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload['groupId'] == 'grp1'
+            assert payload['notAbortable'] == self.NOT_ABORTABLE
+            assert 'message' not in payload
+
+    GROUP_NOT_ABORTABLE = [{'executionId': 'e2', **NOT_ABORTABLE[0]}]
+    GROUP_ABORT_RESULT = {
+        'message': {'groupId': 'grp1', 'results': [{'executionId': 'e1', 'status': 'aborted'},
+                                                   {'executionId': 'e2', 'status': 'aborted'}]},
+        'warnings': ['e1: Sub-process may still be running'],
+        'notAbortable': GROUP_NOT_ABORTABLE}
+
+    def test_abort_group_json_carries_member_attributed_not_abortable_and_warnings(
+            self, cli_runner, generic_command_mocks):
+        """A group abort reports each member's entries with its `executionId` beside the member-prefixed
+        warnings; `--json-output` carries both unchanged onto the unwrapped group message."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = dict(self.GROUP_ABORT_RESULT)
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1',
+                                             '--yes', '--json-output'])
+            assert result.exit_code == 0, result.output
+            payload = json.loads(result.output)
+            assert payload['groupId'] == 'grp1'
+            assert payload['notAbortable'] == self.GROUP_NOT_ABORTABLE
+            assert payload['warnings'] == ['e1: Sub-process may still be running']
+
+    def test_abort_group_cli_mode_names_what_each_member_left_running(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = dict(self.GROUP_ABORT_RESULT)
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1', '--yes'])
+            assert result.exit_code == 0, result.output
+            assert 'Warnings:' in result.output
+            assert '  - e1: Sub-process may still be running' in result.output
+            assert 'Left running (VAMS cannot stop these sub-process types): ' \
+                   'e2: Mock Slurm job (slurmJob, in MockTrain)' in result.output
 
     def test_abort_requires_target(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution'):

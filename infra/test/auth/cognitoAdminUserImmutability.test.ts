@@ -22,10 +22,14 @@
  *      deleting it. Asserted as `UpdateReplacePolicy` AND `DeletionPolicy` on the emitted resource,
  *      because the destructive case is the *replace*, and CloudFormation reads that from
  *      `UpdateReplacePolicy` rather than from `DeletionPolicy`.
- *   2. A `getConfig()` warning when the two fields differ, plus rejection of a username Amazon Cognito
- *      itself would refuse. The rejection is deliberately limited to what Cognito rejects, so it can
- *      never refuse a value that is already deployed and working — a validation that broke an existing
- *      customer's deployment would be worse than the defect.
+ *   2. `getConfig()` rejection of a username Amazon Cognito itself would refuse. The rejection is
+ *      deliberately limited to what Cognito rejects, so it can never refuse a value that is already
+ *      deployed and working — a validation that broke an existing customer's deployment would be
+ *      worse than the defect. Synthesis cannot see the deployed values, so it does not warn about a
+ *      change it cannot detect: the two fields legitimately differ (the shipped templates pair a plain
+ *      username with an email address), and a warning keyed on that difference fired on every
+ *      default deployment. The immutability is documented with both fields in the configuration
+ *      reference instead.
  *
  * The retain policy is asserted against the real synthesized auth stack rather than a hand-built one,
  * so it cannot pass on a construct that the app does not actually use.
@@ -115,19 +119,19 @@ describe("Cognito admin user immutability guards", () => {
 
     describe("getConfig() rejects only what Cognito rejects", () => {
         test("a username matching the email is accepted with no warning", () => {
-            // The template default shape, and the positive control: without it, every "warns" case
-            // below would be satisfied by a build that always warns.
             const run = withAdmin("admin@example.com", "admin@example.com");
             expect(run).not.toThrow();
             run();
             expect(adminWarnings()).toEqual([]);
         });
 
-        test("a plain username differing from the email warns about immutability", () => {
+        test("a plain username differing from the email is accepted with no warning", () => {
+            // The shipped template shape. A warning here would fire on every default deployment,
+            // and synthesis cannot tell a first deployment from a changed value.
             const run = withAdmin("administrator", "admin@example.com");
             expect(run).not.toThrow();
             run();
-            expect(adminWarnings().join(" ")).toMatch(/immutable after the first deployment/);
+            expect(adminWarnings()).toEqual([]);
         });
 
         test("a username containing whitespace is rejected", () => {
