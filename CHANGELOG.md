@@ -45,6 +45,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** Opening a file of another asset in the same browser tab without a reload (for example by pasting its link into the address bar) loads that asset's file. The file view kept the previous asset's file in its state and rewrote the new URL to that file's key, so it requested the previous asset's file from the new asset and showed "File Not Found" until the page was reloaded. ([#492](https://github.com/awslabs/visual-asset-management-system/issues/492))
+
 ### Chores
 
 -   **Security** Dependency updates to resolve security advisories: `handlebars` 4.7.10 (root and `infra/` build and test tooling), `aws-cdk-lib` 2.273.0 and `@aws-cdk/aws-lambda-python-alpha` 2.273.0-alpha.0 (`infra/`; bundles `brace-expansion` 5.0.12), `simple-git` 4.0.2 (the `web/` viewer install scripts), `source-map-js` 1.2.2 and `pbkdf2` 3.1.7 (`web/`), `dompurify` 3.4.16 and `fast-uri` 3.1.8 (the `web/customInstalls/*` viewer installs), `http-cache-semantics` 4.3.0, `joi` 17.13.8 and `postcss-selector-parser` 7.1.6 (documentation site), and `Werkzeug` 3.1.9 (backend test dependencies). `dompurify` ships in the Cesium 3D Tileset viewer; the other packages are build, deploy, install and test tooling or browser polyfills. ([#486](https://github.com/awslabs/visual-asset-management-system/issues/486))
