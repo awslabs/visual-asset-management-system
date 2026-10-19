@@ -8,15 +8,16 @@ import { Construct } from "constructs";
 
 /** One API route contributed by any nested stack. */
 export interface ApiRouteDescriptor {
-    path: string; // OpenAPI path, e.g. "/database/{databaseId}/assets/{assetId}"
-    method: apigateway.HttpMethod;
-    lambdaFn: lambda.IFunction;
-    allowAnonymous?: boolean; // true → IP-only anonymous authorizer, no token required
+    readonly path: string; // OpenAPI path, e.g. "/database/{databaseId}/assets/{assetId}"
+    readonly method: apigateway.HttpMethod;
+    readonly lambdaFn: lambda.IFunction;
+    readonly allowAnonymous?: boolean; // true → IP-only anonymous authorizer, no token required
 }
 
 /**
  * Cross-stack route registry. Nested stacks register descriptors while they build their
  * Lambdas; the REST API builder reads the full set last and renders one OpenAPI document.
+ * Each descriptor is stored as a frozen copy, so a route cannot be changed after registration.
  */
 export class RouteRegistry {
     private readonly routes: ApiRouteDescriptor[] = [];
@@ -28,7 +29,7 @@ export class RouteRegistry {
             throw new Error(`ApiRouteRegistry: duplicate route registered: ${key}`);
         }
         this.seen.add(key);
-        this.routes.push(d);
+        this.routes.push(Object.freeze({ ...d }));
     }
 
     list(): ApiRouteDescriptor[] {

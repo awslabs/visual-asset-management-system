@@ -9,7 +9,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import {
     fetchPhysnaViewerMetadata,
     PhysnaViewerMetadataResponse,
-} from "../../../services/APIService";
+} from "../../../services/addons/physnaAPIService";
 import { ViewerPluginProps } from "../../core/types";
 import styles from "./PhysnaViewer.module.css";
 

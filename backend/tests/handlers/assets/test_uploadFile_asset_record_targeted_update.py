@@ -12,6 +12,7 @@ unconditional write recreates an asset removed during the upload.
 """
 
 import os
+import time
 import pytest
 from unittest.mock import MagicMock, patch
 from botocore.exceptions import ClientError
@@ -218,6 +219,8 @@ def _complete_multipart(request_model, table, asset_read, asset_type='folder'):
         'assetId': ASSET_ID,
         'databaseId': DATABASE_ID,
         'uploadType': request_model.uploadType,
+        # Every writer sets expiresAt (epoch seconds); completion refuses a record without one.
+        'expiresAt': int(time.time()) + 3600,
     }), patch.object(uf, 'get_asset_details', return_value=asset_read), \
             patch.object(uf, 'get_default_bucket_details', return_value={
                 'bucketId': 'bucket-1',

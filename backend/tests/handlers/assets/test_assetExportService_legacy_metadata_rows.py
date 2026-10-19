@@ -299,7 +299,8 @@ class TestTheExportedBundleShowsTheDegradedRow:
                 patch.object(m, "logger", log):
             # process_asset_batch returns (assets, page state); only the assets matter here.
             result, _page_state = m.process_asset_batch(
-                identifiers, m.AssetExportRequestModel(), {"tokens": ["alice"]})
+                identifiers, m.AssetExportRequestModel(), {"tokens": ["alice"]},
+                {'requestContext': {}})
 
         entry = _by_asset_id(result)[_ASSET]
         return entry

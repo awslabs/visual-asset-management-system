@@ -138,6 +138,7 @@ from .exceptions import (
 )
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
+from .custom_api_client import CustomAPIClientMixin
 
 
 def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
@@ -169,8 +170,11 @@ def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) ->
     )
 
 
-class APIClient:
-    """HTTP client for VAMS API Gateway."""
+class APIClient(CustomAPIClientMixin):
+    """HTTP client for VAMS API Gateway.
+
+    Inherits the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
+    """
     
     def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
         self.base_url = base_url.rstrip('/')
