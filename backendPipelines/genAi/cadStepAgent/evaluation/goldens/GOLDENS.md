@@ -1,0 +1,28 @@
+# Goldens
+
+A golden is a reviewed known-good output for a corpus case: `golden_diff.py` compares a new output with it geometrically (counts, extents, volume, holes, fillets and, for single solids, the symmetric-difference volume), never byte for byte. Every golden below scores PASS against its case's `expect` block with `stp_quality.py` (`tests/test_cadstep_eval_goldens.py` checks this on every run), and its SHA-256 is pinned here (`tests/test_cadstep_eval_corpus.py`).
+
+The generate goldens are the textbook CadQuery construction of the case, built by `make_goldens.py`. The modify goldens are outputs of the deployed agent that passed every check of their case in a live evaluation round; each derives from its input fixture and carries that fixture's licence (see `../fixtures/PROVENANCE.md`).
+
+| File                           | Cases                          | Source                                                                                           | Scorer verdict      | Bytes   | SHA-256                                                            |
+| :----------------------------- | :----------------------------- | :----------------------------------------------------------------------------------------------- | :------------------ | :------ | :----------------------------------------------------------------- |
+| `g1-plate.step`                | G1, FG6; M2, M3 input fallback | `make_goldens.py` construction, CadQuery 2.8.0, built 2026-09-23                                 | PASS 7/7            | 34 429  | `38f582912fdae4f473454e58c6596f831610ac39acac8f5180f19e10a19f1853` |
+| `g2-counterbored-plate.step`   | G2                             | `make_goldens.py`, CadQuery 2.8.0, built 2026-10-19                                              | PASS 10/10          | 49 918  | `001456796ff832ac87ac8bc683847165803e5e09f151728b426252778fd502a0` |
+| `g3-l-bracket.step`            | G3                             | `make_goldens.py`, CadQuery 2.8.0, built 2026-10-19                                              | PASS 5/5            | 55 611  | `5e0cf607c0fdd00106bdc6c17db6629493b39939650359ca3250e7c9bb7a5b5d` |
+| `g4-hub-keyway.step`           | G4                             | `make_goldens.py`, CadQuery 2.8.0, built 2026-10-19                                              | PASS 7/7            | 20 068  | `a8bac0d73dbb39870d5f32c7a6ef0c0cc300c730e9f8ff46d3c04c9562c4115a` |
+| `g5-flange-disc.step`          | G5; M5 input fallback          | `make_goldens.py` construction, CadQuery 2.8.0, built 2026-09-23                                 | PASS 10/10          | 40 138  | `6cbfff45e73ee3f8928c9acf57bc36fdfe740e59c8d63ffb872881c955aa335c` |
+| `g6-stepped-shaft.step`        | G6                             | `make_goldens.py`, CadQuery 2.8.0, built 2026-10-19                                              | PASS 9/9            | 13 623  | `73c766a1ad3f7b693cf5475ca36776621187daf037fca8acd4137e96081ae262` |
+| `g7-filleted-box.step`         | G7; M4 input fallback          | `make_goldens.py` construction, CadQuery 2.8.0, built 2026-09-23                                 | PASS 6/6            | 31 851  | `47dcd065e2457e461a8be67a50f9d9ded4e4a2a263153d02b09e894af5056a97` |
+| `g8-jetson-carrier-plate.step` | G8, G8-noresearch              | `make_goldens.py`, CadQuery 2.8.0, built 2026-10-19                                              | PASS 6/6            | 34 385  | `688db47dc5cd692ef4f668a7313d3d0488066ebe6d2ddc94c6750a1ab51c4fdc` |
+| `g9-inch-plate.step`           | G9                             | `make_goldens.py`, CadQuery 2.8.0, built 2026-10-19                                              | PASS 7/7            | 20 449  | `a00808e55d20215cac97881bb6782cc00708adb71b51620df6e676a5e19512c7` |
+| `fm1-x2-four-corner-holes.stp` | FM1                            | live round 6 (2026-09-26), execution `bd88b86d9fa6452abcae450cd0971ee5`; input X2 (NIST)         | PASS 8/8            | 458 139 | `66870fe7fa6e826cf153987a0b83635e9018b1b97a3bcd75eaf09e28ec2985ce` |
+| `fm4-x3-centre-hole.stp`       | FM4                            | live round 7 (2026-10-07), execution `91a6abac20a74c76b8e6ad633535944b`; input X3 (NIST)         | PASS 9/9            | 481 588 | `cc7c49a534a578e7ec76d1ab4b0fceb4daf793e1943cf61a053a62a71a73f914` |
+| `fm6-x4-largest-body.step`     | FM6                            | live round 6 (2026-09-26), execution `968660906a1641b9804c97b332472461`; input X4 (Adafruit MIT) | PASS 5/5            | 85 083  | `103325467049d3fbc6f70e698d2bab088bcbc2b3ba7c3b71a0e7ee1043814c5f` |
+| `fm8-x7-edge-hole.stp`         | FM8                            | live round 6 (2026-09-26), execution `61aa1e0a1a88440fac6a017c8a784e15`; input X7 (NIST)         | PASS 9/9            | 525 489 | `f0da6bd40cbd5f4697bcc0e5d675d74aa5181026965be4e857f4e0072db7a763` |
+| `fm9-x9-solid-only.stp`        | FM9, FM10                      | live round 7 (2026-10-07), execution `63afe812f8604a039f32fe82f55cfb93`; input X9 (NIST)         | PASS 6/6 (geometry) | 614 178 | `67b37acdd0d2a9baf6d6f85f8c82410760d66a854dea4435472723c1520e36b6` |
+
+FM9's live run also passed its four report checks (10/10 in all); the scorer verdict above is the geometry alone, since a golden carries no report.
+
+Three cases use their input fixture as the golden, because an unchanged re-export's reference is the input itself: M6 (`fixtures/plate-40x40x10.step`, PASS 6/6), FM2 (`fixtures/X1-adafruit-1866-slide-rail-platform.step`, PASS 9/9) and FM5 (`fixtures/X4-adafruit-2230-extruded-box-94mm-3bodies.step`, PASS 8/8). Their digests are in `../fixtures/SHA256SUMS.txt`.
+
+No golden exceeds 700 KB. M1, M2, M3, M4, M5, M7, FM3, FM7 and every FG case but FG6 have no golden yet; the README says how to promote one.
