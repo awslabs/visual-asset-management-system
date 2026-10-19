@@ -2707,11 +2707,12 @@ def _workflow_version_fields(main_item, workflow_def):
     on the unqualified state machine ARN, or a stored value that does not parse. workflowVersionCurrent
     compares that ARN with the workflow record's current workflowVersionArn: True or False when both
     are recorded, None when either is missing. A False means the workflow's state machine has been
-    redeployed since the run: its step list changed, or a step's pipeline changed a setting the state
-    machine encodes. It says nothing about workflowSystemConfig or the pipeline names and descriptions,
-    which are read live and change without a redeploy; each step's effectiveSystemConfig is the snapshot
-    it ran under. The ARNs themselves are not returned: like every other ARN this view omits, they carry
-    the account id and Region."""
+    redeployed since the run: every save from the workflow builder redeploys it, as does an API or CLI
+    update that supplies the step list, and so does a change to a setting a step's pipeline contributes
+    to the state machine. It says nothing about workflowSystemConfig or the pipeline names and
+    descriptions, which are read live and change without a redeploy; each step's effectiveSystemConfig
+    is the snapshot it ran under. The ARNs themselves are not returned: like every other ARN this view
+    omits, they carry the account id and Region."""
     run_arn = main_item.get('workflowVersionArn') or ''
     current_arn = (workflow_def or {}).get('workflowVersionArn') or ''
     run_arn = run_arn if isinstance(run_arn, str) else ''

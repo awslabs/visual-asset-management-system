@@ -1411,6 +1411,9 @@ describe("ExecutionDetailPage workflow version", () => {
         expect(
             (await screen.findAllByText(/has been redeployed since this run started/)).length
         ).toBeGreaterThan(0);
+        // Every builder save redeploys, so the tooltip must not present step or pipeline changes as
+        // the only causes.
+        expect(screen.getAllByText(/saved in the workflow builder/).length).toBeGreaterThan(0);
     });
 
     it("says a run started before versions were recorded has none", () => {

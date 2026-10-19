@@ -500,7 +500,8 @@ const Field: React.FC<{ label: string; children: React.ReactNode; mono?: boolean
 
 /**
  * The published workflow version a run started on: "(latest)" while the workflow still runs it,
- * "Superseded" once its state machine has been redeployed (its steps changed, or a pipeline changed a
+ * "Superseded" once its state machine has been redeployed (every save from the workflow builder
+ * redeploys it, as do an API or CLI update that supplies the step list and a pipeline change to a
  * setting the state machine encodes), and the bare number when the workflow no longer records a
  * current version. The workflow settings and pipeline names this page reads live are not part of the
  * version and can change without a redeploy.
@@ -523,7 +524,7 @@ const WorkflowVersionValue: React.FC<{
                     </span>
                     <InfoTooltip
                         label="About superseded versions"
-                        text="The workflow has been redeployed since this run started: its steps, or the execution settings of one of its pipelines, have changed. Re-running it runs the newer definition."
+                        text="The workflow has been redeployed since this run started: it was saved in the workflow builder, or one of its pipelines changed an execution setting. Rerunning it runs the newer definition."
                     />
                 </>
             )}

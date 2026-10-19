@@ -79,8 +79,11 @@ vamscli execution details my-execution-id --json-output
 
 `Workflow version` names the published workflow state machine version the run started on, marked
 `(latest)` while the workflow still runs it or `(superseded)` once the workflow's state machine has
-been redeployed since the run: its step list changed, or one of its pipelines changed a setting the
-state machine encodes (execution type, target, callback mode, timeouts, Deadline Cloud job settings).
+been redeployed since the run. A save from the workflow builder always redeploys it, as does an API
+or CLI update that supplies the step list (`vamscli workflow update` with `--pipeline`,
+`--specified-pipelines` or `--specified-pipelines-file`); a change to a setting one of its pipelines
+contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud
+job settings) redeploys it too.
 The marker does not track the workflow-level settings or the pipeline names and descriptions: they are
 read live and can change without a redeploy, so they may differ from what the run used whatever the
 marker says. A number with no marker means the workflow no longer records a current version (for
