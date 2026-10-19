@@ -83,16 +83,22 @@ def _holds(condition, row):
 
 class FakeWorkflowTable:
     """Workflow rows keyed by (databaseId, workflowId) that APPLY conditional writes, plus an optional
-    Pager serving the by-date GSI walk."""
+    Pager serving the by-date GSI walk. With `lagging`, an eventually consistent read returns the rows
+    as first stored (a replica that has not caught up) and only a ConsistentRead sees later writes.
+    `reads` records the ConsistentRead flag of every get_item."""
 
-    def __init__(self, rows, pager=None, before_write=None):
+    def __init__(self, rows, pager=None, before_write=None, lagging=False):
         self.rows = {(r["databaseId"], r["workflowId"]): r for r in rows}
+        self.replica = {key: dict(row) for key, row in self.rows.items()} if lagging else None
         self.pager = pager
         self.before_write = before_write
         self.writes = []
+        self.reads = []
 
-    def get_item(self, Key):
-        row = self.rows.get((Key["databaseId"], Key["workflowId"]))
+    def get_item(self, Key, ConsistentRead=False):
+        self.reads.append(ConsistentRead)
+        source = self.rows if ConsistentRead or self.replica is None else self.replica
+        row = source.get((Key["databaseId"], Key["workflowId"]))
         return {"Item": dict(row)} if row else {}
 
     def query(self, **kwargs):
@@ -113,6 +119,23 @@ class FakeWorkflowTable:
             written[ExpressionAttributeNames[name_ref]] = ExpressionAttributeValues[value_ref]
         row.update(written)
         self.writes.append((key, written))
+
+
+class LaggingPipelineTable:
+    """Pipeline rows whose eventually consistent reads return `previous` (the row before the latest
+    write) and whose ConsistentRead returns `latest`. `reads` records the ConsistentRead flag of
+    every get_item."""
+
+    def __init__(self, previous, latest):
+        self.previous = {(r["databaseId"], r["pipelineId"]): r for r in previous}
+        self.latest = {(r["databaseId"], r["pipelineId"]): r for r in latest}
+        self.reads = []
+
+    def get_item(self, Key, ConsistentRead=False):
+        self.reads.append(ConsistentRead)
+        source = self.latest if ConsistentRead else self.previous
+        row = source.get((Key["databaseId"], Key["pipelineId"]))
+        return {"Item": dict(row)} if row else {}
 
 
 def _stored_workflow(workflow_id="wf1", database_id="db1", refs=None, deployed_from=None, **extra):
@@ -346,7 +369,7 @@ class TestRefreshPipelineReferences:
         live = _pipeline(taskTimeout="7200")
         with patch(f"{MOD}._workflow_table", return_value=table), \
                 patch(f"{MOD}._get_pipeline_record",
-                      side_effect=lambda db, pid: live if pid == "pipe1" else _pipeline(pid)), \
+                      side_effect=lambda db, pid, **_kw: live if pid == "pipe1" else _pipeline(pid)), \
                 patch(f"{MOD}.workflowAsl.deploy_state_machine", side_effect=_deployed()) as deploy, \
                 patch(f"{MOD}.log_actions"):
             result = ws.refresh_pipeline_references("db1", "pipe1")
@@ -452,6 +475,62 @@ class TestRedeployIsConditional:
             result = ws.redeploy_workflow("db1", "wf1", reason="test")
         assert result["outcome"] == "redeployed"
         assert table.rows[("db1", "wf1")]["deploymentRevision"] == 1
+
+
+@pytest.mark.unit
+class TestRedeployReadsAreStronglyConsistent:
+    """A pipeline save writes the pipeline and then invokes the refresh, so the refresh's reads can land
+    before the replicas have the write. The redeploy path reads strongly consistent; the ordinary API
+    reads keep the default."""
+
+    def test_a_refresh_right_after_a_pipeline_write_sees_the_new_settings(self):
+        row = _stored_workflow(deployed_from=[_pipeline()])
+        live = _pipeline(taskTimeout="7200")
+        pipelines = LaggingPipelineTable(previous=[_pipeline()], latest=[live])
+        table = FakeWorkflowTable([row])
+        with patch(f"{MOD}._workflow_table", return_value=table), \
+                patch(f"{MOD}._pipeline_table", return_value=pipelines), \
+                patch(f"{MOD}.workflowAsl.deploy_state_machine", side_effect=_deployed()):
+            result = ws.redeploy_workflow("db1", "wf1", reason="pipeline db1:pipe1 changed")
+        assert result["outcome"] == "redeployed", result
+        assert table.rows[("db1", "wf1")]["pipelineFingerprints"] == \
+            wa.workflow_pipeline_fingerprints([live])
+        assert pipelines.reads and all(pipelines.reads), pipelines.reads
+
+    def test_the_re_read_after_a_lost_write_sees_the_other_writers_deployment(self):
+        row = _stored_workflow(deployed_from=[_pipeline()])
+        live = _pipeline(taskTimeout="7200")
+
+        def _concurrent_redeploy(stored):
+            stored.update({"deploymentRevision": 4, "workflowVersionArn": ARN + ":7",
+                           "pipelineFingerprints": wa.workflow_pipeline_fingerprints([live])})
+
+        table = FakeWorkflowTable([row], before_write=_concurrent_redeploy, lagging=True)
+        pipelines = LaggingPipelineTable(previous=[live], latest=[live])
+        with patch(f"{MOD}._workflow_table", return_value=table), \
+                patch(f"{MOD}._pipeline_table", return_value=pipelines), \
+                patch(f"{MOD}.workflowAsl.deploy_state_machine", side_effect=_deployed("8")):
+            result = ws.redeploy_workflow("db1", "wf1", reason="launch-time check")
+        assert result["outcome"] == "current", result
+        assert result["workflowVersionArn"] == ARN + ":7"
+        assert table.writes == []
+        assert len(table.reads) == 2 and all(table.reads), table.reads
+
+    def test_an_api_update_keeps_eventually_consistent_reads(self):
+        row = _stored_workflow(deployed_from=[_pipeline()])
+        table = FakeWorkflowTable([row])
+        pipelines = LaggingPipelineTable(previous=[_pipeline()], latest=[_pipeline()])
+        with patch(f"{MOD}._workflow_table", return_value=table), \
+                patch(f"{MOD}._pipeline_table", return_value=pipelines), \
+                patch(f"{MOD}.request_to_claims", return_value={"tokens": ["user1"]}), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=_allow()), \
+                patch(f"{MOD}.log_actions"), \
+                patch(f"{MOD}.workflowAsl.deploy_state_machine") as deploy:
+            resp = ws.lambda_handler(_put_event({"description": "edited"}), MagicMock())
+        assert resp["statusCode"] == 200
+        deploy.assert_not_called()
+        assert table.reads and not any(table.reads), table.reads
+        assert pipelines.reads and not any(pipelines.reads), pipelines.reads
 
 
 #######################

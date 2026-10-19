@@ -195,10 +195,13 @@ def _enforce_workflow(claims_and_roles, item, action):
 # Pipeline resolution (for authorization, save-validation, and ASL generation)
 #######################
 
-def _get_pipeline_record(pipeline_database_id, pipeline_id):
-    return _pipeline_table().get_item(
-        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id}
-    ).get("Item")
+def _get_pipeline_record(pipeline_database_id, pipeline_id, consistent_read=False):
+    """The pipeline row, or None. `consistent_read` makes the read strongly consistent, for a caller
+    that must see a write made just before it was invoked."""
+    kwargs = {"Key": {"databaseId": pipeline_database_id, "pipelineId": pipeline_id}}
+    if consistent_read:
+        kwargs["ConsistentRead"] = True
+    return _pipeline_table().get_item(**kwargs).get("Item")
 
 
 def _resolve_referenced_pipelines(workflow_database_id, specified_pipelines, claims_and_roles):
@@ -302,10 +305,12 @@ def _item_to_response(item, triggers=None, warnings=None, execution_count=None,
     )
 
 
-def get_workflow_item(database_id, workflow_id):
-    return _workflow_table().get_item(
-        Key={"databaseId": database_id, "workflowId": workflow_id}
-    ).get("Item")
+def get_workflow_item(database_id, workflow_id, consistent_read=False):
+    """The workflow row, or None. `consistent_read` makes the read strongly consistent."""
+    kwargs = {"Key": {"databaseId": database_id, "workflowId": workflow_id}}
+    if consistent_read:
+        kwargs["ConsistentRead"] = True
+    return _workflow_table().get_item(**kwargs).get("Item")
 
 
 def _write_workflow_updates(database_id, workflow_id, updates, condition=None):
@@ -453,16 +458,21 @@ def redeploy_workflow(database_id, workflow_id, reason=""):
     deployed definition is stale. Returns {"outcome": current|redeployed|missing|empty|failed, ...};
     current and redeployed carry the deployment view.
 
+    Both reads are strongly consistent. A pipeline save invokes this path right after its write, and
+    the re-read after a lost conditional write must see the other writer's deployment; an eventually
+    consistent read in either place can return the previous row and conclude nothing changed.
+
     The write is conditional on the deploymentRevision this call read, so it never replaces a
     deployment another writer recorded in the meantime; the workflow is then re-read and re-checked.
     A failure is recorded on the workflow (deploymentStale + reason) rather than raised."""
     for _attempt in range(MAX_REDEPLOY_WRITE_ATTEMPTS):
-        item = get_workflow_item(database_id, workflow_id)
+        item = get_workflow_item(database_id, workflow_id, consistent_read=True)
         if not item:
             return {"outcome": "missing"}
         if not (item.get("specifiedPipelines") or []):
             return {"outcome": "empty"}
-        ref_records = _align_snapshot_records(item, _resolve_snapshot_pipeline_records(item))
+        ref_records = _align_snapshot_records(
+            item, _resolve_snapshot_pipeline_records(item, consistent_read=True))
         if ref_records is None:
             failure = "A referenced pipeline no longer exists, so the state machine was not redeployed."
             _mark_deployment_stale(database_id, workflow_id, failure)
@@ -1009,13 +1019,15 @@ def _ordered_pipeline_system_configs(workflow_item, configs_by_key):
     ]
 
 
-def _resolve_snapshot_pipeline_records(workflow_item):
+def _resolve_snapshot_pipeline_records(workflow_item, consistent_read=False):
     """Fetch the pipeline records referenced by a stored workflow's specifiedPipelines snapshot
     (best-effort; skips any that no longer exist). The full record (incl. current enabled/archived
-    state) is returned so save-validation can flag a pipeline archived/disabled after it was added."""
+    state) is returned so save-validation can flag a pipeline archived/disabled after it was added.
+    `consistent_read` is passed to each pipeline read."""
     records = []
     for ref in workflow_item.get("specifiedPipelines", []) or []:
-        rec = _get_pipeline_record(ref.get("pipelineDatabaseId", ""), ref.get("pipelineId", ""))
+        rec = _get_pipeline_record(ref.get("pipelineDatabaseId", ""), ref.get("pipelineId", ""),
+                                   consistent_read=consistent_read)
         if rec:
             records.append(rec)
     return records

@@ -156,7 +156,7 @@ class TestSuccessiveRedeploys:
         live = {"record": _pipeline(taskTimeout="7200")}
         deploy, calls = _deploy_against(sfn)
 
-        with patch(f"{MOD}._get_pipeline_record", side_effect=lambda _db, _pid: live["record"]), \
+        with patch(f"{MOD}._get_pipeline_record", side_effect=lambda _db, _pid, **_kw: live["record"]), \
                 patch(f"{MOD}.workflowAsl.deploy_state_machine", side_effect=deploy):
             first = ws.redeploy_workflow("db1", "wf1", reason="first change")
             live["record"] = _pipeline(taskTimeout="10800")
@@ -182,7 +182,7 @@ class TestSuccessiveRedeploys:
         live = {"record": _pipeline(taskTimeout="7200")}
         deploy, calls = _deploy_against(sfn)
 
-        with patch(f"{MOD}._get_pipeline_record", side_effect=lambda _db, _pid: live["record"]), \
+        with patch(f"{MOD}._get_pipeline_record", side_effect=lambda _db, _pid, **_kw: live["record"]), \
                 patch(f"{MOD}.workflowAsl.deploy_state_machine", side_effect=deploy):
             refresh = ws.handle_internal_action(wr.build_internal_action_event(
                 wr.INTERNAL_ACTION_REFRESH_PIPELINE_REFERENCES,
