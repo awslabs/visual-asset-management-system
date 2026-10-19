@@ -80,7 +80,7 @@ const ViewFile = require("./ViewFile").default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { fetchAsset, fetchFileInfo } = require("../../services/APIService");
 
-let go: (to: string, options?: { state?: unknown }) => void = () => undefined;
+let go: ReturnType<typeof useNavigate> = () => undefined;
 let visited: string[] = [];
 const Probe = () => {
     const navigate = useNavigate();
@@ -219,5 +219,27 @@ describe("ViewFile file switch within one asset", () => {
         expect(viewer()).toBe("assetA:assetA/a.glb@v-old");
         expect(lastUrl()).toBe(`${FILE_ROUTE}/a.glb?version=v-old`);
         expect(fetchAsset.mock.calls.length).toBe(assetReads);
+    });
+
+    it("clears the loading state when Back reaches an entry with navigation state", async () => {
+        await openAt("a.glb");
+        await move(`${FILE_ROUTE}/a.glb?version=v-old`, {
+            state: { filename: "a.glb", key: "assetA/a.glb", versionId: "v-old" },
+        });
+        await settle();
+        const slow = gate("b.glb");
+        await move(`${FILE_ROUTE}/b.glb`);
+        await settle();
+
+        await act(async () => go(-1));
+        await settle();
+
+        expect(screen.queryByText("Loading file...")).toBeNull();
+        expect(viewer()).toBe("assetA:assetA/a.glb@v-old");
+
+        await act(async () => slow.open());
+        await settle();
+
+        expect(viewer()).toBe("assetA:assetA/a.glb@v-old");
     });
 });
