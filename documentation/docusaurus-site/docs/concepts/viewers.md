@@ -4,7 +4,7 @@ VAMS includes a plugin-based viewer system that enables browser-based visualizat
 
 VAMS ships **20 built-in viewer plugins** across five categories. Fourteen are available in every deployment. The remaining six are conditional:
 
--   **Two licensed viewers** — VNTANA and VEERUM — ship disabled and require both a vendor license and enabling them in the viewer configuration.
+-   **Two licensed viewers** — VNTANA and VEERUM, both [add-ons](../developer/addons-overview.md) — ship disabled and require both a vendor license and enabling them in the viewer configuration.
 -   **Three viewers require `app.webUi.allowUnsafeEvalFeatures`** — Needle USD, the SuperSplat Editor, and ThatOpen IFC BIM. Their loaders use `eval`, so VAMS does not offer them at all when a deployment has not enabled that setting.
 -   **The Physna Viewer** appears only when the Physna Sync add-on is enabled.
 
@@ -247,7 +247,7 @@ Two viewer plugins are integrations with commercial products and require separat
 | **VNTANA 3D Viewer** | [VNTANA](https://www.vntana.com/) | `.glb`                                  | Yes              |
 | **VEERUM 3D Viewer** | [Veerum](https://veerum.com/)     | `.e57`, `.las`, `.laz`, `.ply`, `.json` | Yes              |
 
-Both licensed viewers ship disabled in the viewer configuration, so neither appears in the viewer selector until it is enabled. Enabling one also requires a valid license from the respective vendor: without a license the viewer will not render content. Contact the vendor directly for licensing details.
+Both licensed viewers ship disabled in the add-on viewer configuration (`web/src/visualizerPlugin/config/addonViewerConfig.json`), so neither appears in the viewer selector until its entry is set to `"enabled": true`. Enabling one also requires a valid license from the respective vendor: without a license the viewer will not render content. Contact the vendor directly for licensing details.
 
 For more information on partner integrations, see [Partner Integrations](../additional/partner-integrations.md).
 

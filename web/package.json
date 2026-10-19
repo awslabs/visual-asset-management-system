@@ -101,7 +101,7 @@
         "e2e": "playwright test",
         "e2e:headed": "playwright test --headed",
         "e2e:auth": "playwright test e2e/auth.setup.ts --headed",
-        "postinstall": "node ./customInstalls/needletools-usd-viewer/usdViewerInstall.js && node ./customInstalls/veerum/veerumInstall.js && node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/threejs/install.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js && node ./customInstalls/thatopenwebifc/thatOpenWebIfcInstall.js && node ./customInstalls/supersplat/superSplatInstall.js"
+        "postinstall": "node ./customInstalls/needletools-usd-viewer/usdViewerInstall.js && node ./customInstalls/veerum/veerumInstall.js && node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/threejs/install.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js && node ./customInstalls/thatopenwebifc/thatOpenWebIfcInstall.js && node ./customInstalls/supersplat/superSplatInstall.js && node ./customInstalls/custom/customInstall.js"
     },
     "devDependencies": {
         "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
@@ -131,7 +131,7 @@
         "prettier": "^2.4.1",
         "react-test-renderer": "^18.3.1",
         "sass": "^1.43.4",
-        "simple-git": "^3.19.0",
+        "simple-git": "^4.0.2",
         "tailwindcss": "^3.4.14",
         "ts-node": "^10.9.1",
         "vite": "^8.0.16",

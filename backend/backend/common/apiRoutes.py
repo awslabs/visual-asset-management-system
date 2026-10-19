@@ -21,63 +21,31 @@ Consumers:
 The route templates MUST match the routes registered with API Gateway in the
 CDK api builder stacks (``infra/lib/nestedStacks/apiLambda/``).
 
+Add-on routes are declared in ``common/addonApiRoutes.py`` and spliced into
+ALL_API_ROUTES as ``ADDON_ROUTES``; routes a fork adds are declared in
+``custom/customApiRoutes.py`` and spliced in as ``CUSTOM_ROUTES``.
+
 Adding or changing a route checklist:
-  1. Update the ApiRoute constant here AND add it to the appropriate category
-     group array so it is included in ALL_API_ROUTES (and therefore served by
-     the GET /auth/routes/api listing).
+  1. Update the ApiRoute constant here (or in ``common/addonApiRoutes.py`` for
+     an add-on) AND add it to the appropriate category group array so it is
+     included in ALL_API_ROUTES (and therefore served by the
+     GET /auth/routes/api listing).
   2. Register/Update the route attachment in the CDK api builder stacks.
   3. Update ``documentation/VAMS_API.yaml`` and the CLI constants if exposed.
 """
 
-import re
-from functools import lru_cache
-from typing import NamedTuple, Tuple
+from typing import Tuple
 
-# HTTP methods VAMS routes use.
-GET = "GET"
-POST = "POST"
-PUT = "PUT"
-DELETE = "DELETE"
-HEAD = "HEAD"
+# The route type and method constants are defined in common/apiRouteTypes.py so the add-on and
+# fork-owned route lists can import them without importing this module; re-exported here.
+from common.apiRouteTypes import DELETE, GET, HEAD, POST, PUT, ApiRoute, _route_regex  # noqa: F401
 
+# Add-on routes are declared in common/addonApiRoutes.py; every name there is re-exported here.
+from common.addonApiRoutes import *  # noqa: F401,F403
+from common.addonApiRoutes import ADDON_ROUTES
 
-@lru_cache(maxsize=None)
-def _route_regex(path_template: str) -> "re.Pattern":
-    """Compile an API Gateway route template into an exact-match regex.
-
-    ``{param}`` matches exactly one path segment; ``{param+}`` (greedy proxy)
-    matches the remainder of the path. All other characters are literal.
-    """
-    parts = []
-    for segment in path_template.split("/"):
-        if segment.startswith("{") and segment.endswith("+}"):
-            parts.append(".+")
-        elif segment.startswith("{") and segment.endswith("}"):
-            parts.append("[^/]+")
-        else:
-            parts.append(re.escape(segment))
-    return re.compile("^" + "/".join(parts) + "$")
-
-
-class ApiRoute(NamedTuple):
-    """One API endpoint: route template, allowed methods, logical category.
-
-    ``internal=True`` marks routes that are not registered with API Gateway
-    (cross-Lambda invocation only) -- they participate in handler dispatch but
-    are excluded from the public route listing.
-    ``unauthenticated=True`` marks routes served without the custom Lambda
-    authorizer (no Casbin enforcement applies).
-    """
-
-    path: str
-    methods: Tuple[str, ...]
-    category: str
-    internal: bool = False
-    unauthenticated: bool = False
-
-    def matches(self, path: str) -> bool:
-        """Return True if ``path`` (a concrete request path) matches this route."""
-        return _route_regex(self.path).fullmatch(path) is not None
+# Routes a fork adds are declared in custom/customApiRoutes.py (fork-owned, shipped empty).
+from custom.customApiRoutes import CUSTOM_ROUTES
 
 
 # ---------------------------------------------------------------------------
@@ -540,13 +508,6 @@ API_SEARCH_NLP = ApiRoute("/search/nlp", (POST,), "search")
 SEARCH_ROUTES: Tuple[ApiRoute, ...] = (API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_NLP)
 
 # ---------------------------------------------------------------------------
-# Add-ons
-# ---------------------------------------------------------------------------
-API_ADDON_PHYSNA_VIEWER = ApiRoute("/addon/physna/viewer", (GET,), "addons")
-
-ADDON_ROUTES: Tuple[ApiRoute, ...] = (API_ADDON_PHYSNA_VIEWER,)
-
-# ---------------------------------------------------------------------------
 # Master list and lookups
 # ---------------------------------------------------------------------------
 ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
@@ -572,6 +533,7 @@ ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
     + USER_ROUTES
     + SEARCH_ROUTES
     + ADDON_ROUTES
+    + CUSTOM_ROUTES
 )
 
 

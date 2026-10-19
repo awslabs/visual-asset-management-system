@@ -51,6 +51,13 @@ try:
 except Exception as e:
     logger.info(f"Deadline Cloud client unavailable in this partition: {e}")
     deadline_client = None
+# Used only to stop a registered SageMaker training job or pipeline execution while reconciling a
+# failed run. Built the same way for the same reason; a None client reports the job as left running.
+try:
+    sagemaker_client = boto3.client('sagemaker', config=retry_config)
+except Exception as e:
+    logger.info(f"SageMaker client unavailable in this partition: {e}")
+    sagemaker_client = None
 
 try:
     workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
@@ -180,7 +187,7 @@ def reconcile_failed_execution(body, error_info):
         stop_failures = eo.mark_inflight_pipelines_terminal(
             dynamodb, pipeline_executions_table, pipeline_rows, FAILED_STATUS, now,
             sfn_client=sfn_client, batch_client=batch_client, deadline_client=deadline_client,
-            get_pipeline_definition=get_pipeline_definition)
+            get_pipeline_definition=get_pipeline_definition, sagemaker_client=sagemaker_client)
         if stop_failures:
             logger.warning(f"Sub-processes left running for execution {execution_id}: "
                            f"{'; '.join(stop_failures)}")

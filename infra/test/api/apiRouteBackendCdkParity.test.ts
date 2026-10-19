@@ -42,6 +42,11 @@ import * as path from "path";
 import { SynthResult, synthTemplate } from "../support/templateSynth";
 
 const API_ROUTES_PY = path.resolve(__dirname, "..", "../../backend/backend/common/apiRoutes.py");
+// The route lists apiRoutes.py splices into ALL_API_ROUTES from other files.
+const SPLICED_ROUTE_LISTS_PY = [
+    path.resolve(__dirname, "..", "../../backend/backend/common/addonApiRoutes.py"),
+    path.resolve(__dirname, "..", "../../backend/backend/custom/customApiRoutes.py"),
+];
 
 interface DeclaredRoute {
     name: string;
@@ -151,7 +156,9 @@ function groupedNames(code: string): Set<string> {
     return grouped;
 }
 
-const CODE = pythonCode(fs.readFileSync(API_ROUTES_PY, "utf-8"));
+const CODE = [API_ROUTES_PY, ...SPLICED_ROUTE_LISTS_PY]
+    .map((file) => pythonCode(fs.readFileSync(file, "utf-8")))
+    .join("\n");
 const DECLARED = declaredRoutes(CODE);
 const GROUPED = groupedNames(CODE);
 
@@ -202,9 +209,17 @@ function withRouteContributingFeatures(c: any) {
 describe("apiRoutes.py parses as expected", () => {
     // The parse is the weak link in this file: a regex that silently matched nothing would make every
     // comparison below trivially true. These four assertions are what stop that.
-    test("the file was found and read", () => {
+    test("the files were found and read", () => {
         expect(fs.existsSync(API_ROUTES_PY)).toBe(true);
+        for (const file of SPLICED_ROUTE_LISTS_PY) expect(fs.existsSync(file)).toBe(true);
         expect(CODE.length).toBeGreaterThan(5000);
+    });
+
+    test("the spliced add-on route list was parsed", () => {
+        // apiRoutes.py imports ADDON_ROUTES rather than declaring it, so without the add-on file
+        // its routes would be neither declared nor grouped here.
+        expect(DECLARED.map((r) => r.name)).toContain("API_ADDON_PHYSNA_VIEWER");
+        expect(GROUPED.has("API_ADDON_PHYSNA_VIEWER")).toBe(true);
     });
 
     test("a plausible number of route constants were parsed", () => {

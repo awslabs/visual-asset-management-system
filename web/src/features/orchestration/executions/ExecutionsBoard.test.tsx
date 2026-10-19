@@ -8,7 +8,7 @@ import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import ExecutionsBoard from "./ExecutionsBoard";
+import ExecutionsBoard, { notAbortableSummary } from "./ExecutionsBoard";
 import type { Execution } from "../types";
 
 // Mock the query hooks
@@ -1057,6 +1057,84 @@ describe("ExecutionsBoard abort feedback", () => {
         await waitFor(() => expect(mockToast.success).toHaveBeenCalled());
         expect(mockToast.warning).not.toHaveBeenCalled();
         expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("names the sub-processes VAMS cannot stop ahead of the free-text warnings", async () => {
+        // `notAbortable` is the structured half of the same answer: a registered sub-process whose
+        // type VAMS has no stop API for. It is summarised into one leading line so the operator sees
+        // what was left running by name and stage, not only as a sentence buried in `warnings`.
+        setup(
+            jest.fn().mockResolvedValue({
+                message: "Execution aborted",
+                warnings: [SUBPROCESS_WARNING],
+                notAbortable: [
+                    {
+                        resourceType: "slurmJob",
+                        label: "Mock Slurm job",
+                        stageName: "MockTrain",
+                        locator: "slurm-00001",
+                    },
+                ],
+            })
+        );
+        await clickAbort();
+        const notice = await screen.findByRole("status");
+        expect(notice).toHaveTextContent(
+            "1 sub-process was left running because VAMS cannot stop their type: Mock Slurm job (slurmJob, in MockTrain)."
+        );
+        // The summary leads; the server's own sentence still follows it.
+        expect(notice.textContent!.indexOf("1 sub-process was")).toBeLessThan(
+            notice.textContent!.indexOf("Batch job 1234")
+        );
+        await waitFor(() => expect(mockToast.warning).toHaveBeenCalled());
+        expect(mockToast.warning.mock.calls[0][1].description).toContain("Mock Slurm job");
+    });
+
+    it("names the member each sub-process belongs to after a group abort", async () => {
+        // A group abort's `notAbortable` entries carry the member `executionId`; the summary prefixes
+        // each entry with it the way the server prefixes the member's warnings.
+        const MEMBER = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+        const abortImpl = jest.fn().mockResolvedValue({
+            message: { groupId: "grp-1", results: [{ executionId: MEMBER, status: "aborted" }] },
+            warnings: [`${MEMBER}: ${SUBPROCESS_WARNING}`],
+            notAbortable: [
+                {
+                    executionId: MEMBER,
+                    resourceType: "slurmJob",
+                    label: "Mock Slurm job",
+                    stageName: "MockTrain",
+                    locator: "slurm-00001",
+                },
+            ],
+        });
+        setup(abortImpl, { ...RUNNING_ROW, executionGroupId: "grp-1" });
+        await userEvent.click(screen.getByRole("button", { name: "Execution actions" }));
+        await userEvent.click(await screen.findByText(/abort group/i));
+        const dialogButtons = await screen.findAllByRole("button", { name: "Abort" });
+        await userEvent.click(dialogButtons[dialogButtons.length - 1]);
+
+        expect(abortImpl).toHaveBeenCalledWith({ executionId: "exec-running", groupId: "grp-1" });
+        const notice = await screen.findByRole("status");
+        expect(notice).toHaveTextContent(
+            `1 sub-process was left running because VAMS cannot stop their type: ${MEMBER}: Mock Slurm job (slurmJob, in MockTrain).`
+        );
+        expect(notice).toHaveTextContent(`${MEMBER}: ${SUBPROCESS_WARNING}`);
+    });
+
+    it("prefixes a summary entry with its member only when the entry names one", () => {
+        const entry = {
+            resourceType: "slurmJob",
+            label: "Mock Slurm job",
+            stageName: "MockTrain",
+            locator: "slurm-00001",
+        };
+        expect(notAbortableSummary([entry])).toBe(
+            "1 sub-process was left running because VAMS cannot stop their type: Mock Slurm job (slurmJob, in MockTrain)."
+        );
+        expect(notAbortableSummary([{ ...entry, executionId: "e2" }, entry])).toBe(
+            "2 sub-processes were left running because VAMS cannot stop their type: " +
+                "e2: Mock Slurm job (slurmJob, in MockTrain); Mock Slurm job (slurmJob, in MockTrain)."
+        );
     });
 
     it("still reports a failed abort as an error", async () => {

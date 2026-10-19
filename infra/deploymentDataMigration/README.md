@@ -12,7 +12,7 @@ When performing minor updates to VAMS or VAMS configuration, it is possible to j
 
 When upgrading an existing VAMS stack due to major changes in either code or configuration that would normally break a CloudFormation changeset, it may be necessary to perform an A/B deployment methodology.
 
-A/B deployments are when you would deploy a secondary VAMS CloudFormation/CDK stack (with a different name) [Stack B], migrate data using the migration scripts from the initial stack deployed [Stack A], point domains to the secondary [Stack B] after migration, and then delete/destroy the initial stack [Stack A]. This allows for a smooth transition and/or rollback with only minimal downtime during data migration and domain switch-over.
+A/B deployments are when you would deploy a secondary VAMS CloudFormation/CDK stack (with a different name) [Stack B], copy the data from the initial stack deployed [Stack A] into it, point domains to the secondary [Stack B] after migration, and then delete/destroy the initial stack [Stack A]. This allows for a smooth transition and/or rollback with only minimal downtime during data migration and domain switch-over.
 
 **Use-case Note:** This process can also be used for cases of migration of VAMS stack to another region deployment within the same AWS account.
 
@@ -29,7 +29,7 @@ Perform the following steps to conduct an A/B deployment and data migration betw
 2. Change all domains / DNS records pointing to Stack A to temporarily offline notice site
 3. Deploy VAMS stack B in CDK/CloudFormation
 4. Migrate data from Stack A to Stack B:
-    - For DynamoDB tables: Follow the [Migration Script Instructions](#migration-script-instructions) section
+    - For DynamoDB tables: Follow the [A/B Deployment Data Copy](#ab-deployment-data-copy) section
     - For S3 buckets: Use AWS CLI or SDK to copy data between buckets (see [S3 Bucket Migration](#s3-bucket-migration))
 5. If using Cognito, cognito user pool will need to be moved by hand
 6. Verify VAMS stack B endpoints are working and test VAMS stack B functionality with Stack A data
@@ -40,8 +40,8 @@ Perform the following steps to conduct an A/B deployment and data migration betw
 
 When migrating DynamoDB tables between stacks:
 
-1. Ensure the target tables in Stack B are empty to prevent key collisions
-2. Use the appropriate migration script based on your VAMS version (see [Migration Script Template Outline](#migration-script-template-outline))
+1. Confirm which Stack B tables its own deployment has already written (see [A/B Deployment Data Copy](#ab-deployment-data-copy)); every other target table is empty, so no key collides there
+2. Copy each table with AWS tooling as described in [A/B Deployment Data Copy](#ab-deployment-data-copy); if Stack B is a newer VAMS version, run the [Version Upgrade Scripts](#version-upgrade-scripts) for each version step afterwards (see the [Version Upgrade Script Index](#version-upgrade-script-index))
 3. Verify that all data has been successfully migrated before proceeding
 4. If the migration fails, clear the target tables and retry
 
@@ -149,38 +149,36 @@ For detailed instructions, refer to the [v2.1 to v2.2 Migration README](./v2.1_t
 
 ## Migration Script Instructions
 
-VAMS provides two types of migration scripts:
+VAMS provides two kinds of migration tooling:
 
-1. **A/B Deployment Migration Scripts**: For migrating data between two separate VAMS stacks
-2. **Version Upgrade Scripts**: For upgrading data schema within the same stack
+1. **A/B Deployment Data Copy**: Copying data from one VAMS stack to another, using AWS tooling (VAMS ships no cross-stack copy script)
+2. **Version Upgrade Scripts**: Upgrading the data schema within the same stack, one directory per version step under this folder
 
-### A/B Deployment Migration Scripts
+### A/B Deployment Data Copy
 
-These scripts are used to migrate data from one VAMS deployment stack to another.
+VAMS does not ship a Stack A to Stack B table copy script. Copy each DynamoDB table from Stack A into the matching table in Stack B with the tooling of your choice -- an AWS Glue job, an AWS Database Migration Service task, or a scan-and-batch-write script built on the AWS SDK -- and sync the S3 buckets as described in [S3 Bucket Migration](#s3-bucket-migration).
 
-1. Install python 3.12 and boto3:
+1. Deploy Stack B and leave its data tier idle (no uploads, no pipeline runs) until the copy is verified.
 
-    ```bash
-    pip install boto3
-    ```
-
-2. Copy the appropriate migration script template from [Migration Script Template Outline](#migration-script-template-outline) to a new JSON schema file in `./infra/deploymentDataMigration/config/`.
-
-3. Update the regionFrom [Stack A] and regionTo [Stack B] fields in your JSON MigrationSchema file to reflect the region where the old and new VAMS stacks are deployed.
-
-4. Add S3 bucket names in your JSON MigrationSchema file for S3Bucket_OldStack_Name [Stack A] and S3Bucket_NewStack_Name [Stack B] based on bucket descriptor provided in each JSON block.
-
-5. Add DynamoDB table names in your JSON MigrationSchema file for DynamoDBTable_OldStack_Name [Stack A] and DynamoDBTable_NewStack_Name [Stack B] based on table descriptor provided in each JSON block.
-
-6. Ensure permissions on AWS account this will be running against has read/write permissions on both sets of S3 buckets and tables (old stack + new stack).
-
-7. Run the script from the command line as follows, filling in the schema file to use in the `./infra/deploymentDataMigration/config/` folder as the argument:
+2. Read the table names of both stacks from SSM Parameter Store. Each stack publishes them under the prefix in its `ResourceNamesSSMParamPrefixOutput` CloudFormation output:
 
     ```bash
-    python VAMSDataMigration.py MigrationSchema_XXX.json
+    aws ssm get-parameters-by-path --recursive \
+      --path "<ResourceNamesSSMParamPrefixOutput>/dynamoTables" \
+      --query 'Parameters[].[Name,Value]' --output table
     ```
 
-8. Verify in NewStack S3 Buckets and Tables that data moved successfully.
+    Parameters under `dynamoTables/legacy/` name deprecated tables kept only as migration sources; copy them when the version upgrade step below still reads from them.
+
+3. Ensure the credentials the copy runs under have read access to the Stack A tables and buckets and write access to the Stack B tables and buckets, including both stacks' KMS keys when `useKmsCmkEncryption` is enabled.
+
+4. Copy each table into the Stack B table with the same `dynamoTables/<key>` parameter name, with two exceptions that Stack B's own deployment writes before any copy and rewrites on every deploy. Skip `dynamoTables/appFeatureEnabledStorage` entirely: it holds Stack B's feature switches, derived from Stack B's configuration, and a copy would replace them with Stack A's until the next deploy. Copy `rolesStorage` (the `admin` and `basicReadOnly` roles), `constraintsStorage` (the `initial_admin_*` and `initial_basicro_*` constraints), `userStorage` and `userRolesStorage` (the `SYSTEM_USER` and `app.adminUserId` records and their `admin` role assignments) and `metadataSchemaStorageV2` (the default schemas, when an `app.metadataSchema.autoLoad*` flag is on) with a writer that overwrites or skips an existing key. Every other destination table is empty until the copy writes it; if a copy of one of those fails, clear that destination table and retry.
+
+5. Sync the S3 buckets ([S3 Bucket Migration](#s3-bucket-migration)).
+
+6. If Stack B runs a newer VAMS version than Stack A, run the [Version Upgrade Scripts](#version-upgrade-scripts) for each version step against Stack B after the copy.
+
+7. Verify in the Stack B tables and buckets that the data moved successfully, then test the Stack B endpoints.
 
 ### Version Upgrade Scripts
 
@@ -198,15 +196,10 @@ Migration scripts for upgrades **to versions before v2.6** (v2.4 to v2.5 and ear
 
 When a new DynamoDB table, audit log group, or migration-consumed Lambda function is added to the deployment, add the matching constant to `ResourceParamKeys` in `ssm_resource_lookup.py` alongside the `infra/common/resourceParamKeys.ts` and `backend/backend/common/resourceNames.py` entries.
 
-### Migration Script Template Outline
+### Version Upgrade Script Index
 
-Migration script templates for A/B deployments can be found at `./infra/deploymentDataMigration/config/`.
+Each version step has its own directory under `infra/deploymentDataMigration/` with the script, a configuration template and a README describing the transformation and its IAM needs. Run the steps in order when upgrading across more than one version.
 
-VAMS Upgrade Templates are described below. Copy the template to a new configuration file that you modify with your from/to resource types that the data migration script will use.
-
--   VAMS 1.X -> 1.X - `MigrationSchema_v1.X_to_v2.0.template.json`
--   VAMS 1.X -> 2.0 - `MigrationSchema_v1.X_to_v2.0.template.json`
--   VAMS 2.0 -> 2.0 - `MigrationSchema_v2.1_to_v2.1.template.json`
 -   VAMS 2.1 -> 2.2 - See the [v2.1 to v2.2 Migration README](./v2.1_to_v2.2/upgrade/v2.1_to_v2.2_migration_README.md)
 -   VAMS 2.2 -> 2.3 - See the [v2.2 to v2.3 Migration README](./v2.2_to_v2.3/upgrade/v2.2_to_v2.3_migration_README.md)
 -   VAMS 2.3 -> 2.4 - See the [v2.3 to v2.4 Migration README](./v2.3_to_v2.4/upgrade/v2.3_to_v2.4_migration_README.md)
@@ -214,9 +207,10 @@ VAMS Upgrade Templates are described below. Copy the template to a new configura
 -   VAMS 2.5 -> 2.6 - See the [v2.5 to v2.6 Migration README](./v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_README.md).
 -   VAMS 2.6 -> 2.7 - See the [v2.6 to v2.7 Migration README](./v2.6_to_v2.7/upgrade/v2.6_to_v2.7_migration_README.md).
 
+Deployments older than v2.1 have no in-repository upgrade path; deploy a new stack and copy the data as described in [A/B Deployment Data Copy](#ab-deployment-data-copy).
+
 ### Script Notes
 
--   Do not use A/B deployment migration scripts in conjunction with stagingBucket configurations as staging is only used for new VAMS stack deployments that require existing asset migration.
--   New tables should be empty to prevent possible key collisions. If script fails, clear table data first before re-running.
+-   Destination tables for an A/B copy are empty except the ones Stack B's deployment seeds (listed in [A/B Deployment Data Copy](#ab-deployment-data-copy)); on those, overwrite or skip existing keys and never copy `appFeatureEnabledStorage`. If a copy or an upgrade script fails on an unseeded table, clear that table's data first before re-running.
 -   Always test migrations on a small subset of data before running on production data.
 -   Always back up your data before running any migration scripts.

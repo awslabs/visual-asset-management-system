@@ -16,8 +16,8 @@
         "cdk": "cdk",
         "cdk.synth.app": "cdk synth --all --require-approval never",
         "cdk.deploy.app": "cdk deploy --all --require-approval never",
-        "deploy.dev": "npm run cdk.deploy.app -- --context ",
-        "deploy.vams": "cdk deploy --all --require-approval never -c stack-name=vams -c region=us-east-1 --context",
+        "deploy.dev": "npm run cdk.deploy.app --",
+        "deploy.vams": "npm run cdk.deploy.app --",
         "gen": "ts-node ./gen/genEndpoints.ts",
         "check.account": "ts-node ./scripts/assertManifestAccount.ts",
         "check.quotas": "ts-node ./scripts/assertDeployQuotas.ts"
@@ -34,13 +34,13 @@
         "typescript": "^5.9.2"
     },
     "dependencies": {
-        "@aws-cdk/aws-lambda-python-alpha": "^2.263.0-alpha.0",
+        "@aws-cdk/aws-lambda-python-alpha": "^2.273.0-alpha.0",
         "@aws-sdk/client-iam": "^3.1011.0",
         "@aws-sdk/client-ssm": "^3.1011.0",
         "@opensearch-project/opensearch": "^3.5.1",
         "@types/aws-lambda": "^8.10.152",
         "@types/aws4": "^1.11.6",
-        "aws-cdk-lib": "^2.263.0",
+        "aws-cdk-lib": "^2.273.0",
         "aws4": "^1.13.2",
         "cdk-nag": "^2.38.2",
         "constructs": "^10.5.1",

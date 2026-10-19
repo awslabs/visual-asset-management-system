@@ -108,8 +108,8 @@ The active profile has not been initialized with `setup`, or the stored token is
 1. Configure and authenticate the profile:
 
     ```bash
-    vamscli setup <api-gateway-url> --profile <profile-name>
-    vamscli auth login -u <username> --profile <profile-name>
+    vamscli --profile <profile-name> setup <api-gateway-url>
+    vamscli --profile <profile-name> auth login -u <username>
     ```
 
 2. Check the current session:

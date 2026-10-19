@@ -13,10 +13,12 @@
  * `RESOURCE_PARAM_KEYS`, so adding a table without touching the prose fails in the test that names
  * the sentence.
  *
- * "Published by the registry" excludes the `lambdaFunctions` category: the search stack publishes
- * those parameters itself, each only when its feature is enabled, so they are neither in the
- * ResourceNamesBuilder count nor guaranteed to exist. details.md is the one page that also states
- * the grand total with those names included.
+ * "Published by the registry" excludes the `lambdaFunctions` category and the one `integration`
+ * value the secondary API stack publishes: the search stack and ApiBuilder2 publish those parameters
+ * themselves (the reindexer names each only when its feature is enabled), so they are neither in the
+ * ResourceNamesBuilder count nor guaranteed to exist. The storage builder registers the other two
+ * `integration` values (the orchestration bus ARN and event source prefix) through the registry.
+ * details.md is the one page that also states the grand total with the late-bound names included.
  */
 
 import * as fs from "fs";
@@ -33,7 +35,11 @@ const LEGACY = size(RESOURCE_PARAM_KEYS.dynamoTablesLegacy);
 const S3 = size(RESOURCE_PARAM_KEYS.s3Buckets);
 const LOGS = size(RESOURCE_PARAM_KEYS.cloudwatchLogGroups);
 const LAMBDAS = size(RESOURCE_PARAM_KEYS.lambdaFunctions);
-const PUBLISHED_BY_REGISTRY = DYNAMO + LEGACY + S3 + LOGS;
+const INTEGRATION = size(RESOURCE_PARAM_KEYS.integration);
+// `integration/workflowExecutionRoleArn` is published by ApiBuilder2, not through the registry.
+const INTEGRATION_LATE_BOUND = 1;
+const PUBLISHED_BY_REGISTRY = DYNAMO + LEGACY + S3 + LOGS + INTEGRATION - INTEGRATION_LATE_BOUND;
+const GRAND_TOTAL = PUBLISHED_BY_REGISTRY + INTEGRATION_LATE_BOUND + LAMBDAS;
 
 const AWS_RESOURCES = "documentation/docusaurus-site/docs/architecture/aws-resources.md";
 const DETAILS = "documentation/docusaurus-site/docs/architecture/details.md";
@@ -75,6 +81,7 @@ describe("architecture/aws-resources.md states the registry's counts", () => {
         ["s3Buckets/*", S3],
         ["cloudwatchLogGroups/*", LOGS],
         ["lambdaFunctions/*", LAMBDAS],
+        ["integration/*", INTEGRATION],
     ])("SSM Parameter Store table row %s", (group, expected) => {
         const escaped = group.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
         const row = new RegExp("resourceNames/" + escaped + "`\\s*\\|\\s*(\\d+)\\s*\\|");
@@ -93,7 +100,14 @@ describe("architecture/details.md states the resource-name parameter counts", ()
                 /— (\d+) in the shipped configuration \((\d+) DynamoDB tables/,
                 DETAILS
             )
-        ).toEqual([PUBLISHED_BY_REGISTRY + LAMBDAS, DYNAMO + LEGACY]);
+        ).toEqual([GRAND_TOTAL, DYNAMO + LEGACY]);
+        expect(
+            documentedFigure(
+                md,
+                /(\d+) integration values for externally owned pipeline bridges/,
+                DETAILS
+            )
+        ).toBe(INTEGRATION);
         expect(documentedFigure(md, /(\d+) Lambda function names?\)/, DETAILS)).toBe(LAMBDAS);
         expect(documentedFigure(md, /materializes (\d+) of them/, DETAILS)).toBe(
             PUBLISHED_BY_REGISTRY

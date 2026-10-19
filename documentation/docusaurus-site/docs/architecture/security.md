@@ -284,7 +284,11 @@ Each object type accepts only the fields that are meaningful for it. `category` 
 without listing every identifier — for example allowing GET where `category equals conversion`, or denying
 PUT where `name starts_with prod-`. The authoritative per-type field matrix is returned by
 `GET /auth/constraints/permissionObjects`, which is the same mapping the backend validates a submitted
-constraint against.
+constraint against. A deployment can register more object types and fields for its own entities (add-on
+and fork constants files); those appear in the same response, are validated and evaluated the same way,
+and start with no access for any role, administrators included, until a constraint grants it. Names are
+letters and digits only, and an entry that redefines a built-in type or field stops every backend
+function from loading rather than changing what the built-in type allows.
 
 :::note
 A pipeline's `name` and `pipelineExecutionType` are stored structurally on the pipeline record
@@ -561,7 +565,7 @@ When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and �
 
 The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the address AWS WAF observes on the connection. An `X-Forwarded-For` aggregation key is not applied: the header is supplied by the caller and can be rotated to evade the limit, and AWS WAF omits a request that omits the header from the rule's evaluation altogether. Requests arriving through Amazon CloudFront, an Application Load Balancer, or a shared corporate NAT gateway or VPN egress address therefore share a counter. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
 
-When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit and the response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
+When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. On the REST API, Amazon API Gateway renders the block through its `WAF_FILTERED` gateway response, and the API's default `4XX` gateway response adds `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers` to every response it renders, so a browser can read the `429` whether the API is called same-origin (the Amazon CloudFront topology, where the web application calls `/api/*` on its own distribution) or cross-origin (the Application Load Balancer topology, where the web application is served from the ALB host and the API from the `execute-api` host, or a client calling the API Gateway endpoint directly from another origin). The WAF response does not repeat those headers — a second copy would give `Access-Control-Allow-Origin` two values, which browsers reject. It carries `Retry-After` and `Access-Control-Expose-Headers: Retry-After`, because `Retry-After` is not a CORS-safelisted response header and a cross-origin caller cannot read it without the exposure. A throttled CORS preflight (`OPTIONS`) request still fails, because AWS WAF answers it before the API's MOCK integration and a preflight requires a success status. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit and the response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
 
 ### Rule policy validation
 
@@ -638,7 +642,7 @@ Each partition entry carries both a standard and a FIPS hostname, so `useFips` r
 
 ## Blocked File Types
 
-VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content:
+VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content. The comparison is case-insensitive on the file extension and on the media-type part of the reported content type (any parameter such as `; charset=binary` is ignored), so `.EXE` and `Application/X-Msdownload` are blocked exactly like their lower-case forms. The extension is everything from the last dot of the file name, read from the key's last non-empty path segment after any trailing dots and whitespace are removed, so `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are blocked like `payload.exe`; dotfiles such as `.gitignore` are not affected, and a folder whose own name ends in a blocked extension (`builds.exe/`) cannot be downloaded as a prefix. Every colon-separated piece of the file name is checked against the list, because a Windows client writes whichever piece survives: a `:` opens an NTFS alternate data stream that is not part of the file written to disk, so `payload.exe::$DATA` and `payload.exe:evil` are blocked like `payload.exe`, and a browser that cannot write `:` substitutes it and keeps the rest of the name, so `a:b.exe` is blocked like `b.exe`. A file path that creates a new object (upload, move or copy destination) is also rejected when its final name ends in a dot or whitespace, because Windows drops that character when the file is written to disk, and an upload path is rejected when it ends in a slash, because a file is never a folder. A path that creates a new object (upload, create folder, move or copy destination) is rejected when it contains a `:` anywhere, because Windows forbids that character in a file or folder name.
 
 ### Blocked Extensions
 
@@ -647,6 +651,10 @@ VAMS validates all uploaded files against blocked extension and MIME type lists 
 ### Blocked MIME Types
 
 `application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/javascript`, `application/x-powershell`, `application/vbscript`, and additional potentially dangerous MIME types.
+
+A deployment can add entries to both lists in its add-on or fork constants files; it cannot remove one. Added entries are matched the same way as the shipped ones. See [Upload deny lists](../developer/customizing-vams.md#upload-deny-lists).
+
+Upload completion applies the blocked-extension check to every object it creates, including zero-byte and abandoned uploads, before the object is written, and accepts only the files that were declared when the upload was initialized; an upload initialized before this check existed is completed without it until it expires, seven days after it was initialized, and an expired upload is refused.
 
 ## Audit Logging
 

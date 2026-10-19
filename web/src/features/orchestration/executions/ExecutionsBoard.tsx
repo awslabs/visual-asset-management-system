@@ -26,7 +26,8 @@ import {
 } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
-import type { Execution } from "../types";
+import type { Execution, NotAbortableSubExecution } from "../types";
+import { resourceTypeLabel } from "./resourceTypeLabels";
 
 interface ExecutionsBoardProps {
     scope: ExecutionScope;
@@ -35,6 +36,26 @@ interface ExecutionsBoardProps {
 // Lower bound for a custom range whose "from" side is left empty, meaning "everything up to the
 // chosen end date".
 const OPEN_ENDED_RANGE_START = "1970-01-01T00:00:00Z";
+
+/**
+ * One line naming the registered sub-processes an abort left running because VAMS cannot stop their
+ * type: "2 sub-processes were left running because VAMS cannot stop their type: Mock Slurm job
+ * (slurmJob, in MockTrain); ...". A group abort's entries carry the member `executionId`, which
+ * prefixes the entry the way the group's warnings are prefixed: "<executionId>: Mock Slurm job
+ * (slurmJob, in MockTrain)". Rendered ahead of the server's free-text warnings.
+ */
+export const notAbortableSummary = (entries: NotAbortableSubExecution[]): string => {
+    const named = entries.map((e) => {
+        const member = e.executionId ? `${e.executionId}: ` : "";
+        const name = e.label || e.locator || e.resourceType;
+        const type = resourceTypeLabel(e.resourceType);
+        const stage = e.stageName ? `, in ${e.stageName}` : "";
+        return `${member}${name} (${type}${stage})`;
+    });
+    const count =
+        entries.length === 1 ? "1 sub-process was" : `${entries.length} sub-processes were`;
+    return `${count} left running because VAMS cannot stop their type: ${named.join("; ")}.`;
+};
 
 const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const toast = useToast();
@@ -306,9 +327,17 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             const result: any = await abortExecution.mutateAsync({ executionId, groupId });
             setAbortConfirm(null);
             // The abort response carries `warnings` when a registered sub-process could not be
-            // stopped. The execution still reads ABORTED, so without surfacing these the compute left
-            // running is invisible — which is the opposite of what the operator asked for.
-            const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+            // stopped, and `notAbortable` for the sub-processes of a type VAMS cannot stop at all. The
+            // execution still reads ABORTED, so without surfacing these the compute left running is
+            // invisible — which is the opposite of what the operator asked for. The structured list
+            // is summarised into one leading line; the free-text warnings follow it.
+            const notAbortable: NotAbortableSubExecution[] = Array.isArray(result?.notAbortable)
+                ? result.notAbortable
+                : [];
+            const warnings: string[] = [
+                ...(notAbortable.length ? [notAbortableSummary(notAbortable)] : []),
+                ...(Array.isArray(result?.warnings) ? result.warnings : []),
+            ];
             setActionWarnings(warnings);
             const what = groupId
                 ? `Every active execution in group ${groupId} was signalled to stop.`

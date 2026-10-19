@@ -132,6 +132,7 @@ For the full list of command groups and every command in each, see the [Command 
 -   **Tier 2 (Object-level)** -- Controls access to specific data entities (databases, assets, pipelines, tags, tag types)
 -   **GLOBAL keyword** -- Apply constraints across all databases or resources
 -   **Deny overlay** -- Layer deny constraints on top of allow constraints for exception-based access patterns
+-   **Extension object types** -- A deployment can register object types and constraint fields for the entities its own extensions add; a registered type starts with no access for any role, administrators included, until a constraint grants it
 -   **Pre-built templates** -- Five pre-built permission profiles: database-admin, database-user, database-readonly, global-readonly, deny-tagged-assets
 
 ### Metadata System
@@ -286,4 +287,14 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 -   **Metadata schema auto-loading** -- Control which default metadata schemas are loaded on deployment
 -   **External asset buckets** -- Register existing Amazon S3 buckets with VAMS for asset management
 -   **Custom Amazon S3 bucket policies** -- Additional bucket policy statements via `s3AdditionalBucketPolicyConfig.json`
--   **Addon framework** -- Garnet Framework integration for NGSI-LD digital twin data synchronization; Physna Sync add-on for one-way synchronization of supported 3D/CAD files and metadata to a Physna for geometric and semantic 3D search
+-   **Add-ons** -- Optional, upstream-maintained integrations with external solutions and stand-alone components, enabled by configuration ([Add-ons Overview](../developer/addons-overview.md)): Garnet Framework integration for NGSI-LD digital twin data synchronization; Physna Sync add-on for one-way synchronization of supported 3D/CAD files and metadata to a Physna for geometric and semantic 3D search; the licensed VNTANA and VEERUM viewers
+
+### Fork Extension Points
+
+An organization that runs its own fork of VAMS adds its own features in files that upstream VAMS ships empty and never edits, so merging an upstream release does not conflict with them. See [Extending VAMS in a Fork](../developer/customizing-vams.md).
+
+-   **Backend and API** -- API routes, Lambda handlers and models, SSM resource names, upload deny-list entries (append-only), and permission object types with their constraint fields, which start with no access for any role until a constraint grants it
+-   **Infrastructure** -- CDK resources in a nested stack of their own, feature switches and fork settings
+-   **Web, CLI and MCP** -- web pages, routes and navigation, viewer plugins and their install steps, CLI commands and client methods, MCP tools
+-   **Collision checks** -- an entry that duplicates a core route, resource-name key, feature switch, object type, constraint field, CLI command or viewer is refused rather than replacing the core one
+-   **Add-on files** -- the optional add-ons (Physna, Garnet) and the licensed viewers (VNTANA, VEERUM) live in add-on files beside the core lists, so add-on code stays off the path of core changes

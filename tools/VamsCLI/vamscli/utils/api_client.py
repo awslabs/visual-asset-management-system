@@ -139,6 +139,7 @@ from .exceptions import (
 )
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
+from .custom_api_client import CustomAPIClientMixin
 
 
 def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
@@ -170,8 +171,11 @@ def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) ->
     )
 
 
-class APIClient:
-    """HTTP client for VAMS API Gateway."""
+class APIClient(CustomAPIClientMixin):
+    """HTTP client for VAMS API Gateway.
+
+    Inherits the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
+    """
     
     def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
         self.base_url = base_url.rstrip('/')
@@ -208,8 +212,8 @@ class APIClient:
                 expiration_info = self.profile_manager.get_token_expiration_info()
                 raise OverrideTokenError(
                     "Override token has expired. Please provide a new token with "
-                    "'vamscli auth set-override --token <new_token>' or use "
-                    "'vamscli --token-override <new_token> <command>'"
+                    "'vamscli auth set-override -u <user-id> --token-stdin' or "
+                    "'vamscli auth login --user-id <user-id> --token-override-stdin'"
                 )
     
     def _make_request(self, method: str, endpoint: str, include_auth: bool = True,
@@ -310,8 +314,8 @@ class APIClient:
                 if self.profile_manager.is_override_token():
                     raise OverrideTokenError(
                         "Override token authentication failed. The token may be invalid or expired. "
-                        "Please provide a new token with 'vamscli auth set-override --token <new_token>' "
-                        "or use 'vamscli --token-override <new_token> <command>'"
+                        "Please provide a new token with 'vamscli auth set-override -u <user-id> --token-stdin' "
+                        "or 'vamscli auth login --user-id <user-id> --token-override-stdin'"
                     )
                 
                 # Try to refresh token or re-authenticate (for Cognito tokens only)
@@ -330,8 +334,8 @@ class APIClient:
                     if self.profile_manager.is_token_expired():
                         raise TokenExpiredError(
                             "Override token has expired. Please provide a new token with "
-                            "'vamscli auth set-override --token <new_token>' or use "
-                            "'vamscli --token-override <new_token> <command>'"
+                            "'vamscli auth set-override -u <user-id> --token-stdin' or "
+                            "'vamscli auth login --user-id <user-id> --token-override-stdin'"
                         )
                     else:
                         # Token not expired, this is a permission issue
@@ -5327,13 +5331,14 @@ class APIClient:
 
         Args:
             template_data: Template import data matching ImportConstraintsTemplateRequestModel:
-                - template: Optional template metadata (name, description, version)
+                - metadata: Optional template header (name, description, version); this is the
+                  key the shipped template files use. ``template`` is accepted as an alternative.
                 - variables: Optional list of variable definitions
                 - variableValues: Dictionary of variable name -> value mappings (ROLE_NAME required)
                 - constraints: List of constraint definitions
 
         Returns:
-            API response data with import results (constraintsCreated, constraintIds, etc.)
+            API response data: success, message, constraintsCreated, constraintIds, timestamp
 
         Raises:
             InvalidConstraintDataError: When template data is invalid

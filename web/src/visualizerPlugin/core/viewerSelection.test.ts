@@ -24,6 +24,7 @@ import {
 import { CompareContext } from "./compareShape";
 import { CompareModeConfig, ViewerConfig, ViewerPluginConfig } from "./types";
 import shippedConfig from "../config/viewerConfig.json";
+import shippedAddonConfig from "../config/addonViewerConfig.json";
 
 const viewer = (overrides: Partial<ViewerPluginConfig> = {}): ViewerPluginConfig => ({
     id: "test-viewer",
@@ -348,7 +349,10 @@ describe("availableViewerModes", () => {
 // ---------------------------------------------------------------------------------------------
 
 describe("shipped viewerConfig.json compare contract", () => {
-    const shipped = (shippedConfig as ViewerConfig).viewers;
+    const shipped = [
+        ...(shippedConfig as ViewerConfig).viewers,
+        ...(shippedAddonConfig as ViewerConfig).viewers,
+    ];
     const compareCapable = shipped.filter((v) => v.compareMode?.enabled);
     const compareOnly = shipped.filter(isCompareOnlyViewer);
 

@@ -50,6 +50,15 @@ jest.mock("../../visualizerPlugin/core/viewableExtensions", () => ({
     availableModesForFiles: () => ({ visualize: true, compare: false }),
 }));
 
+// The registry pulls in Vite's import.meta.glob, which jest cannot load; only types are used here.
+jest.mock("../../visualizerPlugin/core/PluginRegistry", () => ({}));
+jest.mock("../../visualizerPlugin/core/viewableExtensions", () => ({
+    availableModesForFiles: () => ({ visualize: true, compare: false }),
+}));
+jest.mock("../../visualizerPlugin/core/useViewerRegistryReady", () => ({
+    useViewerRegistryReady: () => true,
+}));
+
 const mockMounts: string[] = [];
 jest.mock("../../visualizerPlugin/components/DynamicViewer", () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires

@@ -751,6 +751,8 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
 
 ## Adding a New Processing Pipeline
 
+**In a fork, or for an external solution.** Pipelines have no custom lane and are not add-ons. A fork adds a pipeline without editing these core files by deploying it as its own stack and registering it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges`); the custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam. An upstream pipeline that calls a vendor's service is still a core pipeline behind its own `app.pipelines.*` switch. The `/add-pipeline` skill's fork mode and `documentation/docusaurus-site/docs/developer/customizing-vams.md` (Known Limits) say the same; the add-on definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
 1. Create directory under `backendPipelines/{useCase}/`.
 2. Add Lambda handler in `lambda/` subdirectory. **Every pipeline `lambda/` directory MUST include:**
 

@@ -2,6 +2,9 @@
 Constants for VamsCLI
 """
 
+# Add-on constants are declared in vamscli/addon_constants.py; every name there is re-exported here.
+from vamscli.addon_constants import *  # noqa: F401,F403
+
 # CLI Configuration
 CLI_NAME = "vamscli"
 
@@ -264,7 +267,8 @@ DEFAULT_RETRY_JITTER = 0.1
 
 # Feature Switch Constants
 # One per member of VAMS_APP_FEATURES (infra/common/vamsAppFeatures.ts), which is what a deployment
-# publishes through /secure-config. A missing member is a gate the CLI cannot name.
+# publishes through /secure-config. A missing member is a gate the CLI cannot name. The add-on
+# switches (ADDON_APP_FEATURES) are declared in vamscli/addon_constants.py and re-exported above.
 FEATURE_GOVCLOUD = "GOVCLOUD"
 FEATURE_ALLOWUNSAFEEVAL = "ALLOWUNSAFEEVAL"
 FEATURE_LOCATIONSERVICES = "LOCATIONSERVICES"
@@ -275,7 +279,6 @@ FEATURE_AUTHPROVIDER_COGNITO = "AUTHPROVIDER_COGNITO"
 FEATURE_AUTHPROVIDER_COGNITO_SAML = "AUTHPROVIDER_COGNITO_SAML"
 FEATURE_AUTHPROVIDER_COGNITO_OIDC = "AUTHPROVIDER_COGNITO_OIDC"
 FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP = "AUTHPROVIDER_EXTERNALOAUTHIDP"
-FEATURE_PHYSNA_ADDON = "PHYSNA_ADDON"
 FEATURE_DEADLINECLOUD_PIPELINES = "DEADLINECLOUD_PIPELINES"
 FEATURE_VECTORSEARCH = "VECTORSEARCH"
 

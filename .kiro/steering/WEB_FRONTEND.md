@@ -46,7 +46,7 @@ web/
     vntana/
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -77,6 +77,8 @@ web/
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
                             #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+                            #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
+                            #   with a not-abortable note when abortable === false)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
                             #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
                             #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
@@ -104,6 +106,15 @@ web/
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
+      addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
+
+    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
+    custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
+      customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
+      customNavigation.ts   #   customNavSections, appended to the side navigation
+      customFeatures.ts     #   names of the fork's feature switches
+      services/             #   fork API calls (may import apiClient)
+      pages/                #   fork pages
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -171,14 +182,19 @@ web/
       index.ts              # Public API
       README.md             # Plugin development docs
       config/
-        viewerConfig.json   # Plugin configuration
+        viewerConfig.json   # Plugin configuration (core)
+        addonViewerConfig.json   # Add-on viewers (Physna; licensed VNTANA, VEERUM)
+        customViewerConfig.json  # FORK EXTENSION POINT (shipped empty)
       core/
         PluginRegistry.ts   # Singleton registry (manages all viewers)
+        viewerSources.ts    # Merges core + add-on + custom configs and manifests
         StylesheetManager.ts
         types.ts
       components/           # Shared viewer UI components
       viewers/              # Individual viewer plugins
         manifest.ts         # Static analysis manifest
+        addonManifest.ts    # Add-on viewer manifest
+        custom/             # FORK EXTENSION POINT: customManifest.ts + fork viewer plugins
         AudioViewerPlugin/
         BabylonJSGaussianSplatViewerPlugin/
         CesiumViewerPlugin/
@@ -216,6 +232,7 @@ web/
 
     utils/
       apiEndpoint.ts        # Resolves the API base URL
+      chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
       sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
@@ -303,7 +320,7 @@ const response = await apiClient.get(`database/${databaseId}/assets`);
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/` and `src/features/orchestration/api/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/`, `src/features/orchestration/api/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -311,9 +328,11 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
+-   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper).
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, never in `APIService.ts`.
 
 ### Rule 4: npm Only
 
@@ -783,6 +802,12 @@ const MyPage = React.lazy(() => import("./pages/MyPage"));
 
 The route is automatically permission-filtered via `webRoutes()` API call. The backend must also allow the route.
 
+### 7.5 Adding Pages in a Fork
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
 ---
 
 ## 8. Viewer Plugin System
@@ -792,8 +817,9 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`src/visualizerPlugin/core/PluginRegistry.ts`) -- Singleton that manages all viewer plugins
--   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for all plugins
--   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports
+-   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for the core plugins; add-on viewers (Physna and the licensed VNTANA and VEERUM viewers) are configured in `addonViewerConfig.json` and a fork's in `customViewerConfig.json` (fork extension point, shipped `{ "viewers": [] }`)
+-   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` hold the add-on and fork entries
+-   **viewerSources.ts** (`src/visualizerPlugin/core/viewerSources.ts`) -- merges core, add-on and custom configs and manifests; a custom viewer whose `id` repeats a shipped one is skipped with a console error, and a shipped manifest key always wins
 -   **StylesheetManager** -- Per-plugin CSS lifecycle management
 
 ### 8.2 Current Viewers (plugins)
@@ -813,8 +839,8 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
 | `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
-| `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed)                             |
-| `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed)                             |
+| `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
+| `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
 | `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
@@ -900,6 +926,8 @@ export const VIEWER_COMPONENTS = {
 ```
 
 **Step 5:** If the viewer has external dependencies, create a custom install script in `web/customInstalls/myviewer/` and add it to the `postinstall` chain in `package.json`.
+
+**Add-on and fork viewers.** (Add-on as defined in `documentation/docusaurus-site/docs/developer/addons-overview.md`.) An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), is registered in `config/addonViewerConfig.json` + `viewers/addonManifest.ts`, never in the core files; its plugin directory stays under `viewers/`. To enable a licensed viewer, set `"enabled": true` on its entry in `config/addonViewerConfig.json`; its install script (`web/customInstalls/vntana/`, `web/customInstalls/veerum/`, unchanged in `postinstall`) checks the core, add-on and custom config files through `web/customInstalls/utility/checkViewerEnabled.js`. A fork's viewer lives in `viewers/custom/<Name>Plugin/` and is registered in `config/customViewerConfig.json` + `viewers/custom/customManifest.ts` (fork extension point, shipped empty); its install steps go in `web/customInstalls/custom/customInstall.js`, which `postinstall` already runs. `core/viewerSources.ts` merges core, add-on and custom in that order, so a priority tie between a core and an add-on viewer resolves to the core one; a custom entry whose `id` repeats a shipped `id` is skipped with a console error and a shipped manifest key always wins. Ids prefixed `custom-` are recommended, not enforced.
 
 ### 8.4 Plugin Config Fields
 
@@ -996,6 +1024,50 @@ at its root) or its lines render centered and stop wrapping. The differ also pas
 `styles={{ titleBlock: { pre: { margin: 0 } } }}` to `react-diff-viewer-continued`: the library's
 `pre` margin reset covers only the table, and the UA `1em` margin on the title `<pre>` pushed the
 labels down and clipped them inside the fixed-height title block.
+
+### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
+
+A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
+expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
+are not treated as containing credentials and stay in the web app access-logs bucket until its
+lifecycle rule removes them (`WebAppAccessLogsBucket` in `staticWebBuilder-nestedStack.ts`): the bucket
+is versioned, so a log object expires after 30 days and its noncurrent version is deleted 30 days later.
+
+`supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
+`?load=<presigned>&filename=…`) — one object, expiring, but logged. **Do not copy the pattern into a new
+viewer.** Use the **URL fragment** instead: browsers do not transmit a fragment, so nothing reaches the
+server or its logs.
+
+For a vendored build that reads `location.search` and cannot be changed at the call site, inject a shim
+into its `index.html` from that viewer's `customInstalls/` script which moves the fragment into the query
+string with `history.replaceState` before the bundle runs. Write the shim as a file beside `index.html`
+and load it with a classic `<script src>` placed ahead of the bundle's: the CSP's `script-src` admits an
+inline script only by the hashes of `web/index.html`'s own blocks (`cspInlineScriptHashes.ts`), so an
+inline shim in a viewer page never runs. Patch the HTML entry rather than the minified bundle: the bundle
+is regenerated from a pinned upstream tag on every `npm install`, so a regex against its internals breaks
+on the next version bump while injected elements do not.
+
+The shimmed page also needs `<meta name="referrer" content="no-referrer">` at the top of its `<head>`,
+ahead of the shim and of every `<script>` and `<link>`. `replaceState` issues no request, but it
+changes the document URL, and the browser builds the `Referer` of every later request the page makes
+from that URL. The CloudFront distribution sends `Referrer-Policy: strict-origin-when-cross-origin`
+(`cloudfront-s3-website-construct.ts`) and the ALB sends none, so the browser default applies, which is
+the same policy. Both put the full URL, query string included, in the `Referer` of a same-origin request,
+and a vendored viewer keeps fetching its own files after it starts (SuperSplat loads `static/locales/`
+and `static/lib/webp/webp.wasm` from `/viewers/supersplat/`). Without the `<meta>`, each of those requests
+carries the presigned URL into the web access logs: CloudFront standard logs record the `Referer`, and on
+the ALB path so do the web bucket's S3 server access logs. A `<meta>` referrer policy replaces the
+response header's for the requests the document makes after the element is parsed, which is why it goes
+at the top, and it is the only control that covers both distributions, because the ALB cannot add a
+`Referrer-Policy` header. The iframe's `referrerPolicy` attribute, which `HTMLViewerComponent.tsx` sets,
+is not a substitute: it governs only the request that loads the framed page, not the requests that page
+makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
+the fragment.
+
+Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
+value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
+same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
+breaks and S3 returns 400.
 
 ### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
 

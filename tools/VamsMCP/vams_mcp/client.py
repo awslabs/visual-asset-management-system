@@ -61,6 +61,9 @@ class VamsClient:
         self.profile_name = profile_name
         self._profile = ProfileManager(profile_name)
 
+        # `--profile` is a vamscli root option and goes before the command.
+        cli_prefix = f"vamscli --profile {profile_name} " if config.profile else "vamscli "
+
         # Discover the API Gateway URL from the profile (raises a clear,
         # actionable error if the user hasn't run `vamscli setup`).
         try:
@@ -68,16 +71,14 @@ class VamsClient:
         except Exception as exc:  # ProfileNotFoundError / ConfigurationError
             raise ConfigError(
                 f"vamscli profile '{profile_name}' is not set up: {exc} "
-                f"Run `vamscli setup <api-gateway-url>"
-                + (f" --profile {profile_name}`" if config.profile else "`")
-                + " first."
+                f"Run `{cli_prefix}setup <api-gateway-url>` first."
             )
 
         api_url = profile_config.get("api_gateway_url")
         if not api_url:
             raise ConfigError(
                 f"vamscli profile '{profile_name}' has no api_gateway_url. "
-                f"Re-run `vamscli setup <api-gateway-url>`."
+                f"Re-run `{cli_prefix}setup <api-gateway-url>`."
             )
 
         # Require an existing login. The APIClient will refresh tokens as needed;
@@ -85,9 +86,7 @@ class VamsClient:
         if self._profile.load_auth_profile() is None:
             raise ConfigError(
                 f"Not authenticated for vamscli profile '{profile_name}'. "
-                f"Run `vamscli auth login -u <user>"
-                + (f" --profile {profile_name}`" if config.profile else "`")
-                + " first."
+                f"Run `{cli_prefix}auth login -u <user>` first."
             )
 
         self.api_url = api_url

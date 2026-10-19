@@ -221,12 +221,17 @@ describe("root, backend, and documentation steering", () => {
         expect(steering).toContain("Pipelines (including the System pipelines subcategory)");
     });
 
-    test("documentation/CLAUDE.md's spelled-out pipeline count is the one overview/features.md states", () => {
+    test("documentation/CLAUDE.md tells the author to keep features.md's spelled-out pipeline count in step", () => {
+        // The steering quotes the sentence with a placeholder rather than the current number, so it
+        // cannot go stale; the literal count is pinned against the table's row count by
+        // docsVectorSearchRelease.test.ts.
         const steering = readRepo(path.join("documentation", "CLAUDE.md"));
-        const m = steering.match(/VAMS includes _([a-z-]+)_ built-in processing pipelines/);
-        expect(m).not.toBeNull();
+        expect(steering).toContain("VAMS includes _N_ built-in processing pipelines");
+        expect(steering).not.toMatch(
+            /VAMS includes _[a-z]+(-[a-z]+)?_ built-in processing pipelines/
+        );
         const features = fs.readFileSync(path.join(DOCS, "overview", "features.md"), "utf8");
-        expect(features).toContain(`VAMS includes ${m![1]} built-in processing pipelines`);
+        expect(features).toMatch(/VAMS includes [a-z]+(-[a-z]+)? built-in processing pipelines/);
     });
 });
 

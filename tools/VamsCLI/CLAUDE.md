@@ -24,9 +24,11 @@ VamsCLI is a Python command-line interface built with the **Click** framework fo
 ```
 tools/VamsCLI/
   vamscli/
-    main.py                  # CLI entry point, @click.group, command registration
+    main.py                  # CLI entry point, @click.group, command registration (+ CUSTOM_COMMANDS)
     version.py               # __version__ and CLI_VERSION
-    constants.py             # All API endpoints, limits, config constants
+    constants.py             # All API endpoints, limits, config constants (re-exports addon_constants)
+    addon_constants.py       # Add-on FEATURE_* names (FEATURE_PHYSNA_ADDON), mirrors infra/common/addonAppFeatures.ts
+    custom_constants.py      # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
     auth/
       base.py                # BaseAuthenticator abstract class
       cognito.py             # CognitoAuthenticator (SRP, USER_PASSWORD_AUTH)
@@ -55,6 +57,7 @@ tools/VamsCLI/
       execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
+      custom/__init__.py     # FORK EXTENSION POINT: CUSTOM_COMMANDS, registered on the root group by main.py
       industry/
         industry.py          # Industry command group
         engineering/
@@ -64,7 +67,8 @@ tools/VamsCLI/
         spatial/
           glb.py             # GLB file combination operations
     utils/
-      api_client.py          # APIClient class (HTTP, retries, error mapping)
+      api_client.py          # APIClient class (HTTP, retries, error mapping); inherits CustomAPIClientMixin
+      custom_api_client.py   # FORK EXTENSION POINT: CustomAPIClientMixin (shipped empty)
       profile.py             # ProfileManager (multi-profile, config dirs)
       exceptions.py          # Two-tier exception hierarchy (~140 classes)
       global_exceptions.py   # @handle_global_exceptions() decorator
@@ -103,7 +107,7 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
--   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
+-   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`; `--json-output` carries every top-level sibling of the handler's `message` — `warnings`, `notAbortable` — through `_payload_with_warnings`, so a field added upstream reaches scripts, the MCP server and the connectors without a CLI change), `execution rerun`, `execution permanent-delete`
 
 Comment and subscription cover the comments and subscriptions APIs:
 
@@ -323,6 +327,18 @@ and it is best-effort (any read failure degrades to the default) because it runs
    `tests/test_active_profile_resolution.py`.
 4. A bare `ProfileManager()` / `APIClient(url)` targets the **default** profile. Pass the resolved
    profile (`ProfileManager(read_active_profile_name())`) when no manager is supplied.
+5. **A hint names a command Click accepts.** `--profile`, `--verbose` and `--version` are
+   root-group options and go **before** the subcommand: `vamscli --profile <name> setup <url>`;
+   placed after the subcommand, Click rejects them with "No such option". Token-override guidance names
+   `auth set-override -u <user-id> --token-stdin` or
+   `auth login --user-id <user-id> --token-override-stdin`; there is no root `--token-override`.
+   `tests/test_setup_check.py` scans the CLI, MCP and connector sources for any
+   `vamscli --<opt>` that is not a root option.
+6. **The setup gate exempts the recovery commands.** `check_setup_required` (`main.py`) reads the
+   invoked top-level command off `sys.argv` (skipping root options and the value of `--profile`)
+   and lets `setup`, `version` and the `profile` group run without a configured profile — those
+   are the commands its own hint sends the user to. Any new command that must work before setup
+   is added to `_SETUP_EXEMPT_COMMANDS`, not special-cased in the callback.
 
 ### 7. Constants and Endpoints
 
@@ -338,9 +354,9 @@ API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetvers
 
 **Rules**:
 
-1. New endpoints go in `constants.py`, never hardcoded in commands or api_client
+1. New endpoints go in `constants.py` (in a fork: `custom_constants.py`), never hardcoded in commands or api_client
 2. Upload/download limits are constants, not magic numbers
-3. Feature switch names are constants (e.g., `FEATURE_GOVCLOUD = "GOVCLOUD"`)
+3. Feature switch names are constants (e.g., `FEATURE_GOVCLOUD = "GOVCLOUD"`; in a fork, `FEATURE_CUSTOM_*` in `custom_constants.py`)
 4. Retry config defaults are constants, overridable via env vars
 5. **Every `API_*` path constant must name a route the API actually registers.** `constants.py` is
    the authority a new consumer trusts, so a path the backend never declared is a trap that fails
@@ -796,6 +812,25 @@ Follow this checklist:
 
     To validate the command surface, walk `cli.commands[group].commands[cmd].params` for every group/subcommand/flag the connectors pass, then spot-check a live `--json-output` response for the keys each connector parses.
 
+### Adding Commands in a Fork
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+A fork adds commands without editing `main.py`, `constants.py` or `utils/api_client.py`; each splices in a fork-owned file that upstream ships empty and never edits:
+
+| What                     | Fork-owned file                                                                                   | Spliced in by                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint paths, switches | `vamscli/custom_constants.py` (`API_*`, `FEATURE_CUSTOM_*`)                                       | read by the fork's client methods and commands (Rule 7)                                                                       |
+| API client methods       | `vamscli/utils/custom_api_client.py` (`CustomAPIClientMixin`)                                     | `APIClient` inherits it, so the methods get retries and typed errors and the MCP server reaches them as `CLIENT.api.<method>` |
+| Command groups           | `vamscli/commands/custom/<group>.py`, listed in `commands/custom/__init__.py` (`CUSTOM_COMMANDS`) | `main.py` registers every entry on the root `cli` group                                                                       |
+
+-   Command files follow the same patterns as core ones (`roleUserConstraints.py`: decorators, `--json-output`, typed errors).
+-   `custom_constants.py` imports nothing from `vamscli`, and `custom_api_client.py` must not import from `vamscli.commands` (which imports `APIClient`): either would create an import cycle.
+-   `tests/test_constants_contract.py` checks every custom `API_*` path against the backend route lists (including `backend/backend/custom/customApiRoutes.py`) and every `FEATURE_*` in `custom_constants.py` against `infra/common/customAppFeatures.ts`.
+-   A custom command never replaces a core one: `main.py` registers `CUSTOM_COMMANDS` after every core command and raises at import on a name that is already registered (`tests/test_custom_commands.py`).
+-   A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name.
+-   Command names prefixed `custom-` are recommended, not enforced. Pattern 7 still applies: a custom command an agent should reach gets an MCP tool in `tools/VamsMCP/vams_mcp/custom_tools.py`.
+
 ### Adding a New Exception Class
 
 1. Choose the correct tier:
@@ -1024,26 +1059,30 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 
 ### Feature Switches
 
-One constant per member of `VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`), which is the set a
-deployment publishes through `/secure-config`. The two lists must stay equal in both directions — a
-missing constant is a gate no command can name, and an extra one names a gate no deployment publishes.
-`tests/test_constants_contract.py` parses the enum and fails on either drift.
+One constant per published feature switch, lane by lane: `constants.py` declares one per member of
+`VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`), `addon_constants.py` one per member of
+`ADDON_APP_FEATURES` (`infra/common/addonAppFeatures.ts`) and `custom_constants.py` one per member of a
+fork's `CUSTOM_APP_FEATURES`. `constants.py` re-exports every add-on name, so
+`from vamscli.constants import FEATURE_PHYSNA_ADDON` keeps working. Together they are the set a deployment
+publishes through `/secure-config`, and each lane must equal its enum in both directions — a missing
+constant is a gate no command can name, and an extra one names a gate no deployment publishes.
+`tests/test_constants_contract.py` parses the three enums and fails on either drift.
 
-| Constant                                | Value                             | Meaning                  |
-| --------------------------------------- | --------------------------------- | ------------------------ |
-| `FEATURE_GOVCLOUD`                      | `"GOVCLOUD"`                      | Restricted partition     |
-| `FEATURE_ALLOWUNSAFEEVAL`               | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
-| `FEATURE_LOCATIONSERVICES`              | `"LOCATIONSERVICES"`              | Location Service enabled |
-| `FEATURE_ALBDEPLOY`                     | `"ALBDEPLOY"`                     | ALB deployment mode      |
-| `FEATURE_CLOUDFRONTDEPLOY`              | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
-| `FEATURE_NOOPENSEARCH`                  | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
-| `FEATURE_AUTHPROVIDER_COGNITO`          | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
-| `FEATURE_AUTHPROVIDER_COGNITO_SAML`     | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
-| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`     | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
-| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP` | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
-| `FEATURE_PHYSNA_ADDON`                  | `"PHYSNA_ADDON"`                  | Physna add-on features   |
-| `FEATURE_DEADLINECLOUD_PIPELINES`       | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
-| `FEATURE_VECTORSEARCH`                  | `"VECTORSEARCH"`                  | `search nlp` available   |
+| Constant                                      | Value                             | Meaning                  |
+| --------------------------------------------- | --------------------------------- | ------------------------ |
+| `FEATURE_GOVCLOUD`                            | `"GOVCLOUD"`                      | Restricted partition     |
+| `FEATURE_ALLOWUNSAFEEVAL`                     | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
+| `FEATURE_LOCATIONSERVICES`                    | `"LOCATIONSERVICES"`              | Location Service enabled |
+| `FEATURE_ALBDEPLOY`                           | `"ALBDEPLOY"`                     | ALB deployment mode      |
+| `FEATURE_CLOUDFRONTDEPLOY`                    | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
+| `FEATURE_NOOPENSEARCH`                        | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
+| `FEATURE_AUTHPROVIDER_COGNITO`                | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
+| `FEATURE_AUTHPROVIDER_COGNITO_SAML`           | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
+| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`           | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
+| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`       | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
+| `FEATURE_PHYSNA_ADDON` (`addon_constants.py`) | `"PHYSNA_ADDON"`                  | Physna add-on features   |
+| `FEATURE_DEADLINECLOUD_PIPELINES`             | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| `FEATURE_VECTORSEARCH`                        | `"VECTORSEARCH"`                  | `search nlp` available   |
 
 ---
 

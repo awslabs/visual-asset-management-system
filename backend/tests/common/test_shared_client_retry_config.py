@@ -96,6 +96,9 @@ DELIBERATE_DEPARTURES = {
     # The reindexer's asynchronous self-invoke re-queues from a cursor; a retried duplicate would enqueue
     # the same files twice.
     ("handlers/osVectorSearch/vectorReindexer.py", "invoke_config"),
+    # Best-effort Location Service key lookup on the /secure-config path: bounded so a VPC with no
+    # route to the service degrades to an empty map URL inside the API Gateway integration timeout.
+    ("handlers/config/configService.py", "geo_lookup_config"),
 }
 
 

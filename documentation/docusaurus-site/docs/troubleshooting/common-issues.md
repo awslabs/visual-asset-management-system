@@ -148,10 +148,10 @@ Perform a two-phase deployment:
 
 ```bash
 # Phase 1: Import VPC context and deploy non-VPC stacks
-cdk deploy --all --require-approval never --context loadContextIgnoreVPCStacks=true
+npx cdk deploy --all --require-approval never --context loadContextIgnoreVPCStacks=true
 
 # Phase 2: Deploy all stacks including VPC-dependent ones
-cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never
 ```
 
 Alternatively, set `loadContextIgnoreVPCStacks: true` in `infra/config/config.json` for the first deployment, then set it back to `false` for subsequent deployments.

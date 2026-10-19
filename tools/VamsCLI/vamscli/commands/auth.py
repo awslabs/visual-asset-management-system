@@ -7,7 +7,7 @@ import sys
 from ..auth.cognito import CognitoAuthenticator
 from ..utils.decorators import requires_api_access, requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
-from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
+from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info, mask_url_key
 from ..utils.exceptions import AuthenticationError, ConfigurationError, OverrideTokenError, AuthRoutesError
 
 
@@ -185,7 +185,7 @@ def login(ctx: click.Context, username: str, password: str, password_stdin: bool
         profile_name = profile_manager.profile_name
         error_msg = (
             f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+            f"Please run 'vamscli --profile {profile_name} setup <api-gateway-url>' first."
         )
         output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
         raise click.ClickException(error_msg)
@@ -513,7 +513,7 @@ def change_password(ctx: click.Context, username: str, old_password: str, old_pa
         profile_name = profile_manager.profile_name
         error_msg = (
             f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+            f"Please run 'vamscli --profile {profile_name} setup <api-gateway-url>' first."
         )
         output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
         raise click.ClickException(error_msg)
@@ -685,7 +685,7 @@ def forgot_password(ctx: click.Context, username: str, code: str, new_password: 
         profile_name = profile_manager.profile_name
         error_msg = (
             f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+            f"Please run 'vamscli --profile {profile_name} setup <api-gateway-url>' first."
         )
         output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
         raise click.ClickException(error_msg)
@@ -981,7 +981,7 @@ def status(ctx: click.Context, json_output: bool):
             
             # Show locationServiceApiUrl (backward compatible - only if present)
             if data.get('location_service_api_url'):
-                lines.append(f"  Location Service URL: {data['location_service_api_url']}")
+                lines.append(f"  Location Service URL: {mask_url_key(data['location_service_api_url'])}")
             
             # Feature switches
             if data.get('feature_switches'):

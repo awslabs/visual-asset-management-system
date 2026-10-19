@@ -187,6 +187,7 @@ describe("core stack nested-stack dependencies", () => {
         "apiBuilder2NestedStack",
         "searchBuilderNestedStack",
         "addonBuilderNestedStack",
+        "customBuilderNestedStack",
     ])("%s depends on resourceNamesNestedStack", (stackVar) => {
         // Matched on the current spelling: Stack#addDependency is deprecated in favour of
         // addStackDependency, and asserting the old name would fail a correct migration.
