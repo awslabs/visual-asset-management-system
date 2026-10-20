@@ -54,10 +54,10 @@ Every run that produced a valid STEP file writes four things to the asset:
 | `cadBboxXMm`, `cadBboxYMm`, `cadBboxZMm` | decimal                  | Size of the solids' bounding box along X, Y and Z, in mm.                                         |
 | `cadSolidCount`                          | integer                  | Number of solids in the file.                                                                     |
 | `cadHoleCount`                           | integer                  | Number of holes the inspection counted, through and blind.                                        |
-| `cadFilletCount`                         | integer                  | Number of fillet-like faces the inspection counted (convex partial cylinders and tori).           |
+| `cadFilletCount`                         | integer                  | Number of fillet-like faces: convex partial cylinders and every toroidal face.                    |
 | `cadUnits`                               | `mm`                     | The unit of the figures above. The inspection measures in millimetres whatever the file declares. |
 
-VAMS file attributes are string-typed, so each figure is written as a decimal string rounded to three places, for example `59363.843` or `100`. A figure the run did not measure is left out rather than written empty: a run whose feature summary failed carries no `cadHoleCount` or `cadFilletCount`.
+VAMS file attributes are string-typed, so each figure is written as a decimal string rounded to three places, for example `59363.827` or `100`. A figure the run did not measure is left out rather than written empty: a run whose feature summary failed carries no `cadHoleCount` or `cadFilletCount`. Concave corner rounds are not counted in `cadFilletCount`; the geometry summary lists them under `partial_round_cuts`.
 
 The run also writes two files to the execution's results folder, which the execution's detail page lists under **Output Results** and shows as text:
 
