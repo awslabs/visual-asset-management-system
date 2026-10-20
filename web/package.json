@@ -64,7 +64,7 @@
         "react-router-dom": "^7.18.2",
         "react-syntax-highlighter": "^16.1.1",
         "reactflow": "^11.11.4",
-        "sanitize-html": "^2.11.0",
+        "sanitize-html": "^2.18.0",
         "semver": "^7.5.2",
         "styled-components": "^5.3.3",
         "tough-cookie": "^4.1.3",
