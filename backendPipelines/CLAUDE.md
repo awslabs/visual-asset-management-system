@@ -118,11 +118,10 @@ asks only for each `map_Kd` value, the rest of its line. Hand the loader a resol
 the fetched files and refuses every other name, so a reference outside the asset is refused or skipped,
 never read.
 
-The 3D Basic Conversion copy is `conversion/3dBasic/lambdaContainer/referenced_files.py`
-(`ConfinedResolver`); its path rules and collectors are vendored from the 3D Preview Thumbnail
-container's `preview_pipeline/dependencies.py`, so change both together. The policies differ on purpose:
-the thumbnail logs and skips every bad reference, while the conversion FAILS on a glTF/GLB buffer (the
-geometry) and skips a material library or texture image with a warning naming it (`Reference.required`).
+The 3D Basic Conversion applies these rules in `conversion/3dBasic/lambdaContainer/referenced_files.py`
+(`resolve_reference` for the path rules, one collector per format, `ConfinedResolver`). It FAILS on a
+glTF/GLB buffer (the geometry) and skips a material library or texture image with a warning naming it
+(`Reference.required`).
 A skipped name is never in the resolver's set, and every name looked up counts toward the file limit,
 found or not. Real-trimesh coverage runs in a child interpreter (`tests/test_3dbasic_real_conversions.py`)
 since sibling modules stub `trimesh`.
