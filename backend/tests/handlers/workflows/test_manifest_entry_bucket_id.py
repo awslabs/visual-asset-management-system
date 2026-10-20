@@ -58,7 +58,7 @@ GUIDE = REPO_ROOT / "documentation" / "docusaurus-site" / "docs" / "pipelines" /
 
 # The full self-locating shape a pipeline may index.
 ENTRY_KEYS = {"relativePath", "databaseId", "assetId", "assetRootS3Key", "auxPreviewPrefix",
-              "bucket", "bucketId", "key", "versionId"}
+              "bucket", "bucketId", "key", "versionId", "bucketRegion", "bucketAccountId"}
 
 
 def _entry(**overrides):
@@ -93,6 +93,13 @@ class TestBuildManifestEntry:
         consumer sees, so the whole set is pinned, with and without the optional arguments."""
         assert set(_entry(bucket_id="bkt-01")) == ENTRY_KEYS
         assert set(er.build_manifest_entry("/a.glb", "bkt", "x/a.glb")) == ENTRY_KEYS
+        # The registration id and the bucket's Region/account travel together: a consumer that resolves
+        # the row from `bucketId` and one that signs for `bucketRegion` read the same entry.
+        entry = er.build_manifest_entry("/a.glb", "bkt", "x/a.glb", bucket_id="bkt-01",
+                                        bucket_region="eu-west-1", bucket_account_id="222222222222")
+        assert (entry["bucketId"], entry["bucketRegion"], entry["bucketAccountId"]) == ("bkt-01", "eu-west-1", "222222222222")
+        assert (er.build_manifest_entry("/a.glb", "bkt", "x/a.glb")["bucketRegion"],
+                er.build_manifest_entry("/a.glb", "bkt", "x/a.glb")["bucketAccountId"]) == ("", "")
 
 
 @pytest.mark.unit

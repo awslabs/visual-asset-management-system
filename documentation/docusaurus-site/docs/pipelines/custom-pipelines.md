@@ -477,10 +477,15 @@ Three behaviors are worth knowing:
 -   **Each `inputFiles` entry is self-locating.** It carries the file's asset-relative `relativePath`;
     its S3 location by bucket name (`bucket`, `key`, and `versionId` -- empty on an unversioned
     bucket); its asset identity (`databaseId`, `assetId`, `assetRootS3Key`); its auxiliary-bucket
-    preview prefix (`auxPreviewPrefix`); and `bucketId`, the asset bucket's registration id. Read S3
-    with `bucket`. `bucketId` is for a consumer downstream of the pipeline that must resolve the
-    registered bucket row itself -- the vector indexer does, from the embedding event a pipeline
-    publishes -- and is `""` only on an entry no asset row produced.
+    preview prefix (`auxPreviewPrefix`); `bucketId`, the asset bucket's registration id; and the
+    bucket's placement -- `bucketRegion`, the Region the bucket is in (`""` for the deployment
+    Region), and `bucketAccountId`, its owning account when that is not the deployment account
+    (`""` otherwise). Read S3 with `bucket`, through a client for `bucketRegion`
+    (`manifestHelper.s3_client_for_region`); the resolved inputs expose the first file's Region as
+    `inputBucketRegion` and the output bucket's as `outputBucketRegion`. `bucketId` is for a consumer
+    downstream of the pipeline that must resolve the registered bucket row itself -- the vector
+    indexer does, from the embedding event a pipeline publishes -- and is `""` only on an entry no
+    asset row produced.
 
 ### The metadata envelope
 

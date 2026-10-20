@@ -29,6 +29,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import boto3
+from common.s3 import region_routing_s3_client
 from botocore.config import Config
 
 from common.indexing.fileEnumeration import FileRef, enumerate_latest_live_files
@@ -44,7 +45,8 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 invoke_config = Config(retries={'total_max_attempts': 1}, read_timeout=60, connect_timeout=10)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
+# Asset buckets may be in another Region: every call is signed for the Region of the bucket it names.
+s3_client = region_routing_s3_client()
 sqs_client = boto3.client('sqs', config=retry_config)
 lambda_client = boto3.client('lambda', config=invoke_config)
 logger = safeLogger(service_name="VectorReindexer")

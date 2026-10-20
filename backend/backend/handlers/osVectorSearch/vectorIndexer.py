@@ -60,7 +60,7 @@ from common.indexing.documentIds import (
     vector_file_key_path,
 )
 from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
-from common.s3 import list_all_object_versions
+from common.s3 import bucket_region_fields, list_all_object_versions, region_routing_s3_client
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -76,7 +76,8 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
+# Asset buckets may be in another Region: every call is signed for the Region of the bucket it names.
+s3_client = region_routing_s3_client()
 sqs_client = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="VectorIndexer")
 
@@ -243,7 +244,10 @@ def _get_bucket_record(bucket_id: str) -> Optional[Dict[str, Any]]:
     """The bucket registration for a bucketId (one row per registration; the sort key is bucketName:prefix)."""
     response = s3_asset_buckets_table.query(KeyConditionExpression=Key('bucketId').eq(bucket_id), Limit=1)
     items = response.get('Items') or []
-    return items[0] if len(items) > 0 else None
+    if not items:
+        return None
+    # Records the bucket name's Region so the Region-routing client signs later name-only calls for it.
+    return {**items[0], **bucket_region_fields(items[0])}
 
 
 def _normalize_prefix(prefix: Optional[str]) -> str:
