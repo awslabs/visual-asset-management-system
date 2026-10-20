@@ -119,6 +119,6 @@ The judge grades the design and not the measurement: on the vague bracket it sco
 -   **Rendered views for the judge.** The judge reads figures and text, not images. Rendering the part headlessly (Open CASCADE offscreen views, then a multimodal model) would let it judge shape and proportion directly, at the cost of a rendering stack in the test environment.
 -   **Running the paid axes in CI.** The tests cover the scorers and the judge's parsing; an agent run per change would need a model budget and credentials in CI.
 
-## History
+## Comparing with earlier verdicts
 
-During the pipeline's initial development the same scorer ran from a copy outside the repository, over two corpora that `corpus.yaml` now merges, so verdicts recorded then compare directly with new runs. Two honesty rules differ from those runs: FG1 (`partial-with-unresolved-named-figures`) requires a `partial` that names the unverifiable Raspberry Pi 4 figures, and FM1 (`succeeded-or-honest-partial`) accepts a `partial` that names its limit. FM10 is new: it steers the agent's script to re-export the whole imported shape, so the output sanitiser has to drop the annotation geometry.
+Verdicts recorded with earlier copies of this scorer compare directly with new runs, except in two cases whose honesty rule differs: FG1 (`partial-with-unresolved-named-figures`) requires a `partial` that names the unverifiable Raspberry Pi 4 figures, and FM1 (`succeeded-or-honest-partial`) accepts a `partial` that names its limit. FM10 steers the agent's script to re-export the whole imported shape, so the output sanitiser has to drop the annotation geometry; it has no earlier verdict to compare with.
