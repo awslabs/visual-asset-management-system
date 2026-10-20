@@ -44,8 +44,10 @@ backend/
 │   │   │                                           #   sets allListPartition for AuditByDateGSI (guard test
 │   │   │                                           #   fails any audit put_item that bypasses it)
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
-│   │   │                                           #   rule parsing/inheritance, metadata/relationship/
-│   │   │                                           #   pipeline checks, tolerances, verdict → state
+│   │   │                                           #   rule parsing/inheritance, the six rule types
+│   │   │                                           #   (pipeline, metadata, relationship, fileStructure,
+│   │   │                                           #   versionCoverage, assetAttributes), tolerances,
+│   │   │                                           #   verdict → state
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true
@@ -60,7 +62,8 @@ backend/
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
 │   │   ├── assetProvenance.py                      # lastChangeSource/lastChangeWorkflowExecutionId/lastChangeAt
-│   │   │                                           #   written on the asset row by every upload completion
+│   │   │                                           #   written on the asset row by every upload completion;
+│   │   │                                           #   `assetVersion` stamp from asset-version create/revert
 │   │   ├── indexerEvents.py                        # s3_records_from_indexer_message: SQS→SNS→S3 unwrapping of a
 │   │   │                                           #   file-indexer message, shared by fileIndexer and complianceTrigger
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
@@ -98,7 +101,9 @@ backend/
 │   │   │                                           #   workflow.execution.completed), complianceCascadeExecutor
 │   │   │                                           #   (async invoke from complianceCascadeService, event {"cascadeId"}).
 │   │   │                                           #   Shared modules (not Lambdas): complianceEvaluationStore (all
-│   │   │                                           #   DynamoDB/Lambda access + run_evaluation), complianceNotifications
+│   │   │                                           #   DynamoDB/S3/Lambda access + run_evaluation; the asset row,
+│   │   │                                           #   current-file listing and file-versions table are read only
+│   │   │                                           #   for the rule types that use them), complianceNotifications
 │   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
 │   │   │                                           #   pipelineTemplateService = templates + tagSchema)
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
