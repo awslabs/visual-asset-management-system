@@ -1418,7 +1418,11 @@ pushes a tag the AWS Batch job definition does not name and the deploy still rep
 every execution then failing `CannotPullContainerError`. `:latest` is pushed alongside solely as the
 `--cache-from` alias, since a content-addressed tag never pre-exists and a cold cache adds hours to a
 GPU image build. Coverage: `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the
-immutable-tag block of `infra/test/pipelines/containerBuildSources.test.ts`.
+immutable-tag block of `infra/test/pipelines/containerBuildSources.test.ts`. An AWS Lambda container
+image built this way needs a trigger that WAITS for the build (a `cr.Provider` with an
+`isCompleteHandler`, and the function depending on the custom resource, as in
+`conversion3dBasicCodeBuild-construct.ts`), because Lambda resolves the image when the function is
+created or updated, where AWS Batch pulls it only when a job starts.
 
 #### **Pinned Upstream Clones in a Container Build**
 

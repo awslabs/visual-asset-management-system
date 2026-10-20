@@ -312,7 +312,7 @@ VAMS log group names are deterministic (a hash of the stack name plus account ID
 
 A pipeline configured with `useCodeBuild: true` creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
 
-Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform repository is the exception — it carries the explicit name `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform` — so if a teardown fails and leaves it behind, delete it before redeploying with the same configuration name and account:
+Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform and 3D Basic Conversion repositories are the exceptions — they carry the explicit names `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform` and `<CONFIG_NAME>-<BASE_STACK_NAME>-3dbasic` — so if a teardown fails and leaves one behind, delete it before redeploying with the same configuration name and account. The commands below show the Coordinate Transform name; substitute the 3D Basic Conversion name for that repository:
 
 ```bash
 # Check for the explicitly named repository

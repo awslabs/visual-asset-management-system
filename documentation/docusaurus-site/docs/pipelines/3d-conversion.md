@@ -118,12 +118,15 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 -   **Trimesh** -- 3D mesh loading and export library
 -   **boto3** -- AWS SDK for Amazon S3 operations
 
+With `app.pipelines.useConversion3dBasic.useCodeBuild` set to `true`, AWS CodeBuild builds the image from the same directory and pushes it to an Amazon ECR repository instead of a local Docker build. The deployment waits for that build and fails if the build fails, because the Lambda function is created from the image. See the [configuration reference](../deployment/configuration-reference.md#3d-basic-conversion-apppipelinesuseconversion3dbasic).
+
 ## Infrastructure Components
 
 | Resource                      | Service            | Purpose                   |
 | ----------------------------- | ------------------ | ------------------------- |
 | Container Lambda Function     | AWS Lambda         | Mesh conversion execution |
 | Container Image               | Amazon ECR         | Trimesh container image   |
+| CodeBuild Project             | AWS CodeBuild      | Optional image build      |
 | Step Functions State Machine  | AWS Step Functions | Workflow orchestration    |
 | Lambda Function (vamsExecute) | AWS Lambda         | Pipeline coordination     |
 

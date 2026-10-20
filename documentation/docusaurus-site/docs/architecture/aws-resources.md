@@ -507,29 +507,38 @@ container image from the source in the repository and pushes it to a private Ama
 the pipeline's AWS Batch job definition then references. Pipelines that do not set `useCodeBuild` build
 their image locally at synthesis time and use the CDK asset repository instead.
 
-| Resource              | Configuration                                                                                 |
-| --------------------- | --------------------------------------------------------------------------------------------- |
-| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained             |
-| **CodeBuild project** | One per repository, privileged mode for container builds, one-hour timeout                    |
-| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed |
+For the 3D Basic Conversion pipeline (`useConversion3dBasic.useCodeBuild`) the repository holds an AWS
+Lambda container image, which the pipeline's Lambda function references. Lambda resolves the image when
+the function is created or updated, so the build trigger waits for the build: an AWS CDK provider custom
+resource starts the build, and an AWS Step Functions waiter state machine polls it every 30 seconds for up
+to 35 minutes. The function is created or updated only after the build succeeds, and a failed build fails
+the deployment with the build's status and log link. The other pipelines' triggers start the build and
+return.
+
+| Resource              | Configuration                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                                                |
+| **CodeBuild project** | One per repository, privileged mode for container builds, one-hour timeout (3D Basic Conversion: 20 minutes, plus up to 10 minutes in the queue) |
+| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                                                    |
 
 All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
 images are removed when the stack is destroyed cleanly.
 
 Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. The
-**Coordinate Transform** repository is the exception: it carries an explicit name,
-`{config.name}-{app.baseStackName}-coordtransform`, and is redeploy-collision relevant. Delete any
-orphaned repository of that name left by a failed teardown before redeploying with the same configuration
-name and account.
+**Coordinate Transform** and **3D Basic Conversion** repositories are the exceptions: they carry explicit
+names, `{config.name}-{app.baseStackName}-coordtransform` and `{config.name}-{app.baseStackName}-3dbasic`,
+and are redeploy-collision relevant. Delete any orphaned repository of those names left by a failed
+teardown before redeploying with the same configuration name and account.
 
-:::note[Why one repository is explicitly named]
+:::note[Why two repositories are explicitly named]
 Amazon ECS and AWS Batch cap a container image reference at 255 characters across the whole
 `{account}.dkr.ecr.{region}.amazonaws.com/{repository}:{tag}` string. An auto-generated repository
 name is derived from the nested-stack path, and the Coordinate Transform pipeline's path is deep enough
 that the resulting reference exceeds the cap — AWS Batch then rejects every job at submission. Because the
 job never starts, no container log or exit code is produced; the reason appears only in the job's
 `statusReason`. An explicit short name keeps the reference well inside the limit without shortening the
-content-addressed tag.
+content-addressed tag. The 3D Basic Conversion repository sits one nested stack deeper still and is named
+explicitly as well, which keeps its Lambda function's image URI short and the same across deployments.
 :::
 
 ## AWS CloudTrail

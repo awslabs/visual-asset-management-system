@@ -767,7 +767,11 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     alongside solely as the `--cache-from` alias, since a content-addressed tag never pre-exists and a
     cold cache adds hours to a GPU image build. Copying an existing buildspec is how this regresses;
     `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the immutable-tag block of
-    `infra/test/pipelines/containerBuildSources.test.ts` assert both halves.
+    `infra/test/pipelines/containerBuildSources.test.ts` assert both halves. An AWS Lambda container
+    image built this way needs a trigger that WAITS for the build (a `cr.Provider` with an
+    `isCompleteHandler`, and the function depending on the custom resource, as in
+    `conversion3dBasicCodeBuild-construct.ts`), because Lambda resolves the image when the function is
+    created or updated, where AWS Batch pulls it only when a job starts.
 19. **A container that clones an upstream repository at build time clones a FIXED revision.** Declare
     the revision as an `ARG <NAME>_COMMIT=<40-hex>`, `git checkout --detach` it, and verify it landed
     with `test "$(git rev-parse HEAD)" = "${<NAME>_COMMIT}"` **in the same `RUN`** — a checkout in a
