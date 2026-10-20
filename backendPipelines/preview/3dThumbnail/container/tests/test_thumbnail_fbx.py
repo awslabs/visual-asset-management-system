@@ -232,6 +232,30 @@ def property_links(scene):
                 + [(c, p, "PP") for c, p in pairs])
 
 
+def nested_ascii(depth):
+    """An ASCII FBX whose scopes nest ``depth`` levels deep, and nothing else. The parser descends
+    into each ``{`` as it opens, so this is ``depth`` levels of nesting."""
+    return "; FBX 7.4.0 project file\n" + "".join(f"N{i}: {{\n" for i in range(depth)) + "}\n" * depth
+
+
+def nested_binary(depth, version=7400):
+    """A binary FBX of ``depth`` nested node records (one chain). ``depth`` must stay within the
+    interpreter's recursion limit, since ``_node`` builds the chain recursively; the reader under
+    test walks it iteratively."""
+    node = _node(b"N")
+    for _ in range(depth - 1):
+        node = _node(b"N", children=[node])
+    wide = version >= 7500
+    data = b"Kaydara FBX Binary  \x00\x1a\x00" + struct.pack("<I", version)
+    data += node(len(data), wide, False)
+    return data + b"\x00" * (25 if wide else 13)
+
+
+def _nested(depth, encoding):
+    return nested_ascii(depth) if encoding == "ascii" else nested_binary(
+        depth, version=7500 if encoding == "binary-7500" else 7400)
+
+
 def _write(path, text_or_bytes):
     if isinstance(text_or_bytes, str):
         path.write_text(text_or_bytes)
@@ -431,6 +455,39 @@ class TestFbxExpansion:
         with pytest.raises(ValueError, match="places more than 1,000,000 models"):
             core._load_file(path, ".fbx", budgets=_budgets())
 
+    def test_a_deeply_nested_fbx_is_refused_before_it_is_read(self, tmp_path):
+        """A file nesting tens of thousands of levels must be refused by the pre-read, before the
+        reader descends into it. The real load path runs in a subprocess so that, without the
+        pre-read, the child does not return cleanly (it is read by descending into every level and
+        the process ends abnormally) and this test fails on the child's exit status instead of
+        taking pytest down with it. With the pre-read the child refuses the file and exits 0."""
+        import os
+        import subprocess  # nosec B404 - fixed interpreter, no shell
+        import sys
+
+        import conftest
+
+        path = _write(tmp_path / "deep.fbx", nested_ascii(30_000))
+        child = (
+            "import sys\n"
+            "from preview_pipeline import core\n"
+            "try:\n"
+            "    core._load_file(sys.argv[1], '.fbx', budgets=None)\n"
+            "    print('LOADED')\n"
+            "except ValueError as e:\n"
+            "    print('REFUSED' if 'nests deeper' in str(e) else 'VALUEERROR:' + str(e))\n"
+        )
+        env = dict(os.environ,
+                   PYTHONPATH=conftest._CONTAINER_DIR + os.pathsep + os.environ.get("PYTHONPATH", ""),
+                   AWS_DEFAULT_REGION="us-east-1", AWS_REGION="us-east-1")
+        result = subprocess.run([sys.executable, "-c", child, path],  # nosec B603 - fixed args
+                                capture_output=True, text=True, timeout=600, env=env)
+        assert result.returncode == 0, (
+            f"the load did not return cleanly (returncode {result.returncode}). The file reached the "
+            f"reader instead of being refused first. stdout={result.stdout!r} "
+            f"stderr={result.stderr[-500:]!r}")
+        assert "REFUSED" in result.stdout, f"stdout={result.stdout!r}"
+
     def test_instances_past_the_triangle_budget_are_refused(self, tmp_path, monkeypatch):
         path = _write(tmp_path / "row.fbx", ascii_fbx(**one_cube_placed(100)))
         _block_open3d(monkeypatch)
@@ -533,23 +590,29 @@ class TestFbxSceneSize:
 
         assert tuple(fbx_scene.scene_size(_write(tmp_path / "doubling.fbx", build(4)), 1_000_000)) == expected
 
-    @pytest.mark.parametrize("line, count", [("PolygonVertexIndex: *1 {\n", 20_000),
-                                             (";PolygonVertexIndex: *1 {\n", 4_000)],
-                             ids=["open-index-arrays", "commented-index-arrays"])
-    def test_the_ascii_scan_reads_the_file_once(self, tmp_path, line, count):
-        """A geometry block packed with index-array headers, left open or commented out. A scan that
-        re-reads the rest of the block from each header takes more than 10 s on these files; one pass
-        takes milliseconds, so the bound is generous."""
+    @pytest.mark.parametrize("line, count, refused", [
+        ("PolygonVertexIndex: *1 {\n", 20_000, True),
+        ("PolygonVertexIndex: *1 {}\n", 20_000, False),
+        (";PolygonVertexIndex: *1 {\n", 4_000, False),
+    ], ids=["open-index-arrays", "closed-index-arrays", "commented-index-arrays"])
+    def test_the_ascii_scan_reads_the_file_once(self, tmp_path, line, count, refused):
+        """A geometry block packed with index-array headers, left open, closed or commented out. A
+        scan that re-reads the rest of the block from each header takes more than 10 s on these files;
+        one pass takes milliseconds, so the bound is generous. The open headers each open a scope and
+        never close it, so that file nests one level per header and is refused by the depth bound;
+        the closed and commented headers stay shallow and are counted."""
         from preview_pipeline.format_handlers import fbx_scene
 
         anchor = '"Geometry::g10", "Mesh" {\n'
         text = ascii_fbx(**one_cube_placed(1)).replace(anchor, anchor + line * count, 1)
         path = _write(tmp_path / "packed.fbx", text)
         started = time.perf_counter()
-        size = fbx_scene.scene_size(path, 1_000_000)
+        if refused:
+            with pytest.raises(ValueError, match="nests deeper"):
+                fbx_scene.scene_size(path, 1_000_000)
+        else:
+            assert tuple(fbx_scene.scene_size(path, 1_000_000)) == (1, 24, 12, 24, 12)
         assert time.perf_counter() - started < 2.0
-        if line.startswith(";"):
-            assert tuple(size) == (1, 24, 12, 24, 12)
 
     def test_a_deep_doubling_stops_counting_at_the_bound(self, tmp_path):
         from preview_pipeline.format_handlers import fbx_scene
@@ -627,3 +690,38 @@ class TestFbxSceneSize:
         from preview_pipeline.format_handlers import fbx_scene
 
         assert tuple(fbx_scene.scene_size(_write(tmp_path / "e.fbx", b""), 100)) == (0, 0, 0, 0, 0)
+
+    @pytest.mark.parametrize("encoding", ["ascii", "binary", "binary-7500"])
+    def test_a_file_nesting_past_the_bound_is_refused(self, tmp_path, encoding):
+        """At and just below the bound the file is counted; one level over is refused, naming the
+        bound. ASCII scopes and binary node records alike."""
+        from preview_pipeline.format_handlers import fbx_scene
+
+        limit = fbx_scene.MAX_FBX_NESTING_DEPTH
+        for depth in (limit - 1, limit):
+            path = _write(tmp_path / f"ok-{depth}.fbx", _nested(depth, encoding))
+            fbx_scene.scene_size(path, 1_000_000)  # counted, not refused
+        over = _write(tmp_path / "over.fbx", _nested(limit + 1, encoding))
+        with pytest.raises(ValueError, match=f"nests deeper than {limit} levels"):
+            fbx_scene.scene_size(over, 1_000_000)
+
+    def test_a_deeply_nested_file_is_refused_without_python_recursion(self, tmp_path):
+        """Tens of thousands of levels are read iteratively: the scan refuses the file with the
+        bound message rather than raising RecursionError or hanging."""
+        from preview_pipeline.format_handlers import fbx_scene
+
+        limit = fbx_scene.MAX_FBX_NESTING_DEPTH
+        path = _write(tmp_path / "deep.fbx", nested_ascii(30_000))
+        with pytest.raises(ValueError, match=f"nests deeper than {limit} levels"):
+            fbx_scene.scene_size(path, 1_000_000)
+
+    def test_quoted_and_comment_braces_do_not_count_toward_depth(self, tmp_path):
+        """Braces inside a quoted string or a ``;`` comment are not scope openings, so a shallow
+        file carrying many of them is counted normally, not refused."""
+        from preview_pipeline.format_handlers import fbx_scene
+
+        braces = "{" * (fbx_scene.MAX_FBX_NESTING_DEPTH * 4)
+        comment_and_string = "; " + braces + '\nObjects:  {\n\tNote: "' + braces + '"'
+        text = ascii_fbx(**one_cube_placed(1)).replace("Objects:  {", comment_and_string, 1)
+        size = fbx_scene.scene_size(_write(tmp_path / "braces.fbx", text), 1_000_000)
+        assert tuple(size)[:3] == (1, 24, 12)

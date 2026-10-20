@@ -33,6 +33,11 @@ Vertices are counted as Assimp's FBX converter makes them, one per polygon corne
 entries). Triangles are counted as its triangulation makes them: ``n - 2`` per polygon of ``n`` corners,
 none for a one- or two-corner polygon. A geometry holding more than one index array counts its largest.
 A cycle in the model graph counts as over the bound.
+
+The parser reads a scope (ASCII ``{ }`` block) or a node record list (binary) by descending into each
+level as it opens, so the same pass measures how deeply the file nests and refuses one that nests past
+``MAX_FBX_NESTING_DEPTH`` before the file is read, whatever else it holds (ARCC BSC1: bound untrusted
+input before parsing; BSC12: validate structure before a native parser reads it).
 """
 
 import mmap
@@ -55,6 +60,13 @@ _CHUNK = 16 * 1024 ** 2
 # Bytes of an ASCII index array classified at a time.
 _TEXT_CHUNK = 4 * 1024 ** 2
 
+# The deepest a file's scopes (ASCII ``{ }`` blocks) or node records (binary nested record lists) may
+# nest. The bundled parser reads a scope and a record list by descending into each level as it opens,
+# so a file that nests far past any real model is refused by ``scene_size`` before the parser reads it.
+# Real FBX exports nest a few tens of levels; this bound sits well above them and far below any depth a
+# produced file reaches, leaving a wide margin either way.
+MAX_FBX_NESTING_DEPTH = 256
+
 _BINARY_MAGIC = b"Kaydara FBX Binary"
 _FIXED_SIZES = {b"Y": 2, b"C": 1, b"I": 4, b"F": 4, b"D": 8, b"L": 8}
 _ARRAY_STRIDES = {b"f": 4, b"d": 8, b"l": 8, b"i": 4, b"c": 1}
@@ -74,7 +86,10 @@ class SceneSize(NamedTuple):
 
 def scene_size(file_path: str, max_models: int) -> SceneSize:
     """The models, vertices and triangles the file's scene places. Model counting stops at
-    ``max_models + 1``; a cycle counts as that."""
+    ``max_models + 1``; a cycle counts as that. A file whose scopes (ASCII) or node records (binary)
+    nest deeper than ``MAX_FBX_NESTING_DEPTH`` is refused with a ``ValueError`` before it is counted
+    further, since the parser reads them by descending into each level (ARCC BSC1: bound untrusted
+    input before parsing; BSC12: validate structure before a native parser reads it)."""
     models, geometries, connections = set(), {}, []
     if os.path.getsize(file_path):
         with open(file_path, "rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
@@ -84,7 +99,7 @@ def scene_size(file_path: str, max_models: int) -> SceneSize:
                 except (struct.error, zlib.error) as e:
                     raise ValueError(f"FBX binary file is truncated or corrupt: {e}") from e
             else:
-                _AsciiScan(data, models, geometries, connections).run()
+                _AsciiScan(data, models, geometries, connections, MAX_FBX_NESTING_DEPTH).run()
     children = {}
     for child, parent in connections:
         if parent != ROOT_ID and parent not in models:
@@ -242,7 +257,7 @@ class _AsciiScan:
     """One pass over an ASCII FBX that keeps the ``Model``/``Geometry`` ids in ``Objects``, the index
     arrays (``PolygonVertexIndex`` ``a``) of each geometry, and the links in ``Connections``."""
 
-    def __init__(self, data, models, geometries, connections):
+    def __init__(self, data, models, geometries, connections, max_depth):
         self.data = data
         end = data.find(b"\x00")  # Assimp's tokenizer stops at the first NUL byte
         self.end = len(data) if end < 0 else end
@@ -252,6 +267,7 @@ class _AsciiScan:
         self.tokens = None  # (start, end) of the tokens kept for an object header or a connection
         self.wanted = 0
         self.polygons = None  # set while the element is an index array
+        self.max_depth = max_depth  # deepest scope nesting allowed before the file is refused
 
     def run(self):
         data, end = self.data, self.end
@@ -339,17 +355,30 @@ class _AsciiScan:
         self._finish()
         if scope is not None:
             self.scopes.append(scope)
+            self._check_depth(len(self.scopes) - 1)
             return position
         data, end, depth = self.data, self.end, 1
+        peak = 1
         while position < end:
             position = _SKIP.match(data, position, end).end()
             if position >= end:
                 break
             stop = _BRACKETS.match(data, position, end).end()
-            position, depth = _close_brackets(data, position, stop, depth)
+            position, depth, run_peak = _close_brackets(data, position, stop, depth)
+            if run_peak > peak:
+                peak = run_peak
             if not depth:
                 break
+        # The skipped scope sits one level below the enclosing read scopes (``len(self.scopes) - 1``
+        # brackets deep); ``peak`` is the deepest nesting reached inside it, the unread scope itself
+        # counting as 1.
+        self._check_depth(len(self.scopes) - 1 + peak)
         return position
+
+    def _check_depth(self, depth):
+        """Refuse a file that nests past the bound before the recursive parser reads it."""
+        if depth > self.max_depth:
+            raise ValueError(f"FBX file nests deeper than {self.max_depth} levels")
 
     def _finish(self):
         """Record the element being read, which ends at a key, a bracket or the end of the text."""
@@ -415,25 +444,34 @@ class _AsciiScan:
 
 
 def _close_brackets(data, start, stop, depth):
-    """Read the brackets in ``[start, stop)`` from nesting ``depth``; return (position, depth), with
-    position just past the bracket that brings the depth to 0 if one does."""
+    """Read the brackets in ``[start, stop)`` from nesting ``depth``; return (position, depth, peak),
+    with position just past the bracket that brings the depth to 0 if one does, and peak the deepest
+    nesting reached up to that point (so a scope closed mid-run does not count its siblings)."""
     position = start
+    peak = depth
     while position < stop:
         chunk = data[position:min(position + _TEXT_CHUNK, stop)]
         if len(chunk) < 16:
             for bracket in chunk:
                 depth += 1 if bracket == _OPEN else -1
+                if depth > peak:
+                    peak = depth
                 position += 1
                 if not depth:
-                    return position, 0
+                    return position, 0, peak
             continue
         running = depth + np.cumsum(np.where(np.frombuffer(chunk, dtype=np.uint8) == _OPEN, 1, -1))
         closed = np.flatnonzero(running == 0)
         if len(closed):
-            return position + int(closed[0]) + 1, 0
+            cut = int(closed[0])
+            run_peak = int(running[:cut + 1].max())
+            return position + cut + 1, 0, run_peak if run_peak > peak else peak
+        run_peak = int(running.max())
+        if run_peak > peak:
+            peak = run_peak
         depth = int(running[-1])
         position += len(chunk)
-    return position, depth
+    return position, depth, peak
 
 
 def _count_ascii_entries(data, start, stop, polygons):
@@ -479,6 +517,7 @@ def _read_binary(data, models, geometries, connections):
         raise ValueError("FBX binary header is truncated")
     version = struct.unpack_from("<I", data, 23)[0]
     wide = version >= 7500
+    _check_binary_depth(data, wide)
     for name, _, _, body, end in _records(data, 27, len(data), wide, nested=False):
         if name == b"Objects":
             for kind, props, count, kbody, kend in _records(data, body, end, wide, nested=True):
@@ -505,6 +544,25 @@ def _read_binary(data, models, geometries, connections):
                 prop = values[3] if len(values) > 3 else None
                 if isinstance(child, int) and isinstance(parent, int) and _is_link(values[0], prop):
                     connections.append((child, parent))
+
+
+def _check_binary_depth(data, wide):
+    """Refuse a binary FBX whose node records nest past the bound, before the recursive reader reads
+    it. Iterative: a stack of record iterators, one per open nesting level, so the walk itself cannot
+    exhaust the interpreter's recursion limit. Only record headers are read (each record jumps to the
+    next by its stored offset), so the walk is cheap whatever the file holds and stops as soon as the
+    bound is passed."""
+    stack = [_records(data, 27, len(data), wide, nested=False)]
+    while stack:
+        if len(stack) > MAX_FBX_NESTING_DEPTH:
+            raise ValueError(f"FBX file nests deeper than {MAX_FBX_NESTING_DEPTH} levels")
+        try:
+            _, _, _, body, nested_end = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        if nested_end > body:  # the record holds a nested record list
+            stack.append(_records(data, body, nested_end, wide, nested=True))
 
 
 def _records(data, start, end, wide, nested):
