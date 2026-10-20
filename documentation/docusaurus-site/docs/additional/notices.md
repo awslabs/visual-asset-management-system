@@ -75,6 +75,8 @@ The GenAI CAD STEP Agent pipeline container depends on [CadQuery](https://github
 The agent generates Python scripts at run time that import CadQuery. Those scripts are run inside the pipeline container and are not distributed with VAMS.
 :::
 
+The pipeline's evaluation harness (`backendPipelines/genAi/cadStepAgent/evaluation/`) commits third-party STEP files as test data; none of them is part of the container image. Fixtures X1, X4 and X6, and the golden `fm6-x4-largest-body.step` derived from X4, come from [Adafruit_CAD_Parts](https://github.com/adafruit/Adafruit_CAD_Parts) under the MIT license, © 2016 Adafruit Industries; the license text is kept beside them as `fixtures/LICENSE-adafruit-MIT.txt`. Fixtures X2, X3 and X5, and the goldens `fm1-x2-four-corner-holes.stp`, `fm4-x3-centre-hole.stp`, `fm8-x7-edge-hole.stp` and `fm9-x9-solid-only.stp` derived from NIST files, come from the [NIST MBE PMI Validation and Conformance Testing](https://www.nist.gov/ctl/smart-connected-systems-division/smart-connected-manufacturing-systems-group/mbe-pmi-0) project's STEP files, a work of the U.S. Government in the public domain (17 U.S.C. §105). `fixtures/PROVENANCE.md` and `goldens/GOLDENS.md` record each file's source, license and SHA-256 digest.
+
 ### Gaussian Splat Toolbox Pipeline Model Notice
 
 The Gaussian Splat Toolbox container image ships the segmentation model weights its optional
