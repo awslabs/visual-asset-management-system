@@ -505,8 +505,16 @@ def create_schema(ctx: click.Context, schema_name: str, schema_file: str,
     """Register a compliance schema.
 
     The schema body must be a vams-rules-v1 document: {"schemaFormat": "vams-rules-v1",
-    "rules": {...}} where each rule has a ruleType (pipeline, metadata or relationship), an
-    enforcement level (quarantine, warn or inform) and its checks. Any other body is rejected.
+    "rules": {...}} where each rule has a ruleType (pipeline, metadata, relationship,
+    fileStructure, versionCoverage or assetAttributes), an enforcement level (quarantine, warn or
+    inform) and its checks. Any other body is rejected.
+
+    A fileStructure check requires (requiredPaths) or forbids (forbiddenPaths) regular expressions
+    over the asset's current file paths and bounds their number (minFiles, maxFiles). A
+    versionCoverage check requires every current file, except those matching excludePaths, to be
+    recorded in an asset version; it fails after every upload until a version is created. An
+    assetAttributes check tests the asset's assetName or description against a matches or
+    notMatches regular expression, or its tags against requiredTags, forbiddenTags or minTags.
 
     A pipeline rule names the workflow it executes and the pipeline whose measurements its checks
     read under pipelineRef: databaseId (the workflow's database), workflowId, pipelineDatabaseId,
@@ -768,7 +776,8 @@ def evaluate(ctx: click.Context, database_id: str, asset_id: str, schema_name: O
              json_output: bool):
     """Evaluate an asset against its compliance schema.
 
-    Metadata and relationship rules are evaluated within the request and their results returned.
+    Metadata, relationship, fileStructure, versionCoverage and assetAttributes rules are evaluated
+    within the request and their results returned.
     Pipeline rules start a workflow execution and complete asynchronously; the result reports how
     many are pending, and 'compliance state' shows the final verdict once they finish. Naming a
     schema with -n evaluates against it without changing the asset's binding. While the asset

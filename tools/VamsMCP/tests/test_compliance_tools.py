@@ -841,3 +841,16 @@ def test_readme_documents_the_format_the_error_status_and_the_dedup():
     assert "`hasRuleErrors`" in readme
     assert "`schemaVersion`" in readme
     assert "not duplicated" in readme
+
+
+# --- Rule types in the schema tool descriptions -----------------------------------
+
+RULE_TYPES = ("pipeline", "metadata", "relationship", "fileStructure", "versionCoverage",
+              "assetAttributes")
+
+
+@pytest.mark.parametrize("tool", ["list_compliance_schemas", "get_compliance_schema"])
+def test_the_schema_tools_name_every_rule_type(tool):
+    docstring = _docstring_of(tool)
+    for rule_type in RULE_TYPES:
+        assert rule_type in docstring

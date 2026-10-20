@@ -1491,9 +1491,9 @@ def list_user_api_keys(
 
 # --- Compliance (read) -----------------------------------------------------
 #
-# A compliance schema is a rule set (vams-rules-v1: pipeline, metadata and relationship rules, each
-# with an enforcement level of quarantine / warn / inform) bound to a database, or to one asset as an
-# override. Evaluation checks an asset against its bound schema; a failed quarantine-level rule
+# A compliance schema is a rule set (vams-rules-v1: pipeline, metadata, relationship, fileStructure,
+# versionCoverage and assetAttributes rules, each with an enforcement level of quarantine / warn /
+# inform) bound to a database, or to one asset as an override. Evaluation checks an asset against its bound schema; a failed quarantine-level rule
 # quarantines the asset until it is released or granted an exception. A cascade re-evaluates the
 # dependents of a changed asset, by default after a human approval.
 
@@ -1507,7 +1507,8 @@ def list_compliance_schemas(database_id: Optional[str] = None) -> Dict[str, Any]
     can bind); without it, every schema the caller may read. The route returns the whole list in one
     response and takes no paging parameters, so there is no `starting_token` and the result is never
     `truncated`. Each item carries schemaName, databaseId (the scope, or GLOBAL), description,
-    schemaBody (the rule document), `schemaFormat`, version and createdAt. `schemaFormat` is
+    schemaBody (the rule document; rule types pipeline, metadata, relationship, fileStructure,
+    versionCoverage, assetAttributes), `schemaFormat`, version and createdAt. `schemaFormat` is
     `vams-rules-v1`, or `legacy` for a row whose body is not a vams-rules-v1 document: a legacy
     schema cannot be bound, updated or evaluated and is listed only so it can be found and removed
     with delete_compliance_schema().
@@ -1521,7 +1522,10 @@ def get_compliance_schema(schema_name: str) -> Dict[str, Any]:
     """Read the latest version of one compliance schema, including its `schemaBody`.
 
     A vams-rules-v1 body is `{"schemaFormat": "vams-rules-v1", "rules": {<ruleName>: {ruleType,
-    enforcement, ...}}}`; a pipeline rule's `pipelineRef` names the workflow it executes
+    enforcement, checks, ...}}}` with `ruleType` one of pipeline, metadata, relationship,
+    fileStructure (regular expressions over the asset's current file paths, file-count bounds),
+    versionCoverage (every current file recorded in an asset version) or assetAttributes (the
+    asset's name, description or tags); a pipeline rule's `pipelineRef` names the workflow it executes
     (databaseId — the WORKFLOW's database — and workflowId) and the pipeline whose measurements its
     checks read (pipelineDatabaseId, pipelineId, optional templateId), and its `inputFiles`
     (`mode` matching / wholeAsset / explicit, with `filter` globs or explicit `keys`) selects

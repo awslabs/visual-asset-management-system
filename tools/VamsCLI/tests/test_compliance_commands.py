@@ -585,7 +585,7 @@ class TestComplianceSchemaCommands:
         result = cli_runner.invoke(cli, ['compliance', 'schema', 'create', '--help'])
         assert result.exit_code == 0
         # Click wraps the paragraphs and may break a hyphenated token across lines.
-        text = re.sub(r'-\n\s+', '-', result.output)
+        text = ' '.join(re.sub(r'-\n\s+', '-', result.output).split())
         assert 'must be a vams-rules-v1 document' in text
         assert 'Any other body is rejected' in text
         assert 'JSON Schema' not in text
@@ -594,6 +594,17 @@ class TestComplianceSchemaCommands:
         assert 'exactly one file' in text
         assert 'compliance-output.json' in text
         assert 'execution_success' in text
+
+    def test_create_help_names_every_rule_type_and_the_new_check_fields(self, cli_runner):
+        result = cli_runner.invoke(cli, ['compliance', 'schema', 'create', '--help'])
+        assert result.exit_code == 0
+        text = ' '.join(re.sub(r'-\n\s+', '-', result.output).split())
+        assert ('pipeline, metadata, relationship, fileStructure, versionCoverage or '
+                'assetAttributes') in text
+        for field in ('requiredPaths', 'forbiddenPaths', 'minFiles', 'maxFiles', 'excludePaths',
+                      'notMatches', 'requiredTags', 'forbiddenTags', 'minTags'):
+            assert field in text
+        assert 'fails after every upload until a version is created' in text
 
     def test_update_sends_only_the_options_given(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:

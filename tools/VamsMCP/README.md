@@ -153,9 +153,9 @@ Compliance: `list_compliance_schemas`, `get_compliance_schema`,
 `list_quarantined_assets`, `list_compliance_cascades`, `get_compliance_cascade`,
 `query_compliance_audit`, `get_asset_compliance_audit`.
 
-A compliance schema is a rule set (`vams-rules-v1`: pipeline, metadata and
-relationship rules, each enforced at quarantine / warn / inform) bound to a
-database, or to one asset as an override; `get_compliance_bindings` shows both
+A compliance schema is a rule set (`vams-rules-v1`: pipeline, metadata,
+relationship, fileStructure, versionCoverage and assetAttributes rules, each
+enforced at quarantine / warn / inform) bound to a database, or to one asset as an override; `get_compliance_bindings` shows both
 for a database. Each schema record carries `schemaFormat` — `vams-rules-v1`, or
 `legacy` for a row whose body is not such a document; a legacy schema cannot be
 bound, updated or evaluated and is listed only so it can be found and deleted.
