@@ -120,6 +120,8 @@ export class Conversion3dBasicCodeBuildConstruct extends Construct {
             ],
         });
 
+        // The build context. `tests` is excluded so a test-only edit leaves the content tag, and with it
+        // the build and the function, unchanged; the container's tests run in the repository's pytest.
         const sourceAsset = new s3assets.Asset(this, "Source-3dBasic", {
             path: path.join(PIPELINE_DIR, "lambdaContainer"),
             exclude: [
@@ -130,6 +132,7 @@ export class Conversion3dBasicCodeBuildConstruct extends Construct {
                 ".venv",
                 "node_modules",
                 ".env",
+                "tests",
             ],
         });
 
@@ -243,6 +246,16 @@ export class Conversion3dBasicCodeBuildConstruct extends Construct {
                 {
                     id: "AwsSolutions-IAM5",
                     reason: "The build role's wildcards are ecr:GetAuthorizationToken, which has no resource-level form, and the CDK-generated log-stream and report-group grants under this project's own name.",
+                    // Exactly those three, so a wildcard added to the build role later is reported.
+                    appliesTo: [
+                        "Resource::*",
+                        {
+                            regex: "/^Resource::arn:(<AWS::Partition>|aws[a-z-]*):logs:(<AWS::Region>|[a-z0-9-]+):(<AWS::AccountId>|[0-9]{12}):log-group:\\/aws\\/codebuild\\/<Conversion3dBasicCodeBuildCodeBuild3dBasic[0-9A-F]{8}>:\\*$/g",
+                        },
+                        {
+                            regex: "/^Resource::arn:(<AWS::Partition>|aws[a-z-]*):codebuild:(<AWS::Region>|[a-z0-9-]+):(<AWS::AccountId>|[0-9]{12}):report-group\\/<Conversion3dBasicCodeBuildCodeBuild3dBasic[0-9A-F]{8}>-\\*$/g",
+                        },
+                    ],
                 },
             ],
             true
