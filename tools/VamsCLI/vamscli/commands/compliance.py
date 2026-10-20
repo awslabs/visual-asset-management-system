@@ -419,7 +419,11 @@ def format_audit_entries(result: Dict[str, Any]) -> str:
 
 @click.group()
 def compliance():
-    """Compliance schema, evaluation, quarantine, cascade and audit commands."""
+    """Compliance schema, evaluation, quarantine, cascade and audit commands.
+
+    Schema rules take one of six rule types: pipeline, metadata, relationship, fileStructure,
+    versionCoverage and assetAttributes (see 'compliance schema create --help').
+    """
     pass
 
 

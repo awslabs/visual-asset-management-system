@@ -606,6 +606,14 @@ class TestComplianceSchemaCommands:
             assert field in text
         assert 'fails after every upload until a version is created' in text
 
+    def test_group_help_names_every_rule_type(self, cli_runner):
+        result = cli_runner.invoke(cli, ['compliance', '--help'])
+        assert result.exit_code == 0
+        text = ' '.join(result.output.split())
+        assert ('pipeline, metadata, relationship, fileStructure, versionCoverage and '
+                'assetAttributes') in text
+        assert "compliance schema create --help" in text
+
     def test_update_sends_only_the_options_given(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].update_compliance_schema.return_value = {
