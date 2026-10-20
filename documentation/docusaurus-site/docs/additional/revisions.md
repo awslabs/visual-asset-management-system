@@ -73,7 +73,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **3D Basic Conversion rejects point cloud to STL** — A point cloud converted to STL fails with a message that STL stores triangle meshes only, instead of writing an empty STL reported as a success; an input with no geometry fails for every target. (issue #508)
 -   **3D Basic Conversion task token stays out of logs** — The handler checks for a task token before it logs anything and logs only the manifest and input configuration locations, never the invocation event. (issue #509)
 -   **3D Basic Conversion image inputs** — `requirements.txt` is exported from the container's `poetry.lock` (trimesh 4.8.3, the version the image installed), the Lambda base image is pinned by digest, and a `.dockerignore` keeps tests, Poetry files and caches out of the image. (issue #510)
--   **3D Basic Conversion PLY template and documentation** — A Convert to PLY template is registered, and the pipeline page states the five output formats, the manifest-based inputs, which targets keep point clouds and the multi-file model rules; the architecture page lists its compute as an AWS Lambda container image, and the NOTICE rows list the installed library versions. (issue #511)
+-   **3D Basic Conversion PLY template and documentation** — A Convert to PLY template is registered, and the pipeline page states the five output formats, the manifest-based inputs, which targets keep point clouds and the multi-file model rules; the architecture page lists its compute, and that of the CAD/Mesh Metadata Extraction pipeline, as an AWS Lambda container image, and the NOTICE rows list the installed library versions. (issue #511)
 
 **Other changes:**
 

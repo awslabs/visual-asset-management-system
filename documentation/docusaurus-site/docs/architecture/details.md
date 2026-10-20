@@ -224,7 +224,7 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 | Pipeline                           | Compute                      | Description                                                              |
 | ---------------------------------- | ---------------------------- | ------------------------------------------------------------------------ |
 | 3D Basic Conversion                | AWS Lambda (container image) | Convert 3D file formats                                                  |
-| CAD/Mesh Metadata Extraction       | AWS Batch (Fargate)          | Extract metadata from CAD and mesh files                                 |
+| CAD/Mesh Metadata Extraction       | AWS Lambda (container image) | Extract metadata from CAD and mesh files                                 |
 | Point Cloud Potree Viewer          | AWS Batch (Fargate)          | Generate Potree octree data for point cloud visualization                |
 | 3D Preview Thumbnail               | AWS Batch (Fargate)          | Generate GIF/JPG/PNG preview thumbnails for 3D files                     |
 | Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate)          | Generate Gaussian splat reconstructions                                  |
