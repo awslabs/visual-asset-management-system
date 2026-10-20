@@ -197,10 +197,14 @@ This software includes third party software subject to the following copyrights:
 
 **3D Basic Conversion Pipeline**
 
-| Name                  | Version | License |
-| :-------------------- | :------ | :------ |
-| trimesh               | ^4.5.2  | MIT     |
-| aws-lambda-powertools | ^3.2.0  | MIT-0   |
+| Name                  | Version | License      |
+| :-------------------- | :------ | :----------- |
+| aws-lambda-powertools | 3.2.0   | MIT-0        |
+| jmespath              | 1.0.1   | MIT          |
+| numpy                 | 2.0.1   | BSD-3-Clause |
+| pillow                | 13.0.0  | MIT-CMU      |
+| trimesh               | 4.8.3   | MIT          |
+| typing-extensions     | 4.12.2  | Python-2.0   |
 
 **Mesh/CAD Metadata Extraction Pipeline**
 
