@@ -299,7 +299,8 @@ print("RESULTS " + json.dumps(results))
 
 
 def _child_has_dependencies():
-    probe = subprocess.run([sys.executable, "-c", "import trimesh, PIL, numpy, botocore"],  # nosemgrep: dangerous-subprocess-use-audit
+    # nosemgrep: dangerous-subprocess-use-audit -- fixed argv (this interpreter, a constant import check), no shell
+    probe = subprocess.run([sys.executable, "-c", "import trimesh, PIL, numpy, botocore"],
                            capture_output=True, text=True)
     return probe.returncode == 0
 
@@ -308,7 +309,8 @@ def _child_has_dependencies():
 def results():
     if not _child_has_dependencies():
         pytest.skip("trimesh, Pillow, numpy and botocore are needed for the real conversions")
-    run = subprocess.run([sys.executable, "-c", _SCRIPT, _LAMBDA_DIR],  # nosemgrep: dangerous-subprocess-use-audit
+    # nosemgrep: dangerous-subprocess-use-audit -- fixed argv (this interpreter, this module's script and directory), no shell
+    run = subprocess.run([sys.executable, "-c", _SCRIPT, _LAMBDA_DIR],
                          capture_output=True, text=True, timeout=300)
     assert run.returncode == 0, run.stderr[-4000:]
     line = [l for l in run.stdout.splitlines() if l.startswith("RESULTS ")][-1]
