@@ -47,7 +47,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
             codeBuildConstruct = new Conversion3dBasicCodeBuildConstruct(
                 this,
                 "Conversion3dBasicCodeBuild",
-                { config: props.config }
+                { config: props.config, kmsKey: props.storageResources.encryption.kmsKey }
             );
 
             new CfnOutput(this, "Conversion3dBasicCodeBuildProject", {

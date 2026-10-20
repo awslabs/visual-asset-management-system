@@ -16,6 +16,10 @@
  *     depends on the custom resource, and the waiter outlives the build's own timeouts.
  *   - Lambda pulls through the repository policy, not an IAM role, so the policy must name the Lambda
  *     service principal of the partition being deployed to.
+ *   - Amazon ECR cannot change a repository's encryption after creation. With the CMK on, the
+ *     repository is encrypted with the deployment key and its explicit name carries `-kms`, so turning
+ *     the CMK on or off is a rename that re-fires the build instead of a replacement CloudFormation
+ *     refuses for a custom-named resource.
  *
  * With the flag off (as every template ships) the function keeps its CDK image asset and none of these
  * resources exist; `expectAbsent` carries the function itself as its positive control.
@@ -43,6 +47,13 @@ const CONFIG_NAME: Record<TemplateName, string> = {
     commercial: (commercialTemplate as any).name,
     govcloud: (govcloudTemplate as any).name,
     eusovereign: (eusovereignTemplate as any).name,
+};
+
+/** `app.useKmsCmkEncryption.enabled` as each template ships: off in commercial, on in the other two. */
+const CMK_ON: Record<TemplateName, boolean> = {
+    commercial: (commercialTemplate as any).app.useKmsCmkEncryption.enabled === true,
+    govcloud: (govcloudTemplate as any).app.useKmsCmkEncryption.enabled === true,
+    eusovereign: (eusovereignTemplate as any).app.useKmsCmkEncryption.enabled === true,
 };
 
 const CONTENT_TAG = new RegExp(`^[0-9a-f]{${IMAGE_TAG_LENGTH}}$`);
@@ -106,6 +117,43 @@ const roleStatements = (s: SynthResult, fn: Resource): any[] => {
 
 const asList = (value: any): any[] => (Array.isArray(value) ? value : [value]);
 
+/** The deployment's shared VAMS key in the storage nested stack: one with the CMK on, none with it off. */
+const deploymentKeys = (s: SynthResult): Resource[] =>
+    s.where(
+        "AWS::KMS::Key",
+        (r) =>
+            /StorageResourcesBuilder/.test(r.stack) &&
+            r.logicalId.startsWith("VAMSEncryptionKMSKey")
+    );
+
+/**
+ * The storage-stack key a nested-stack value refers to, or undefined.
+ *
+ * A key from the storage nested stack reaches a pipeline nested stack as a parameter named
+ * `referenceto…Outputs<output name>`, which every parent stack passes down unchanged. The storage
+ * template's output of that name must be the key's `Arn`.
+ */
+const storageKeyReferencedBy = (s: SynthResult, of: Resource, value: any): string | undefined => {
+    const param = value?.Ref;
+    if (typeof param !== "string" || !(param in (s.templates[of.stack].Parameters ?? {}))) {
+        return undefined;
+    }
+    const outputName = param.split("Outputs").pop() as string;
+    for (const [stackKey, template] of Object.entries<any>(s.templates)) {
+        if (!/StorageResourcesBuilder/.test(stackKey)) continue;
+        const output = template.Outputs?.[outputName];
+        if (output?.Value?.["Fn::GetAtt"]?.[1] === "Arn") return getAttId(output.Value);
+    }
+    return undefined;
+};
+
+/** The repository URI a property resolves to, with the repository's `Ref` replaced by its name. */
+const resolvedRepositoryUri = (value: any, repository: Resource): string =>
+    SynthResult.flatten(value).replace(
+        `\${${repository.logicalId}}`,
+        repository.properties.RepositoryName
+    );
+
 describe.each(ALL_TEMPLATES)("%s: 3D Basic Conversion built by CodeBuild", (name) => {
     let s: SynthResult;
     let fn: Resource;
@@ -159,14 +207,33 @@ describe.each(ALL_TEMPLATES)("%s: 3D Basic Conversion built by CodeBuild", (name
     });
 
     it("the repository is explicitly named, scanned, size-bounded and removed with the stack", () => {
+        // The name carries `-kms` when the repository is KMS-encrypted (see the CMK flip below).
         expect(repository.properties.RepositoryName).toBe(
-            `${CONFIG_NAME[name]}-t1-${name}-3dbasic`.toLowerCase()
+            `${CONFIG_NAME[name]}-t1-${name}-3dbasic${CMK_ON[name] ? "-kms" : ""}`.toLowerCase()
         );
         expect(repository.raw.DeletionPolicy).toBe("Delete");
         expect(repository.properties.EmptyOnDelete).toBe(true);
         expect(repository.properties.ImageScanningConfiguration).toEqual({ ScanOnPush: true });
         const lifecycle = JSON.parse(repository.properties.LifecyclePolicy.LifecyclePolicyText);
         expect(lifecycle.rules.map((r: any) => r.selection.countNumber)).toEqual([10]);
+    });
+
+    it("the repository is encrypted with the deployment key exactly when the CMK is on", () => {
+        const keys = deploymentKeys(s);
+        if (CMK_ON[name]) {
+            // Control: the template really has the shared key the repository should name.
+            expect(keys).toHaveLength(1);
+            const encryption = repository.properties.EncryptionConfiguration;
+            expect(encryption?.EncryptionType).toBe("KMS");
+            expect(storageKeyReferencedBy(s, repository, encryption?.KmsKey)).toBe(
+                keys[0].logicalId
+            );
+        } else {
+            // Control: no shared key exists, so AES-256 (no EncryptionConfiguration) is the only
+            // correct result, and a KMS configuration here would point at an AWS managed key.
+            expect(keys).toHaveLength(0);
+            expect(repository.properties).not.toHaveProperty("EncryptionConfiguration");
+        }
     });
 
     it("the repository policy lets this partition's Lambda service principal pull the image", () => {
@@ -266,6 +333,73 @@ describe.each(ALL_TEMPLATES)("%s: 3D Basic Conversion built by CodeBuild", (name
                 { actions: ["codebuild:BatchGetBuilds"], resources: [project.logicalId] },
             ]);
         });
+    });
+});
+
+describe("commercial: turning useKmsCmkEncryption on with useCodeBuild on", () => {
+    // Amazon ECR cannot change a repository's encryption, so a CMK flip replaces the repository, and
+    // AWS CloudFormation refuses to replace a custom-named resource under the same name. The flip must
+    // therefore be a rename that re-fires the build before the function moves to the new repository.
+    let off: SynthResult;
+    let on: SynthResult;
+    const plainName = `${CONFIG_NAME.commercial}-t1-commercial-3dbasic`.toLowerCase();
+    const repositoryOf = (s: SynthResult): Resource =>
+        s.where("AWS::ECR::Repository", (r) =>
+            r.logicalId.startsWith("Conversion3dBasicCodeBuild")
+        )[0];
+    const triggerOf = (s: SynthResult): Resource =>
+        s.where("AWS::CloudFormation::CustomResource", (r) =>
+            r.logicalId.startsWith("Conversion3dBasicCodeBuildBuildTriggerCR")
+        )[0];
+
+    beforeAll(() => {
+        off = synthOn("commercial");
+        on = synthTemplate("commercial", {
+            mutate: (c: any) => {
+                c.app.pipelines.useConversion3dBasic.enabled = true;
+                c.app.pipelines.useConversion3dBasic.useCodeBuild = true;
+                c.app.useKmsCmkEncryption.enabled = true;
+            },
+            mutateKey: "conversion3dbasic-codebuild-on-cmk-on",
+        });
+    });
+
+    it("[control] the two synths differ in the CMK and both emit the repository and trigger", () => {
+        expect(CMK_ON.commercial).toBe(false);
+        expect(deploymentKeys(off)).toHaveLength(0);
+        expect(deploymentKeys(on)).toHaveLength(1);
+        for (const s of [off, on]) {
+            expect(repositoryOf(s)).toBeDefined();
+            expect(triggerOf(s)).toBeDefined();
+        }
+    });
+
+    it("the same repository resource is renamed and gains the deployment key", () => {
+        expect(repositoryOf(on).logicalId).toBe(repositoryOf(off).logicalId);
+        expect(repositoryOf(off).properties.RepositoryName).toBe(plainName);
+        expect(repositoryOf(on).properties.RepositoryName).toBe(`${plainName}-kms`);
+        const encryption = repositoryOf(on).properties.EncryptionConfiguration;
+        expect(encryption.EncryptionType).toBe("KMS");
+        expect(storageKeyReferencedBy(on, repositoryOf(on), encryption.KmsKey)).toBe(
+            deploymentKeys(on)[0].logicalId
+        );
+    });
+
+    it("the trigger's repository URI changes, so CloudFormation sends the Update that rebuilds", () => {
+        const uri = (s: SynthResult) =>
+            resolvedRepositoryUri(triggerOf(s).properties.EcrRepositoryUri, repositoryOf(s));
+        expect(uri(off).endsWith(`/${plainName}`)).toBe(true);
+        expect(uri(on).endsWith(`/${plainName}-kms`)).toBe(true);
+        // Same image tag: the source did not change, only where the image has to be built into.
+        expect(triggerOf(on).properties.ImageTag).toBe(triggerOf(off).properties.ImageTag);
+    });
+
+    it("the function still waits for the trigger and pulls from the renamed repository", () => {
+        const fn = basicFunctions(on)[0];
+        expect(asList(fn.raw.DependsOn ?? [])).toContain(triggerOf(on).logicalId);
+        expect(resolvedRepositoryUri(fn.properties.Code.ImageUri, repositoryOf(on))).toContain(
+            `/${plainName}-kms:`
+        );
     });
 });
 

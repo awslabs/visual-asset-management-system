@@ -8,6 +8,7 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as path from "path";
@@ -44,6 +45,8 @@ const WAIT_TOTAL_TIMEOUT = Duration.minutes(35);
 
 export interface Conversion3dBasicCodeBuildConstructProps {
     config: Config.Config;
+    /** `storageResources.encryption.kmsKey`: the shared VAMS key, undefined when the CMK is off. */
+    kmsKey?: kms.IKey;
 }
 
 /**
@@ -75,12 +78,37 @@ export class Conversion3dBasicCodeBuildConstruct extends Construct {
         // rule): the name embeds `config.name` and `app.baseStackName`, so only an orphan left by a
         // failed teardown of the SAME configuration can conflict. removalPolicy DESTROY + emptyOnDelete
         // means an ordinary teardown removes it.
-        const repositoryName = [props.config.name, props.config.app.baseStackName, "3dbasic"]
+        //
+        // Amazon ECR cannot change a repository's encryption after it is created, so turning
+        // useKmsCmkEncryption on or off replaces the repository, and AWS CloudFormation cannot replace
+        // a custom-named resource under the same name. The name therefore depends on the encryption:
+        // a flip creates the repository under the other name, the build trigger re-fires on its new
+        // URI, the function moves to the image built into it, and the old repository is deleted in
+        // the cleanup phase.
+        const repositoryName = [
+            props.config.name,
+            props.config.app.baseStackName,
+            "3dbasic",
+            ...(props.kmsKey ? ["kms"] : []),
+        ]
             .join("-")
             .toLowerCase();
 
+        // Imported by ARN, not passed as the key object, so any grant CDK derives from the key lands on
+        // the grantee's own policy and never in the key policy of the storage nested stack, which
+        // would then consume this stack's outputs (infra/CLAUDE.md, encryption trap 2). Amazon ECR
+        // creates its own grants on the key when CloudFormation creates the repository; pushing and
+        // pulling need no permission on the key.
+        const encryptionKey = props.kmsKey
+            ? kms.Key.fromKeyArn(this, "Conversion3dBasicEcrKmsKeyRef", props.kmsKey.keyArn)
+            : undefined;
+
         this.repository = new ecr.Repository(this, "EcrRepo-3dBasic", {
             repositoryName,
+            encryption: encryptionKey
+                ? ecr.RepositoryEncryption.KMS
+                : ecr.RepositoryEncryption.AES_256,
+            encryptionKey,
             removalPolicy: RemovalPolicy.DESTROY,
             emptyOnDelete: true,
             imageScanOnPush: true,
@@ -189,8 +217,8 @@ export class Conversion3dBasicCodeBuildConstruct extends Construct {
         // ProjectName, SourceHash and EcrRepositoryUri are the trigger inputs: AWS CloudFormation
         // invokes the Update handler only when a property changes, so a source change or a repository
         // replacement (RepositoryName is a REPLACEMENT property, which leaves an empty repository behind
-        // an unchanged project and source) each re-fire the build. ImageTag is what the handler builds
-        // and looks for.
+        // an unchanged project and source; a CMK flip renames the repository) each re-fire the build.
+        // ImageTag is what the handler builds and looks for.
         this.buildTrigger = new cdk.CustomResource(this, "BuildTriggerCR-3dBasic", {
             serviceToken: buildProvider.serviceToken,
             properties: {

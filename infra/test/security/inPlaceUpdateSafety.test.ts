@@ -168,6 +168,9 @@ describe("nested stack dependency direction", () => {
             if (c.app.pipelines.useNvidiaCosmos3.modelsOmni?.nano16B) {
                 c.app.pipelines.useNvidiaCosmos3.modelsOmni.nano16B.enabled = true;
             }
+            // The 3D Basic Conversion CodeBuild repository consumes the key as well.
+            c.app.pipelines.useConversion3dBasic.enabled = true;
+            c.app.pipelines.useConversion3dBasic.useCodeBuild = true;
         },
         mutateKey: "cycle-check-pipelines-on-cmk-on",
     });
@@ -182,6 +185,14 @@ describe("nested stack dependency direction", () => {
     it("both nested stacks are present, so the assertion is not vacuous", () => {
         expect(storageStacks.length).toBeGreaterThan(0);
         expect(pipelineStacks.length).toBeGreaterThan(0);
+    });
+
+    it("the 3D Basic Conversion repository takes the key in this synth, so its reference is covered", () => {
+        const repositories = synth.where("AWS::ECR::Repository", (r) =>
+            r.logicalId.startsWith("Conversion3dBasicCodeBuild")
+        );
+        expect(repositories).toHaveLength(1);
+        expect(repositories[0].properties.EncryptionConfiguration?.EncryptionType).toBe("KMS");
     });
 
     it("the storage stack takes no parameter fed from a pipeline stack output", () => {
