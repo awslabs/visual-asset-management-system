@@ -718,7 +718,7 @@ class TestTools:
         assert out["geometry"]["dropped_non_solid_geometry"] == stray and "non_solid_geometry" not in out["geometry"]
         assert dropped_at == [state.best_output]
         assert state.best_geometry["dropped_non_solid_geometry"] == stray
-        assert state.attempts[0].summary.endswith("; 5 face(s) and 290 edge(s) outside the solids dropped from the output file by the pipeline")
+        assert state.attempts[0].summary.endswith("; 5 face(s) and 290 edge(s) outside the solids dropped from the output file by the pipeline's solids-only rule (not a STEP or exporter limit)")
 
     def test_a_clean_output_is_not_rewritten_and_a_failed_rewrite_keeps_the_summary(self, tmp_path, caplog):
         state = _state(tmp_path, research=False)

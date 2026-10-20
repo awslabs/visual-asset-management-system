@@ -91,7 +91,8 @@ CadQuery recipes for MODIFY runs (start from part = cq.importers.importStep(os.e
   keeps several of them in the result.
 - Re-export unchanged: result = cq.Compound.makeCompound(part.solids().vals()) - the solids only. PMI annotation
   planes and curves of the source file are not part of the design; the tool drops any that reach the output
-  and reports what went.
+  and reports what went. Keeping solids only is this pipeline's rule, not a limit of STEP or of the exporter:
+  report a drop as the pipeline's, without giving it another reason.
 GENERATE recipes (each is one script; wp = cq.Workplane("XY"); use them in a modify run only when the edit
 is impossible on the imported solid):
 - Plate with holes at explicit positions (positions measured from the plate centre):

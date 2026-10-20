@@ -281,7 +281,9 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
         script's output; use it to correct the next attempt. The output keeps solids only: after the script
         runs, the pipeline drops any geometry outside the solids (annotation planes or curves carried over
         from an imported file) from the output file, whatever the script exported, and reports it under
-        dropped_non_solid_geometry. On a modify run the result also carries deltaVsInput: the volume, hole
+        dropped_non_solid_geometry. Keeping solids only is this pipeline's rule: STEP can carry annotation
+        geometry, and the exporter writes whatever the script exports.
+        On a modify run the result also carries deltaVsInput: the volume, hole
         count, solid count and bounding-box change against the input, the volume band under which a
         difference is re-export noise (unchanged_below_mm3: one millionth of the input's volume, at least
         0.001 mm^3), and a note when the change stays within that band with nothing else changed or when

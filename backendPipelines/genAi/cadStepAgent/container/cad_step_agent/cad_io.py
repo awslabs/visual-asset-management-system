@@ -73,7 +73,8 @@ class StepSummary:
         ignored = (f"; {describe_non_solid_geometry(self.non_solid_geometry)} outside the solids ignored"
                    if self.non_solid_geometry else "")
         dropped = (f"; {describe_non_solid_geometry(self.dropped_non_solid_geometry)} outside the solids dropped "
-                   "from the output file by the pipeline" if self.dropped_non_solid_geometry else "")
+                   "from the output file by the pipeline's solids-only rule (not a STEP or exporter limit)"
+                   if self.dropped_non_solid_geometry else "")
         return (f"{self.solid_count} solid(s), {self.face_count} faces, {self.edge_count} edges{bbox}{volume}{bodies}"
                 f"{features}{thickness}{ignored}{dropped}")
 
