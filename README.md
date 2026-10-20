@@ -157,7 +157,7 @@ See the [Configuration Reference](https://awslabs.github.io/visual-asset-managem
 
 ```bash
 cd infra
-cdk destroy --all
+npx cdk destroy --all
 ```
 
 Some resources (S3 buckets, DynamoDB tables) are retained by default. See the [Uninstall Guide](https://awslabs.github.io/visual-asset-management-system/deployment/uninstall) for complete cleanup instructions.
