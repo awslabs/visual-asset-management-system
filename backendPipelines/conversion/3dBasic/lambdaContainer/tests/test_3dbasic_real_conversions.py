@@ -9,7 +9,7 @@ asset bucket, on models generated here (#506, #507, #508).
   back in from the run's output folder, and a separate glTF image is fetched (#507).
 - A textured GLB keeps its texture through a GLB re-export (#506).
 - A point cloud to STL fails with the STL message; to PLY it converts (#508).
-- A buffer outside the asset, an absolute local path, and a missing buffer each fail before the loader
+- A buffer outside the asset, an absolute path, and a missing buffer each fail before the loader
   runs; a missing or rejected material library and a missing image are skipped with a warning and the
   geometry converts; the loader cannot read a file the fetch did not stage.
 
@@ -217,23 +217,25 @@ escape["buffers"][0]["uri"] = "../../xother/secret.bin"
 put("xasset/esc/model.gltf", json.dumps(escape))
 run("gltf_buffer_in_another_asset", "xasset/esc/model.gltf", ".glb", "esc")
 
-# A buffer named by an absolute local path that exists on this machine.
-local_file = os.path.join(outside, "local.bin")
-with open(local_file, "wb") as handle:
+# A buffer named by an absolute path is refused. A file is placed at that path, so the result shows the
+# refusal rather than a missing file.
+placed_buffer = os.path.join(outside, "placed.bin")
+with open(placed_buffer, "wb") as handle:
     handle.write(exported[document["buffers"][0]["uri"]])
 absolute = json.loads(json.dumps(document))
-absolute["buffers"][0]["uri"] = local_file
+absolute["buffers"][0]["uri"] = placed_buffer
 put("xasset/abs/model.gltf", json.dumps(absolute))
-run("gltf_buffer_absolute_local_path", "xasset/abs/model.gltf", ".glb", "abs")
+run("gltf_buffer_absolute_path", "xasset/abs/model.gltf", ".glb", "abs")
 
-# An OBJ whose first 'mtllib' text is in a comment naming a local file. The reference scan reads
-# statements only; trimesh's loader takes the first 'mtllib' anywhere in the text, so this is what
-# the resolver alone has to refuse. The local MTL points at a local texture.
+# An OBJ whose material library is outside the asset: the first 'mtllib' in its text, which is the
+# one the loader reads, is in a comment and names an absolute path. It is skipped and the model
+# converts without it. A material library naming an 8x8 texture is placed at that path, so the result
+# shows the refusal rather than a missing file.
 Image.fromarray((rng.random((8, 8, 3)) * 255).astype(np.uint8)).save(os.path.join(outside, "t.png"))
-with open(os.path.join(outside, "local.mtl"), "w") as handle:
+with open(os.path.join(outside, "placed.mtl"), "w") as handle:
     handle.write(f"newmtl material_0\nmap_Kd {os.path.join(outside, 't.png')}\n")
-put("xasset/cmt/box.obj", f"# mtllib {os.path.join(outside, 'local.mtl')}\n" + text.replace("mtllib box.mtl", ""))
-run("obj_comment_mtllib_local_file", "xasset/cmt/box.obj", ".glb", "cmt")
+put("xasset/cmt/box.obj", f"# mtllib {os.path.join(outside, 'placed.mtl')}\n" + text.replace("mtllib box.mtl", ""))
+run("obj_material_library_outside_the_asset", "xasset/cmt/box.obj", ".glb", "cmt")
 
 # An OBJ whose material library name has a space (D1), as trimesh and Blender write it for
 # 'my box.obj', with and without that library in the asset.
@@ -413,14 +415,15 @@ class TestReferencesAreConfined:
         assert result.get("error") == "ReferencedFileError", result
         assert "xother/secret.bin" not in result["requested"], result
 
-    def test_an_absolute_local_path_is_rejected_before_loading(self, results):
-        result = results["gltf_buffer_absolute_local_path"]
+    def test_an_absolute_path_is_rejected_before_loading(self, results):
+        result = results["gltf_buffer_absolute_path"]
         assert result.get("error") == "ReferencedFileError", result
 
     def test_the_loader_cannot_read_a_file_the_fetch_did_not_stage(self, results):
-        # The geometry converts; the 8x8 texture trimesh tried to read from the local disk does not.
+        # A material library outside the asset is skipped: the geometry converts, without the 8x8
+        # texture the library at that path names.
         # (A 2x2 texture is trimesh's default for an OBJ with UVs and no material.)
-        result = _ok(results, "obj_comment_mtllib_local_file")
+        result = _ok(results, "obj_material_library_outside_the_asset")
         assert result["model"]["vertices"] > 0
         assert [8, 8] not in result["model"]["textures"], result
 
