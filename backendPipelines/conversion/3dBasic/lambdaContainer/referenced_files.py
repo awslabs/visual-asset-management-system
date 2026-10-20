@@ -12,19 +12,23 @@ allowlist). A reference is accepted only when it is a relative path that, normal
 referring file's directory, stays inside the input's asset prefix; absolute paths, ``..`` escapes,
 URI schemes (``s3:``, ``http(s):``, ``file:``, a Windows drive), control characters and over-long
 values are rejected. An inline ``data:`` URI is left to the loader and never becomes an Amazon S3
-request. The fetch is bounded by a file count, a byte total (each object's size is read with
-HeadObject before it is downloaded, and checked against free disk) and a recursion depth: only an
-OBJ's material libraries are read for further references, so the chain is at most OBJ -> MTL ->
-texture.
+request. The fetch is bounded by a file count (every name looked up counts, found or not), a byte
+total (each object's size is read with HeadObject before it is downloaded, and checked against free
+disk) and a recursion depth: only an OBJ's material libraries are read for further references, so the
+chain is at most OBJ -> MTL -> texture.
+
+What happens to a reference that is rejected, missing or over a limit depends on what it carries. A
+glTF or GLB buffer holds the geometry, so without it the model cannot be loaded: the conversion FAILS
+with a message naming it. A material library or a texture image only adds appearance: it is skipped
+with a warning naming it, and the model converts without it.
 
 The loader reads the fetched files through ``ConfinedResolver``, which serves the files fetched here
-from the local copy of the asset and refuses any other name.
+from the local copy of the asset and refuses any other name, so a skipped reference is not read from
+anywhere.
 
 The path rules (``resolve_reference``, ``local_path_for``) and the glTF, OBJ and MTL collectors are
 vendored from the 3D Preview Thumbnail container's ``preview_pipeline/dependencies.py`` (PR #474);
-keep the two in step. This copy differs in policy: a reference that is rejected, missing or over a
-limit FAILS the conversion. A thumbnail without its texture is still a usable preview, whereas a
-converted model without its buffers or materials is a different model reported as a success.
+keep the two in step. The thumbnail skips every unusable reference; this copy fails on a buffer.
 """
 
 import json
@@ -35,7 +39,7 @@ import shutil
 import struct
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 from urllib.parse import unquote
 
 from botocore.exceptions import ClientError
@@ -49,6 +53,8 @@ DEFAULT_MAX_DEPTH = 2
 DEFAULT_DISK_HEADROOM_BYTES = 512 * 1024 ** 2
 # S3 keys are at most 1,024 bytes; a longer reference cannot name an object.
 MAX_REFERENCE_LENGTH = 1024
+# Skipped references logged one by one; any beyond this are counted in one closing warning.
+MAX_SKIPPED_LOGGED = 50
 # A GLB's JSON chunk, or a PLY header, larger than this is not one this pipeline reads references from.
 _HEADER_SCAN_LIMIT = 64 * 1024 ** 2
 # The longest reference quoted back in an error message.
@@ -58,7 +64,17 @@ _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 
 
 class ReferencedFileError(ValueError):
-    """A file the input model references cannot be used: rejected, missing, or over a limit."""
+    """A buffer the input model references cannot be used: rejected, missing, or over a limit."""
+
+
+class Reference(NamedTuple):
+    """A file name as the referring file spells it."""
+    raw: object
+    # A glTF URI, which is percent-decoded before it is checked.
+    percent_encoded: bool
+    # A glTF/GLB buffer: the model cannot be loaded without it, so a reference that cannot be used
+    # fails the conversion. Material libraries and texture images are optional and are skipped.
+    required: bool
 
 
 @dataclass
@@ -78,6 +94,10 @@ class FetchReport:
     # MTL texture name relative to the MTL rather than to the OBJ), so this is what the resolver
     # looks it up by.
     by_reference: Dict[str, str] = field(default_factory=dict)
+    # The warning for each optional reference that was skipped (the first MAX_SKIPPED_LOGGED), and
+    # how many were skipped in all.
+    skipped: List[str] = field(default_factory=list)
+    skipped_count: int = 0
 
 
 # --------------------------------------------------------------------------------------------------
@@ -149,28 +169,28 @@ def _shown(value) -> str:
 
 
 # --------------------------------------------------------------------------------------------------
-# Reference collectors: (local file) -> [(raw reference, percent_encoded)]
+# Reference collectors: (local file) -> [Reference]
 # --------------------------------------------------------------------------------------------------
 
-def _gltf_document_references(document) -> List[tuple]:
+def _gltf_document_references(document) -> List[Reference]:
     references = []
     if not isinstance(document, dict):
         return references
-    for group in ("buffers", "images"):
+    for group, required in (("buffers", True), ("images", False)):
         for entry in document.get(group) or []:
             uri = entry.get("uri") if isinstance(entry, dict) else None
             if isinstance(uri, str) and uri and not uri.startswith("data:"):
-                references.append((uri, True))
+                references.append(Reference(uri, True, required))
     return references
 
 
-def _gltf_references(path: str) -> List[tuple]:
+def _gltf_references(path: str) -> List[Reference]:
     with open(path, "r", encoding="utf-8") as handle:
         document = json.load(handle)
     return _gltf_document_references(document)
 
 
-def _glb_references(path: str) -> List[tuple]:
+def _glb_references(path: str) -> List[Reference]:
     """The same ``buffers`` / ``images`` URIs, read from a GLB's JSON chunk. A GLB normally carries
     its data in its own binary chunk, but its JSON may still name external files, and the loader
     resolves those exactly as it does for a ``.gltf``."""
@@ -185,7 +205,7 @@ def _glb_references(path: str) -> List[tuple]:
     return _gltf_document_references(document)
 
 
-def _obj_references(path: str) -> List[tuple]:
+def _obj_references(path: str) -> List[Reference]:
     """``mtllib`` names: one or more file names after the keyword."""
     references = []
     with open(path, "rb") as handle:
@@ -194,7 +214,7 @@ def _obj_references(path: str) -> List[tuple]:
             if line[:6].lower() != b"mtllib" or (len(line) > 6 and not line[6:7].isspace()):
                 continue
             names = line[6:].decode("utf-8", errors="replace").split()
-            references.extend((name, False) for name in names)
+            references.extend(Reference(name, False, False) for name in names)
     return references
 
 
@@ -229,7 +249,7 @@ def _mtl_texture_name(tokens: List[str]) -> Optional[str]:
     return name or None
 
 
-def _mtl_references(path: str) -> List[tuple]:
+def _mtl_references(path: str) -> List[Reference]:
     references = []
     with open(path, "rb") as handle:
         for raw in handle:
@@ -237,11 +257,11 @@ def _mtl_references(path: str) -> List[tuple]:
             if len(tokens) >= 2 and tokens[0].lower() in _MTL_MAP_KEYWORDS:
                 name = _mtl_texture_name(tokens[1:])
                 if name:
-                    references.append((name, False))
+                    references.append(Reference(name, False, False))
     return references
 
 
-def _ply_references(path: str) -> List[tuple]:
+def _ply_references(path: str) -> List[Reference]:
     """The texture a PLY header names (``comment TextureFile fuze_uv.jpg``), read the way trimesh's
     PLY loader reads it: the rest of any header line after ``TextureFile``."""
     references = []
@@ -260,11 +280,11 @@ def _ply_references(path: str) -> List[tuple]:
             if "texturefile" in lowered:
                 name = line[lowered.index("texturefile") + len("texturefile"):].strip()
                 if name:
-                    references.append((name, False))
+                    references.append(Reference(name, False, False))
     return references
 
 
-_COLLECTORS: Dict[str, Callable[[str], List[tuple]]] = {
+_COLLECTORS: Dict[str, Callable[[str], List[Reference]]] = {
     ".gltf": _gltf_references,
     ".glb": _glb_references,
     ".obj": _obj_references,
@@ -310,8 +330,9 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
     ``local_input_path`` is the input already downloaded at ``input_relative_path`` under
     ``local_root``; each fetched file lands at its own root-relative path beside it, so relative
     references resolve locally exactly as they do in the asset. ``client`` is the Amazon S3 client
-    for ``bucket``'s Region. Raises ``ReferencedFileError`` for a reference that is rejected, names
-    no object, or would pass a limit.
+    for ``bucket``'s Region. A buffer reference that is rejected, names no object, or would pass a
+    limit raises ``ReferencedFileError``; any other such reference is skipped, with a warning on
+    ``logger`` and in ``FetchReport.skipped``.
     """
     limits = limits or FetchLimits()
     report = FetchReport()
@@ -319,8 +340,24 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
     if not has_references(ext):
         return report
 
-    seen = {input_relative_path}
+    # Root-relative path -> local file, for every file the loader may be served; and root-relative
+    # path -> the failure message, for every name already looked up and not fetched.
+    available = {input_relative_path: local_input_path}
+    unavailable: Dict[str, str] = {}
+    looked_up = 0
     queue = deque([(local_input_path, input_relative_path, ext, 0)])
+
+    def refuse(reference: Reference, rel_path: str, name: str, failure: str, reason: str):
+        """Fail on a required reference; skip an optional one with a warning naming it."""
+        if reference.required:
+            raise ReferencedFileError(failure)
+        report.skipped_count += 1
+        if report.skipped_count <= MAX_SKIPPED_LOGGED:
+            warning = (f"Skipped {name}, referenced by {rel_path}: {reason}. The model is converted "
+                       f"without it.")
+            report.skipped.append(warning)
+            if logger is not None:
+                logger.warning(warning)
 
     while queue:
         local_path, rel_path, file_ext, depth = queue.popleft()
@@ -333,55 +370,89 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
             if logger is not None:
                 logger.warning(f"Could not read the references in {rel_path}: {e}")
             continue
-        if references and depth + 1 > limits.max_depth:
-            raise ReferencedFileError(
-                f"{rel_path} references further files {depth + 1} levels below the input; this "
-                f"pipeline follows at most {limits.max_depth}.")
+        too_deep = depth + 1 > limits.max_depth
         referrer_dir = posixpath.dirname(rel_path)
-        for raw, percent_encoded in references:
-            relative = resolve_reference(raw, referrer_dir, percent_encoded=percent_encoded)
+        for reference in references:
+            raw = reference.raw
+            if too_deep:
+                refuse(reference, rel_path, _shown(raw),
+                       f"{rel_path} references further files {depth + 1} levels below the input; "
+                       f"this pipeline follows at most {limits.max_depth}.",
+                       f"it is {depth + 1} levels below the input, and this pipeline follows at most "
+                       f"{limits.max_depth}")
+                continue
+            relative = resolve_reference(raw, referrer_dir, percent_encoded=reference.percent_encoded)
             target = local_path_for(local_root, relative) if relative else None
             if relative is None or target is None:
-                raise ReferencedFileError(
-                    f"{rel_path} references {_shown(raw)}, which is not a relative path to a file in "
-                    f"the same asset. Only files inside the input's own asset are fetched: change "
-                    f"the reference to a path relative to {rel_path}, or embed the data, and run the "
-                    f"conversion again.")
-            report.by_reference.setdefault(raw.strip(), target)
-            if relative in seen:
+                refuse(reference, rel_path, _shown(raw),
+                       f"{rel_path} references {_shown(raw)}, which is not a relative path to a file "
+                       f"in the same asset. Only files inside the input's own asset are fetched: "
+                       f"change the reference to a path relative to {rel_path}, or embed the data, "
+                       f"and run the conversion again.",
+                       "it is not a relative path to a file in the same asset")
                 continue
-            seen.add(relative)
-            if len(report.fetched) >= limits.max_files:
-                raise ReferencedFileError(
-                    f"The input references more than {limits.max_files} files; this pipeline "
-                    f"fetches at most {limits.max_files}.")
+            if relative in available:
+                report.by_reference.setdefault(raw.strip(), available[relative])
+                continue
+            if relative in unavailable:
+                # Already looked up and not fetched, and already reported once if it was skipped.
+                if reference.required:
+                    raise ReferencedFileError(unavailable[relative])
+                continue
+            if looked_up >= limits.max_files:
+                failure = (f"The input references more than {limits.max_files} files; this "
+                           f"pipeline fetches at most {limits.max_files}.")
+                unavailable[relative] = failure
+                refuse(reference, rel_path, relative, failure,
+                       f"the input references more than {limits.max_files} files, and this "
+                       f"pipeline fetches at most {limits.max_files}")
+                continue
+            looked_up += 1
             key = root_key + relative
             measured = _object_size(client, bucket, key)
             if measured is None:
-                raise ReferencedFileError(
-                    f"{rel_path} references {relative}, which is not in the asset. Upload it to the "
-                    f"asset at /{relative} and run the conversion again.")
+                failure = (f"{rel_path} references {relative}, which is not in the asset. Upload it "
+                           f"to the asset at /{relative} and run the conversion again.")
+                unavailable[relative] = failure
+                refuse(reference, rel_path, relative, failure,
+                       f"it is not in the asset (upload it at /{relative} and run the conversion "
+                       f"again to include it)")
+                continue
             size, version_id = measured
             if report.total_bytes + size > limits.max_total_bytes:
-                raise ReferencedFileError(
-                    f"The files the input references exceed {limits.max_total_bytes} bytes "
-                    f"(reached at {relative}, {size} bytes).")
+                failure = (f"The files the input references exceed {limits.max_total_bytes} bytes "
+                           f"(reached at {relative}, {size} bytes).")
+                unavailable[relative] = failure
+                refuse(reference, rel_path, relative, failure,
+                       f"its {size} bytes take the referenced files past "
+                       f"{limits.max_total_bytes} bytes")
+                continue
             free = shutil.disk_usage(local_root).free
             if size + limits.disk_headroom_bytes > free:
-                raise ReferencedFileError(
-                    f"{relative} ({size} bytes) does not fit in the {free} bytes of working disk left.")
+                failure = (f"{relative} ({size} bytes) does not fit in the {free} bytes of working "
+                           f"disk left.")
+                unavailable[relative] = failure
+                refuse(reference, rel_path, relative, failure,
+                       f"its {size} bytes exceed the {free} bytes of working disk left")
+                continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
             extra = {"VersionId": version_id} if version_id else None
             with open(target, "wb") as handle:
                 client.download_fileobj(Bucket=bucket, Key=key, Fileobj=handle, ExtraArgs=extra)
             report.fetched.append(relative)
             report.total_bytes += size
+            available[relative] = target
+            report.by_reference.setdefault(raw.strip(), target)
             child_ext = os.path.splitext(relative)[1].lower()
             if child_ext in _FOLLOWED.get(file_ext, ()):
                 queue.append((target, relative, child_ext, depth + 1))
 
     if logger is not None:
-        logger.info(f"Referenced files: {len(report.fetched)} fetched ({report.total_bytes} bytes)")
+        if report.skipped_count > MAX_SKIPPED_LOGGED:
+            logger.warning(f"Skipped {report.skipped_count - MAX_SKIPPED_LOGGED} further referenced "
+                           f"files.")
+        logger.info(f"Referenced files: {len(report.fetched)} fetched ({report.total_bytes} bytes), "
+                    f"{report.skipped_count} skipped")
     return report
 
 

@@ -117,9 +117,11 @@ does not see (its OBJ loader takes the first `mtllib` anywhere in the text, comm
 The 3D Basic Conversion copy is `conversion/3dBasic/lambdaContainer/referenced_files.py`
 (`ConfinedResolver`); its path rules and collectors are vendored from the 3D Preview Thumbnail
 container's `preview_pipeline/dependencies.py`, so change both together. The policies differ on purpose:
-the thumbnail logs and skips a bad reference, while the conversion FAILS, because a converted model
-missing its buffers or materials is a different model reported as a success. Real-trimesh coverage runs
-in a child interpreter (`tests/test_3dbasic_real_conversions.py`) since sibling modules stub `trimesh`.
+the thumbnail logs and skips every bad reference, while the conversion FAILS on a glTF/GLB buffer (the
+geometry) and skips a material library or texture image with a warning naming it (`Reference.required`).
+A skipped name is never in the resolver's set, and every name looked up counts toward the file limit,
+found or not. Real-trimesh coverage runs in a child interpreter (`tests/test_3dbasic_real_conversions.py`)
+since sibling modules stub `trimesh`.
 
 The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
 `lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set

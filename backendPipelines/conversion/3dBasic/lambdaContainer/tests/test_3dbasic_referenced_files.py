@@ -3,7 +3,8 @@
 
 """Referenced files (#507): the input's buffers, materials and textures are fetched from its own asset,
 every reference is checked against an allowlist before any Amazon S3 call, and the loader can read the
-fetched files and nothing else.
+fetched files and nothing else. A glTF/GLB buffer that cannot be used fails the run; a material library
+or a texture image that cannot be used is skipped with a warning naming it.
 
 These run without trimesh: the module under test only parses the reference syntax of each format. The
 conversions that load the fetched files for real are in ``test_3dbasic_real_conversions.py``.
@@ -13,6 +14,7 @@ import json
 import os
 import struct
 import sys
+from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
@@ -60,11 +62,15 @@ def _stage(tmp_path, relative, content):
     return str(local_root), str(target)
 
 
-def _fetch(tmp_path, client, input_relative, content, limits=None):
+def _fetch(tmp_path, client, input_relative, content, limits=None, logger=None):
     local_root, local_input = _stage(tmp_path, input_relative, content)
     report = rf.fetch_referenced_files(client, "abkt", ROOT, input_relative, local_input, local_root,
-                                       limits=limits)
+                                       limits=limits, logger=logger)
     return local_root, report
+
+
+def _warnings(logger):
+    return [call.args[0] for call in logger.warning.call_args_list]
 
 
 def _gltf(*uris, images=()):
@@ -138,38 +144,38 @@ class TestConfinementRoot:
 
 @pytest.mark.unit
 class TestCollectors:
-    def test_gltf_buffers_and_images_are_collected_and_data_uris_skipped(self, tmp_path):
+    def test_gltf_buffers_are_required_images_optional_and_data_uris_skipped(self, tmp_path):
         path = tmp_path / "m.gltf"
         path.write_text(_gltf("b0.bin", "data:application/octet-stream;base64,AAAA",
                               images=("tex.png",)))
-        assert rf._gltf_references(str(path)) == [("b0.bin", True), ("tex.png", True)]
+        assert rf._gltf_references(str(path)) == [("b0.bin", True, True), ("tex.png", True, False)]
 
     def test_glb_json_chunk_uris_are_collected(self, tmp_path):
         path = tmp_path / "m.glb"
         path.write_bytes(_glb({"asset": {"version": "2.0"}, "buffers": [{"byteLength": 4}],
                                "images": [{"uri": "tex.png"}]}))
-        assert rf._glb_references(str(path)) == [("tex.png", True)]
+        assert rf._glb_references(str(path)) == [("tex.png", True, False)]
 
     def test_a_file_that_is_not_a_glb_yields_nothing(self, tmp_path):
         path = tmp_path / "m.glb"
         path.write_bytes(b"not a glb at all")
         assert rf._glb_references(str(path)) == []
 
-    def test_obj_mtllib_names(self, tmp_path):
+    def test_obj_mtllib_names_are_optional(self, tmp_path):
         path = tmp_path / "m.obj"
         path.write_text("# mtllibrary comment\nmtllib a.mtl b.mtl\nv 0 0 0\nmtllibx c.mtl\n")
-        assert rf._obj_references(str(path)) == [("a.mtl", False), ("b.mtl", False)]
+        assert rf._obj_references(str(path)) == [("a.mtl", False, False), ("b.mtl", False, False)]
 
     def test_mtl_texture_options_are_skipped(self, tmp_path):
         path = tmp_path / "m.mtl"
         path.write_text("newmtl m\nmap_Kd -s 1 1 1 -bm 0.5 wood.png\nbump normal.png\nKd 1 1 1\n")
-        assert rf._mtl_references(str(path)) == [("wood.png", False), ("normal.png", False)]
+        assert rf._mtl_references(str(path)) == [("wood.png", False, False), ("normal.png", False, False)]
 
     def test_ply_texturefile_comment(self, tmp_path):
         path = tmp_path / "m.ply"
         path.write_bytes(b"ply\nformat ascii 1.0\ncomment TextureFile fuze uv.jpg\n"
                          b"element vertex 0\nend_header\ncomment TextureFile after.png\n")
-        assert rf._ply_references(str(path)) == [("fuze uv.jpg", False)]
+        assert rf._ply_references(str(path)) == [("fuze uv.jpg", False, False)]
 
 
 @pytest.mark.unit
@@ -194,10 +200,16 @@ class TestFetch:
         # the resolver keeps the spelling the MTL used.
         assert report.by_reference["wood.png"].endswith(os.path.join("mats", "wood.png"))
 
-    def test_a_missing_reference_fails_and_names_it(self, tmp_path):
+    def test_a_missing_buffer_fails_and_names_it(self, tmp_path):
         client = FakeS3({})
         with pytest.raises(rf.ReferencedFileError, match=r"references b0\.bin, which is not in the asset"):
             _fetch(tmp_path, client, "m.gltf", _gltf("b0.bin"))
+
+    def test_a_missing_glb_buffer_fails(self, tmp_path):
+        client = FakeS3({})
+        document = {"asset": {"version": "2.0"}, "buffers": [{"uri": "b0.bin", "byteLength": 4}]}
+        with pytest.raises(rf.ReferencedFileError, match="not in the asset"):
+            _fetch(tmp_path, client, "m.glb", _glb(document))
 
     def test_a_forbidden_head_is_reported_as_missing(self, tmp_path):
         client = FakeS3({}, head_error_codes={ROOT + "b0.bin": "403"})
@@ -209,16 +221,23 @@ class TestFetch:
         with pytest.raises(ClientError):
             _fetch(tmp_path, client, "m.gltf", _gltf("b0.bin"))
 
+    def test_any_other_s3_error_on_an_optional_reference_propagates(self, tmp_path):
+        # Only a missing or unreadable object is skipped; a throttled lookup fails the run rather
+        # than converting a model without a texture that exists.
+        client = FakeS3({}, head_error_codes={ROOT + "tex.png": "SlowDown"})
+        with pytest.raises(ClientError):
+            _fetch(tmp_path, client, "m.gltf", _gltf(images=("tex.png",)))
+
     @pytest.mark.parametrize("reference", [
         "../other-asset/b0.bin", "/var/task/lambda.py", "s3://abkt/other/b0.bin", "C:\\b0.bin",
     ])
-    def test_a_rejected_reference_fails_before_any_s3_call(self, tmp_path, reference):
+    def test_a_rejected_buffer_fails_before_any_s3_call(self, tmp_path, reference):
         client = FakeS3({})
         with pytest.raises(rf.ReferencedFileError, match="not a relative path to a file in the same"):
             _fetch(tmp_path, client, "m.gltf", _gltf(reference))
         assert client.heads == [] and client.downloads == []
 
-    def test_a_reference_into_another_asset_is_never_requested(self, tmp_path):
+    def test_a_buffer_in_another_asset_is_never_requested(self, tmp_path):
         # In-band positive control for the rejection: the other asset's object exists, so a fetch that
         # skipped the check would succeed rather than fail on a missing key.
         client = FakeS3({"xother/b0.bin": b"secret"})
@@ -239,10 +258,10 @@ class TestFetch:
                    limits=rf.FetchLimits(max_total_bytes=15))
         assert [key for key, _ in client.downloads] == [ROOT + "b0.bin"]
 
-    def test_the_depth_is_bounded(self, tmp_path):
-        client = FakeS3({ROOT + "m.mtl": b"map_Kd wood.png\n", ROOT + "wood.png": b"png"})
-        with pytest.raises(rf.ReferencedFileError, match="at most 1"):
-            _fetch(tmp_path, client, "model.obj", "mtllib m.mtl\n", limits=rf.FetchLimits(max_depth=1))
+    def test_a_buffer_past_the_depth_limit_fails(self, tmp_path):
+        client = FakeS3({ROOT + "b0.bin": b"x"})
+        with pytest.raises(rf.ReferencedFileError, match="at most 0"):
+            _fetch(tmp_path, client, "m.gltf", _gltf("b0.bin"), limits=rf.FetchLimits(max_depth=0))
 
     def test_a_repeated_reference_is_fetched_once(self, tmp_path):
         client = FakeS3({ROOT + "b0.bin": b"x"})
@@ -258,6 +277,130 @@ class TestFetch:
         client = FakeS3({})
         _, report = _fetch(tmp_path, client, "m.gltf", "{not json")
         assert report.fetched == [] and client.heads == []
+
+
+@pytest.mark.unit
+class TestOptionalReferencesAreSkipped:
+    """Material libraries and texture images: one that is missing, rejected or over a limit is skipped
+    with a warning naming it, and the rest of the model is still fetched."""
+
+    def test_a_missing_material_library_is_skipped_and_named(self, tmp_path):
+        client, logger = FakeS3({}), MagicMock()
+        _, report = _fetch(tmp_path, client, "lonely/box.obj", "mtllib box.mtl\nv 0 0 0\n",
+                           logger=logger)
+        assert report.fetched == [] and report.skipped_count == 1
+        assert client.heads == [ROOT + "lonely/box.mtl"]
+        warning = _warnings(logger)[0]
+        assert "lonely/box.mtl" in warning and "lonely/box.obj" in warning
+        assert "not in the asset" in warning and "converted without it" in warning
+        assert report.skipped == [warning]
+        assert "box.mtl" not in report.by_reference
+
+    def test_a_windows_absolute_material_library_is_skipped_before_any_s3_call(self, tmp_path):
+        client, logger = FakeS3({}), MagicMock()
+        _, report = _fetch(tmp_path, client, "box.obj", "mtllib C:\\models\\box.mtl\nv 0 0 0\n",
+                           logger=logger)
+        assert report.skipped_count == 1 and client.heads == [] and client.downloads == []
+        warning = _warnings(logger)[0]
+        assert "models" in warning and "not a relative path to a file in the same asset" in warning
+
+    def test_a_material_library_in_another_asset_is_never_requested(self, tmp_path):
+        # In-band positive control: the other asset's MTL exists, so a fetch that skipped the check
+        # would download it rather than skip it.
+        client = FakeS3({"xother/m.mtl": b"newmtl a\n"})
+        _, report = _fetch(tmp_path, client, "box.obj", "mtllib ../xother/m.mtl\n")
+        assert report.skipped_count == 1 and client.heads == []
+
+    def test_a_missing_texture_is_skipped_and_the_material_library_kept(self, tmp_path):
+        client, logger = FakeS3({ROOT + "m.mtl": b"newmtl a\nmap_Kd wood.png\n"}), MagicMock()
+        _, report = _fetch(tmp_path, client, "box.obj", "mtllib m.mtl\n", logger=logger)
+        assert report.fetched == ["m.mtl"] and report.skipped_count == 1
+        assert "wood.png" in _warnings(logger)[0] and "m.mtl" in _warnings(logger)[0]
+
+    @pytest.mark.parametrize("texture", ["/etc/hostname", "../../xother/wood.png", "https://example.com/t.png"])
+    def test_a_rejected_texture_is_skipped_and_never_requested(self, tmp_path, texture):
+        client = FakeS3({ROOT + "m.mtl": f"newmtl a\nmap_Kd {texture}\n".encode(),
+                         "xother/wood.png": b"png"})
+        _, report = _fetch(tmp_path, client, "box.obj", "mtllib m.mtl\n")
+        assert report.fetched == ["m.mtl"] and report.skipped_count == 1
+        assert client.heads == [ROOT + "m.mtl"]
+
+    def test_a_missing_gltf_image_is_skipped_and_the_buffer_fetched(self, tmp_path):
+        client, logger = FakeS3({ROOT + "b0.bin": b"x" * 4}), MagicMock()
+        _, report = _fetch(tmp_path, client, "m.gltf", _gltf("b0.bin", images=("tex/t.png",)),
+                           logger=logger)
+        assert report.fetched == ["b0.bin"] and report.skipped_count == 1
+        assert "tex/t.png" in _warnings(logger)[0]
+        assert "tex/t.png" not in report.by_reference
+
+    def test_a_missing_glb_image_is_skipped(self, tmp_path):
+        client = FakeS3({})
+        document = {"asset": {"version": "2.0"}, "buffers": [{"byteLength": 4}],
+                    "images": [{"uri": "tex.png"}]}
+        _, report = _fetch(tmp_path, client, "m.glb", _glb(document))
+        assert report.fetched == [] and report.skipped_count == 1
+
+    def test_a_missing_ply_texture_is_skipped(self, tmp_path):
+        client = FakeS3({})
+        _, report = _fetch(tmp_path, client, "m.ply",
+                           b"ply\nformat ascii 1.0\ncomment TextureFile uv.jpg\nend_header\n")
+        assert report.skipped_count == 1
+
+    def test_a_texture_name_is_escaped_in_the_warning(self, tmp_path):
+        logger = MagicMock()
+        _fetch(tmp_path, FakeS3({}), "m.gltf", _gltf(images=("evil\nline.png",)), logger=logger)
+        assert "\n" not in _warnings(logger)[0] and "\\n" in _warnings(logger)[0]
+
+    def test_missing_optional_references_count_toward_the_file_limit(self, tmp_path):
+        # A missing name is looked up with HeadObject, so it counts: a model cannot drive an unbounded
+        # number of Amazon S3 requests by naming files that do not exist.
+        client = FakeS3({})
+        names = " ".join(f"m{i}.mtl" for i in range(5))
+        _, report = _fetch(tmp_path, client, "box.obj", f"mtllib {names}\n",
+                           limits=rf.FetchLimits(max_files=2))
+        assert len(client.heads) == 2 and report.skipped_count == 5
+
+    def test_a_texture_over_the_byte_total_is_skipped(self, tmp_path):
+        client = FakeS3({ROOT + "t0.png": b"x" * 10, ROOT + "t1.png": b"x" * 10})
+        _, report = _fetch(tmp_path, client, "m.gltf", _gltf(images=("t0.png", "t1.png")),
+                           limits=rf.FetchLimits(max_total_bytes=15))
+        assert report.fetched == ["t0.png"] and report.skipped_count == 1
+        assert [key for key, _ in client.downloads] == [ROOT + "t0.png"]
+
+    def test_a_texture_past_the_depth_limit_is_skipped(self, tmp_path):
+        client = FakeS3({ROOT + "m.mtl": b"map_Kd wood.png\n", ROOT + "wood.png": b"png"})
+        _, report = _fetch(tmp_path, client, "model.obj", "mtllib m.mtl\n",
+                           limits=rf.FetchLimits(max_depth=1))
+        assert report.fetched == ["m.mtl"] and report.skipped_count == 1
+        assert ROOT + "wood.png" not in client.heads
+
+    def test_the_warnings_are_bounded(self, tmp_path):
+        logger = MagicMock()
+        count = rf.MAX_SKIPPED_LOGGED + 10
+        obj = "".join(f"mtllib /abs/m{i}.mtl\n" for i in range(count))
+        _, report = _fetch(tmp_path, FakeS3({}), "box.obj", obj, logger=logger)
+        assert report.skipped_count == count and len(report.skipped) == rf.MAX_SKIPPED_LOGGED
+        warnings = _warnings(logger)
+        assert len(warnings) == rf.MAX_SKIPPED_LOGGED + 1
+        assert "10 further referenced files" in warnings[-1]
+
+    def test_a_buffer_naming_a_file_already_skipped_still_fails(self, tmp_path, monkeypatch):
+        # The collectors list buffers first, so this order does not come from a real document; the
+        # buffer rule holds whatever the order.
+        monkeypatch.setitem(rf._COLLECTORS, ".gltf", lambda path: [
+            rf.Reference("x.bin", True, False), rf.Reference("x.bin", True, True)])
+        with pytest.raises(rf.ReferencedFileError, match="not in the asset"):
+            _fetch(tmp_path, FakeS3({}), "m.gltf", "{}")
+
+    def test_a_skipped_reference_is_never_served(self, tmp_path):
+        client = FakeS3({})
+        local_root, report = _fetch(tmp_path, client, "box.obj", "mtllib box.mtl\nmtllib /etc/x.mtl\n")
+        # A file at the skipped name's local path, which the fetch did not write, is still refused.
+        (tmp_path / "input" / "box.mtl").write_bytes(b"newmtl planted\n")
+        resolver = rf.ConfinedResolver(local_root, "box.obj", report.by_reference)
+        for name in ("box.mtl", "/etc/x.mtl"):
+            with pytest.raises(FileNotFoundError):
+                resolver.get(name)
 
 
 @pytest.mark.unit

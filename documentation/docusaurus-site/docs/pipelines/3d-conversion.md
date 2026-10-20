@@ -30,7 +30,8 @@ A GLTF file, and an OBJ file with materials, keep part of the model in other fil
 Each reference is checked before anything is downloaded:
 
 -   It must be a path relative to the file that names it (for example `textures/wood.png` or `../shared/wood.png`) that resolves to a file inside the input's own asset. Absolute paths, URLs, and paths that leave the asset are rejected. Data embedded in the model (a `data:` URI) needs no download.
--   A rejected reference, or a referenced file that is not in the asset, fails the run with a message naming the reference.
+-   A GLTF or GLB buffer holds the geometry. A rejected buffer reference, or a buffer that is not in the asset, fails the run with a message naming it.
+-   A material library or a texture image only adds appearance. One that is rejected, not in the asset, or over a limit is skipped, the run log records a warning naming it, and the model converts without it: an OBJ without its material library converts as geometry only.
 -   A model may reference at most 1,000 files totalling 2 GiB, and only an OBJ file's material libraries are read for further references.
 
 ## Architecture

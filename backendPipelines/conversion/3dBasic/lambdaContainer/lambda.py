@@ -358,9 +358,10 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         # Download the input at its own path within its asset, then the files it references beside
         # it (glTF/GLB buffers and images, an OBJ's material libraries and their texture maps, a
         # PLY's texture), so its relative references resolve locally as they do in the asset. Every
-        # reference is validated against the input's asset prefix before anything is fetched, and the
-        # loader is given a resolver that serves only those files, so no reference reaches anything
-        # else on the local disk.
+        # reference is validated against the input's asset prefix before anything is fetched; a buffer
+        # that cannot be fetched fails the run, and a material library or texture that cannot is
+        # skipped with a warning. The loader is given a resolver that serves only the fetched files,
+        # so no reference reaches anything else on the local disk.
         root_key, input_relative_path = referenced_files.confinement_root(input_key, relative_subdir)
         temp_file = referenced_files.local_path_for(input_dir, input_relative_path)
         if temp_file is None:
