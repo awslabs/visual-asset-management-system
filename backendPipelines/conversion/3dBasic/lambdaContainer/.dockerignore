@@ -1,0 +1,16 @@
+# Files the Dockerfile's `COPY . .` must not put in the Lambda image. The image needs the runtime
+# modules (lambda.py, referenced_files.py, common/) and requirements.txt, which the Dockerfile copies
+# on its own. CDK also hashes the build context through this file, so a change to a test no longer
+# rebuilds the image. Docker still reads the Dockerfile and this file for the build; listing them only
+# keeps them out of the copy.
+Dockerfile
+.dockerignore
+tests/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+poetry.lock
+pyproject.toml
+.venv/
+venv/
+*.log
