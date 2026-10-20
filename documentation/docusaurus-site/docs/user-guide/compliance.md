@@ -107,7 +107,7 @@ In the schema editor, open the **Visual Builder** tab and choose a rule type fro
 | **Asset attributes rule** | Per check: the **Attribute** (asset name, description or tags). For a name or description, a **Condition** (**Must match** or **Must not match**) and a **Pattern**. For tags, **Required tags**, **Forbidden tags** and **Minimum tags**.      |
 
 :::warning[A version coverage rule fails after every upload]
-A version coverage rule fails from every upload until you create an asset version that records the new files; creating the version (or reverting to an earlier one) re-evaluates the asset and clears the failure. With **Quarantine** enforcement and quarantine blocking downloads (`app.compliance.quarantineBlocksDownload`), a freshly uploaded asset cannot be downloaded until it is versioned. Use **Warn** for this rule unless that is what you want.
+A version coverage rule fails from every upload until you create an asset version that records the new files; creating the version re-evaluates the asset and clears the failure. Reverting to an earlier version also re-evaluates the asset, but files added after that version remain uncovered until a new version includes them. With **Quarantine** enforcement and quarantine blocking downloads (`app.compliance.quarantineBlocksDownload`), a freshly uploaded asset cannot be downloaded until it is versioned. Use **Warn** for this rule unless that is what you want.
 :::
 
 With automatic evaluation on, editing an asset's name, description or tags re-evaluates the asset, so an asset attributes rule follows the edit; an edit that leaves all three as they were starts no evaluation.
