@@ -7,6 +7,7 @@ asset.metadata.json is assembled from typed key/value entries and written withou
 
 import csv
 import json
+import os
 import re
 
 import jsonschema
@@ -172,9 +173,11 @@ def write_bom_md(path, rows, part_level_base=0):
         handle.write("\n".join(lines) + "\n")
 
 
-def build_sop(steps, final, product_name, product_name_from_narration, source_videos, timeline, frame_refs, bom_rows):
-    """sop.json: deterministic title; per-step video mapping, frame_ref, bom_refs (lab_part_number) and the
-    cross-window dependency edges appended to the within-window dependencies."""
+def build_sop(steps, final, product_name, product_name_from_narration, source_videos, timeline, frame_refs, bom_rows,
+              title=None):
+    """sop.json: deterministic title (`<product> — teardown SOP` unless `title` is given); per-step video
+    mapping, frame_ref, bom_refs (lab_part_number) and the cross-window dependency edges appended to the
+    within-window dependencies."""
     refs_by_step = {}
     for entry in final.get("step_bom_refs", []) or []:
         numbers = []
@@ -212,7 +215,7 @@ def build_sop(steps, final, product_name, product_name_from_narration, source_vi
             "bom_refs": refs_by_step.get(number, []),
         })
     return {
-        "title": f"{product_name} — teardown SOP",
+        "title": title or f"{product_name} — teardown SOP",
         "product_name": product_name,
         "product_name_from_narration": product_name_from_narration or "",
         "source_videos": list(source_videos),
@@ -364,3 +367,167 @@ def write_summary(path, summary):
         raise ValueError(f"results summary is {len(encoded.encode('utf-8'))} bytes, above the {SUMMARY_MAX_BYTES}-byte results budget")
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(encoded + "\n")
+
+
+# --- Profile artifacts -----------------------------------------------------------------------------------
+# A workload profile names extra deliverables: each is the finalize output field `sourceField`, written as
+# `<name>.json` and, when a renderer is named, as a readable `<name>.md`. The renderers take whatever shape
+# the profile's prompt asked for, so they are generic: a list of objects becomes a table, an object becomes
+# headed sections, and the step/summary shapes the shipped profiles use get a dedicated layout.
+
+ARTIFACT_RENDERERS = ("table", "steps-timeline", "summary-card")
+_STEP_LIST_KEYS = ("steps", "entries")
+_STEP_NUMBER_KEYS = ("step_number", "step")
+_STEP_LABEL_KEYS = ("action", "description", "activity", "title")
+_TITLE_KEYS = ("title", "report_title")
+_SUMMARY_KEYS = ("summary", "executive_summary")
+_MAX_SECTION_DEPTH = 4
+
+
+def _label(key):
+    text = str(key).replace("_", " ").strip()
+    return text[:1].upper() + text[1:] if text else "Value"
+
+
+def _inline(value):
+    """One line of text: strings as written (line breaks folded), a list of plain values comma-separated,
+    other scalars and containers as JSON."""
+    if isinstance(value, str):
+        return " ".join(value.split())
+    if isinstance(value, list) and all(not isinstance(item, (dict, list)) for item in value):
+        return ", ".join(_inline(item) for item in value)
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _cell(value):
+    """A table cell: blank for a missing or null value, pipes escaped."""
+    return "" if value is None else _inline(value).replace("|", "\\|")
+
+
+def _paragraph(value):
+    return value.strip() if isinstance(value, str) else _inline(value)
+
+
+def _first(mapping, keys):
+    for key in keys:
+        value = mapping.get(key)
+        if value not in (None, "", [], {}):
+            return key, value
+    return None, None
+
+
+def _table_lines(rows):
+    if not rows:
+        return ["_No entries._", ""]
+    if all(isinstance(row, dict) for row in rows):
+        columns = []
+        for row in rows:
+            columns.extend(key for key in row if key not in columns)
+        lines = ["| " + " | ".join(_cell(_label(column)) for column in columns) + " |",
+                 "| " + " | ".join("---" for _ in columns) + " |"]
+        lines += ["| " + " | ".join(_cell(row.get(column)) for column in columns) + " |" for row in rows]
+        return lines + [""]
+    return [f"- {_inline(row)}" for row in rows] + [""]
+
+
+def _section_lines(key, value, level, depth=1):
+    """A scalar is one labelled line, a list a table or bullets, an object a headed subsection."""
+    heading = "#" * min(level, 6) + " " + _label(key)
+    if isinstance(value, dict):
+        if depth >= _MAX_SECTION_DEPTH:
+            return [heading, "", _inline(value), ""]
+        lines = [heading, ""]
+        for child, child_value in value.items():
+            lines += _section_lines(child, child_value, level + 1, depth + 1)
+        return lines
+    if isinstance(value, list):
+        return [heading, ""] + _table_lines(value)
+    return [f"**{_label(key)}:** {_inline(value)}", ""]
+
+
+def _table_md(name, value):
+    lines = [f"# {_label(name)}", ""]
+    if isinstance(value, list):
+        return lines + _table_lines(value)
+    for key, child in value.items():
+        lines += _section_lines(key, child, 2)
+    return lines
+
+
+def _step_heading(index, item):
+    number_key, number = _first(item, _STEP_NUMBER_KEYS)
+    label_key, label = _first(item, _STEP_LABEL_KEYS)
+    heading = f"## {number if number_key else index}. {_inline(label) if label_key else 'Entry'}"
+    timestamp = item.get("timestamp_seconds")
+    if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
+        heading += f" [{format_timestamp(float(timestamp))}]"
+    return heading, {number_key, label_key, "timestamp_seconds"}
+
+
+def _timeline_md(name, value):
+    data = {"steps": value} if isinstance(value, list) else value
+    _, title = _first(data, _TITLE_KEYS)
+    lines = [f"# {_inline(title) if title else _label(name)}", ""]
+    summary_key, summary = _first(data, _SUMMARY_KEYS)
+    if summary_key:
+        lines += [_paragraph(summary), ""]
+    list_key = next((key for key in _STEP_LIST_KEYS if isinstance(data.get(key), list)), None)
+    for index, item in enumerate(data.get(list_key) or [], start=1):
+        if not isinstance(item, dict):
+            lines += [f"## {index}. {_inline(item)}", ""]
+            continue
+        heading, used = _step_heading(index, item)
+        lines += [heading, ""]
+        lines += [f"- {_label(key)}: {_inline(child)}" for key, child in item.items()
+                  if key not in used and child not in (None, "", [], {})]
+        lines.append("")
+    for key, child in data.items():
+        if key not in (list_key, summary_key) and key not in _TITLE_KEYS:
+            lines += _section_lines(key, child, 2)
+    return lines
+
+
+def _card_md(name, value):
+    if not isinstance(value, dict):
+        return _table_md(name, value)
+    title_key, title = _first(value, _TITLE_KEYS)
+    lines = [f"# {_inline(title) if title_key else _label(name)}", ""]
+    summary_key, summary = _first(value, _SUMMARY_KEYS)
+    if summary_key:
+        lines += [_paragraph(summary), ""]
+    used = {title_key, summary_key}
+    if isinstance(value.get("stats"), list):
+        used.add("stats")
+        lines += [f"- **{_inline(stat.get('label', ''))}:** {_inline(stat.get('value', ''))}"
+                  for stat in value["stats"] if isinstance(stat, dict)] + [""]
+    if isinstance(value.get("sections"), list):
+        used.add("sections")
+        for section in value["sections"]:
+            if isinstance(section, dict):
+                lines += [f"## {_inline(section.get('heading', ''))}", "", _paragraph(section.get("content", "")), ""]
+    for key, child in value.items():
+        if key not in used:
+            lines += _section_lines(key, child, 2)
+    return lines
+
+
+_RENDERERS = {"table": _table_md, "steps-timeline": _timeline_md, "summary-card": _card_md}
+
+
+def render_artifact_md(name, value, renderer):
+    """The Markdown text of one artifact under `renderer` (one of ARTIFACT_RENDERERS)."""
+    return "\n".join(_RENDERERS[renderer](name, value)).rstrip("\n") + "\n"
+
+
+def write_artifact(files_dir, artifact, value):
+    """`<name>.json` with the field as the model returned it, plus `<name>.md` when the artifact names a
+    renderer. Returns the file names written."""
+    name = artifact["name"]
+    names = [f"{name}.json"]
+    write_json(os.path.join(files_dir, f"{name}.json"), value)
+    renderer = artifact.get("renderer")
+    if renderer:
+        with open(os.path.join(files_dir, f"{name}.md"), "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(render_artifact_md(name, value, renderer))
+        names.append(f"{name}.md")
+    return names

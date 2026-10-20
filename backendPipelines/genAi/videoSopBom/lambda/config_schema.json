@@ -2,7 +2,7 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "vams:videoSopBom/config_schema.json",
     "title": "Rendered template configuration of the Video SOP/BOM Extraction pipeline",
-    "description": "The JSON body of the video-sop-bom-full or video-sop-bom-transcript-only template after tag substitution. constructPipeline rejects (never clamps) a body that fails this schema; the container validates the copy carried in definition.json again. In full mode the three typed tags (maxKeyFrames, partLevelBase, generateLabSummary) are required; the free-text tags are optional and an absent value means an empty string.",
+    "description": "The JSON body of a video-sop-bom-* template after tag substitution. constructPipeline rejects (never clamps) a body that fails this schema; the container validates the copy carried in definition.json again. In full mode the three typed tags (maxKeyFrames, partLevelBase, generateLabSummary) are required; the free-text tags are optional and an absent value means an empty string.",
     "type": "object",
     "additionalProperties": false,
     "required": ["mode", "languageCode", "videoOrder"],
@@ -69,6 +69,130 @@
         "additionalInstructions": {
             "type": "string",
             "maxLength": 4000
+        },
+        "runVisualVerification": {
+            "description": "RUN_VISUAL_VERIFICATION tag (full mode). false skips key-frame extraction and the Amazon Bedrock vision calls; absent means true.",
+            "type": "boolean"
+        },
+        "profile": {
+            "description": "A workload profile (full mode only): prompts that replace the built-in ones per stage, stage knobs bounded by the built-in caps, and extra artifacts written from the finalize output. Absent means the built-in teardown behaviour. A profile never names a model: the model is set per deployment in app.pipelines.useGenAiVideoSopBom.bedrockModelId. profileRules.py checks what this schema cannot (no model keys anywhere, prompt inputs, artifact names).",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["profileId", "profileVersion"],
+            "properties": {
+                "profileId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "profileVersion": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "prompts": {
+                    "description": "Prompt text per stage, replacing prompts/<stage>.md; inputs are placed as [[TOKEN]]. system_boundary is appended to the fixed built-in boundary, never replaces it.",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "system_boundary": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4000
+                        },
+                        "window_extraction": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 32000
+                        },
+                        "vision_verification": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 32000
+                        },
+                        "finalize": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 32000
+                        }
+                    }
+                },
+                "stages": {
+                    "description": "Per-stage knobs; each maximum is the built-in value, so a profile can lower a cap but never raise it.",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "window_extraction": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "maxTokens": {
+                                    "type": "integer",
+                                    "minimum": 1024,
+                                    "maximum": 16000
+                                }
+                            }
+                        },
+                        "vision_verification": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "maxTokens": {
+                                    "type": "integer",
+                                    "minimum": 1024,
+                                    "maximum": 32000
+                                },
+                                "batchMaxFrames": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 12
+                                }
+                            }
+                        },
+                        "finalize": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "maxTokens": {
+                                    "type": "integer",
+                                    "minimum": 1024,
+                                    "maximum": 32000
+                                }
+                            }
+                        }
+                    }
+                },
+                "artifacts": {
+                    "description": "Extra deliverables: each writes <name>.json (and <name>.md when a renderer is named) from the finalize output field sourceField, which the finalize call is then required to return.",
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["name", "sourceField"],
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
+                            },
+                            "sourceField": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
+                            },
+                            "renderer": {
+                                "type": "string",
+                                "enum": ["table", "steps-timeline", "summary-card"]
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

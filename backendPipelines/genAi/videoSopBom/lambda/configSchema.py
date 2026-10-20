@@ -5,29 +5,34 @@
 
 The Lambda runtime carries no jsonschema package (the shared base layer is boto3, powertools and
 pydantic v1, and the code asset is copied without a pip step), so this module interprets the subset
-of JSON Schema the pipeline's schema uses: the object and property keywords, and one top-level
-if/then conditional whose `if` node holds `properties` (with `const`) and `required`. The schema
-file is a byte-identical copy of the container's, so both validators read one document. Every
-message is one operator-readable sentence naming the offending value and the bound it broke; the
-caller joins them into a task-token cause."""
+of JSON Schema the pipeline's schema uses: the object, array, string and number keywords at any
+depth (a nested object or an array's `items` is walked the same way as the top level), and one
+top-level if/then conditional whose `if` node holds `properties` (with `const`) and `required`. The
+schema file is a byte-identical copy of the container's, so both validators read one document. Every
+message is one operator-readable sentence naming the offending value and the bound it broke; a
+nested value is named by its path (`profile.artifacts[0].name`). The caller joins them into a
+task-token cause."""
 
 import json
 import os
+import re
 
 SCHEMA_FILENAME = "config_schema.json"
 
 # Keywords this validator interprets. Annotation keywords are accepted and ignored. A schema
-# carrying any other keyword (an `else`, a pattern, a union type) is reported by
+# carrying any other keyword (an `else`, a union type, a `format`) is reported by
 # unsupported_keywords, which the tests hold at [] so a schema change cannot leave a rule enforced
-# only in the container.
+# only in the container. `pattern` is matched with re.search, the semantics python-jsonschema
+# applies in the container, so the two validators accept the same strings.
 SUPPORTED_KEYWORDS = frozenset({
     "type", "properties", "required", "additionalProperties", "enum", "const",
     "minimum", "maximum", "minLength", "maxLength", "if", "then",
+    "items", "minItems", "maxItems", "pattern",
 })
 ANNOTATION_KEYWORDS = frozenset({"$schema", "$id", "title", "description", "default", "examples"})
 
 # Keywords whose value is a sub-schema the walker descends into.
-_NODE_KEYWORDS = ("if", "then")
+_NODE_KEYWORDS = ("if", "then", "items")
 
 # The `type` names _type_ok tests; any other value (a union list, an unknown name) is reported.
 _TYPES = ("string", "integer", "number", "boolean", "object", "array")
@@ -108,9 +113,61 @@ def _condition(if_schema):
     return " and ".join(clauses) or "the condition holds"
 
 
-def _node_errors(config, node, condition=None):
+def _child(path, key):
+    return f"{path}.{key}" if path else key
+
+
+def _value_errors(name, value, rule):
+    """Sentences for every way `value` (named `name`) violates the value keywords of `rule`, then the
+    errors of its members when it is an object or an array."""
+    errors = []
+    expected = rule.get("type")
+    if expected and not _type_ok(expected, value):
+        return [f"{name} is {_describe(value)}; expected {_ARTICLE.get(expected, expected)}."]
+    if "enum" in rule and value not in rule["enum"]:
+        errors.append(
+            f"{name} is {_describe(value)}; allowed values are "
+            f"{', '.join(_describe(member) for member in rule['enum'])}.")
+    if "const" in rule and value != rule["const"]:
+        errors.append(
+            f"{name} is {_describe(value)}; the only allowed value is {_describe(rule['const'])}.")
+    if _is_number(value):
+        if "minimum" in rule and value < rule["minimum"]:
+            errors.append(f"{name} is {value}; this pipeline allows at least {rule['minimum']}.")
+        if "maximum" in rule and value > rule["maximum"]:
+            errors.append(f"{name} is {value}; this pipeline allows at most {rule['maximum']}.")
+    if isinstance(value, str):
+        if "minLength" in rule and len(value) < rule["minLength"]:
+            errors.append(
+                f"{name} is {len(value)} characters; this pipeline needs at least "
+                f"{rule['minLength']}.")
+        if "maxLength" in rule and len(value) > rule["maxLength"]:
+            errors.append(
+                f"{name} is {len(value)} characters; this pipeline allows at most "
+                f"{rule['maxLength']}.")
+        if "pattern" in rule and re.search(rule["pattern"], value) is None:
+            errors.append(
+                f"{name} is {_describe(value)}; it must match the pattern {rule['pattern']}.")
+    if isinstance(value, list):
+        if "minItems" in rule and len(value) < rule["minItems"]:
+            errors.append(
+                f"{name} has {len(value)} entries; this pipeline needs at least {rule['minItems']}.")
+        if "maxItems" in rule and len(value) > rule["maxItems"]:
+            errors.append(
+                f"{name} has {len(value)} entries; this pipeline allows at most {rule['maxItems']}.")
+        if isinstance(rule.get("items"), dict):
+            for index, member in enumerate(value):
+                errors.extend(_value_errors(f"{name}[{index}]", member, rule["items"]))
+    if isinstance(value, dict) and ("properties" in rule or "required" in rule
+                                    or "additionalProperties" in rule):
+        errors.extend(_node_errors(value, rule, path=name))
+    return errors
+
+
+def _node_errors(config, node, condition=None, path=""):
     """Sentences for every way the object `config` violates the object keywords of `node`;
-    `condition` names the `if` clause a `then` node's `required` keys depend on."""
+    `condition` names the `if` clause a `then` node's `required` keys depend on, `path` the object's
+    own place in the configuration ("" for the top level)."""
     errors = []
     properties = node.get("properties") or {}
     for key in node.get("required") or []:
@@ -121,41 +178,15 @@ def _node_errors(config, node, condition=None):
                 f"the rendered configuration is missing {_describe(key)}, which is required when "
                 f"{condition}; the template body must reference every typed tag.")
         else:
-            errors.append(f"{key} is required but the rendered configuration does not set it.")
+            errors.append(f"{_child(path, key)} is required but the rendered configuration does not set it.")
     if node.get("additionalProperties") is False:
         for key in sorted(set(config) - set(properties)):
             errors.append(
-                f"unknown configuration key {_describe(key)}; allowed keys are "
+                f"unknown configuration key {_describe(_child(path, key))}; allowed keys are "
                 f"{', '.join(sorted(properties))}.")
     for key, rule in properties.items():
-        if key not in config:
-            continue
-        value = config[key]
-        expected = rule.get("type")
-        if expected and not _type_ok(expected, value):
-            errors.append(f"{key} is {_describe(value)}; expected {_ARTICLE.get(expected, expected)}.")
-            continue
-        if "enum" in rule and value not in rule["enum"]:
-            errors.append(
-                f"{key} is {_describe(value)}; allowed values are "
-                f"{', '.join(_describe(member) for member in rule['enum'])}.")
-        if "const" in rule and value != rule["const"]:
-            errors.append(
-                f"{key} is {_describe(value)}; the only allowed value is {_describe(rule['const'])}.")
-        if _is_number(value):
-            if "minimum" in rule and value < rule["minimum"]:
-                errors.append(f"{key} is {value}; this pipeline allows at least {rule['minimum']}.")
-            if "maximum" in rule and value > rule["maximum"]:
-                errors.append(f"{key} is {value}; this pipeline allows at most {rule['maximum']}.")
-        if isinstance(value, (str, list)):
-            if "minLength" in rule and len(value) < rule["minLength"]:
-                errors.append(
-                    f"{key} is {len(value)} characters; this pipeline needs at least "
-                    f"{rule['minLength']}.")
-            if "maxLength" in rule and len(value) > rule["maxLength"]:
-                errors.append(
-                    f"{key} is {len(value)} characters; this pipeline allows at most "
-                    f"{rule['maxLength']}.")
+        if key in config:
+            errors.extend(_value_errors(_child(path, key), config[key], rule))
     return errors
 
 

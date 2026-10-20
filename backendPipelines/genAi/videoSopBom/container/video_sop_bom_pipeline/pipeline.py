@@ -3,7 +3,9 @@
 
 """The stage sequence: preflight -> media -> Amazon Transcribe -> Amazon Bedrock -> render -> upload -> callback."""
 
+import copy
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -14,8 +16,8 @@ import time
 
 from botocore.exceptions import ClientError
 
-from .bedrock import BedrockUsage, extract_all_windows, finalize, verify_frames
-from .errors import INPUT_REJECTED, LIMIT_EXCEEDED, PIPELINE_ERROR, TRANSCRIBE_FAILED, PipelineRejection
+from .bedrock import BedrockUsage, extract_all_windows, finalize, profile_of, verify_frames
+from .errors import INPUT_REJECTED, LIMIT_EXCEEDED, MODEL_OUTPUT_INVALID, PIPELINE_ERROR, TRANSCRIBE_FAILED, PipelineRejection
 from .merge import merge_windows
 from .preflight import check_connectivity, check_disk_budget
 from .render import (
@@ -24,6 +26,7 @@ from .render import (
     build_sop,
     compute_lab_summary,
     write_analysis_report,
+    write_artifact,
     write_asset_metadata,
     write_bom_csv,
     write_bom_md,
@@ -108,6 +111,19 @@ def _frame_refs(steps, frames):
 
 def _configured(limits):
     return {key: limits[key] for key in CONFIGURED_CAPS}
+
+
+def _summary_config(config):
+    """The config echo for results/summary.json, which has a 50 KB budget: a profile's prompt bodies are
+    echoed as `sha256:<hex>` digests (analysis-report.json keeps the full text). Without profile prompts it
+    is the config itself."""
+    prompts = (config.get("profile") or {}).get("prompts")
+    if not isinstance(prompts, dict) or not prompts:
+        return config
+    echo = copy.deepcopy(config)
+    echo["profile"]["prompts"] = {stage: "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+                                  for stage, text in prompts.items()}
+    return echo
 
 
 def _stage_tokens(usage):
@@ -269,6 +285,9 @@ def _run_stages(ctx):
         logger.info("gate mode=%s speech=%s analysis=%s", mode, speech, run_analysis)
 
     product_name = (config.get("productName") or "").strip() or definition["assetName"]
+    profile = profile_of(config)
+    # RUN_VISUAL_VERIFICATION: absent (every template written before the tag) means on.
+    run_visual = run_analysis and config.get("runVisualVerification", True) is not False
     merged = None
     final = None
     vision = []
@@ -277,6 +296,8 @@ def _run_stages(ctx):
     window_count = 0
 
     if run_analysis:
+        logger.info("analysis profile=%s visualVerification=%s",
+                    f"{profile['profileId']}@{profile['profileVersion']}" if profile else "built-in", run_visual)
         with ctx.stage(8, "extract"):
             windows = build_windows(transcript.transcript_json)
             results = extract_all_windows(clients, model_id, windows, config, product_name,
@@ -290,6 +311,7 @@ def _run_stages(ctx):
             ctx.put_analysis("merged.json", {"steps": merged.steps, "components": merged.components, "key_moments": merged.key_moments})
             logger.info("merged steps=%d components=%d keyMoments=%d", len(merged.steps), len(merged.components), len(merged.key_moments))
 
+    if run_visual:
         with ctx.stage(10, "frames"):
             moments = merged.key_moments[:config["maxKeyFrames"]]
             frames_requested = len(moments)
@@ -314,9 +336,11 @@ def _run_stages(ctx):
 
         with ctx.stage(11, "vision"):
             vision = verify_frames(clients, model_id, frames, merged.steps, merged.components,
-                                   additional_instructions=config.get("additionalInstructions", ""), usage=usage, sleep=ctx.sleep) if frames else []
+                                   additional_instructions=config.get("additionalInstructions", ""), usage=usage,
+                                   config=config, sleep=ctx.sleep) if frames else []
             ctx.put_analysis("vision.json", vision)
 
+    if run_analysis:
         with ctx.stage(12, "finalize"):
             final = finalize(clients, model_id, merged.steps, merged.components, vision, config, product_name, usage=usage, sleep=ctx.sleep)
             ctx.put_analysis("final.json", final)
@@ -334,41 +358,62 @@ def _run_stages(ctx):
         vocab_misses = []
         if run_analysis:
             part_level_base = int(config["partLevelBase"])
-            bom_rows, vocab_misses = build_bom_rows(final["bom_rows"], config, product_name)
+            # The teardown contract always returns bom_rows; a profile finalize prompt may not, and then no
+            # BOM files are written.
+            has_bom = "bom_rows" in final
+            bom_rows, vocab_misses = build_bom_rows(final["bom_rows"], config, product_name) if has_bom else ([], [])
             sop = build_sop(merged.steps, final, product_name, merged.product_name_from_narration, timeline["video_keys"], timeline,
-                            _frame_refs(merged.steps, frames), bom_rows)
+                            _frame_refs(merged.steps, frames), bom_rows, title=f"{product_name} — SOP" if profile else None)
             write_json(os.path.join(dirs["files"], "sop.json"), sop, "sop_schema")
             write_sop_md(os.path.join(dirs["files"], "sop.md"), sop)
-            # bom.json echoes the config's partLevelBase string; the integer only indents bom.md.
-            write_json(os.path.join(dirs["files"], "bom.json"),
-                       {"product_name": product_name, "part_level_base": config["partLevelBase"], "rows": bom_rows}, "bom_row_schema")
-            write_bom_csv(os.path.join(dirs["files"], "bom.csv"), bom_rows)
-            write_bom_md(os.path.join(dirs["files"], "bom.md"), bom_rows, part_level_base=part_level_base)
-            lab = compute_lab_summary(final["lab_summary"], bom_rows, config, product_name, merged.product_name_from_narration)
-            if config["generateLabSummary"]:
+            if has_bom:
+                # bom.json echoes the config's partLevelBase string; the integer only indents bom.md.
+                write_json(os.path.join(dirs["files"], "bom.json"),
+                           {"product_name": product_name, "part_level_base": config["partLevelBase"], "rows": bom_rows}, "bom_row_schema")
+                write_bom_csv(os.path.join(dirs["files"], "bom.csv"), bom_rows)
+                write_bom_md(os.path.join(dirs["files"], "bom.md"), bom_rows, part_level_base=part_level_base)
+            lab = compute_lab_summary(final.get("lab_summary") or {}, bom_rows, config, product_name, merged.product_name_from_narration)
+            if config["generateLabSummary"] and "lab_summary" in final:
                 write_json(os.path.join(dirs["files"], "lab-summary.json"), lab, "lab_summary_schema")
                 write_lab_summary_md(os.path.join(dirs["files"], "lab-summary.md"), lab)
                 paths["labSummary"] = asset_path(definition, "lab-summary.json")
                 values["sopBom_labSummaryPath"] = paths["labSummary"]
-            # frames.json follows frames_schema.json: `file` is the bare JPEG name and `path` the asset
-            # path; the scratch path stays inside the container.
-            write_json(os.path.join(dirs["files"], "frames.json"), {
-                "executionId": definition["executionId"],
-                "frames": [dict({key: value for key, value in frame.items() if key not in ("path", "frame_key")},
-                                file=os.path.basename(frame["path"]), path=frame["frame_key"]) for frame in frames],
-                "skipped": ctx.frames_skipped,
-                "video_timeline": timeline["video_timeline"],
-            }, "frames_schema")
-            paths.update({"sop": asset_path(definition, "sop.json"), "bom": asset_path(definition, "bom.json"),
-                          "bomCsv": asset_path(definition, "bom.csv"), "frames": asset_path(definition, "frames.json")})
-            values.update({
-                "sopBom_productName": product_name,
-                "sopBom_componentCount": len(bom_rows),
-                "sopBom_stepCount": len(sop["steps"]),
-                "sopBom_totalMassG": lab["total_mass_g"],
-                "sopBom_sopPath": paths["sop"],
-                "sopBom_bomPath": paths["bomCsv"],
-            })
+            elif config["generateLabSummary"]:
+                ctx.warnings.append("generateLabSummary is true but the finalize output carries no lab_summary, so no lab summary was written.")
+            if run_visual:
+                # frames.json follows frames_schema.json: `file` is the bare JPEG name and `path` the asset
+                # path; the scratch path stays inside the container.
+                write_json(os.path.join(dirs["files"], "frames.json"), {
+                    "executionId": definition["executionId"],
+                    "frames": [dict({key: value for key, value in frame.items() if key not in ("path", "frame_key")},
+                                    file=os.path.basename(frame["path"]), path=frame["frame_key"]) for frame in frames],
+                    "skipped": ctx.frames_skipped,
+                    "video_timeline": timeline["video_timeline"],
+                }, "frames_schema")
+            artifact_paths = {}
+            for artifact in profile.get("artifacts") or []:
+                if artifact["sourceField"] not in final:
+                    raise PipelineRejection(
+                        MODEL_OUTPUT_INVALID,
+                        f"the finalize output has no {artifact['sourceField']} field, which the profile artifact {artifact['name']} requires.")
+                write_artifact(dirs["files"], artifact, final[artifact["sourceField"]])
+                artifact_paths[f"artifact_{artifact['name']}"] = asset_path(definition, f"{artifact['name']}.json")
+            # Key order is the built-in run's: sop, bom, bomCsv, frames, then any profile artifacts.
+            paths["sop"] = asset_path(definition, "sop.json")
+            if has_bom:
+                paths.update({"bom": asset_path(definition, "bom.json"), "bomCsv": asset_path(definition, "bom.csv")})
+            if run_visual:
+                paths["frames"] = asset_path(definition, "frames.json")
+            paths.update(artifact_paths)
+            values["sopBom_productName"] = product_name
+            if has_bom:
+                values["sopBom_componentCount"] = len(bom_rows)
+            values["sopBom_stepCount"] = len(sop["steps"])
+            if has_bom:
+                values["sopBom_totalMassG"] = lab["total_mass_g"]
+            values["sopBom_sopPath"] = paths["sop"]
+            if has_bom:
+                values["sopBom_bomPath"] = paths["bomCsv"]
         stage_tokens = _stage_tokens(usage)
         report = {
             "mode": mode, "config": config, "modelId": model_id,
@@ -385,7 +430,7 @@ def _run_stages(ctx):
             "limits": {"configured": _configured(limits), "observed": ctx.observed},
             "timings": {"stages": [{"name": stage["name"], "durationS": stage["durationS"]} for stage in ctx.stages],
                         "elapsedS": round(time.monotonic() - ctx.started, 3)},
-            "warnings": ctx.warnings, "paths": paths, "config": config,
+            "warnings": ctx.warnings, "paths": paths, "config": _summary_config(config),
         }
         write_summary(os.path.join(dirs["results"], "summary.json"), summary)
 

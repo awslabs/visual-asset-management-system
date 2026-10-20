@@ -6,7 +6,12 @@
 The prompts and the tool input schemas are the package's shipped files: a prompt is rendered by substituting every
 `{{TOKEN}}` its `PROMPT_TOKENS` entry lists, and a tool schema is the shipped JSON Schema with its
 metadata keys dropped and its local `$ref`s inlined, so the model is steered by and validated against
-the same document."""
+the same document.
+
+A workload profile (`config["profile"]`) may replace a stage's prompt with its own text, which places the
+same inputs as `[[TOKEN]]`; may append to the fixed system boundary (never replace it); may lower a stage's
+maxTokens or the vision batch size; and may name artifacts the finalize call must return. The model is never
+a profile setting: every call uses the deployment's one model id."""
 
 import json
 import logging
@@ -23,6 +28,7 @@ from botocore.exceptions import ClientError
 
 from . import PROMPT_TOKENS, load_prompt, load_schema
 from .errors import MODEL_OUTPUT_INVALID, PIPELINE_ERROR, PipelineRejection
+from .profileRules import CONFIGURED_TOKEN
 from .vocab import MATERIAL_TYPES, PART_TYPE_DESCRIPTIONS, PART_TYPES, PRIMARY_TECHNIQUES
 from .windows import Window, format_timestamp
 
@@ -97,6 +103,8 @@ def tool_schema(name):
 WINDOW_TOOL_SCHEMA = tool_schema("window_extraction_schema")
 VISION_TOOL_SCHEMA = tool_schema("vision_schema")
 FINALIZE_TOOL_SCHEMA = tool_schema("finalize_schema")
+# What a profile finalize prompt must still return: the SOP's summary and safety notes.
+FINALIZE_PROFILE_REQUIRED = ("summary", "safety_notes")
 
 
 def render_prompt(name, values):
@@ -110,6 +118,75 @@ def render_prompt(name, values):
     for token in PROMPT_TOKENS[name]:
         text = text.replace("{{" + token + "}}", str(values[token]))
     return text
+
+
+def profile_of(config):
+    """The run's workload profile block, or {} when the template sets none (the built-in behaviour)."""
+    profile = (config or {}).get("profile")
+    return profile if isinstance(profile, dict) else {}
+
+
+def render_configured_prompt(name, text, values):
+    """A profile's prompt with every `[[TOKEN]]` in PROMPT_TOKENS[name] substituted in one pass, so a value
+    that itself contains `[[...]]` (a transcript, operator text) is never substituted again. profileRules
+    has already refused a token outside the stage's inputs."""
+    allowed = set(PROMPT_TOKENS[name])
+
+    def _value(match):
+        token = match.group(1)
+        return str(values[token]) if token in allowed else match.group(0)
+
+    return CONFIGURED_TOKEN.sub(_value, text)
+
+
+def stage_prompt(name, config, values):
+    """The profile's prompt for this stage when it configures one, else the shipped prompt."""
+    configured = (profile_of(config).get("prompts") or {}).get(name)
+    if configured:
+        return render_configured_prompt(name, configured, values)
+    return render_prompt(name, values)
+
+
+def system_prompt(config):
+    """The fixed boundary, then the profile's own system text when it sets one: a profile adds a persona or
+    domain framing but cannot drop the statement that transcript and frames are untrusted data."""
+    extra = ((profile_of(config).get("prompts") or {}).get("system_boundary") or "").strip()
+    return f"{SYSTEM_BOUNDARY}\n\n{extra}" if extra else SYSTEM_BOUNDARY
+
+
+def stage_setting(name, key, config, default):
+    """A profile's `stages.<name>.<key>` knob, else the built-in value (the schema bounds it by that value)."""
+    value = ((profile_of(config).get("stages") or {}).get(name) or {}).get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
+def _kilo(tokens):
+    return f"{tokens // 1000}K"
+
+
+def finalize_tool_schema(config):
+    """The finalize tool's input schema for this run. Without a profile finalize prompt or artifacts it is the
+    shipped schema. A profile artifact adds its sourceField and makes the call return it. A profile finalize
+    prompt replaces the teardown contract (BOM rows, lab summary) with summary + safety_notes, which the SOP
+    needs; the teardown fields stay available, and a BOM is rendered only when bom_rows comes back."""
+    profile = profile_of(config)
+    artifacts = [artifact for artifact in profile.get("artifacts") or [] if isinstance(artifact, dict)]
+    overrides_prompt = bool((profile.get("prompts") or {}).get("finalize"))
+    if not artifacts and not overrides_prompt:
+        return FINALIZE_TOOL_SCHEMA
+    schema = json.loads(json.dumps(FINALIZE_TOOL_SCHEMA))
+    required = list(FINALIZE_PROFILE_REQUIRED if overrides_prompt else schema["required"])
+    for artifact in artifacts:
+        field_name = artifact["sourceField"]
+        if field_name not in schema["properties"]:
+            schema["properties"][field_name] = {
+                "description": f"The {artifact['name']} artifact, shaped as the prompt describes.",
+                "type": ["object", "array"],
+            }
+        if field_name not in required:
+            required.append(field_name)
+    schema["required"] = required
+    return schema
 
 
 class MaxTokensStop(Exception):
@@ -231,7 +308,12 @@ def _interpret(response, tool_name, schema, stage):
         jsonschema.validate(payload, schema)
     except jsonschema.ValidationError as exc:
         path = "/".join(str(part) for part in exc.absolute_path) or "<root>"
-        return ("retry", f"schema violation at {path}", f"the tool input violated the schema at {path}: {exc.message}")
+        feedback = f"the tool input violated the schema at {path}: {exc.message}"
+        if exc.validator == "required" and isinstance(exc.instance, dict):
+            # The names come from the schema's own `required` list, so the label still carries no model output.
+            missing = [key for key in exc.validator_value if key not in exc.instance]
+            return ("retry", f"missing required key(s) {', '.join(missing)} at {path}", feedback)
+        return ("retry", f"schema violation at {path}", feedback)
     return ("ok", payload, "")
 
 
@@ -282,7 +364,7 @@ def _operator(config):
 def extract_window(clients, model_id, window, config, product_name, *, max_key_moments, window_count=1, usage=None, **kw):
     """One window through the window_extraction prompt. `product_name` is carried for the finalize call's
     sake (the window template declares no PRODUCT_NAME slot); the window is described 1-based."""
-    text = render_prompt(PROMPT_NAMES_BY_TOOL[WINDOW_TOOL], {
+    text = stage_prompt(PROMPT_NAMES_BY_TOOL[WINDOW_TOOL], config, {
         "WINDOW_INDEX": window.index + 1,
         "WINDOW_COUNT": max(1, window_count),
         "WINDOW_START_HMS": format_timestamp(window.start_s),
@@ -294,8 +376,9 @@ def extract_window(clients, model_id, window, config, product_name, *, max_key_m
         "ADDITIONAL_INSTRUCTIONS": _operator(config),
     })
     messages = [{"role": "user", "content": [{"text": text}]}]
-    return converse_tool(clients, model_id, SYSTEM_BOUNDARY, messages, WINDOW_TOOL, WINDOW_TOOL_SCHEMA,
-                         WINDOW_MAX_TOKENS, stage=f"window-{window.index}", usage=usage, **kw)
+    max_tokens = stage_setting("window_extraction", "maxTokens", config, WINDOW_MAX_TOKENS)
+    return converse_tool(clients, model_id, system_prompt(config), messages, WINDOW_TOOL, WINDOW_TOOL_SCHEMA,
+                         max_tokens, stage=f"window-{window.index}", usage=usage, **kw)
 
 
 def _split_window(window):
@@ -315,6 +398,7 @@ def extract_all_windows(clients, model_id, windows, config, product_name, *, max
     Returns [(Window, result)] with the windows renumbered consecutively."""
     per_window = max(1, math.ceil(max_key_frames / max(1, len(windows))))
     count = len(windows)
+    cap = _kilo(stage_setting("window_extraction", "maxTokens", config, WINDOW_MAX_TOKENS))
     results = []
     for window in windows:
         try:
@@ -324,26 +408,26 @@ def extract_all_windows(clients, model_id, windows, config, product_name, *, max
         except MaxTokensStop:
             halves = _split_window(window)
             if halves is None:
-                raise PipelineRejection(MODEL_OUTPUT_INVALID, f"window {window.index} output exceeded 16K tokens even after splitting")
+                raise PipelineRejection(MODEL_OUTPUT_INVALID, f"window {window.index} output exceeded {cap} tokens even after splitting")
             logger.warning("window %s hit maxTokens; splitting at %.1fs", window.index, halves[1].start_s)
         for half in halves:
             try:
                 results.append((half, extract_window(clients, model_id, half, config, product_name,
                                                      max_key_moments=per_window, window_count=count, usage=usage, **kw)))
             except MaxTokensStop:
-                raise PipelineRejection(MODEL_OUTPUT_INVALID, f"window {window.index} output exceeded 16K tokens even after splitting")
+                raise PipelineRejection(MODEL_OUTPUT_INVALID, f"window {window.index} output exceeded {cap} tokens even after splitting")
     for index, (window, _) in enumerate(results):
         window.index = index
     return results
 
 
-def batch_frames(frames):
-    """Time-ordered batches of at most VISION_BATCH_MAX_FRAMES frames and VISION_BATCH_MAX_BYTES bytes."""
+def batch_frames(frames, max_frames=VISION_BATCH_MAX_FRAMES):
+    """Time-ordered batches of at most `max_frames` frames and VISION_BATCH_MAX_BYTES bytes."""
     ordered = sorted(frames, key=lambda frame: (frame["timestamp_seconds"], frame["momentIndex"]))
     batches, current, current_bytes = [], [], 0
     for frame in ordered:
         size = os.path.getsize(frame["path"])
-        if current and (len(current) >= VISION_BATCH_MAX_FRAMES or current_bytes + size > VISION_BATCH_MAX_BYTES):
+        if current and (len(current) >= max_frames or current_bytes + size > VISION_BATCH_MAX_BYTES):
             batches.append(current)
             current, current_bytes = [], 0
         current.append(frame)
@@ -369,9 +453,9 @@ def _frame_list(batch):
     )
 
 
-def _verify_batch(clients, model_id, batch, steps, components, stage, usage, additional_instructions, kw):
+def _verify_batch(clients, model_id, batch, steps, components, stage, usage, additional_instructions, kw, config=None):
     window_steps, window_components = _context_for(batch, steps, components)
-    intro = render_prompt(PROMPT_NAMES_BY_TOOL[VISION_TOOL], {
+    intro = stage_prompt(PROMPT_NAMES_BY_TOOL[VISION_TOOL], config, {
         "WINDOW_STEPS": _json(window_steps),
         "WINDOW_COMPONENTS": _json(window_components),
         "FRAME_LIST": _frame_list(batch),
@@ -383,31 +467,35 @@ def _verify_batch(clients, model_id, batch, steps, components, stage, usage, add
         with open(frame["path"], "rb") as handle:
             content.append({"image": {"format": "jpeg", "source": {"bytes": handle.read()}}})
     messages = [{"role": "user", "content": content}]
-    result = converse_tool(clients, model_id, SYSTEM_BOUNDARY, messages, VISION_TOOL, VISION_TOOL_SCHEMA,
-                           VISION_MAX_TOKENS, stage=stage, usage=usage, **kw)
+    max_tokens = stage_setting("vision_verification", "maxTokens", config, VISION_MAX_TOKENS)
+    result = converse_tool(clients, model_id, system_prompt(config), messages, VISION_TOOL, VISION_TOOL_SCHEMA,
+                           max_tokens, stage=stage, usage=usage, **kw)
     return result["frame_analyses"]
 
 
-def verify_frames(clients, model_id, frames, steps, components, *, additional_instructions="", usage=None, **kw):
-    """Vision verification over time-local batches; a max_tokens stop halves that batch once."""
+def verify_frames(clients, model_id, frames, steps, components, *, additional_instructions="", usage=None, config=None, **kw):
+    """Vision verification over time-local batches; a max_tokens stop halves that batch once. `config` carries
+    the run's profile (prompt, system text, maxTokens, batchMaxFrames); None is the built-in behaviour."""
+    cap = _kilo(stage_setting("vision_verification", "maxTokens", config, VISION_MAX_TOKENS))
+    max_frames = stage_setting("vision_verification", "batchMaxFrames", config, VISION_BATCH_MAX_FRAMES)
     results = []
-    for number, batch in enumerate(batch_frames(frames)):
+    for number, batch in enumerate(batch_frames(frames, max_frames)):
         stage = f"vision-{number}"
         try:
-            results.extend(_verify_batch(clients, model_id, batch, steps, components, stage, usage, additional_instructions, kw))
+            results.extend(_verify_batch(clients, model_id, batch, steps, components, stage, usage, additional_instructions, kw, config))
             continue
         except MaxTokensStop:
             if len(batch) < 2:
-                raise PipelineRejection(MODEL_OUTPUT_INVALID, f"vision batch {number} output exceeded 32K tokens for a single frame")
+                raise PipelineRejection(MODEL_OUTPUT_INVALID, f"vision batch {number} output exceeded {cap} tokens for a single frame")
             logger.warning("vision batch %d hit maxTokens; halving %d frames", number, len(batch))
         half = len(batch) // 2
         for part in (batch[:half], batch[half:]):
             try:
-                results.extend(_verify_batch(clients, model_id, part, steps, components, stage, usage, additional_instructions, kw))
+                results.extend(_verify_batch(clients, model_id, part, steps, components, stage, usage, additional_instructions, kw, config))
             except MaxTokensStop:
                 raise PipelineRejection(
                     MODEL_OUTPUT_INVALID,
-                    f"vision batch {number} output exceeded 32K tokens for {len(batch)} frames even after halving",
+                    f"vision batch {number} output exceeded {cap} tokens for {len(batch)} frames even after halving",
                 )
     return results
 
@@ -420,7 +508,7 @@ def finalize(clients, model_id, steps, components, vision_results, config, produ
     """The final BOM rows, bom_refs, dependency edges, SOP summary/safety and lab summary text."""
     if compact:
         steps, components, vision_results = _compact(steps), _compact(components), _compact(vision_results)
-    text = render_prompt(PROMPT_NAMES_BY_TOOL[FINALIZE_TOOL], {
+    text = stage_prompt(PROMPT_NAMES_BY_TOOL[FINALIZE_TOOL], config, {
         "PRODUCT_NAME": product_name,
         "PART_LEVEL_BASE": config.get("partLevelBase", "0"),
         "PART_TYPES_WITH_DESCRIPTIONS": "\n".join(f"- {name}: {PART_TYPE_DESCRIPTIONS[name]}" for name in PART_TYPES),
@@ -432,9 +520,10 @@ def finalize(clients, model_id, steps, components, vision_results, config, produ
         "ADDITIONAL_INSTRUCTIONS": _operator(config),
     })
     messages = [{"role": "user", "content": [{"text": text}]}]
+    max_tokens = stage_setting("finalize", "maxTokens", config, FINALIZE_MAX_TOKENS)
     try:
-        return converse_tool(clients, model_id, SYSTEM_BOUNDARY, messages, FINALIZE_TOOL, FINALIZE_TOOL_SCHEMA,
-                             FINALIZE_MAX_TOKENS, stage="finalize", usage=usage, **kw)
+        return converse_tool(clients, model_id, system_prompt(config), messages, FINALIZE_TOOL, finalize_tool_schema(config),
+                             max_tokens, stage="finalize", usage=usage, **kw)
     except MaxTokensStop:
         if not compact:
             logger.warning("finalize hit maxTokens; retrying with a compacted draft")
@@ -442,5 +531,5 @@ def finalize(clients, model_id, steps, components, vision_results, config, produ
                             usage=usage, compact=True, **kw)
         raise PipelineRejection(
             MODEL_OUTPUT_INVALID,
-            f"finalize output exceeded 32K tokens for {len(components)} components / {len(steps)} steps",
+            f"finalize output exceeded {_kilo(max_tokens)} tokens for {len(components)} components / {len(steps)} steps",
         )

@@ -7,6 +7,7 @@ import boto3
 from customLogging.logger import safeLogger
 import manifestHelper
 import configSchema
+import profileRules
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -76,8 +77,13 @@ def abort_external_workflow(error, task_token):
 
 
 def validate_rendered_config(config):
-    """Reject — never clamp — a rendered configuration outside the schema or the deployment's
-    key-frame ceiling; every sentence names the value and the bound."""
+    """Reject — never clamp — a rendered configuration outside the schema, the deployment's
+    key-frame ceiling or the profile rules; every sentence names the value and the bound. A model key
+    is reported on its own first: it is the one-model-per-deployment rule, and the schema's generic
+    unknown-key sentence would only blur it."""
+    model_errors = profileRules.model_key_errors(config)
+    if model_errors:
+        raise PipelineRejection(ERROR_INPUT_REJECTED, " ".join(model_errors))
     errors = configSchema.validate_config(config, CONFIG_SCHEMA)
     if not errors:
         max_key_frames = config.get("maxKeyFrames")
@@ -86,6 +92,7 @@ def validate_rendered_config(config):
             errors.append(
                 f"maxKeyFrames is {max_key_frames}; this deployment allows at most "
                 f"{MAX_KEY_FRAMES_CEILING}.")
+        errors.extend(profileRules.profile_errors(config))
     if errors:
         raise PipelineRejection(ERROR_INPUT_REJECTED, " ".join(errors))
 

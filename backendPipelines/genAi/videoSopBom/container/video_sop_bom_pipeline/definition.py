@@ -9,7 +9,8 @@ import json
 import jsonschema
 
 from . import load_schema
-from .errors import PIPELINE_ERROR, PipelineRejection
+from .errors import INPUT_REJECTED, PIPELINE_ERROR, PipelineRejection
+from .profileRules import model_key_errors, profile_errors
 
 DEFINITION_SCHEMA = "definition_schema"
 CONFIG_SCHEMA = "config_schema"
@@ -34,7 +35,16 @@ def _validate(instance, schema_name, label):
 
 def validate_definition(definition):
     _validate(definition, DEFINITION_SCHEMA, "definition document")
-    _validate(definition.get("config", {}), CONFIG_SCHEMA, "definition document config block")
+    config = definition.get("config", {})
+    # The rules constructPipeline applied, in its order: a model key on its own, then the schema, then
+    # what the schema cannot express (profileRules.py is the same file in both places).
+    model_errors = model_key_errors(config)
+    if model_errors:
+        raise PipelineRejection(INPUT_REJECTED, " ".join(model_errors))
+    _validate(config, CONFIG_SCHEMA, "definition document config block")
+    errors = profile_errors(config)
+    if errors:
+        raise PipelineRejection(INPUT_REJECTED, " ".join(errors))
     return definition
 
 

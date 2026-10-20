@@ -4,10 +4,11 @@
 """What ships in the genAi/videoSopBom lambda directory and vamsSchema bundle.
 
 Three groups: the vendored files (customLogging redaction, manifestHelper and config_schema.json
-identity), the registration bundle's invariants (arity, scopes, the five-places allow list, two
+identity), the registration bundle's invariants (arity, scopes, the five-places allow list, four
 templates with one default, every tag referenced with type-driven quoting, no trigger, the timeout
 chain's bundle member), and the bridge between the templates and the config schema the lambda
-validates against (the rendered defaults conform)."""
+validates against (the rendered defaults conform, the profile templates pass the profile rules and
+name no model)."""
 
 import copy
 import hashlib
@@ -194,7 +195,7 @@ _TYPED_TAG_TYPES = ("integer", "number", "boolean", "string-list")
 _EXPECTED_FULL_DEFAULTS = {
     "mode": "full", "languageCode": "en-US", "videoOrder": "selection", "productName": "",
     "contributors": "", "maxKeyFrames": 60, "partLevelBase": "0", "generateLabSummary": True,
-    "additionalInstructions": "",
+    "runVisualVerification": True, "additionalInstructions": "",
 }
 _EXPECTED_TRANSCRIPT_DEFAULTS = {"mode": "transcript", "languageCode": "en-US", "videoOrder": "selection"}
 
@@ -317,13 +318,14 @@ class TestPipelineAndWorkflowBundle:
 
 @pytest.mark.unit
 class TestTemplates:
-    def test_exactly_two_templates_with_one_default(self):
+    def test_four_templates_with_the_full_one_the_only_default(self):
         templates = _templates()
-        assert set(templates) == {"video-sop-bom-full", "video-sop-bom-transcript-only"}
+        assert set(templates) == {"video-sop-bom-full", "video-sop-bom-transcript-only",
+                                  "video-sop-bom-construction-site", "video-sop-bom-business-process"}
         for stem, template in templates.items():
             assert template["templateId"] == stem
-        assert templates["video-sop-bom-full"]["isDefault"] is True
-        assert templates["video-sop-bom-transcript-only"].get("isDefault") is not True
+        assert [stem for stem, template in templates.items() if template.get("isDefault") is True] == \
+            ["video-sop-bom-full"]
 
     def test_every_template_is_a_json_body_with_instructions(self):
         for template in _templates().values():
@@ -334,7 +336,7 @@ class TestTemplates:
             assert template["inputInstructions"].strip()
             assert len(template["inputInstructions"]) <= 4096
 
-    def test_the_full_body_renders_the_nine_configuration_keys(self):
+    def test_the_full_body_renders_the_ten_configuration_keys(self):
         assert _render_with_defaults(_templates()["video-sop-bom-full"]) == _EXPECTED_FULL_DEFAULTS
 
     def test_the_transcript_body_renders_exactly_three_keys(self):
@@ -376,7 +378,7 @@ class TestTemplates:
         full = {tag["tagKey"]: tag for tag in templates["video-sop-bom-full"]["tagSchema"]}
         assert set(full) == {"LANGUAGE_CODE", "VIDEO_ORDER", "PRODUCT_NAME", "CONTRIBUTORS",
                              "MAX_KEY_FRAMES", "PART_LEVEL_BASE", "GENERATE_LAB_SUMMARY",
-                             "ADDITIONAL_INSTRUCTIONS"}
+                             "RUN_VISUAL_VERIFICATION", "ADDITIONAL_INSTRUCTIONS"}
         assert full["LANGUAGE_CODE"]["type"] == "enum" and full["LANGUAGE_CODE"]["default"] == "en-US"
         assert "auto" in full["LANGUAGE_CODE"]["enumValues"]
         assert full["VIDEO_ORDER"]["type"] == "enum" and full["VIDEO_ORDER"]["default"] == "selection"
@@ -388,6 +390,8 @@ class TestTemplates:
         assert full["PART_LEVEL_BASE"]["enumValues"] == ["0", "1"]
         assert full["GENERATE_LAB_SUMMARY"]["type"] == "boolean"
         assert full["GENERATE_LAB_SUMMARY"]["default"] is True
+        assert full["RUN_VISUAL_VERIFICATION"]["type"] == "boolean"
+        assert full["RUN_VISUAL_VERIFICATION"]["default"] is True
         assert full["ADDITIONAL_INSTRUCTIONS"]["type"] == "string"
         transcript = {tag["tagKey"]: tag
                       for tag in templates["video-sop-bom-transcript-only"]["tagSchema"]}
@@ -439,3 +443,84 @@ class TestTemplates:
             for tag in template["tagSchema"]:
                 assert tag["label"].strip() and len(tag["label"]) <= 1024, (stem, tag["tagKey"])
                 assert tag["description"].strip() and len(tag["description"]) <= 1024, (stem, tag["tagKey"])
+
+
+_PROFILE_TEMPLATES = ("video-sop-bom-construction-site", "video-sop-bom-business-process")
+_CONTAINER_PROFILE_RULES = os.path.join(
+    _PIPELINE_DIR, "container", "video_sop_bom_pipeline", "profileRules.py")
+# The largest configBody the bundle may ship. Templates are listed with their bodies inline (the
+# list response is bounded), so a profile's prompts are measured rather than assumed small.
+_MAX_CONFIG_BODY_BYTES = 32 * 1024
+
+
+@pytest.mark.unit
+class TestProfileTemplates:
+    """The construction-site and business-process templates: full mode with a workload profile, one
+    model per deployment (no template names one), and every rule constructPipeline applies holds for
+    their rendered defaults."""
+
+    def test_the_profile_rules_module_is_byte_identical_to_the_container_copy(self):
+        assert os.path.isfile(_CONTAINER_PROFILE_RULES), _CONTAINER_PROFILE_RULES
+        local = os.path.join(_LAMBDA_DIR, "profileRules.py")
+        assert os.path.isfile(local), local
+        assert _normalized_digest(local) == _normalized_digest(_CONTAINER_PROFILE_RULES)
+
+    def test_the_profile_rules_module_imports_only_the_standard_library(self):
+        # It ships in the Lambda code asset, which has no pip step, and in the container.
+        import ast
+        tree = ast.parse(open(os.path.join(_LAMBDA_DIR, "profileRules.py"), encoding="utf-8").read())
+        imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+        imported |= {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+        assert imported == {"re"}
+
+    @pytest.mark.parametrize("stem", sorted(_PROFILE_TEMPLATES))
+    def test_the_rendered_defaults_pass_every_construct_pipeline_rule(self, stem):
+        import configSchema
+        import profileRules
+        config = _render_with_defaults(_templates()[stem])
+        assert configSchema.validate_config(config, configSchema.load_config_schema()) == []
+        assert profileRules.model_key_errors(config) == []
+        assert profileRules.profile_errors(config) == []
+        assert config["mode"] == "full"
+        assert config["generateLabSummary"] is False, "a profile without a lab summary must not request one"
+        profile = config["profile"]
+        assert profile["profileVersion"] == "1"
+        assert profile["artifacts"], stem
+        for artifact in profile["artifacts"]:
+            assert artifact["renderer"] in ("table", "steps-timeline", "summary-card"), artifact
+        # Each shipped prompt fences the operator's text and (for extraction) the transcript, like the
+        # built-in prompts do.
+        for stage, text in profile["prompts"].items():
+            assert "[[ADDITIONAL_INSTRUCTIONS]]" in text, (stem, stage)
+            assert "Respond only through the tool." in text, (stem, stage)
+        assert "<transcript>\n[[TRANSCRIPT]]\n</transcript>" in profile["prompts"]["window_extraction"]
+
+    def test_the_construction_site_template_keeps_visual_verification_switchable(self):
+        template = _templates()["video-sop-bom-construction-site"]
+        tags = {tag["tagKey"]: tag for tag in template["tagSchema"]}
+        assert tags["RUN_VISUAL_VERIFICATION"]["type"] == "boolean"
+        assert tags["RUN_VISUAL_VERIFICATION"]["default"] is True
+        config = _render_with_defaults(template)
+        assert config["runVisualVerification"] is True
+        assert set(config["profile"]["prompts"]) == {"window_extraction", "vision_verification", "finalize"}
+        assert [a["name"] for a in config["profile"]["artifacts"]] == ["equipment_list", "activity_log", "site_report"]
+
+    def test_the_business_process_template_never_runs_the_vision_stages(self):
+        template = _templates()["video-sop-bom-business-process"]
+        assert "RUN_VISUAL_VERIFICATION" not in {tag["tagKey"] for tag in template["tagSchema"]}
+        config = _render_with_defaults(template)
+        assert config["runVisualVerification"] is False, "fixed in the body, as transcript-only fixes its mode"
+        assert set(config["profile"]["prompts"]) == {"window_extraction", "finalize"}
+        assert [a["name"] for a in config["profile"]["artifacts"]] == ["process_doc", "overview"]
+
+    def test_no_template_names_a_model(self):
+        # One model per deployment: app.pipelines.useGenAiVideoSopBom.bedrockModelId, with the job
+        # role's Amazon Bedrock grant scoped to it at synth.
+        import profileRules
+        for stem, template in _templates().items():
+            assert profileRules.model_key_paths(_render_with_defaults(template)) == [], stem
+            assert "modelid" not in template["configBody"].lower().replace("_", ""), stem
+
+    def test_every_config_body_is_within_the_bundle_budget(self):
+        for stem, template in _templates().items():
+            assert len(template["configBody"].encode("utf-8")) <= _MAX_CONFIG_BODY_BYTES, stem

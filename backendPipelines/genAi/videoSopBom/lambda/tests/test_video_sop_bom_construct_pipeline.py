@@ -24,7 +24,7 @@ _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _VALID_FULL_CONFIG = {
     "mode": "full", "languageCode": "en-US", "videoOrder": "selection", "productName": "",
     "contributors": "", "maxKeyFrames": 60, "partLevelBase": "0", "generateLabSummary": True,
-    "additionalInstructions": "",
+    "runVisualVerification": True, "additionalInstructions": "",
 }
 _VALID_TRANSCRIPT_CONFIG = {"mode": "transcript", "languageCode": "en-US", "videoOrder": "selection"}
 
@@ -49,7 +49,7 @@ class TestConfigSchemaValidator:
     def test_the_planted_keyword_is_reported(self):
         # Positive control for the assertion above (an empty list is what a broken walker returns).
         mod = _load("configSchema")
-        assert mod.unsupported_keywords({"properties": {"x": {"type": "string", "pattern": "^a"}}}) == ["pattern"]
+        assert mod.unsupported_keywords({"properties": {"x": {"type": "string", "format": "uri"}}}) == ["format"]
 
     def test_the_conditional_is_walked_and_a_keyword_inside_it_is_reported(self):
         # The top-level if/then/const conditional (the shape of the "mode == full requires these
@@ -75,7 +75,8 @@ class TestConfigSchemaValidator:
 
     def test_the_schema_declares_the_registry_keys(self):
         schema = self._schema()
-        assert set(schema["properties"]) == set(_VALID_FULL_CONFIG)
+        # Every key the full template renders, plus the optional profile block the profile templates add.
+        assert set(schema["properties"]) == set(_VALID_FULL_CONFIG) | {"profile"}
         assert schema.get("additionalProperties") is False
         # The transcript-only template renders only these three, so nothing else may be required.
         assert "mode" in schema.get("required", [])
@@ -561,3 +562,181 @@ class TestModuleContract:
         finally:
             monkeypatch.undo()
             _load(_MODULE)
+
+
+# A full-mode configuration carrying a workload profile, as a profile template renders it.
+_PROFILE = {
+    "profileId": "construction-site", "profileVersion": "1",
+    "prompts": {"window_extraction": "Log the walk in [[TRANSCRIPT]] (window [[WINDOW_INDEX]]).",
+                "finalize": "Report on [[MERGED_STEPS]] for [[PRODUCT_NAME]].",
+                "system_boundary": "You are a site safety analyst."},
+    "stages": {"window_extraction": {"maxTokens": 12000}, "finalize": {"maxTokens": 8000},
+               "vision_verification": {"maxTokens": 8000, "batchMaxFrames": 4}},
+    "artifacts": [{"name": "site_report", "sourceField": "site_report", "renderer": "summary-card"},
+                  {"name": "equipment_list", "sourceField": "equipment_list"}],
+}
+_PROFILE_CONFIG = dict(_VALID_FULL_CONFIG, generateLabSummary=False, profile=_PROFILE)
+
+
+def _with_profile(**changes):
+    profile = copy.deepcopy(_PROFILE)
+    for path, value in changes.items():
+        node = profile
+        *parents, leaf = path.split("__")
+        for part in parents:
+            node = node[int(part)] if isinstance(node, list) else node[part]
+        if value is _DROP:
+            del node[int(leaf) if isinstance(node, list) else leaf]
+        else:
+            node[int(leaf) if isinstance(node, list) else leaf] = value
+    return dict(_PROFILE_CONFIG, profile=profile)
+
+
+_DROP = object()
+
+
+@pytest.mark.unit
+class TestNestedConfigValidation:
+    """The profile block is validated at every depth by the stdlib validator, so no profile rule is
+    enforced only in the container; a nested value is named by its path."""
+
+    def _errors(self, config):
+        mod = _load("configSchema")
+        return mod.validate_config(config, mod.load_config_schema())
+
+    def test_a_profile_configuration_validates(self):
+        assert self._errors(_PROFILE_CONFIG) == []
+        assert self._errors(dict(_VALID_FULL_CONFIG, runVisualVerification=False)) == []
+
+    @pytest.mark.parametrize("changes,expected_fragments", [
+        ({"stages__finalize__maxTokens": 64000}, ("profile.stages.finalize.maxTokens is 64000", "at most 32000")),
+        ({"stages__window_extraction__maxTokens": 500},
+         ("profile.stages.window_extraction.maxTokens is 500", "at least 1024")),
+        ({"stages__vision_verification__batchMaxFrames": 13},
+         ("profile.stages.vision_verification.batchMaxFrames is 13", "at most 12")),
+        ({"artifacts__0__renderer": "html"}, ('profile.artifacts[0].renderer is "html"', "allowed values are")),
+        ({"artifacts__0__name": "../site"}, ('profile.artifacts[0].name is "../site"', "must match the pattern")),
+        ({"artifacts__1__sourceField": "Site Report"},
+         ('profile.artifacts[1].sourceField is "Site Report"', "must match the pattern")),
+        ({"prompts__finalize": "x" * 32001}, ("profile.prompts.finalize is 32001 characters", "at most 32000")),
+        ({"prompts__window_extraction": 5}, ("profile.prompts.window_extraction is 5", "expected a string")),
+        ({"stages__extract": {"maxTokens": 1}}, ('unknown configuration key "profile.stages.extract"',)),
+        ({"profileVersion": _DROP}, ("profile.profileVersion is required",)),
+        ({"artifacts__0__sourceField": _DROP}, ("profile.artifacts[0].sourceField is required",)),
+        ({"artifacts": [{"name": f"a{index}", "sourceField": "f"} for index in range(9)]},
+         ("profile.artifacts has 9 entries", "at most 8")),
+        ({"profileId": "Construction Site"}, ('profile.profileId is "Construction Site"', "must match the pattern")),
+    ])
+    def test_each_nested_violation_names_its_path_and_bound(self, changes, expected_fragments):
+        errors = self._errors(_with_profile(**changes))
+        assert len(errors) == 1, errors
+        for fragment in expected_fragments:
+            assert fragment in errors[0], (fragment, errors[0])
+        assert errors[0].endswith(".")
+
+    def test_run_visual_verification_is_a_boolean(self):
+        assert self._errors(dict(_VALID_FULL_CONFIG, runVisualVerification="false")) == [
+            'runVisualVerification is "false"; expected a boolean.']
+
+    def test_the_walker_descends_into_array_items(self):
+        # Positive control for `items`: a keyword this validator would not enforce, planted inside an
+        # array's item schema, is still reported.
+        mod = _load("configSchema")
+        planted = {"properties": {"a": {"type": "array", "items": {"type": "string", "format": "uri"}}}}
+        assert mod.unsupported_keywords(planted) == ["format"]
+
+
+@pytest.mark.unit
+class TestProfileRejections:
+    """constructPipeline refuses a bad profile on the external token before the definition is
+    written, and states the one-model-per-deployment rule on its own."""
+
+    _MODEL_SENTENCE = ("{path} names a model; this pipeline uses one Amazon Bedrock model per deployment, "
+                       "set in app.pipelines.useGenAiVideoSopBom.bedrockModelId, so a template or profile "
+                       "may not set one.")
+
+    def test_a_profile_configuration_is_carried_verbatim(self):
+        mod = _load(_MODULE)
+        _, s3, send_failure = _run(mod, s3=_s3(config=_PROFILE_CONFIG))
+        send_failure.assert_not_called()
+        _, definition = _written_definition(s3)
+        assert definition["config"] == _PROFILE_CONFIG
+        assert definition["bedrockModelId"] == mod.BEDROCK_MODEL_ID, "the model comes from the deployment only"
+
+    @pytest.mark.parametrize("config,path", [
+        (_with_profile(stages__finalize__modelId="us.anthropic.claude-x"), "profile.stages.finalize.modelId"),
+        (_with_profile(model_id="global.anthropic.claude-x"), "profile.model_id"),
+        (_with_profile(artifacts__0__bedrockModelId="m"), "profile.artifacts[0].bedrockModelId"),
+        (dict(_VALID_FULL_CONFIG, modelId="m"), "modelId"),
+    ])
+    def test_a_model_key_anywhere_is_refused_with_the_one_model_rule_alone(self, config, path):
+        mod = _load(_MODULE)
+        s3 = _s3(config=config)
+        error, send_failure = _refused(mod, mod.PipelineRejection, s3=s3)
+        cause = _reported(send_failure, "VideoSopBomInputRejected")
+        assert cause == self._MODEL_SENTENCE.format(path=path), cause
+        assert cause == error.cause
+        s3.put_object.assert_not_called()
+
+    @pytest.mark.parametrize("config,expected", [
+        (_with_profile(prompts__finalize="Report on [[MERGED_STEPS]] and [[SITE_PHOTOS]]."),
+         "profile.prompts.finalize places [[SITE_PHOTOS]], which the finalize stage does not supply; it supplies "
+         "[[PRODUCT_NAME]], [[PART_LEVEL_BASE]], [[PART_TYPES_WITH_DESCRIPTIONS]], [[MATERIAL_TYPES]], "
+         "[[PRIMARY_TECHNIQUES]], [[MERGED_STEPS]], [[MERGED_COMPONENTS]], [[VISION_RESULTS]], "
+         "[[ADDITIONAL_INSTRUCTIONS]]."),
+        (_with_profile(prompts__window_extraction="Log the walk."),
+         "profile.prompts.window_extraction never places [[TRANSCRIPT]]; a configured window_extraction prompt "
+         "must carry that input."),
+        (_with_profile(prompts__system_boundary="Use [[TRANSCRIPT]]."),
+         "profile.prompts.system_boundary places [[TRANSCRIPT]], which the system_boundary stage does not supply; "
+         "it supplies none."),
+        (_with_profile(prompts__finalize="Report on [[MERGED_STEPS]] for {{SITE}}."),
+         "profile.prompts.finalize contains {{SITE}}, which VAMS left unresolved; a configured prompt places a "
+         "stage input as [[SITE]] and an operator value through a declared tag."),
+        (_with_profile(artifacts__0__name="sop"),
+         "profile.artifacts[0].name is 'sop', which would overwrite the built-in sop deliverable; reserved names "
+         "are transcript, sop, bom, frames."),
+        (_with_profile(artifacts__1__name="site_report"),
+         "profile.artifacts[1].name is 'site_report' again; each artifact needs its own name."),
+        (dict(_VALID_TRANSCRIPT_CONFIG, profile=_PROFILE),
+         "profile is set but mode is 'transcript'; a profile applies only to the full mode's Amazon Bedrock stages."),
+    ])
+    def test_a_profile_rule_violation_is_refused_naming_the_value(self, config, expected):
+        mod = _load(_MODULE)
+        s3 = _s3(config=config)
+        error, send_failure = _refused(mod, mod.PipelineRejection, s3=s3)
+        assert _reported(send_failure, "VideoSopBomInputRejected") == expected
+        assert error.cause == expected
+        s3.put_object.assert_not_called()
+
+
+@pytest.mark.unit
+class TestProfileRulesModule:
+    def _mod(self):
+        return _load("profileRules")
+
+    def test_the_prompt_stages_match_the_schema(self):
+        mod = self._mod()
+        prompts = _load("configSchema").load_config_schema()["properties"]["profile"]["properties"]["prompts"]
+        assert set(prompts["properties"]) == set(mod.PROMPT_STAGES) == set(mod.PROMPT_INPUTS)
+        stages = _load("configSchema").load_config_schema()["properties"]["profile"]["properties"]["stages"]
+        assert set(stages["properties"]) <= set(mod.PROMPT_STAGES)
+
+    def test_model_key_paths_reads_every_spelling_at_any_depth(self):
+        mod = self._mod()
+        assert mod.model_key_paths({"a": [{"MODEL_ID": 1}], "b": {"model-id": 2, "inferenceModelId": 3},
+                                    "modelName": 4, "models": 5}) == ["a[0].MODEL_ID", "b.model-id", "b.inferenceModelId"]
+
+    def test_a_trailing_newline_does_not_pass_as_an_artifact_name(self):
+        # The schema pattern is matched with re.search, where `$` also matches before a final newline;
+        # the artifact name is a file name, so this module matches it in full.
+        mod = self._mod()
+        errors = mod.profile_errors(_with_profile(artifacts__0__name="site_report\n"))
+        assert errors == ["profile.artifacts[0].name is 'site_report\\n'; an artifact name is a lowercase letter "
+                          "followed by at most 63 lowercase letters, digits or underscores."]
+
+    def test_no_profile_means_no_profile_errors(self):
+        mod = self._mod()
+        assert mod.profile_errors(_VALID_FULL_CONFIG) == []
+        assert mod.profile_errors(_VALID_TRANSCRIPT_CONFIG) == []
+        assert mod.profile_errors(_PROFILE_CONFIG) == []
