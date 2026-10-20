@@ -92,6 +92,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   **File view opens another asset's file without a reload** — Opening a file of a different asset in the same browser tab, for example by pasting its link into the address bar, loads that asset's file instead of showing "File Not Found" until the page is reloaded. (issue #492)
 -   **File view opens another file of the same asset without a reload** — Opening a different file of the same asset in the same browser tab, for example by pasting its link into the address bar, shows that file and any version the link names, instead of returning to the previous file or alternating between the two. (issue #496)
+-   **File view loads a link without a version once** — Opening a file from a link that names no version no longer looks the file up and shows the loading spinner a second time after the page adds the latest version to the URL. (issue #512)
 
 **Other changes:**
 
