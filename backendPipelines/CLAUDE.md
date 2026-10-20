@@ -126,9 +126,9 @@ since sibling modules stub `trimesh`.
 The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
 `lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set
 and redacts only `authorization`. A Lambda-container handler therefore checks `TaskToken` before it
-logs anything and never logs the event, as the 3dBasic handler does
-(`tests/test_3dbasic_task_token_logging.py`). The 3dBasic `.dockerignore` keeps `tests/`, the Poetry
-files and caches out of its `COPY . .`.
+logs anything and never logs the event, as both handlers do
+(`tests/test_3dbasic_task_token_logging.py`, `tests/test_meshcad_task_token_logging.py`). The 3dBasic
+`.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
 
 ## Reporting Failure on a Task-Token Pipeline
 

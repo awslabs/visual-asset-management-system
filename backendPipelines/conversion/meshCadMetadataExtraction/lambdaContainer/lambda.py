@@ -345,30 +345,32 @@ def lambda_handler(event, context):
     Returns:
         Dictionary with status code and message
     """
-    logger.info(event)
-
-    response = {
-        'statusCode': 200,
-        'body': '',
-        'headers': {
-            'Content-Type': 'application/json'
-        }
-    }
-
-    # Parse request body
-    if not event.get('body'):
+    # Nothing from the event is logged until the task-token check has passed, and the event itself
+    # is never logged: a run whose pipeline was registered with a callback by mistake carries a
+    # Step Functions task token in its body, and this container's logger does not redact it. Only
+    # identifiers are logged below.
+    body = event.get('body') if isinstance(event, dict) else None
+    if not body:
         message = 'Request body is required'
         logger.error(message)
         raise ValueError(message)
-    
-    if isinstance(event['body'], str):
-        data = json.loads(event['body'])
+
+    if isinstance(body, str):
+        data = json.loads(body)
     else:
-        data = event['body']
+        data = body
+    if not isinstance(data, dict):
+        message = 'Request body must be a JSON object'
+        logger.error(message)
+        raise ValueError(message)
 
     # Check external task token if passed (Synchronous Pipeline so no task token should be passed)
     if 'TaskToken' in data:
         raise Exception("VAMS Workflow TaskToken found in pipeline input. Make sure to register this pipeline in VAMS as NOT needing a task token callback.")
+
+    logger.info("Metadata extraction request received", extra={
+        "inputManifestS3Location": data.get('inputManifestS3Location', ''),
+    })
 
     # Resolve the input file path, its asset-relative path, and the output-metadata path from the
     # workflow manifest (each input file is self-locating; legacy body fields are the fallback).
