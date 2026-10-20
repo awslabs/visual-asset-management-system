@@ -232,6 +232,14 @@ export class Conversion3dBasicCodeBuildConstruct extends Construct {
             },
         });
 
+        // The build reads its source, logs and pushes with the build role's default policy, and the
+        // project does not depend on that policy, so nothing else orders it before the trigger. Wait for
+        // the role and its policy so a build never starts without them, on Create and when a CMK flip
+        // moves the policy to the renamed repository.
+        if (project.role) {
+            this.buildTrigger.node.addDependency(project.role);
+        }
+
         this.imageTag = imageTag;
         this.codeBuildProjectName = project.projectName;
 

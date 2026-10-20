@@ -291,6 +291,23 @@ describe.each(ALL_TEMPLATES)("%s: 3D Basic Conversion built by CodeBuild", (name
             expect(asList(fn.raw.DependsOn ?? [])).toContain(trigger.logicalId);
         });
 
+        it("the build starts only once the build role and its policy exist", () => {
+            // The project references its role but not the role's default policy, which grants the
+            // source read, the logs and the push.
+            const roleId = getAttId(project.properties.ServiceRole);
+            const policies = s.where(
+                "AWS::IAM::Policy",
+                (p) =>
+                    p.stack === fn.stack &&
+                    (p.properties.Roles ?? []).some((role: any) => role?.Ref === roleId)
+            );
+            expect(roleId).toBeDefined();
+            expect(policies).toHaveLength(1);
+            expect(asList(trigger.raw.DependsOn ?? [])).toEqual(
+                expect.arrayContaining([roleId, policies[0].logicalId])
+            );
+        });
+
         it("the build reaches its own terminal status before the waiter gives up", () => {
             // A build that outlives the waiter fails the deploy with the framework's generic
             // "Operation timed out" instead of the build's status and log link.
