@@ -4,11 +4,14 @@
  */
 
 import {
+    COMPLIANCE_RULE_TYPES,
+    ComplianceAssetAttributeField,
     ComplianceEnforcementLevel,
     CompliancePipelineInputFiles,
     CompliancePipelineInputFilesMode,
     CompliancePipelineRef,
     CompliancePipelineRule,
+    ComplianceRule,
     ComplianceRuleType,
     PIPELINE_INPUT_FILES_MODES,
     VAMS_RULES_V1_FORMAT,
@@ -316,19 +319,364 @@ export function bodyFromRulesDraft(draft: RulesDraft): VamsRulesV1SchemaBody {
 }
 
 export function newPipelineRuleDraft(existingNames: string[]): RuleDraft {
+    return newRuleDraft("pipeline", existingNames);
+}
+
+// --- Rule types and the checks the Visual Builder edits ---
+
+/** Limits the backend places on file-structure, version-coverage and asset-attribute rules. */
+export const RULE_MAX_CHECKS = 25;
+export const PATH_PATTERNS_MAX = 25;
+export const PATTERN_MAX_LENGTH = 512;
+export const TAGS_MAX = 50;
+export const TAG_MAX_LENGTH = 256;
+
+export interface RuleTypeOption {
+    value: ComplianceRuleType;
+    label: string;
+    description: string;
+}
+
+/** Every rule type in the order "Add rule" offers them, with its user-visible label. */
+export const RULE_TYPE_OPTIONS: RuleTypeOption[] = [
+    {
+        value: "pipeline",
+        label: "Pipeline rule",
+        description: "Runs a workflow on the asset's files and checks its output",
+    },
+    {
+        value: "metadata",
+        label: "Metadata rule",
+        description: "Validates the asset's metadata against a metadata schema",
+    },
+    {
+        value: "relationship",
+        label: "Relationship rule",
+        description: "Counts the asset's parent, child or related links",
+    },
+    {
+        value: "fileStructure",
+        label: "File structure rule",
+        description: "Requires or forbids file paths and bounds the number of files",
+    },
+    {
+        value: "versionCoverage",
+        label: "Version coverage rule",
+        description: "Requires every current file to be captured in an asset version",
+    },
+    {
+        value: "assetAttributes",
+        label: "Asset attributes rule",
+        description: "Checks the asset's name, description or tags",
+    },
+];
+
+/** The rule types whose checks the Visual Builder edits field by field. */
+export const CHECK_EDITED_RULE_TYPES: ComplianceRuleType[] = [
+    "fileStructure",
+    "versionCoverage",
+    "assetAttributes",
+];
+
+/** The rule each type starts from when it is added in the Visual Builder. */
+export const EXAMPLE_RULES: Record<ComplianceRuleType, ComplianceRule> = {
+    pipeline: EXAMPLE_PIPELINE_RULE,
+    metadata: {
+        ruleType: "metadata",
+        enforcement: "warn",
+        metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "defaultAsset" },
+        checks: [{ name: "required-fields-present", validateRequired: true, validateTypes: true }],
+    },
+    relationship: {
+        ruleType: "relationship",
+        enforcement: "warn",
+        checks: [
+            {
+                name: "has-parent",
+                direction: "parents",
+                relationshipType: "parentChild",
+                minCount: 1,
+            },
+        ],
+    },
+    fileStructure: {
+        ruleType: "fileStructure",
+        enforcement: "warn",
+        checks: [
+            {
+                name: "model-file-present",
+                description: "At least one 3D model file is present",
+                requiredPaths: ["\\.(glb|gltf|obj|stl|fbx)$"],
+            },
+        ],
+    },
+    versionCoverage: {
+        ruleType: "versionCoverage",
+        enforcement: "warn",
+        checks: [
+            {
+                name: "files-captured-in-a-version",
+                description: "Every current file is recorded in an asset version",
+                excludePaths: ["\\.previewFile\\."],
+            },
+        ],
+    },
+    assetAttributes: {
+        ruleType: "assetAttributes",
+        enforcement: "inform",
+        checks: [
+            {
+                name: "naming-convention",
+                description: "The asset name starts with a letter or digit and has no spaces",
+                field: "assetName",
+                matches: "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+            },
+        ],
+    },
+};
+
+const RULE_NAME_PREFIX: Record<ComplianceRuleType, string> = {
+    pipeline: "pipeline-rule",
+    metadata: "metadata-rule",
+    relationship: "relationship-rule",
+    fileStructure: "file-structure-rule",
+    versionCoverage: "version-coverage-rule",
+    assetAttributes: "asset-attributes-rule",
+};
+
+/** A rule of `ruleType` seeded from its example, named so it does not clash with `existingNames`. */
+export function newRuleDraft(ruleType: ComplianceRuleType, existingNames: string[]): RuleDraft {
+    const prefix = RULE_NAME_PREFIX[ruleType];
     let index = existingNames.length + 1;
-    let name = `pipeline-rule-${index}`;
+    let name = `${prefix}-${index}`;
     while (existingNames.includes(name)) {
         index += 1;
-        name = `pipeline-rule-${index}`;
+        name = `${prefix}-${index}`;
     }
-    const { ruleType, enforcement, pipelineRef, inputFiles, ...rest } = EXAMPLE_PIPELINE_RULE;
+    const { enforcement, pipelineRef, inputFiles, ...rest } = JSON.parse(
+        JSON.stringify(EXAMPLE_RULES[ruleType])
+    );
+    delete rest.ruleType;
     return {
         name,
         ruleType,
         enforcement,
-        pipelineRef: { ...pipelineRef, templateId: "" },
-        inputFiles: inputFilesDraftFrom(inputFiles),
-        rest: JSON.parse(JSON.stringify(rest)),
+        pipelineRef:
+            ruleType === "pipeline"
+                ? { ...normalizePipelineRef(pipelineRef), templateId: "" }
+                : normalizePipelineRef(undefined),
+        inputFiles:
+            ruleType === "pipeline"
+                ? inputFilesDraftFrom(inputFiles)
+                : { ...DEFAULT_INPUT_FILES_DRAFT },
+        rest,
     };
 }
+
+/** Whether a rule type is one of the vams-rules-v1 types. */
+export const isKnownRuleType = (value: any): value is ComplianceRuleType =>
+    COMPLIANCE_RULE_TYPES.includes(value);
+
+/** The check a rule of `ruleType` gains from "Add check", numbered after the existing ones. */
+export function newCheck(ruleType: ComplianceRuleType, existing: number): Record<string, any> {
+    const name = `check-${existing + 1}`;
+    if (ruleType === "fileStructure") return { name, minFiles: 1 };
+    if (ruleType === "assetAttributes") return { name, field: "tags", minTags: 1 };
+    return { name };
+}
+
+const isEmptyValue = (value: any) =>
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0);
+
+/**
+ * A check with `patch` applied. A key patched to an empty value (undefined, "", []) is removed, so
+ * the JSON carries only the criteria a check uses; keys the patch does not name are kept as they are.
+ */
+export function patchCheck(
+    check: Record<string, any>,
+    patch: Record<string, any>
+): Record<string, any> {
+    const next = { ...check };
+    for (const [key, value] of Object.entries(patch)) {
+        if (isEmptyValue(value)) {
+            delete next[key];
+        } else {
+            next[key] = value;
+        }
+    }
+    return next;
+}
+
+/** The checks of a rule's opaque part, as a list of objects. */
+export const checksOf = (rule: RuleDraft): Record<string, any>[] =>
+    Array.isArray(rule.rest.checks)
+        ? rule.rest.checks.map((check: any) => (check && typeof check === "object" ? check : {}))
+        : [];
+
+/** A string list attribute of a check; [] when absent or not a list. */
+export const checkList = (check: Record<string, any>, key: string): string[] =>
+    stringList(check[key]);
+
+/** A number input's text as a number; undefined when empty or not a number. */
+export function numberFromInput(text: string): number | undefined {
+    if (text.trim() === "") return undefined;
+    const value = Number(text);
+    return Number.isFinite(value) ? value : undefined;
+}
+
+/** Field errors of one check, keyed by the check field; `check` holds an error of the whole check. */
+export type CheckErrors = Partial<Record<string, string>>;
+
+/** The rule-level error of a check list as the backend reports it, or undefined. */
+export function checksCountError(checks: Record<string, any>[]): string | undefined {
+    if (checks.length === 0) return "checks: ensure this value has at least 1 items";
+    if (checks.length > RULE_MAX_CHECKS) {
+        return `checks: ensure this value has at most ${RULE_MAX_CHECKS} items`;
+    }
+    return undefined;
+}
+
+function patternListError(field: string, patterns: string[]): string | undefined {
+    if (patterns.length > PATH_PATTERNS_MAX) {
+        return `${field}: ensure this value has at most ${PATH_PATTERNS_MAX} items`;
+    }
+    if (patterns.some((pattern) => !pattern || pattern.length > PATTERN_MAX_LENGTH)) {
+        return `Every '${field}' pattern must be 1 to ${PATTERN_MAX_LENGTH} characters`;
+    }
+    return undefined;
+}
+
+function countError(field: string, value: any): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "number" || !Number.isInteger(value)) {
+        return `${field}: value is not a valid integer`;
+    }
+    if (value < 0) return `${field}: ensure this value is greater than or equal to 0`;
+    return undefined;
+}
+
+function tagListError(field: string, tags: string[]): string | undefined {
+    if (tags.length > TAGS_MAX) return `${field}: ensure this value has at most ${TAGS_MAX} items`;
+    if (tags.some((tag) => !tag.trim())) return `Every '${field}' entry must be a non-empty string`;
+    if (tags.some((tag) => tag.length > TAG_MAX_LENGTH)) {
+        return `${field} must be lower than ${TAG_MAX_LENGTH} characters`;
+    }
+    return undefined;
+}
+
+const setError = (errors: CheckErrors, key: string, message: string | undefined) => {
+    if (message && !errors[key]) errors[key] = message;
+};
+
+function nameError(check: Record<string, any>): string | undefined {
+    return typeof check.name === "string" && check.name.trim()
+        ? undefined
+        : "Check name is required";
+}
+
+/**
+ * Errors of a file-structure check with the messages the backend returns: at least one criterion,
+ * `minFiles <= maxFiles`, non-negative whole counts, and at most 25 patterns of 1 to 512 characters
+ * per list. Whether a pattern is a valid regular expression is checked by the API when the schema is
+ * saved.
+ */
+export function validateFileStructureCheck(check: Record<string, any>): CheckErrors {
+    const errors: CheckErrors = {};
+    setError(errors, "name", nameError(check));
+    const required = checkList(check, "requiredPaths");
+    const forbidden = checkList(check, "forbiddenPaths");
+    setError(errors, "requiredPaths", patternListError("requiredPaths", required));
+    setError(errors, "forbiddenPaths", patternListError("forbiddenPaths", forbidden));
+    setError(errors, "minFiles", countError("minFiles", check.minFiles));
+    setError(errors, "maxFiles", countError("maxFiles", check.maxFiles));
+    const hasMin = check.minFiles !== undefined && check.minFiles !== null;
+    const hasMax = check.maxFiles !== undefined && check.maxFiles !== null;
+    if (!required.length && !forbidden.length && !hasMin && !hasMax) {
+        errors.check =
+            "At least one of 'requiredPaths', 'forbiddenPaths', 'minFiles' or 'maxFiles' is required";
+    }
+    if (
+        hasMin &&
+        hasMax &&
+        !errors.minFiles &&
+        !errors.maxFiles &&
+        check.minFiles > check.maxFiles
+    ) {
+        errors.maxFiles = "'minFiles' must be <= 'maxFiles'";
+    }
+    return errors;
+}
+
+/** Errors of a version-coverage check with the messages the backend returns. */
+export function validateVersionCoverageCheck(check: Record<string, any>): CheckErrors {
+    const errors: CheckErrors = {};
+    setError(errors, "name", nameError(check));
+    setError(
+        errors,
+        "excludePaths",
+        patternListError("excludePaths", checkList(check, "excludePaths"))
+    );
+    return errors;
+}
+
+export const ASSET_ATTRIBUTE_FIELD_OPTIONS: {
+    value: ComplianceAssetAttributeField;
+    label: string;
+}[] = [
+    { value: "assetName", label: "Asset name" },
+    { value: "description", label: "Description" },
+    { value: "tags", label: "Tags" },
+];
+
+/**
+ * Errors of an asset-attribute check with the messages the backend returns: a name or description
+ * takes exactly one of `matches` / `notMatches` and no tag criteria; tags take at least one tag
+ * criterion and no pattern; lists and counts are bounded as the API bounds them.
+ */
+export function validateAssetAttributeCheck(check: Record<string, any>): CheckErrors {
+    const errors: CheckErrors = {};
+    setError(errors, "name", nameError(check));
+    if (!ASSET_ATTRIBUTE_FIELD_OPTIONS.some((option) => option.value === check.field)) {
+        errors.field = "field: unexpected value; permitted: 'assetName', 'description', 'tags'";
+        return errors;
+    }
+    const required = checkList(check, "requiredTags");
+    const forbidden = checkList(check, "forbiddenTags");
+    const hasMinTags = check.minTags !== undefined && check.minTags !== null;
+    const hasPattern = typeof check.matches === "string" || typeof check.notMatches === "string";
+    if (check.field === "tags") {
+        if (hasPattern) errors.check = "'matches' and 'notMatches' do not apply to the tags field";
+        else if (!required.length && !forbidden.length && !hasMinTags) {
+            errors.check =
+                "At least one of 'requiredTags', 'forbiddenTags' or 'minTags' is required";
+        }
+        setError(errors, "requiredTags", tagListError("requiredTags", required));
+        setError(errors, "forbiddenTags", tagListError("forbiddenTags", forbidden));
+        setError(errors, "minTags", countError("minTags", check.minTags));
+        return errors;
+    }
+    if (required.length || forbidden.length || hasMinTags) {
+        errors.check = "'requiredTags', 'forbiddenTags' and 'minTags' apply to the tags field only";
+    } else if ((typeof check.matches === "string") === (typeof check.notMatches === "string")) {
+        errors.pattern = "Exactly one of 'matches' or 'notMatches' is required for this field";
+    } else {
+        const key = typeof check.matches === "string" ? "matches" : "notMatches";
+        const pattern: string = check[key];
+        if (!pattern || pattern.length > PATTERN_MAX_LENGTH) {
+            errors.pattern = `Every '${key}' pattern must be 1 to ${PATTERN_MAX_LENGTH} characters`;
+        }
+    }
+    return errors;
+}
+
+/** The validator of a check-edited rule type's checks. */
+export const CHECK_VALIDATORS: Partial<
+    Record<ComplianceRuleType, (check: Record<string, any>) => CheckErrors>
+> = {
+    fileStructure: validateFileStructureCheck,
+    versionCoverage: validateVersionCoverageCheck,
+    assetAttributes: validateAssetAttributeCheck,
+};

@@ -36,7 +36,7 @@ import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchema
 /** Shown on a schema row whose body is not a vams-rules-v1 document. */
 export const LEGACY_SCHEMA_LABEL = "Legacy — cannot be bound or evaluated";
 
-const SCHEMA_TEMPLATES: Record<
+export const SCHEMA_TEMPLATES: Record<
     string,
     { label: string; description: string; body: Record<string, any> }
 > = {
@@ -141,6 +141,19 @@ const SCHEMA_TEMPLATES: Record<
                         },
                     ],
                 },
+                "asset-naming": {
+                    ruleType: "assetAttributes",
+                    enforcement: "inform",
+                    checks: [
+                        {
+                            name: "name-convention",
+                            description:
+                                "The asset name starts with a letter or digit and uses only letters, digits, underscores, dots and hyphens.",
+                            field: "assetName",
+                            matches: "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                        },
+                    ],
+                },
             },
         },
     },
@@ -220,6 +233,19 @@ const SCHEMA_TEMPLATES: Record<
                                 "coordinate_system",
                                 "units",
                             ],
+                        },
+                    ],
+                },
+                "model-files": {
+                    ruleType: "fileStructure",
+                    enforcement: "warn",
+                    checks: [
+                        {
+                            name: "model-file-present",
+                            description:
+                                "At least one source model file is present, and no temporary or operating-system files are.",
+                            requiredPaths: ["\\.(stl|obj|ply|gltf|glb|xyz)$"],
+                            forbiddenPaths: ["\\.(tmp|bak)$", "(^|/)(\\.DS_Store|Thumbs\\.db)$"],
                         },
                     ],
                 },
@@ -303,6 +329,18 @@ const SCHEMA_TEMPLATES: Record<
                             description:
                                 "The last access review and the next scheduled retention review are recorded.",
                             additionalRequiredFields: ["last_access_review", "next_review_date"],
+                        },
+                    ],
+                },
+                "files-captured-in-a-version": {
+                    ruleType: "versionCoverage",
+                    enforcement: "warn",
+                    checks: [
+                        {
+                            name: "current-files-versioned",
+                            description:
+                                "Every current file is recorded in an asset version, so a retained version reproduces the asset. Preview images are not checked. The rule fails after an upload until an asset version is created.",
+                            excludePaths: ["\\.previewFile\\."],
                         },
                     ],
                 },
@@ -618,7 +656,7 @@ export default function ComplianceSchemas() {
                         </FormField>
                         <FormField
                             label="Schema Body"
-                            description="A vams-rules-v1 rule set: pipeline, metadata and relationship rules with an enforcement level each. Use the JSON editor for full control or the Visual Builder for guided editing."
+                            description="A vams-rules-v1 rule set: pipeline, metadata, relationship, file structure, version coverage and asset attributes rules with an enforcement level each. Use the JSON editor for full control or the Visual Builder for guided editing."
                         >
                             <ComplianceSchemaEditor value={formBody} onChange={setFormBody} />
                         </FormField>

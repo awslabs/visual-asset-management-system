@@ -13,7 +13,7 @@ import os
 import pytest
 
 from handlers.compliance import complianceSchemaService as svc
-from models.compliance import MetadataRule, PipelineRule, RelationshipRule, VamsRulesV1Schema
+from models.compliance import RULE_TYPE_MODELS, MetadataRule, PipelineRule, VamsRulesV1Schema
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 TEMPLATES_DIR = os.path.join(_REPO_ROOT, "documentation", "complianceSchemaTemplates")
@@ -55,8 +55,7 @@ class TestEveryShippedTemplate:
         assert body["schemaFormat"] == "vams-rules-v1"
         rules = VamsRulesV1Schema(**body).parse_rules()
         assert rules
-        assert all(isinstance(rule, (MetadataRule, PipelineRule, RelationshipRule))
-                   for rule in rules.values())
+        assert all(isinstance(rule, tuple(RULE_TYPE_MODELS.values())) for rule in rules.values())
 
     @pytest.mark.parametrize("path", _template_paths(), ids=os.path.basename)
     def test_the_schema_service_accepts_the_body(self, path):
@@ -71,7 +70,8 @@ class TestEveryShippedTemplate:
 
     def test_the_set_exercises_every_rule_type(self):
         kinds = {type(rule) for path in _template_paths() for rule in _rules(path).values()}
-        assert kinds == {MetadataRule, PipelineRule, RelationshipRule}
+        assert kinds == set(RULE_TYPE_MODELS.values())
+        assert len(kinds) == 6
 
 
 @pytest.mark.unit

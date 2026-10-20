@@ -2,7 +2,7 @@
     "metadata": {
         "name": "3D Model Quality Schema",
         "description": "Quality gate schema for 3D model assets. Requires polygon budget, coordinate system and unit metadata, and proves every model converts through the built-in 3D conversion pipeline before it is approved for use.",
-        "version": "2.0.0"
+        "version": "2.1.0"
     },
     "schemaName": "3d-model-quality",
     "description": "Quality requirements for 3D model assets: polygon count, coordinate system and unit metadata, plus a successful GLB conversion of the model file. The conversion rule selects source formats only and leaves out *.glb: the conversion pipeline writes its .glb output back into the asset, and selecting it would make the asset's own output a second conversion candidate.",
@@ -26,6 +26,18 @@
                     }
                 ]
             },
+            "model-files": {
+                "ruleType": "fileStructure",
+                "enforcement": "warn",
+                "checks": [
+                    {
+                        "name": "model-file-present",
+                        "description": "At least one source model file is present, and no temporary or operating-system files are.",
+                        "requiredPaths": ["\\.(stl|obj|ply|gltf|glb|xyz)$"],
+                        "forbiddenPaths": ["\\.(tmp|bak)$", "(^|/)(\\.DS_Store|Thumbs\\.db)$"]
+                    }
+                ]
+            },
             "converts-to-glb": {
                 "ruleType": "pipeline",
                 "enforcement": "quarantine",
@@ -43,7 +55,7 @@
                 "checks": [
                     {
                         "name": "conversion-succeeds",
-                        "description": "The model file converts to GLB. The pipeline writes no compliance-output document, so the check reads the execution's own success measurement.",
+                        "description": "The model file converts to GLB. The filter lists source formats only: the pipeline writes a .glb, so admitting *.glb would select the pipeline's own output on re-evaluation. The pipeline writes no compliance-output document, so the check reads the execution's own success measurement.",
                         "outputField": "execution_success",
                         "tolerance": { "operator": "eq", "value": 1 }
                     },

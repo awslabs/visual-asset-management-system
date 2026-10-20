@@ -148,3 +148,184 @@ describe("ComplianceSchemaEditor input files", () => {
         expect(within(remove).getByText("Remove")).toBeInTheDocument();
     });
 });
+
+const emptyBody = { schemaFormat: "vams-rules-v1", rules: {} };
+
+const lastBody = (onChange: jest.Mock) =>
+    JSON.parse(onChange.mock.calls[onChange.mock.calls.length - 1][0]);
+
+const ruleBody = (name: string, rule: Record<string, any>) => ({
+    schemaFormat: "vams-rules-v1",
+    rules: { [name]: rule },
+});
+
+const addRule = async (label: string) => {
+    await userEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    await userEvent.click(await screen.findByText(label));
+};
+
+describe("ComplianceSchemaEditor rule types", () => {
+    it("offers all six rule types from Add rule", async () => {
+        render(<Harness initial={emptyBody} onChange={jest.fn()} />);
+        await openBuilder();
+
+        await userEvent.click(screen.getByRole("button", { name: "Add rule" }));
+        for (const label of [
+            "Pipeline rule",
+            "Metadata rule",
+            "Relationship rule",
+            "File structure rule",
+            "Version coverage rule",
+            "Asset attributes rule",
+        ]) {
+            expect(await screen.findByText(label)).toBeInTheDocument();
+        }
+    });
+
+    it("adds a metadata rule from its example and leaves its checks to the JSON tab", async () => {
+        const onChange = jest.fn();
+        render(<Harness initial={emptyBody} onChange={onChange} />);
+        await openBuilder();
+
+        await addRule("Metadata rule");
+
+        await waitFor(() => {
+            expect(lastBody(onChange).rules["metadata-rule-1"]).toMatchObject({
+                ruleType: "metadata",
+                metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "defaultAsset" },
+            });
+        });
+        expect(screen.getByText(/checks of a metadata rule are edited in the/)).toBeInTheDocument();
+    });
+
+    it("adds a file structure rule and writes the patterns typed one per line", async () => {
+        const onChange = jest.fn();
+        render(<Harness initial={emptyBody} onChange={onChange} />);
+        await openBuilder();
+
+        await addRule("File structure rule");
+        await waitFor(() => {
+            expect(lastBody(onChange).rules["file-structure-rule-1"].ruleType).toBe(
+                "fileStructure"
+            );
+        });
+        const required = screen.getByLabelText("Required paths, check 1");
+        await userEvent.clear(required);
+        await userEvent.type(required, "^models/{Enter}\\.glb$");
+
+        await waitFor(() => {
+            expect(lastBody(onChange).rules["file-structure-rule-1"].checks[0]).toMatchObject({
+                name: "model-file-present",
+                requiredPaths: ["^models/", "\\.glb$"],
+            });
+        });
+        expect(screen.getByLabelText("Forbidden paths, check 1")).toBeInTheDocument();
+        expect(screen.getByLabelText("Minimum files, check 1")).toBeInTheDocument();
+        expect(screen.getByLabelText("Maximum files, check 1")).toBeInTheDocument();
+    });
+
+    it("shows the API's message when minFiles exceeds maxFiles and when no criterion is left", async () => {
+        const onChange = jest.fn();
+        render(
+            <Harness
+                initial={ruleBody("files", {
+                    ruleType: "fileStructure",
+                    enforcement: "warn",
+                    checks: [{ name: "count", minFiles: 3 }],
+                })}
+                onChange={onChange}
+            />
+        );
+        await openBuilder();
+
+        await userEvent.type(screen.getByLabelText("Maximum files, check 1"), "2");
+        expect(await screen.findByText("'minFiles' must be <= 'maxFiles'")).toBeInTheDocument();
+
+        await userEvent.clear(screen.getByLabelText("Minimum files, check 1"));
+        await userEvent.clear(screen.getByLabelText("Maximum files, check 1"));
+        expect(
+            await screen.findByText(
+                "At least one of 'requiredPaths', 'forbiddenPaths', 'minFiles' or 'maxFiles' is required"
+            )
+        ).toBeInTheDocument();
+        await waitFor(() => {
+            expect(lastBody(onChange).rules.files.checks[0]).toEqual({ name: "count" });
+        });
+    });
+
+    it("adds a version coverage rule with its excluded paths and a second check", async () => {
+        const onChange = jest.fn();
+        render(<Harness initial={emptyBody} onChange={onChange} />);
+        await openBuilder();
+
+        await addRule("Version coverage rule");
+        expect(screen.getByLabelText("Excluded paths (optional), check 1")).toHaveValue(
+            "\\.previewFile\\."
+        );
+        await userEvent.click(screen.getByRole("button", { name: "Add check" }));
+
+        await waitFor(() => {
+            expect(lastBody(onChange).rules["version-coverage-rule-1"].checks).toEqual([
+                {
+                    name: "files-captured-in-a-version",
+                    description: "Every current file is recorded in an asset version",
+                    excludePaths: ["\\.previewFile\\."],
+                },
+                { name: "check-2" },
+            ]);
+        });
+    });
+
+    it("edits an asset name pattern and its condition", async () => {
+        const onChange = jest.fn();
+        render(<Harness initial={emptyBody} onChange={onChange} />);
+        await openBuilder();
+
+        await addRule("Asset attributes rule");
+        expect(screen.getByLabelText("Must match")).toBeChecked();
+        await userEvent.click(screen.getByLabelText("Must not match"));
+
+        await waitFor(() => {
+            const check = lastBody(onChange).rules["asset-attributes-rule-1"].checks[0];
+            expect(check.notMatches).toBe("^[A-Za-z0-9][A-Za-z0-9_.-]*$");
+            expect(check.matches).toBeUndefined();
+        });
+
+        await userEvent.clear(screen.getByLabelText("Pattern, check 1"));
+        expect(
+            await screen.findByText("Every 'notMatches' pattern must be 1 to 512 characters")
+        ).toBeInTheDocument();
+    });
+
+    it("edits the tags of a tag check as tokens", async () => {
+        const onChange = jest.fn();
+        render(
+            <Harness
+                initial={ruleBody("tagged", {
+                    ruleType: "assetAttributes",
+                    enforcement: "warn",
+                    checks: [{ name: "tags", field: "tags", requiredTags: ["engineering"] }],
+                })}
+                onChange={onChange}
+            />
+        );
+        await openBuilder();
+
+        expect(screen.getByText("engineering")).toBeInTheDocument();
+        await userEvent.type(screen.getByLabelText("Forbidden tag, check 1"), "draft");
+        await userEvent.click(screen.getByRole("button", { name: "Add forbidden tag, check 1" }));
+        await waitFor(() => {
+            expect(lastBody(onChange).rules.tagged.checks[0]).toEqual({
+                name: "tags",
+                field: "tags",
+                requiredTags: ["engineering"],
+                forbiddenTags: ["draft"],
+            });
+        });
+
+        await userEvent.click(screen.getByRole("button", { name: "Remove engineering" }));
+        await waitFor(() => {
+            expect(lastBody(onChange).rules.tagged.checks[0].requiredTags).toBeUndefined();
+        });
+    });
+});

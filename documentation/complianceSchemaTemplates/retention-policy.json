@@ -2,7 +2,7 @@
     "metadata": {
         "name": "Retention Policy Schema",
         "description": "Ensures assets have proper lifecycle and retention metadata. Use this to enforce data governance policies around asset expiry, archival, and disposal.",
-        "version": "2.0.0"
+        "version": "2.1.0"
     },
     "schemaName": "retention-policy",
     "description": "Enforces lifecycle and retention metadata for data governance compliance.",
@@ -42,6 +42,17 @@
                         "name": "review-dates-recorded",
                         "description": "The last access review and the next scheduled retention review are recorded.",
                         "additionalRequiredFields": ["last_access_review", "next_review_date"]
+                    }
+                ]
+            },
+            "files-captured-in-a-version": {
+                "ruleType": "versionCoverage",
+                "enforcement": "warn",
+                "checks": [
+                    {
+                        "name": "current-files-versioned",
+                        "description": "Every current file is recorded in an asset version, so a retained version reproduces the asset. Preview images are not checked. The rule fails after an upload until an asset version is created.",
+                        "excludePaths": ["\\.previewFile\\."]
                     }
                 ]
             }

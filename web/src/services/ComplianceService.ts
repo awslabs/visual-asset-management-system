@@ -11,7 +11,23 @@ export const VAMS_RULES_V1_FORMAT = "vams-rules-v1";
 
 export type ComplianceEnforcementLevel = "quarantine" | "warn" | "inform";
 
-export type ComplianceRuleType = "pipeline" | "metadata" | "relationship";
+export type ComplianceRuleType =
+    | "pipeline"
+    | "metadata"
+    | "relationship"
+    | "fileStructure"
+    | "versionCoverage"
+    | "assetAttributes";
+
+/** Every rule type of the vams-rules-v1 format, in the order the editor offers them. */
+export const COMPLIANCE_RULE_TYPES: ComplianceRuleType[] = [
+    "pipeline",
+    "metadata",
+    "relationship",
+    "fileStructure",
+    "versionCoverage",
+    "assetAttributes",
+];
 
 /**
  * Where a pipeline rule's workflow lives and which pipeline inside it produces the checked
@@ -100,10 +116,70 @@ export interface ComplianceRelationshipRule {
     }[];
 }
 
+/**
+ * Checks over the asset's current, non-archived files. Patterns are regular expressions searched in
+ * each file's asset-relative path without its leading `/`.
+ */
+export interface ComplianceFileStructureCheck {
+    name: string;
+    description?: string;
+    /** Every pattern must match at least one file. */
+    requiredPaths?: string[];
+    /** No file may match any pattern. */
+    forbiddenPaths?: string[];
+    minFiles?: number;
+    maxFiles?: number;
+}
+
+export interface ComplianceFileStructureRule {
+    ruleType: "fileStructure";
+    enforcement: ComplianceEnforcementLevel;
+    checks: ComplianceFileStructureCheck[];
+}
+
+/** Every current file not matched by `excludePaths` has its current version in an asset version. */
+export interface ComplianceVersionCoverageCheck {
+    name: string;
+    description?: string;
+    excludePaths?: string[];
+}
+
+export interface ComplianceVersionCoverageRule {
+    ruleType: "versionCoverage";
+    enforcement: ComplianceEnforcementLevel;
+    checks: ComplianceVersionCoverageCheck[];
+}
+
+export type ComplianceAssetAttributeField = "assetName" | "description" | "tags";
+
+/**
+ * One check on the asset row. `assetName` and `description` take exactly one of `matches` /
+ * `notMatches`; `tags` takes at least one of `requiredTags`, `forbiddenTags`, `minTags`.
+ */
+export interface ComplianceAssetAttributeCheck {
+    name: string;
+    description?: string;
+    field: ComplianceAssetAttributeField;
+    matches?: string;
+    notMatches?: string;
+    requiredTags?: string[];
+    forbiddenTags?: string[];
+    minTags?: number;
+}
+
+export interface ComplianceAssetAttributesRule {
+    ruleType: "assetAttributes";
+    enforcement: ComplianceEnforcementLevel;
+    checks: ComplianceAssetAttributeCheck[];
+}
+
 export type ComplianceRule =
     | CompliancePipelineRule
     | ComplianceMetadataRule
-    | ComplianceRelationshipRule;
+    | ComplianceRelationshipRule
+    | ComplianceFileStructureRule
+    | ComplianceVersionCoverageRule
+    | ComplianceAssetAttributesRule;
 
 export interface VamsRulesV1SchemaBody {
     schemaFormat: typeof VAMS_RULES_V1_FORMAT;

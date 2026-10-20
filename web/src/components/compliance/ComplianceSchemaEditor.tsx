@@ -32,15 +32,24 @@ import Header from "@cloudscape-design/components/header";
 import Alert from "@cloudscape-design/components/alert";
 import RadioGroup from "@cloudscape-design/components/radio-group";
 import AttributeEditor from "@cloudscape-design/components/attribute-editor";
+import ButtonDropdown from "@cloudscape-design/components/button-dropdown";
+import Textarea from "@cloudscape-design/components/textarea";
+import TokenGroup from "@cloudscape-design/components/token-group";
 import type { editor } from "monaco-editor";
 import Synonyms from "../../synonyms";
 import {
+    COMPLIANCE_RULE_TYPES,
+    ComplianceAssetAttributeField,
     CompliancePipelineInputFilesMode,
     CompliancePipelineRef,
+    ComplianceRuleType,
     PIPELINE_INPUT_FILES_MODES,
     VAMS_RULES_V1_FORMAT,
 } from "../../services/ComplianceService";
 import {
+    ASSET_ATTRIBUTE_FIELD_OPTIONS,
+    CHECK_EDITED_RULE_TYPES,
+    CHECK_VALIDATORS,
     COMPLIANCE_ID_PATTERN,
     ENFORCEMENT_OPTIONS,
     INPUT_FILES_MAX_FILTERS,
@@ -48,11 +57,23 @@ import {
     INPUT_FILES_MAX_KEYS,
     INPUT_FILES_MODE_OPTIONS,
     InputFilesDraft,
+    PATH_PATTERNS_MAX,
+    PATTERN_MAX_LENGTH,
     PIPELINE_REF_FIELDS,
+    RULE_MAX_CHECKS,
+    RULE_TYPE_OPTIONS,
     RulesDraft,
+    TAGS_MAX,
+    TAG_MAX_LENGTH,
     bodyFromRulesDraft,
+    checkList,
+    checksCountError,
+    checksOf,
     isVamsRulesBody,
-    newPipelineRuleDraft,
+    newCheck,
+    newRuleDraft,
+    numberFromInput,
+    patchCheck,
     rulesDraftFromBody,
     validateInputFiles,
     validatePipelineRef,
@@ -140,14 +161,28 @@ const TOLERANCE_META_SCHEMA = {
     },
 };
 
+const PATTERN_LIST_META_SCHEMA = (description: string) => ({
+    type: "array",
+    maxItems: PATH_PATTERNS_MAX,
+    items: { type: "string", minLength: 1, maxLength: PATTERN_MAX_LENGTH },
+    description,
+});
+
+const TAG_LIST_META_SCHEMA = (description: string) => ({
+    type: "array",
+    maxItems: TAGS_MAX,
+    items: { type: "string", minLength: 1, maxLength: TAG_MAX_LENGTH },
+    description,
+});
+
 const RULE_META_SCHEMA = {
     type: "object",
     required: ["ruleType", "enforcement", "checks"],
     properties: {
         ruleType: {
             type: "string",
-            enum: ["pipeline", "metadata", "relationship"],
-            description: `What the rule inspects: a workflow run, the metadata, or the ${Synonyms.asset} links.`,
+            enum: COMPLIANCE_RULE_TYPES,
+            description: `What the rule inspects: a workflow run, the metadata, the ${Synonyms.asset} links, the file paths, whether the files are captured in ${Synonyms.asset} versions, or the ${Synonyms.asset}'s name, description and tags.`,
         },
         enforcement: {
             type: "string",
@@ -168,6 +203,7 @@ const RULE_META_SCHEMA = {
         checks: {
             type: "array",
             minItems: 1,
+            description: `At most ${RULE_MAX_CHECKS} checks on a fileStructure, versionCoverage or assetAttributes rule.`,
             items: {
                 type: "object",
                 required: ["name"],
@@ -186,6 +222,45 @@ const RULE_META_SCHEMA = {
                     relationshipType: { type: "string", enum: ["parentChild", "related"] },
                     minCount: { type: "integer", minimum: 0 },
                     maxCount: { type: "integer", minimum: 0 },
+                    requiredPaths: PATTERN_LIST_META_SCHEMA(
+                        "fileStructure: regular expressions that must each match at least one file path (searched in the path without its leading /)."
+                    ),
+                    forbiddenPaths: PATTERN_LIST_META_SCHEMA(
+                        "fileStructure: regular expressions no file path may match."
+                    ),
+                    minFiles: { type: "integer", minimum: 0, description: "fileStructure." },
+                    maxFiles: { type: "integer", minimum: 0, description: "fileStructure." },
+                    excludePaths: PATTERN_LIST_META_SCHEMA(
+                        "versionCoverage: regular expressions of file paths the check ignores."
+                    ),
+                    field: {
+                        type: "string",
+                        enum: ["assetName", "description", "tags"],
+                        description: `assetAttributes: the ${Synonyms.asset} attribute the check reads.`,
+                    },
+                    matches: {
+                        type: "string",
+                        minLength: 1,
+                        maxLength: PATTERN_MAX_LENGTH,
+                        description: "assetAttributes (assetName, description): must match.",
+                    },
+                    notMatches: {
+                        type: "string",
+                        minLength: 1,
+                        maxLength: PATTERN_MAX_LENGTH,
+                        description: "assetAttributes (assetName, description): must not match.",
+                    },
+                    requiredTags: TAG_LIST_META_SCHEMA(
+                        "assetAttributes (tags): tags that must be present."
+                    ),
+                    forbiddenTags: TAG_LIST_META_SCHEMA(
+                        "assetAttributes (tags): tags that must be absent."
+                    ),
+                    minTags: {
+                        type: "integer",
+                        minimum: 0,
+                        description: "assetAttributes (tags).",
+                    },
                 },
             },
         },
@@ -381,6 +456,111 @@ function StringListEditor({
     );
 }
 
+/** The non-blank lines of a multi-line pattern field, each kept exactly as typed. */
+const patternLines = (text: string): string[] =>
+    text.split(/\r?\n/).filter((line) => line.trim() !== "");
+
+const sameList = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((value, index) => value === b[index]);
+
+interface PatternListFieldProps {
+    items: string[];
+    onChange: (items: string[]) => void;
+    ariaLabel: string;
+    placeholder: string;
+    disabled?: boolean;
+}
+
+/**
+ * One regular expression per line. The typed text is kept while it parses to the same list, so a
+ * trailing newline the user is about to type a pattern after is not taken away.
+ */
+function PatternListField({
+    items,
+    onChange,
+    ariaLabel,
+    placeholder,
+    disabled = false,
+}: PatternListFieldProps) {
+    const [text, setText] = useState(items.join("\n"));
+    useEffect(() => {
+        setText((current) => (sameList(patternLines(current), items) ? current : items.join("\n")));
+    }, [items]);
+    return (
+        <Textarea
+            value={text}
+            ariaLabel={ariaLabel}
+            placeholder={placeholder}
+            rows={3}
+            disabled={disabled}
+            onChange={({ detail }) => {
+                setText(detail.value);
+                onChange(patternLines(detail.value));
+            }}
+        />
+    );
+}
+
+interface TagListFieldProps {
+    items: string[];
+    onChange: (items: string[]) => void;
+    /** Names the field to screen readers, e.g. "Required tag". */
+    itemLabel: string;
+    disabled?: boolean;
+}
+
+/** Tag values as dismissible tokens, with a field and button to add one. */
+function TagListField({ items, onChange, itemLabel, disabled = false }: TagListFieldProps) {
+    const [draft, setDraft] = useState("");
+    const add = () => {
+        const tag = draft.trim();
+        if (tag && !items.includes(tag)) {
+            onChange([...items, tag]);
+        }
+        setDraft("");
+    };
+    return (
+        <SpaceBetween size="xs">
+            <SpaceBetween direction="horizontal" size="xs">
+                <Input
+                    value={draft}
+                    ariaLabel={itemLabel}
+                    placeholder="tag value"
+                    disabled={disabled}
+                    onChange={({ detail }) => setDraft(detail.value)}
+                    onKeyDown={({ detail }) => {
+                        if (detail.key === "Enter") add();
+                    }}
+                />
+                <Button
+                    ariaLabel={`Add ${itemLabel.toLowerCase()}`}
+                    disabled={disabled || !draft.trim() || items.length >= TAGS_MAX}
+                    onClick={add}
+                >
+                    Add
+                </Button>
+            </SpaceBetween>
+            <TokenGroup
+                items={items.map((tag) => ({ label: tag, dismissLabel: `Remove ${tag}` }))}
+                readOnly={disabled}
+                onDismiss={({ detail }) =>
+                    onChange(items.filter((_, index) => index !== detail.itemIndex))
+                }
+            />
+        </SpaceBetween>
+    );
+}
+
+const CHECK_FIELD_DESCRIPTIONS = {
+    requiredPaths:
+        "Regular expressions, one per line; each must match at least one file path. Paths are matched without their leading /, so ^models/ means a top-level models folder.",
+    forbiddenPaths: "Regular expressions, one per line; no file path may match any of them.",
+    excludePaths:
+        "Regular expressions, one per line; files whose path matches are not checked (e.g. \\.previewFile\\. for preview images).",
+};
+
+const PATTERN_CONSTRAINT = `Up to ${PATH_PATTERNS_MAX} patterns of up to ${PATTERN_MAX_LENGTH} characters, checked as regular expressions when the schema is saved.`;
+
 interface ComplianceSchemaEditorProps {
     value: string;
     onChange: (value: string) => void;
@@ -533,12 +713,48 @@ export default function ComplianceSchemaEditor({
         updateRule(index, { inputFiles: { ...rule.inputFiles, ...patch } });
     };
 
-    const addPipelineRule = () => {
+    const addRule = (ruleType: ComplianceRuleType) => {
         const names = rulesDraft.rules.map((r) => r.name);
         applyRulesDraft({
             ...rulesDraft,
-            rules: [...rulesDraft.rules, newPipelineRuleDraft(names)],
+            rules: [...rulesDraft.rules, newRuleDraft(ruleType, names)],
         });
+    };
+
+    const setChecks = (index: number, checks: Record<string, any>[]) => {
+        const rule = rulesDraft.rules[index];
+        updateRule(index, { rest: { ...rule.rest, checks } });
+    };
+
+    const updateCheck = (
+        index: number,
+        checkIndex: number,
+        patch: Record<string, any> | ((check: Record<string, any>) => Record<string, any>)
+    ) => {
+        const checks = checksOf(rulesDraft.rules[index]);
+        setChecks(
+            index,
+            checks.map((check, i) =>
+                i !== checkIndex
+                    ? check
+                    : typeof patch === "function"
+                    ? patch(check)
+                    : patchCheck(check, patch)
+            )
+        );
+    };
+
+    const addCheck = (index: number) => {
+        const rule = rulesDraft.rules[index];
+        const checks = checksOf(rule);
+        setChecks(index, [...checks, newCheck(rule.ruleType, checks.length)]);
+    };
+
+    const removeCheck = (index: number, checkIndex: number) => {
+        setChecks(
+            index,
+            checksOf(rulesDraft.rules[index]).filter((_, i) => i !== checkIndex)
+        );
     };
 
     const removeRule = (index: number) => {
@@ -627,15 +843,338 @@ export default function ComplianceSchemaEditor({
         );
     };
 
+    const numberField = (
+        label: string,
+        value: any,
+        errorText: string | undefined,
+        onValue: (value: number | undefined) => void,
+        ariaLabel: string
+    ) => (
+        <FormField label={label} errorText={errorText}>
+            <Input
+                type="number"
+                value={value === undefined || value === null ? "" : String(value)}
+                ariaLabel={ariaLabel}
+                disabled={readOnly}
+                onChange={({ detail }) => onValue(numberFromInput(detail.value))}
+            />
+        </FormField>
+    );
+
+    const renderPatternField = (
+        idx: number,
+        checkIndex: number,
+        check: Record<string, any>,
+        key: "requiredPaths" | "forbiddenPaths" | "excludePaths",
+        label: string,
+        placeholder: string,
+        errorText: string | undefined
+    ) => (
+        <FormField
+            label={label}
+            description={CHECK_FIELD_DESCRIPTIONS[key]}
+            constraintText={PATTERN_CONSTRAINT}
+            errorText={errorText}
+            stretch
+        >
+            <PatternListField
+                items={checkList(check, key)}
+                ariaLabel={`${label}, check ${checkIndex + 1}`}
+                placeholder={placeholder}
+                disabled={readOnly}
+                onChange={(items) => updateCheck(idx, checkIndex, { [key]: items })}
+            />
+        </FormField>
+    );
+
+    const renderAssetAttributeFields = (
+        idx: number,
+        checkIndex: number,
+        check: Record<string, any>,
+        errors: Record<string, string | undefined>
+    ) => {
+        const field: ComplianceAssetAttributeField = check.field;
+        const condition = typeof check.notMatches === "string" ? "notMatches" : "matches";
+        const switchField = (next: ComplianceAssetAttributeField) =>
+            updateCheck(idx, checkIndex, (current) => {
+                if (next === "tags") {
+                    return patchCheck(current, {
+                        field: next,
+                        matches: undefined,
+                        notMatches: undefined,
+                    });
+                }
+                const pattern =
+                    typeof current.matches === "string"
+                        ? { matches: current.matches }
+                        : typeof current.notMatches === "string"
+                        ? { notMatches: current.notMatches }
+                        : { matches: "" };
+                return {
+                    ...patchCheck(current, {
+                        field: next,
+                        requiredTags: [],
+                        forbiddenTags: [],
+                        minTags: undefined,
+                    }),
+                    ...pattern,
+                };
+            });
+        const setPattern = (key: "matches" | "notMatches", value: string) =>
+            updateCheck(idx, checkIndex, (current) => {
+                const next = { ...current, [key]: value };
+                delete next[key === "matches" ? "notMatches" : "matches"];
+                return next;
+            });
+        return (
+            <SpaceBetween size="s">
+                <FormField label="Attribute" errorText={errors.field}>
+                    <Select
+                        ariaLabel={`Attribute, check ${checkIndex + 1}`}
+                        selectedOption={
+                            ASSET_ATTRIBUTE_FIELD_OPTIONS.find((o) => o.value === field) || null
+                        }
+                        options={ASSET_ATTRIBUTE_FIELD_OPTIONS}
+                        disabled={readOnly}
+                        onChange={({ detail }) =>
+                            switchField(
+                                detail.selectedOption.value as ComplianceAssetAttributeField
+                            )
+                        }
+                    />
+                </FormField>
+                {field === "tags" ? (
+                    <ColumnLayout columns={3}>
+                        <FormField
+                            label="Required tags"
+                            description="Every listed tag must be on the asset."
+                            constraintText={`Up to ${TAGS_MAX} tags, compared by exact value.`}
+                            errorText={errors.requiredTags}
+                        >
+                            <TagListField
+                                items={checkList(check, "requiredTags")}
+                                itemLabel={`Required tag, check ${checkIndex + 1}`}
+                                disabled={readOnly}
+                                onChange={(items) =>
+                                    updateCheck(idx, checkIndex, { requiredTags: items })
+                                }
+                            />
+                        </FormField>
+                        <FormField
+                            label="Forbidden tags"
+                            description="None of the listed tags may be on the asset."
+                            constraintText={`Up to ${TAGS_MAX} tags, compared by exact value.`}
+                            errorText={errors.forbiddenTags}
+                        >
+                            <TagListField
+                                items={checkList(check, "forbiddenTags")}
+                                itemLabel={`Forbidden tag, check ${checkIndex + 1}`}
+                                disabled={readOnly}
+                                onChange={(items) =>
+                                    updateCheck(idx, checkIndex, { forbiddenTags: items })
+                                }
+                            />
+                        </FormField>
+                        {numberField(
+                            "Minimum tags",
+                            check.minTags,
+                            errors.minTags,
+                            (minTags) => updateCheck(idx, checkIndex, { minTags }),
+                            `Minimum tags, check ${checkIndex + 1}`
+                        )}
+                    </ColumnLayout>
+                ) : (
+                    <ColumnLayout columns={2}>
+                        <FormField label="Condition">
+                            <RadioGroup
+                                value={condition}
+                                onChange={({ detail }) =>
+                                    setPattern(
+                                        detail.value as "matches" | "notMatches",
+                                        check[condition] ?? ""
+                                    )
+                                }
+                                items={[
+                                    {
+                                        value: "matches",
+                                        label: "Must match",
+                                        description: "An empty value fails.",
+                                        disabled: readOnly,
+                                    },
+                                    {
+                                        value: "notMatches",
+                                        label: "Must not match",
+                                        description: "An empty value passes.",
+                                        disabled: readOnly,
+                                    },
+                                ]}
+                            />
+                        </FormField>
+                        <FormField
+                            label="Pattern"
+                            description="A regular expression searched in the value; use ^ and $ to anchor it."
+                            constraintText={`Up to ${PATTERN_MAX_LENGTH} characters, checked as a regular expression when the schema is saved.`}
+                            errorText={errors.pattern}
+                        >
+                            <Input
+                                value={check[condition] ?? ""}
+                                ariaLabel={`Pattern, check ${checkIndex + 1}`}
+                                placeholder="^[A-Z]"
+                                disabled={readOnly}
+                                onChange={({ detail }) => setPattern(condition, detail.value)}
+                            />
+                        </FormField>
+                    </ColumnLayout>
+                )}
+            </SpaceBetween>
+        );
+    };
+
+    const renderChecks = (idx: number, rule: RulesDraft["rules"][number]) => {
+        const checks = checksOf(rule);
+        const validate = CHECK_VALIDATORS[rule.ruleType];
+        const countError = checksCountError(checks);
+        return (
+            <SpaceBetween size="s">
+                <Header
+                    variant="h3"
+                    counter={`(${checks.length})`}
+                    actions={
+                        <Button
+                            onClick={() => addCheck(idx)}
+                            disabled={readOnly || checks.length >= RULE_MAX_CHECKS}
+                        >
+                            Add check
+                        </Button>
+                    }
+                >
+                    Checks
+                </Header>
+                {countError && <Alert type="error">{countError}</Alert>}
+                {checks.map((check, checkIndex) => {
+                    const errors: Record<string, string | undefined> = validate
+                        ? validate(check)
+                        : {};
+                    return (
+                        <div key={checkIndex} style={cardStyle}>
+                            <SpaceBetween size="s">
+                                <ColumnLayout columns={2}>
+                                    <FormField label="Check name" errorText={errors.name}>
+                                        <Input
+                                            value={check.name ?? ""}
+                                            ariaLabel={`Check name, check ${checkIndex + 1}`}
+                                            placeholder="check-name"
+                                            disabled={readOnly}
+                                            onChange={({ detail }) =>
+                                                updateCheck(idx, checkIndex, (current) => ({
+                                                    ...current,
+                                                    name: detail.value,
+                                                }))
+                                            }
+                                        />
+                                    </FormField>
+                                    <FormField label="Description (optional)">
+                                        <Input
+                                            value={check.description ?? ""}
+                                            ariaLabel={`Description, check ${checkIndex + 1}`}
+                                            disabled={readOnly}
+                                            onChange={({ detail }) =>
+                                                updateCheck(idx, checkIndex, {
+                                                    description: detail.value,
+                                                })
+                                            }
+                                        />
+                                    </FormField>
+                                </ColumnLayout>
+                                {errors.check && <Alert type="error">{errors.check}</Alert>}
+                                {rule.ruleType === "fileStructure" && (
+                                    <>
+                                        {renderPatternField(
+                                            idx,
+                                            checkIndex,
+                                            check,
+                                            "requiredPaths",
+                                            "Required paths",
+                                            "^models/\n\\.glb$",
+                                            errors.requiredPaths
+                                        )}
+                                        {renderPatternField(
+                                            idx,
+                                            checkIndex,
+                                            check,
+                                            "forbiddenPaths",
+                                            "Forbidden paths",
+                                            "\\.tmp$",
+                                            errors.forbiddenPaths
+                                        )}
+                                        <ColumnLayout columns={2}>
+                                            {numberField(
+                                                "Minimum files",
+                                                check.minFiles,
+                                                errors.minFiles,
+                                                (minFiles) =>
+                                                    updateCheck(idx, checkIndex, { minFiles }),
+                                                `Minimum files, check ${checkIndex + 1}`
+                                            )}
+                                            {numberField(
+                                                "Maximum files",
+                                                check.maxFiles,
+                                                errors.maxFiles,
+                                                (maxFiles) =>
+                                                    updateCheck(idx, checkIndex, { maxFiles }),
+                                                `Maximum files, check ${checkIndex + 1}`
+                                            )}
+                                        </ColumnLayout>
+                                    </>
+                                )}
+                                {rule.ruleType === "versionCoverage" &&
+                                    renderPatternField(
+                                        idx,
+                                        checkIndex,
+                                        check,
+                                        "excludePaths",
+                                        "Excluded paths (optional)",
+                                        "\\.previewFile\\.",
+                                        errors.excludePaths
+                                    )}
+                                {rule.ruleType === "assetAttributes" &&
+                                    renderAssetAttributeFields(idx, checkIndex, check, errors)}
+                                {!readOnly && (
+                                    <Box float="right">
+                                        <Button
+                                            variant="link"
+                                            ariaLabel={`Remove check ${checkIndex + 1}`}
+                                            onClick={() => removeCheck(idx, checkIndex)}
+                                        >
+                                            Remove check
+                                        </Button>
+                                    </Box>
+                                )}
+                            </SpaceBetween>
+                        </div>
+                    );
+                })}
+            </SpaceBetween>
+        );
+    };
+
     const renderRulesBuilder = () => (
         <SpaceBetween size="m">
             <Header
                 variant="h3"
-                description="Rules of a vams-rules-v1 schema. A pipeline rule runs a workflow on the input files it selects and compares the output against tolerances; checks and input parameters are edited in the JSON Editor tab and kept as they are."
+                description="Rules of a vams-rules-v1 schema. The checks of file structure, version coverage and asset attributes rules are edited here. A pipeline rule's workflow, pipeline and input files are edited here and its checks and input parameters in the JSON Editor tab; metadata and relationship rules are edited in the JSON Editor tab. Properties the builder does not show are kept as they are."
                 actions={
-                    <Button onClick={addPipelineRule} disabled={readOnly}>
-                        Add pipeline rule
-                    </Button>
+                    <ButtonDropdown
+                        disabled={readOnly}
+                        items={RULE_TYPE_OPTIONS.map((option) => ({
+                            id: option.value,
+                            text: option.label,
+                            description: option.description,
+                        }))}
+                        onItemClick={({ detail }) => addRule(detail.id as ComplianceRuleType)}
+                    >
+                        Add rule
+                    </ButtonDropdown>
                 }
             >
                 Compliance Rules
@@ -657,7 +1196,7 @@ export default function ComplianceSchemaEditor({
 
             {rulesDraft.rules.length === 0 && (
                 <Box textAlign="center" color="text-status-inactive" padding="l">
-                    No rules defined. Click "Add pipeline rule" to start.
+                    No rules defined. Choose a rule type from "Add rule" to start.
                 </Box>
             )}
 
@@ -730,12 +1269,15 @@ export default function ComplianceSchemaEditor({
                                 </ColumnLayout>
                             )}
                             {rule.ruleType === "pipeline" && renderInputFiles(idx, rule.inputFiles)}
-                            {rule.ruleType !== "pipeline" && (
-                                <Box color="text-body-secondary" fontSize="body-s">
-                                    The checks of a {rule.ruleType} rule are edited in the JSON
-                                    Editor tab.
-                                </Box>
-                            )}
+                            {CHECK_EDITED_RULE_TYPES.includes(rule.ruleType) &&
+                                renderChecks(idx, rule)}
+                            {rule.ruleType !== "pipeline" &&
+                                !CHECK_EDITED_RULE_TYPES.includes(rule.ruleType) && (
+                                    <Box color="text-body-secondary" fontSize="body-s">
+                                        The checks of a {rule.ruleType} rule are edited in the JSON
+                                        Editor tab.
+                                    </Box>
+                                )}
                             {!readOnly && (
                                 <Box float="right">
                                     <Button variant="link" onClick={() => removeRule(idx)}>
