@@ -26,9 +26,8 @@ The loader reads the fetched files through ``ConfinedResolver``, which serves th
 from the local copy of the asset and refuses any other name, so a skipped reference is not read from
 anywhere.
 
-The path rules (``resolve_reference``, ``local_path_for``) and the glTF, OBJ and MTL collectors are
-vendored from the 3D Preview Thumbnail container's ``preview_pipeline/dependencies.py`` (PR #474);
-keep the two in step. The thumbnail skips every unusable reference; this copy fails on a buffer.
+``resolve_reference`` applies the path rules above to one name and ``local_path_for`` keeps its local
+copy under the local root; the collectors in ``_COLLECTORS`` list the names each format references.
 """
 
 import json
