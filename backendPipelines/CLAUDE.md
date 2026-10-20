@@ -99,6 +99,35 @@ Output dir: {outputS3AssetFilesPath}
 ❌ Wrong output:   {outputS3AssetFilesPath}pump.e57.previewFile.gif  (relative path lost)
 ```
 
+## Files a Model Input References
+
+A model format can keep part of the model in other files: glTF/GLB buffers and images, an OBJ's `mtllib`
+and the texture maps the MTL names, a PLY `TextureFile`. A pipeline that loads such a model downloads
+the input at its asset-relative path and fetches those files from the **input's own asset** beside it
+before loading; downloading the selected file alone loses them, and renaming it breaks `../` references.
+
+Every reference is untrusted input, because the pipeline role reads every asset bucket (ARCC BSC1, input
+validation by allowlist). Accept a reference only when it is a relative path that, normalised against
+the referring file's directory, stays inside the input's asset prefix; reject absolute paths, `..`
+escapes, URI schemes and control characters before any Amazon S3 call, and bound the file count, byte
+total and depth. Hand the loader a resolver that serves **only** the fetched files: trimesh's default
+`FilePathResolver` joins a name onto the input's directory, and its loaders read references the scan
+does not see (its OBJ loader takes the first `mtllib` anywhere in the text, comments included).
+
+The 3D Basic Conversion copy is `conversion/3dBasic/lambdaContainer/referenced_files.py`
+(`ConfinedResolver`); its path rules and collectors are vendored from the 3D Preview Thumbnail
+container's `preview_pipeline/dependencies.py`, so change both together. The policies differ on purpose:
+the thumbnail logs and skips a bad reference, while the conversion FAILS, because a converted model
+missing its buffers or materials is a different model reported as a success. Real-trimesh coverage runs
+in a child interpreter (`tests/test_3dbasic_real_conversions.py`) since sibling modules stub `trimesh`.
+
+The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
+`lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set
+and redacts only `authorization`. A Lambda-container handler therefore checks `TaskToken` before it
+logs anything and never logs the event, as the 3dBasic handler does
+(`tests/test_3dbasic_task_token_logging.py`). The 3dBasic `.dockerignore` keeps `tests/`, the Poetry
+files and caches out of its `COPY . .`.
+
 ## Reporting Failure on a Task-Token Pipeline
 
 A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
@@ -323,7 +352,7 @@ partition. Author it with the block for your execution type present but empty:
       variations of it. A caller then gets a working zero-argument run.
     - **Mark none**, when the templates are _mutually exclusive outputs_ and picking for the caller
       would silently produce the wrong artifact. Four bundles are this shape: `conversion-3d-basic`
-      (convert-to-glb / -gltf / -obj / -stl), `rapid-pipeline` (to-glb / to-gltf), `vntana-model-ops`
+      (convert-to-glb / -gltf / -obj / -ply / -stl), `rapid-pipeline` (to-glb / to-gltf), `vntana-model-ops`
       (to-glb / -gltf / -usdz) and `3dRecon-splat-toolbox` (splat-objects /
       splat-environments-360). There is no defensible default target format or capture geometry, so
       the API refusing a run that names no `templateId` is the correct behaviour.

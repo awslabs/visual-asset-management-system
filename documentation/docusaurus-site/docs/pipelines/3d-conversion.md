@@ -4,22 +4,34 @@ The 3D Basic Conversion pipeline converts 3D mesh files between common interchan
 
 ## Supported Formats
 
-The pipeline reads the following formats. Six of them are also available as a conversion target; XYZ is read only.
+The pipeline reads the following formats. Five of them are also available as a conversion target; XYZ is read only.
 
-| Format | Extension | Direction        | Description                                               |
-| ------ | --------- | ---------------- | --------------------------------------------------------- |
-| STL    | `.stl`    | Input and output | Stereolithography -- widely used in 3D printing and CAD   |
-| OBJ    | `.obj`    | Input and output | Wavefront OBJ -- common mesh interchange format           |
-| PLY    | `.ply`    | Input and output | Polygon File Format -- supports vertex colors and normals |
-| GLTF   | `.gltf`   | Input and output | GL Transmission Format -- open standard for 3D scenes     |
-| GLB    | `.glb`    | Input and output | Binary GLTF -- single-file variant of GLTF                |
-| XYZ    | `.xyz`    | Input only       | Point cloud text format -- simple ASCII coordinate data   |
+| Format | Extension | Direction        | Description                                                              |
+| ------ | --------- | ---------------- | ------------------------------------------------------------------------ |
+| STL    | `.stl`    | Input and output | Stereolithography -- widely used in 3D printing and CAD                  |
+| OBJ    | `.obj`    | Input and output | Wavefront OBJ -- common mesh interchange format                          |
+| PLY    | `.ply`    | Input and output | Polygon File Format -- supports vertex colors, normals, and point clouds |
+| GLTF   | `.gltf`   | Input and output | GL Transmission Format -- open standard for 3D scenes                    |
+| GLB    | `.glb`    | Input and output | Binary GLTF -- single-file variant of GLTF                               |
+| XYZ    | `.xyz`    | Input only       | Point cloud text format -- simple ASCII coordinate data                  |
 
 :::note[Conversion Directions]
-Any format marked **Input and output** can be converted to any other format marked **Input and output**. For example, you can convert STL to GLB, OBJ to PLY, or PLY to GLTF. The pipeline uses Trimesh's import/export capabilities to handle the translation.
+A mesh in any format marked **Input and output** can be converted to any other format marked **Input and output**. For example, you can convert STL to GLB, OBJ to PLY, or PLY to GLTF. The pipeline uses Trimesh's import/export capabilities to handle the translation.
 
-XYZ is an input-only format. Trimesh reads an XYZ file as a point cloud, and its XYZ exporter cannot write one back, so a run that names `.xyz` as its target is rejected before the input file is downloaded. Convert an XYZ point cloud to one of the five output formats instead.
+XYZ is an input-only format. Trimesh reads an XYZ file as a point cloud, and its XYZ exporter cannot write one back, so a run that names `.xyz` as its target is rejected before the input file is downloaded.
+
+STL stores triangle meshes only. A point cloud -- an XYZ file, or a PLY file that has vertices and no faces -- converts to PLY, OBJ, GLB, or GLTF, which keep the points; a run that converts a point cloud to STL fails with a message saying so. An input that contains no geometry at all fails for every target. When a scene holds both meshes and point clouds, GLB and GLTF keep both, and STL, OBJ, and PLY keep the meshes.
 :::
+
+## Multi-File Models
+
+A GLTF file, and an OBJ file with materials, keep part of the model in other files: GLTF buffers (`.bin`) and texture images, and the OBJ material library (`.mtl`) with the texture maps it names. A GLB or PLY file can also name an external texture. The pipeline reads every file the selected input references and downloads each one from the same asset before it loads the model, so upload the companion files to the asset at the paths the model names. A model that this pipeline wrote as GLTF or as a textured OBJ can be converted again, because its companion files are written beside it.
+
+Each reference is checked before anything is downloaded:
+
+-   It must be a path relative to the file that names it (for example `textures/wood.png` or `../shared/wood.png`) that resolves to a file inside the input's own asset. Absolute paths, URLs, and paths that leave the asset are rejected. Data embedded in the model (a `data:` URI) needs no download.
+-   A rejected reference, or a referenced file that is not in the asset, fails the run with a message naming the reference.
+-   A model may reference at most 1,000 files totalling 2 GiB, and only an OBJ file's material libraries are read for further references.
 
 ## Architecture
 
@@ -54,11 +66,12 @@ This pipeline must be registered as NOT needing a task token callback. If a work
 
 ### Processing Flow
 
-1. The Lambda function receives the request body containing the input Amazon S3 URI, output Amazon S3 URI, and target output format.
-2. The input file is downloaded from the asset bucket to the Lambda container's `/tmp` directory.
-3. Trimesh loads the mesh file, performing automatic format detection based on the file extension.
-4. The mesh is exported to the specified target format using Trimesh's export capabilities.
-5. The converted file is uploaded to the output path in the asset bucket using multipart upload for large files.
+1. The Lambda function receives the workflow step's request body, which carries the Amazon S3 locations of the workflow input manifest and of the pipeline's input configuration. A request that carries a task token is rejected before anything is logged or read.
+2. The function reads the manifest, which names the input file (its bucket, key, asset-relative path, and the bucket's AWS Region) and the run's output files location, and reads the target format (`outputType`) from the input configuration, which the selected pipeline template supplies.
+3. The input file is downloaded from the asset bucket to the Lambda container's `/tmp` directory at its path within the asset, followed by the files it references (see [Multi-File Models](#multi-file-models)).
+4. Trimesh loads the model, detecting the format from the file extension, and reads referenced files only from those downloads.
+5. The model is exported to the target format using Trimesh's export capabilities.
+6. The converted file, and any companion files the export writes, are uploaded to the run's output files location using multipart upload for large files. The workflow then writes them back to the asset beside the input.
 
 ## Configuration
 
@@ -90,15 +103,16 @@ Unlike other built-in pipelines, the 3D Basic Conversion pipeline is enabled by 
 
 ## Input Parameters
 
-When executing the pipeline through a workflow, the following parameters are provided:
+When executing the pipeline through a workflow, the request body carries the following parameters:
 
-| Parameter                | Required | Description                                                            |
-| ------------------------ | -------- | ---------------------------------------------------------------------- |
-| `inputS3AssetFilePath`   | Yes      | Amazon S3 URI of the input file (e.g., `s3://bucket/key/model.stl`)    |
-| `outputS3AssetFilesPath` | Yes      | Amazon S3 URI of the output directory (e.g., `s3://bucket/key/`)       |
-| `outputType`             | Yes      | Target file extension including the dot (e.g., `.glb`, `.obj`, `.ply`) |
+| Parameter                      | Required | Description                                                                                                                                   |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputManifestS3Location`      | Yes      | Amazon S3 URI of the workflow input manifest, which names the single input file and the run's output files location                           |
+| `inputConfigurationS3Location` | Yes      | Amazon S3 URI of the pipeline's input configuration, whose `outputType` is the target file extension including the dot (e.g., `.glb`, `.ply`) |
 
-The Amazon S3 paths come from the workflow. `outputType` comes from the configuration body of the pipeline template the run uses. Selecting a template is mandatory for this pipeline (`systemConfig.requireTemplate` is `true`); deployment registers one template per target format -- `convert-to-glb`, `convert-to-gltf`, `convert-to-obj`, and `convert-to-stl`. To convert to another output format, either register a pipeline template whose configuration body sets that `outputType`, or override the selected template's body for a single run -- the pipeline permits a per-run override (`systemConfig.allowCustomTemplateOverride` is `true`). An `outputType` the pipeline cannot write fails the execution with `Output format <extension> not supported by Trimesh pipeline`.
+For a direct invocation without a manifest, the function falls back to the `inputS3AssetFilePath`, `outputS3AssetFilesPath`, and `outputType` body fields.
+
+`outputType` comes from the configuration body of the pipeline template the run uses. Selecting a template is mandatory for this pipeline (`systemConfig.requireTemplate` is `true`); deployment registers one template per target format -- `convert-to-glb`, `convert-to-gltf`, `convert-to-obj`, `convert-to-ply`, and `convert-to-stl`. A run can also override the selected template's body (`systemConfig.allowCustomTemplateOverride` is `true`). An `outputType` the pipeline cannot write fails the execution with `Output format <extension> not supported by Trimesh pipeline`.
 
 ### Output Naming
 
@@ -112,11 +126,14 @@ This pipeline runs as a containerized Lambda function and does not require a VPC
 
 ### Container Image
 
-The Lambda container image is built during CDK deployment from `backendPipelines/conversion/3dBasic/lambdaContainer/Dockerfile`. It includes:
+The Lambda container image is built during CDK deployment from `backendPipelines/conversion/3dBasic/lambdaContainer/Dockerfile`, on the AWS Lambda Python 3.12 base image pinned by digest. It includes:
 
 -   **Python 3.12** -- Lambda runtime
 -   **Trimesh** -- 3D mesh loading and export library
--   **boto3** -- AWS SDK for Amazon S3 operations
+-   **Pillow** -- texture image decoding and encoding for Trimesh
+-   **boto3** -- AWS SDK for Amazon S3 operations, from the base image
+
+The installed versions are those in the container's `poetry.lock`, from which its `requirements.txt` is exported.
 
 ## Infrastructure Components
 
@@ -129,19 +146,20 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 
 ## Limitations
 
-| Constraint        | Details                                                                                                                       |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Maximum file size | Bounded by function memory, not by disk -- see the note below                                                                 |
-| Execution timeout | 15 minutes (Lambda maximum)                                                                                                   |
-| Geometry only     | Converts mesh geometry; complex materials, animations, or scene hierarchies may not transfer between all formats              |
-| No texture baking | Texture references are preserved where both input and output formats support them, but textures are not embedded or converted |
+| Constraint        | Details                                                                                                                                                                             |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Maximum file size | Bounded by function memory, not by disk -- see the note below                                                                                                                       |
+| Execution timeout | 15 minutes (Lambda maximum)                                                                                                                                                         |
+| Geometry only     | Converts mesh geometry; complex materials, animations, or scene hierarchies may not transfer between all formats                                                                    |
+| Textures          | The base color texture is carried into OBJ, GLTF, and GLB output; a PLY output keeps texture coordinates without the image. Other texture maps may not transfer, and none are baked |
+| Referenced files  | Must be in the input's own asset, at relative paths -- see [Multi-File Models](#multi-file-models)                                                                                  |
 
 Two AWS Lambda quotas bound the largest model the pipeline can convert:
 
-| Bound             | Value                                                            | What it holds                                                                                          |
-| ----------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Function memory   | `LAMBDA_MEMORY_SIZE` (`infra/config/config.ts`)                  | The whole mesh, loaded by trimesh before it is exported                                                |
-| Ephemeral storage | `CONVERSION_EPHEMERAL_STORAGE` (`conversion3dBasicFunctions.ts`) | The downloaded input, the export, and any companion files a `.gltf` export writes -- all in one `/tmp` |
+| Bound             | Value                                                            | What it holds                                                                                                                |
+| ----------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Function memory   | `LAMBDA_MEMORY_SIZE` (`infra/config/config.ts`)                  | The whole mesh, loaded by trimesh before it is exported                                                                      |
+| Ephemeral storage | `CONVERSION_EPHEMERAL_STORAGE` (`conversion3dBasicFunctions.ts`) | The downloaded input and the files it references, the export, and any companion files the export writes -- all in one `/tmp` |
 
 :::note[Memory is the binding constraint, not disk]
 trimesh loads the whole mesh into memory to export it, so the practical ceiling comes from the configured function memory. The ephemeral storage budget only has to be large enough that disk is not the limit reached first -- raising it past the memory bound moves where the failure happens rather than raising the supported file size. An uncompressed export (STL from GLB, for example) is larger than the input it came from, so both copies count against the same budget.
