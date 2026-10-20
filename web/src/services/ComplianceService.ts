@@ -339,6 +339,19 @@ export interface EvaluateAssetResponse {
 
 export type CascadeState = "pending_approval" | "executing" | "completed" | "aborted" | "rejected";
 
+/**
+ * State of one node of a cascade. `pending` and `evaluating` are in flight; every other value is
+ * final: the verdict the node's evaluation produced, `skipped` (no bound schema), `superseded` (a
+ * newer evaluation of the asset had already started, so this one did not run; not a failure) or
+ * `error`.
+ */
+export type CascadeNodeState =
+    | "pending"
+    | "evaluating"
+    | "skipped"
+    | "superseded"
+    | ComplianceEvaluationVerdict;
+
 export interface CascadeRecord {
     cascadeId: string;
     state: CascadeState;
@@ -351,7 +364,7 @@ export interface CascadeRecord {
     actor?: string;
     requireApproval: boolean;
     createdAt: string;
-    /** JSON-encoded map of node key ("databaseId#assetId") to that node's evaluation state. */
+    /** JSON-encoded map of node key ("databaseId:assetId") to that node's `CascadeNodeState`. */
     nodes?: string;
     totalNodes?: number;
     completedAt?: string;

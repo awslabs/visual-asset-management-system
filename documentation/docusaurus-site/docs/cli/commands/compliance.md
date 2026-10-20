@@ -312,7 +312,7 @@ vamscli compliance sweep -n cad-quality --json-output
 A schema with pipeline rules starts one workflow execution per asset it is bound to. Check `compliance bindings` on the databases that use the schema before sweeping a large one.
 :::
 
-The response lists the assets triggered and counts the rest: `skipped` is the number of bound assets the caller is not authorized to evaluate (counted, never listed), and `assetsRemaining` the number beyond the per-call cap, which a repeated sweep works through.
+The response lists the assets triggered and counts the rest: `skipped` is the number of bound assets the caller is not authorized to evaluate (counted, never listed), and `assetsRemaining` the number beyond the per-call cap, which a repeated sweep works through. An asset whose evaluation found a newer evaluation of it already started is marked `(superseded)` in the list and counted on a `Superseded (a newer evaluation had started)` line: its evaluation did not run, and the asset's state is the newer evaluation's. A superseded asset is not an error.
 
 ---
 
@@ -489,7 +489,7 @@ vamscli compliance cascade list --json-output
 
 ## compliance cascade get
 
-Get a cascade's record and state (`pending_approval`, `executing`, `completed` or `aborted`).
+Get a cascade's record and state (`pending_approval`, `executing`, `completed` or `aborted`). With `--json-output` the record includes `nodes`, each node's status: a verdict, `skipped` (no bound schema), `superseded` (a newer evaluation of that asset had already started, so this one did not run; not an error) or `error`.
 
 ```bash
 vamscli compliance cascade get [OPTIONS]

@@ -103,6 +103,30 @@ describe("ComplianceCascades", () => {
         expect(service().fetchCascades).toHaveBeenCalledTimes(2);
     });
 
+    it("reports a cascade with a superseded node as completed, not as failed", async () => {
+        service().approveCascade.mockResolvedValue([
+            true,
+            { message: "Cascade approved", cascadeId: CASCADE_ID, state: "executing" },
+        ]);
+        service().fetchCascade.mockResolvedValue([
+            true,
+            {
+                ...pendingCascade(),
+                state: "completed",
+                nodes: JSON.stringify({ "db1:asset-2": "compliant", "db1:asset-3": "superseded" }),
+                totalNodes: 2,
+            },
+        ]);
+
+        render(<ComplianceCascades />);
+        await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+
+        expect(await screen.findByText(/completed$/)).toBeInTheDocument();
+        expect(screen.getByText("2 of 2 nodes evaluated")).toBeInTheDocument();
+        expect(screen.queryByText(/aborted/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/error|failed/i)).not.toBeInTheDocument();
+    });
+
     it("keeps polling while the cascade executes and shows the abort reason", async () => {
         jest.useFakeTimers();
         const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
@@ -212,6 +236,25 @@ describe("cascadeProgress", () => {
                 totalNodes: 4,
             })
         ).toBe("2 of 4 nodes evaluated");
+    });
+
+    it("counts a superseded node as finished, like a skipped one", () => {
+        expect(
+            cascadeProgress({
+                cascadeId: "c",
+                state: "completed",
+                triggeredByDatabaseId: "db1",
+                triggeredByAssetId: "a1",
+                requireApproval: true,
+                createdAt: "2026-01-01T00:00:00Z",
+                nodes: JSON.stringify({
+                    "db1:a": "compliant",
+                    "db1:b": "superseded",
+                    "db1:c": "skipped",
+                }),
+                totalNodes: 3,
+            })
+        ).toBe("3 of 3 nodes evaluated");
     });
 
     it("returns null without a node map or with an unreadable one", () => {

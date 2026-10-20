@@ -37,6 +37,10 @@ EXECUTION_FAILED_ABORT_REASON = "Cascade execution failed"
 NODE_STATE_PENDING = "pending"
 NODE_STATE_EVALUATING = "evaluating"
 NODE_STATE_SKIPPED = "skipped"
+# A node whose evaluation did not run because a newer evaluation of the same asset had already
+# started (the run_evaluation result carries `superseded: true`): like `skipped`, the node is
+# done and the asset's state is that newer evaluation's to settle.
+NODE_STATE_SUPERSEDED = store.SUPERSEDED_VERDICT
 NODE_STATE_ERROR = "error"
 
 # Bound on the descendants one cascade evaluates; a DAG larger than this is truncated and the
@@ -243,9 +247,9 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
         try:
             evaluation = store.run_evaluation(
                 node["databaseId"], node["assetId"], schema_name, "cascade")
-            verdict = evaluation.get("verdict", NODE_STATE_ERROR)
-            nodes[node_key] = verdict
-            results.append({"node": node_key, "status": verdict,
+            node_state = _node_state_for(evaluation)
+            nodes[node_key] = node_state
+            results.append({"node": node_key, "status": node_state,
                             "evaluationId": evaluation.get("evaluationId")})
         except Exception as e:
             logger.exception(f"Cascade evaluation failed for {node_key}: {e}")
@@ -254,22 +258,19 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
         _write_nodes(cascade_id, nodes)
 
     _complete_cascade(cascade_id, results)
+    summary = _results_summary(results)
 
     store.write_audit(
         source_db, source_asset,
         event_type="cascade_completed",
         actor=store.SYSTEM_ACTOR,
         cascade_id=cascade_id,
-        details={"nodesEvaluated": len(results)},
+        details={"nodesEvaluated": len(results), "summary": summary},
     )
 
     try:
         from handlers.compliance.complianceNotifications import notify_cascade_completed
 
-        summary: Dict[str, int] = {}
-        for result in results:
-            status = result.get("status", "unknown")
-            summary[status] = summary.get(status, 0) + 1
         notify_cascade_completed(source_db, source_asset, cascade_id, summary)
     except Exception as e:
         logger.exception(f"Failed sending cascade completion notification: {e}")
@@ -280,6 +281,24 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
         "evaluated": len(results),
         "results": results,
     }
+
+
+def _node_state_for(evaluation: Dict[str, Any]) -> str:
+    """The node state an evaluation result records: `superseded` for a run a newer evaluation of
+    the asset superseded, otherwise the verdict (`error` when the result carries none)."""
+    if evaluation.get("superseded"):
+        return NODE_STATE_SUPERSEDED
+    return evaluation.get("verdict", NODE_STATE_ERROR)
+
+
+def _results_summary(results: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Node count per status, in first-seen order; the completion audit entry and notification
+    carry it."""
+    summary: Dict[str, int] = {}
+    for result in results:
+        status = result.get("status", "unknown")
+        summary[status] = summary.get(status, 0) + 1
+    return summary
 
 
 def _write_nodes(cascade_id: str, nodes: Dict[str, str]) -> None:

@@ -17,6 +17,7 @@ import {
     fetchCascade,
     approveCascade,
     rejectCascade,
+    CascadeNodeState,
     CascadeRecord,
 } from "../services/ComplianceService";
 import ReasonModal from "../components/compliance/ReasonModal";
@@ -33,8 +34,11 @@ const statusIndicatorMap: Record<string, { type: string; label: string }> = {
 export const CASCADE_POLL_INTERVAL_MS = 3000;
 export const CASCADE_POLL_ATTEMPTS = 20;
 
-/** Node states that mean the node has not been evaluated yet. */
-const NODE_STATES_IN_FLIGHT = new Set(["pending", "evaluating"]);
+/**
+ * Node states that mean the node has not been evaluated yet. Every other state is final, including
+ * `skipped` and `superseded`, which are not failures.
+ */
+const NODE_STATES_IN_FLIGHT = new Set<CascadeNodeState>(["pending", "evaluating"]);
 
 /** An approved cascade whose execution the page follows until it leaves `executing`. */
 interface TrackedCascade {
@@ -57,7 +61,7 @@ export const cascadeTriggerAssetId = (record: CascadeRecord): string =>
 export const cascadeProgress = (record: CascadeRecord | null): string | null => {
     if (!record?.nodes) return null;
     try {
-        const nodes: Record<string, string> = JSON.parse(record.nodes);
+        const nodes: Record<string, CascadeNodeState> = JSON.parse(record.nodes);
         const keys = Object.keys(nodes);
         const total = record.totalNodes ?? keys.length;
         const done = keys.filter((key) => !NODE_STATES_IN_FLIGHT.has(nodes[key])).length;

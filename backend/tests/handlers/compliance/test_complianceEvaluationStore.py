@@ -2166,11 +2166,13 @@ class TestEvaluationOrdering:
     def _assert_superseded(tables, result):
         assert result["superseded"] is True
         assert result["error"] == store.SUPERSEDED_MESSAGE
-        assert result["verdict"] == "error"
+        assert result["verdict"] == "superseded"
+        assert result["evaluationId"] != "eval-newer"
         assert result["complianceState"] == "compliant"
         assert result["pipelineRulesPending"] == 0
         assert tables.evaluation_records() == ([], [])
         tables.evaluation.put_item.assert_not_called()
+        tables.evaluation.update_item.assert_not_called()
         tables.state.update_item.assert_not_called()
         tables.audit.put_item.assert_not_called()
         tables.lambda_client.invoke.assert_not_called()
@@ -2213,10 +2215,40 @@ class TestEvaluationOrdering:
         with patch(f"{STORE}.now_iso", return_value=self.NEWER):
             result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert result["superseded"] is True and result["error"] == store.SUPERSEDED_MESSAGE
+        assert result["verdict"] == "superseded"
         assert tables.state.update_item.call_count == 1
         assert tables.evaluation_records() == ([], [])
+        tables.evaluation.put_item.assert_not_called()
         tables.lambda_client.invoke.assert_not_called()
         tables.audit.put_item.assert_not_called()
+
+    def test_the_superseded_result_names_the_unused_id_and_the_state_as_read(self):
+        """The result a superseded run returns: the id it was given (written nowhere), the
+        `superseded` verdict and flag, the message the evaluate route reports, and the state the
+        row held when read -- the newer evaluation's to settle."""
+        assert store._superseded_result("eval-lost", {
+            "complianceState": "quarantined", "lastEvaluationId": "eval-newer"}) == {
+            "evaluationId": "eval-lost",
+            "verdict": "superseded",
+            "complianceState": "quarantined",
+            "ruleResults": [],
+            "pipelineRulesPending": 0,
+            "schemaVersion": None,
+            "exceptionApplied": False,
+            "hasRuleErrors": False,
+            "errorRules": [],
+            "superseded": True,
+            "error": "A newer evaluation of the asset has started",
+        }
+        assert store._superseded_result("eval-lost", {})["complianceState"] == "unknown"
+
+    def test_the_superseded_verdict_is_not_an_evaluation_verdict(self):
+        """`superseded` lives on the run result only. Evaluation rows and the compliance record
+        carry `EvaluationVerdict` values, so a reader parsing a stored verdict never meets it."""
+        from models.compliance import EvaluationVerdict
+
+        assert store.SUPERSEDED_VERDICT == "superseded"
+        assert store.SUPERSEDED_VERDICT not in {verdict.value for verdict in EvaluationVerdict}
 
     def test_an_evaluation_newer_than_the_rows_last_one_writes_the_state(self):
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row={

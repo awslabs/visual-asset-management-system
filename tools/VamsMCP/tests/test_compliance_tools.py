@@ -658,6 +658,17 @@ def test_sweep_docstring_names_the_skipped_and_remaining_counts():
     assert "not authorized" in docstring
 
 
+def test_sweep_and_cascade_docstrings_say_a_superseded_asset_is_not_a_failure():
+    """An agent reading a sweep or cascade must not report an asset a newer evaluation superseded
+    as an evaluation error."""
+    sweep = _docstring_of("sweep_compliance_schema")
+    assert "`superseded`" in sweep
+    assert "not a failure" in sweep
+    cascade = _docstring_of("get_compliance_cascade")
+    assert "`superseded`" in cascade
+    assert "not a failure" in cascade
+
+
 def test_delete_compliance_schema_docstring_names_the_bound_refusal_and_irreversibility():
     docstring = _docstring_of("delete_compliance_schema")
     assert "Irreversible" in docstring

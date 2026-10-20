@@ -893,7 +893,28 @@ class TestComplianceEvaluationCommands:
             assert 'my-database:a2' in result.output
             assert 'Skipped' not in result.output
             assert 'Remaining' not in result.output
+            assert 'uperseded' not in result.output
             mocks['api_client'].sweep_compliance_schema.assert_called_once_with('cad-quality')
+
+    def test_sweep_marks_and_counts_the_assets_a_newer_evaluation_superseded(self, cli_runner,
+                                                                             generic_command_mocks):
+        # An asset whose evaluation found a newer one already started is listed, marked and
+        # counted as superseded -- never shown as an error.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].sweep_compliance_schema.return_value = {
+                'message': 'Sweep triggered for 2 assets', 'schemaName': 'cad-quality',
+                'assetsTriggered': [
+                    {'databaseId': 'my-database', 'assetId': 'busy', 'evaluationId': 'e-lost',
+                     'verdict': 'superseded', 'superseded': True},
+                    {'databaseId': 'my-database', 'assetId': 'a1', 'evaluationId': 'e1',
+                     'verdict': 'compliant'}],
+                'skipped': 0, 'superseded': 1, 'assetsRemaining': 0}
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality'])
+            assert result.exit_code == 0
+            assert '    my-database:busy (superseded)\n' in result.output
+            assert '    my-database:a1\n' in result.output
+            assert 'Superseded (a newer evaluation had started): 1' in result.output
+            assert 'error' not in result.output.lower()
 
     def test_sweep_reports_the_assets_it_skipped_and_those_remaining(self, cli_runner,
                                                                      generic_command_mocks):

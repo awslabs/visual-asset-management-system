@@ -825,7 +825,8 @@ def sweep(ctx: click.Context, schema_name: str, json_output: bool):
     Assets awaiting evaluation are evaluated first. Bound assets the caller is not authorized to
     evaluate are counted as skipped and never listed; bound assets a call does not reach (its
     per-call cap or its time budget) are counted as remaining, and a repeated sweep works through
-    them.
+    them. An asset whose evaluation found a newer one of it already started is listed as
+    superseded and counted: its state is that newer evaluation's.
 
     Examples:
         vamscli compliance sweep -n cad-quality
@@ -841,7 +842,10 @@ def sweep(ctx: click.Context, schema_name: str, json_output: bool):
             triggered = r.get('assetsTriggered') or []
             lines = [f"  Assets Triggered: {len(triggered)}"]
             lines.extend(f"    {t.get('databaseId', 'N/A')}:{t.get('assetId', 'N/A')}"
+                         + (" (superseded)" if t.get('superseded') else "")
                          for t in triggered)
+            if r.get('superseded'):
+                lines.append(f"  Superseded (a newer evaluation had started): {r['superseded']}")
             if r.get('skipped'):
                 lines.append(f"  Skipped (not authorized to evaluate): {r['skipped']}")
             if r.get('assetsRemaining'):

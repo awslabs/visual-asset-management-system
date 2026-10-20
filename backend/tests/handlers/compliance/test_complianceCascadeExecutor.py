@@ -16,6 +16,7 @@ from backend.tests.handlers.compliance._harness import (
     ASSET, CASCADE_ID, DB, update_values,
 )
 from handlers.compliance import complianceCascadeExecutor as executor
+from handlers.compliance import complianceEvaluationStore as store
 
 EXECUTOR = "handlers.compliance.complianceCascadeExecutor"
 STORE = "handlers.compliance.complianceEvaluationStore"
@@ -300,10 +301,62 @@ class TestExecuteCascade:
         audit = mocks["audit"].call_args.kwargs
         assert audit["event_type"] == "cascade_completed"
         assert audit["actor"] == "SYSTEM_USER"
-        assert audit["details"] == {"nodesEvaluated": 1}
+        assert audit["details"] == {"nodesEvaluated": 1, "summary": {"compliant": 1}}
         published = notifications_aws.sns_client.publish.call_args.kwargs
         assert "CASCADE COMPLETE" in published["Subject"]
         assert "compliant: 1" in published["Message"]
+
+    def test_a_superseded_node_is_recorded_as_superseded_and_the_cascade_completes(self):
+        """B's evaluation finds a newer evaluation of B already started and does not run. B's node
+        is `superseded` (with the id that did not run), not `error`, and the cascade carries on to
+        C and ends `completed`."""
+        graph = Graph([(ASSET, "B"), ("B", "C")])
+
+        def evaluation(db, asset, schema, actor):
+            if asset == "B":
+                return store._superseded_result("eval-lost", {"complianceState": "compliant"})
+            return {"evaluationId": f"eval-{asset}", "verdict": "compliant"}
+
+        result, mocks = _run_executor(graph, EXECUTING, evaluation=evaluation)
+        assert executor.NODE_STATE_SUPERSEDED == "superseded"
+        assert result["status"] == "completed"
+        assert result["results"] == [
+            {"node": f"{DB}:B", "status": "superseded", "evaluationId": "eval-lost"},
+            {"node": f"{DB}:C", "status": "compliant", "evaluationId": "eval-C"}]
+        node_maps = [json.loads(u["nodes"]) for u in update_values(mocks["table"]) if "nodes" in u]
+        assert node_maps[-1] == {f"{DB}:B": "superseded", f"{DB}:C": "compliant"}
+        assert _states_written(mocks["table"]) == ["completed"]
+        terminal = update_values(mocks["table"])[-1]
+        assert "abortReason" not in terminal
+        assert [r["status"] for r in json.loads(terminal["results"])] == ["superseded", "compliant"]
+
+    def test_completion_audit_and_notification_count_a_superseded_node_apart_from_errors(
+            self, notifications_aws):
+        notifications_aws.dynamodb_client.query.return_value = {"Items": [
+            {"assetName": {"S": "Root"}, "snsTopic": {"S": "arn:aws:sns:us-east-1:1:t"}}]}
+
+        def evaluation(db, asset, schema, actor):
+            if asset == "B":
+                return store._superseded_result("eval-lost", {})
+            return {"evaluationId": "e", "verdict": "compliant"}
+
+        _, mocks = _run_executor(Graph([(ASSET, "B"), (ASSET, "C")]), EXECUTING,
+                                 evaluation=evaluation)
+        details = mocks["audit"].call_args.kwargs["details"]
+        assert details == {"nodesEvaluated": 2, "summary": {"superseded": 1, "compliant": 1}}
+        message = notifications_aws.sns_client.publish.call_args.kwargs["Message"]
+        assert "superseded: 1" in message
+        assert "compliant: 1" in message
+        assert "error" not in message
+
+    def test_an_evaluation_that_could_not_run_for_another_reason_is_still_an_error_node(self):
+        """Only the superseded flag makes a node `superseded`: a schema that could not be loaded
+        (verdict `error` with an `error` message) remains an error."""
+        def evaluation(db, asset, schema, actor):
+            return {"evaluationId": "e", "verdict": "error", "error": "Schema not found"}
+
+        result, _ = _run_executor(Graph([(ASSET, "B")]), EXECUTING, evaluation=evaluation)
+        assert [r["status"] for r in result["results"]] == ["error"]
 
     @pytest.mark.parametrize("item,error", [
         (None, "Cascade not found"), (PENDING, "Cascade not in executing state"),

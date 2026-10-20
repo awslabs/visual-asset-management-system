@@ -9568,7 +9568,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/sweep/{schemaName}:
         post:
             summary: "Sweep the assets bound to a schema."
-            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the rest, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. `skipped` counts the bound assets the caller is not authorized to evaluate (they are never listed); `assetsRemaining` reports how many were not reached — a value above 0 means call again."
+            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the rest, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. `skipped` counts the bound assets the caller is not authorized to evaluate (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` reports how many were not reached — a value above 0 means call again."
             parameters:
                 - name: schemaName
                   in: path
@@ -16680,20 +16680,30 @@ components:
                             evaluationId:
                                 type: string
                                 format: uuid
+                                description: "The evaluation started for the asset. On a `superseded` entry it names no evaluation record: that evaluation did not run."
                             verdict:
                                 type: string
+                                enum: [compliant, non_compliant, quarantined, pending_pipeline, error, superseded]
+                                description: "The evaluation's verdict, or `superseded` when a newer evaluation of the asset had already started, so this one did not run and the asset's state is the newer evaluation's (not an error)."
+                            superseded:
+                                type: boolean
+                                description: "Present and `true` on a `superseded` entry."
                 assetsRemaining:
                     type: integer
                     description: "Bound assets the call did not reach, beyond the 200-asset cap or after the time budget; a value above 0 means call again."
                 skipped:
                     type: integer
                     description: "Bound assets the caller is not authorized to evaluate; counted, never listed."
+                superseded:
+                    type: integer
+                    description: "Listed assets whose evaluation did not run because a newer evaluation of the asset had already started."
             required:
                 - message
                 - schemaName
                 - assetsTriggered
                 - assetsRemaining
                 - skipped
+                - superseded
 
         complianceEvaluation:
             type: object
@@ -17024,7 +17034,7 @@ components:
                     type: integer
                 nodes:
                     type: string
-                    description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped`, `error`)."
+                    description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped`, `superseded` when a newer evaluation of the asset had already started so this one did not run, `error`). A skipped or superseded node does not abort the cascade."
                 executionOrder:
                     type: string
                     description: "JSON-encoded list of the downstream assets in evaluation order."

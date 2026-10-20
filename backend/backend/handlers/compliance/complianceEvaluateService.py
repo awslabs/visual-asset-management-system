@@ -254,8 +254,9 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
 
 def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
     """One evaluation plus the downstream cascade check; shared by evaluate and sweep. An evaluation
-    that could not run, or whose every rule errored (verdict `error`), changes no asset state and so
-    opens no cascade."""
+    that could not run (including one a newer evaluation of the asset superseded, which carries an
+    `error`), or whose every rule errored (verdict `error`), changes no asset state and so opens no
+    cascade."""
     result = store.run_evaluation(database_id, asset_id, schema_name, actor)
     if not result.get("error") and result.get("verdict") != EvaluationVerdict.error.value:
         check_and_trigger_cascade(database_id, asset_id)
@@ -269,7 +270,10 @@ def sweep_schema(event, schema_name):
     Rows in `pending_evaluation` are evaluated first, then the rest of the bound rows. One call
     evaluates at most MAX_SWEEP_ASSETS assets and stops launching once SWEEP_TIME_BUDGET_SECONDS has
     elapsed; `assetsRemaining` counts the bound assets this call did not reach under either bound,
-    and tells the caller to call again."""
+    and tells the caller to call again. An asset whose evaluation found a newer one of it already
+    started (a trigger evaluation running at the same time) is listed with verdict `superseded` and
+    `superseded: true` and counted under `superseded`: its state is that evaluation's, and the
+    listed `evaluationId` names no evaluation record."""
     started_at = monotonic()
     (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
     if not valid:
@@ -290,6 +294,7 @@ def sweep_schema(event, schema_name):
     database_allowed = {}
     triggered = []
     skipped = 0
+    superseded = 0
     beyond_cap = 0
     beyond_budget = 0
     budget_spent = False
@@ -309,23 +314,28 @@ def sweep_schema(event, schema_name):
             skipped += 1
             continue
         result = run_evaluation_for_asset(database_id, asset["assetId"], schema_name, actor)
-        triggered.append({
+        entry = {
             "databaseId": database_id,
             "assetId": asset["assetId"],
             "evaluationId": result.get("evaluationId"),
             "verdict": result.get("verdict"),
-        })
+        }
+        if result.get("superseded"):
+            entry["superseded"] = True
+            superseded += 1
+        triggered.append(entry)
 
     remaining = beyond_cap + beyond_budget
-    logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered, {skipped} skipped, "
-                f"{remaining} remaining ({beyond_cap} beyond the cap, {beyond_budget} beyond the "
-                f"time budget)")
+    logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered ({superseded} "
+                f"superseded by a newer evaluation), {skipped} skipped, {remaining} remaining "
+                f"({beyond_cap} beyond the cap, {beyond_budget} beyond the time budget)")
     return success(body={
         "message": f"Sweep triggered for {len(triggered)} assets",
         "schemaName": schema_name,
         "assetsTriggered": triggered,
         "assetsRemaining": remaining,
         "skipped": skipped,
+        "superseded": superseded,
     })
 
 

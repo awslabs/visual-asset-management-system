@@ -547,7 +547,7 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 
 ## Sweep the assets bound to a schema
 
-Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate. Assets in `pending_evaluation` are evaluated first, then the rest. One call evaluates at most 200 assets and stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window; `assetsRemaining` reports how many bound assets were not reached — a value above 0 means call again — and repeated calls work through them. Bound assets the caller is not authorized to evaluate are counted in `skipped` and never listed.
+Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate. Assets in `pending_evaluation` are evaluated first, then the rest. One call evaluates at most 200 assets and stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window; `assetsRemaining` reports how many bound assets were not reached — a value above 0 means call again — and repeated calls work through them. Bound assets the caller is not authorized to evaluate are counted in `skipped` and never listed. An asset whose evaluation found a newer evaluation of it already started (for example, a trigger evaluation running at the same time) did not run: its entry carries `verdict` `superseded` and `superseded: true`, its `evaluationId` names no evaluation record, and `superseded` counts these entries. The asset's state is the newer evaluation's; a superseded entry is not an error.
 
 ```
 POST /compliance/sweep/{schemaName}
@@ -557,7 +557,7 @@ POST /compliance/sweep/{schemaName}
 
 ```json
 {
-    "message": "Sweep triggered for 2 assets",
+    "message": "Sweep triggered for 3 assets",
     "schemaName": "survey-compliance",
     "assetsTriggered": [
         {
@@ -571,9 +571,17 @@ POST /compliance/sweep/{schemaName}
             "assetId": "x1a2b3c4-scan-0043",
             "evaluationId": "8a1d2c3b-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
             "verdict": "quarantined"
+        },
+        {
+            "databaseId": "survey-project",
+            "assetId": "x1a2b3c4-scan-0044",
+            "evaluationId": "c4d5e6f7-8a9b-4c0d-9e1f-2a3b4c5d6e7f",
+            "verdict": "superseded",
+            "superseded": true
         }
     ],
     "skipped": 0,
+    "superseded": 1,
     "assetsRemaining": 0
 }
 ```
@@ -1003,7 +1011,7 @@ GET /compliance/cascades/{cascadeId}
 }
 ```
 
-`state` is `pending_approval`, `executing`, `completed` or `aborted`. `nodes` is a JSON-encoded map of `databaseId:assetId` to the node's status — `pending`, `evaluating`, the verdict the evaluation produced (`compliant`, `non_compliant`, `quarantined`, `pending_pipeline`, `error`), or `skipped` for a descendant with no bound schema — and `executionOrder` the JSON-encoded evaluation order. A rejected cascade carries `rejectedBy`, `rejectedAt` and `rejectionReason` instead of the approval fields. An `aborted` cascade carries `abortReason`: the rejection, or the failure that ended the run.
+`state` is `pending_approval`, `executing`, `completed` or `aborted`. `nodes` is a JSON-encoded map of `databaseId:assetId` to the node's status — `pending`, `evaluating`, the verdict the evaluation produced (`compliant`, `non_compliant`, `quarantined`, `pending_pipeline`, `error`), `skipped` for a descendant with no bound schema, or `superseded` for a descendant whose evaluation found a newer one of it already started (that evaluation settles the asset's state; not an error) — and `executionOrder` the JSON-encoded evaluation order. A `completed` cascade also carries `results`, a JSON-encoded list of `{node, status, evaluationId}` with the same statuses. A skipped or superseded node does not abort the cascade. A rejected cascade carries `rejectedBy`, `rejectedAt` and `rejectionReason` instead of the approval fields. An `aborted` cascade carries `abortReason`: the rejection, or the failure that ended the run.
 
 ### Error responses
 
@@ -1129,24 +1137,24 @@ GET /compliance/audit
 
 ### Event types
 
-| Event type                     | Written when                                                                                                                  |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `compliance_check`             | An asset is evaluated                                                                                                         |
-| `evaluation_error`             | A rule's tooling failed in an evaluation, or the schema could not be loaded; `details` names the errored rules as `ruleNames` |
-| `quarantine_released`          | A quarantined asset is released, by request or by a passing re-evaluation                                                     |
-| `exception_granted`            | An exception is granted to a quarantined asset                                                                                |
-| `exception_revoked`            | An active exception is revoked; the asset returns to its last verdict's state                                                 |
-| `exception_superseded`         | An evaluation against another schema or a newer schema version clears an active exception                                     |
-| `schema_bound_to_database`     | A schema is bound to a database                                                                                               |
-| `schema_unbound_from_database` | A database binding is removed                                                                                                 |
-| `schema_bound_to_asset`        | A schema is bound to an asset as an override                                                                                  |
-| `schema_unbound_from_asset`    | An asset override is removed                                                                                                  |
-| `schema_deleted`               | A schema is deleted                                                                                                           |
-| `cascade_triggered`            | A cascade is created through the API                                                                                          |
-| `cascade_auto_triggered`       | A cascade is opened after the evaluation of an asset that has children                                                        |
-| `cascade_approved`             | A pending cascade is approved                                                                                                 |
-| `cascade_rejected`             | A pending cascade is rejected                                                                                                 |
-| `cascade_completed`            | A cascade finishes evaluating its downstream assets                                                                           |
+| Event type                     | Written when                                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `compliance_check`             | An asset is evaluated                                                                                                            |
+| `evaluation_error`             | A rule's tooling failed in an evaluation, or the schema could not be loaded; `details` names the errored rules as `ruleNames`    |
+| `quarantine_released`          | A quarantined asset is released, by request or by a passing re-evaluation                                                        |
+| `exception_granted`            | An exception is granted to a quarantined asset                                                                                   |
+| `exception_revoked`            | An active exception is revoked; the asset returns to its last verdict's state                                                    |
+| `exception_superseded`         | An evaluation against another schema or a newer schema version clears an active exception                                        |
+| `schema_bound_to_database`     | A schema is bound to a database                                                                                                  |
+| `schema_unbound_from_database` | A database binding is removed                                                                                                    |
+| `schema_bound_to_asset`        | A schema is bound to an asset as an override                                                                                     |
+| `schema_unbound_from_asset`    | An asset override is removed                                                                                                     |
+| `schema_deleted`               | A schema is deleted                                                                                                              |
+| `cascade_triggered`            | A cascade is created through the API                                                                                             |
+| `cascade_auto_triggered`       | A cascade is opened after the evaluation of an asset that has children                                                           |
+| `cascade_approved`             | A pending cascade is approved                                                                                                    |
+| `cascade_rejected`             | A pending cascade is rejected                                                                                                    |
+| `cascade_completed`            | A cascade finishes evaluating its downstream assets; `details` carries `nodesEvaluated` and `summary`, the node count per status |
 
 ### Error responses
 

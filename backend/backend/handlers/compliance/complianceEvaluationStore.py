@@ -131,6 +131,11 @@ ALL_RULES_ERRORED_MESSAGE = "No rule could be evaluated"
 # The `error` of a `run_evaluation` result whose evaluation found the asset-state row already
 # claimed by a newer evaluation and so did not run.
 SUPERSEDED_MESSAGE = "A newer evaluation of the asset has started"
+# The `verdict` of that result. It is deliberately not an `EvaluationVerdict` member: a superseded
+# run writes no evaluation row and no compliance-record outcome, so the value never appears on
+# either and never maps to a compliance state. The sweep reports it per asset and the cascade
+# executor records it as the node state.
+SUPERSEDED_VERDICT = "superseded"
 
 try:
     schema_table_name = get_table_name(ResourceKeys.COMPLIANCE_SCHEMA_STORAGE_TABLE)
@@ -909,8 +914,10 @@ def run_evaluation(
     reads the row meanwhile finds the change covered instead of starting a second evaluation and a
     second workflow execution. An evaluation older than the row's last one, or one whose claim loses
     to a newer evaluation's, does not run: nothing is evaluated, launched or written, and the
-    result carries `superseded: true` and an `error` (`SUPERSEDED_MESSAGE`), so the callers treat
-    it as an evaluation that could not run.
+    result carries `verdict` `superseded` (`SUPERSEDED_VERDICT`, not an `EvaluationVerdict`),
+    `superseded: true` and an `error` (`SUPERSEDED_MESSAGE`). The evaluate route answers it as an
+    evaluation that could not run, and no caller opens a cascade for it; the sweep and the cascade
+    executor report it as `superseded`.
     """
     evaluated_at = now_iso()
     evaluation_id = str(uuid.uuid4())
@@ -1155,10 +1162,13 @@ def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previou
 
 def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str, Any]:
     """The `run_evaluation` result of an evaluation that did not run because a newer one had
-    claimed the asset-state row: no verdict, no rule results, the asset's state as read."""
+    claimed the asset-state row: `verdict` `SUPERSEDED_VERDICT`, `superseded: true`, `error`
+    `SUPERSEDED_MESSAGE`, no rule results, and the asset's state as read (the newer evaluation's
+    to settle). `evaluationId` is the id this run was given and did not use: no evaluation row
+    carries it and the compliance record does not name it."""
     return {
         "evaluationId": evaluation_id,
-        "verdict": EvaluationVerdict.error.value,
+        "verdict": SUPERSEDED_VERDICT,
         "complianceState": previous.get("complianceState", engine.STATE_UNKNOWN),
         "ruleResults": [],
         "pipelineRulesPending": 0,

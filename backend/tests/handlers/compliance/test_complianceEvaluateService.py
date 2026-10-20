@@ -18,6 +18,7 @@ from backend.tests.handlers.compliance._harness import (
     schema_row,
 )
 from handlers.compliance import complianceEvaluateService as svc
+from handlers.compliance import complianceEvaluationStore as store
 
 MOD = "handlers.compliance.complianceEvaluateService"
 STORE = "handlers.compliance.complianceEvaluationStore"
@@ -41,6 +42,12 @@ ALL_PATHS = [
 
 EVALUATION_RESULT = {"evaluationId": "eval-1", "verdict": "compliant",
                      "complianceState": "compliant", "ruleResults": [], "pipelineRulesPending": 0}
+
+
+def _superseded_result(evaluation_id):
+    """What the store returns for a run that found a newer evaluation of the asset already started
+    (the store's own builder, so the shape cannot drift from it)."""
+    return store._superseded_result(evaluation_id, {"complianceState": "compliant"})
 
 OTHER_DB = "db2"
 PENDING = "pending_evaluation"
@@ -80,7 +87,7 @@ def _clock(*readings):
 
 def _run(event, tokens=(USER,), api=True, obj=True, asset_exists=True, compliance_record=None,
          evaluation_result=None, schema_item=None, state_rows=None, evaluation_rows=None,
-         evaluation_last_key=None, casbin=None):
+         evaluation_last_key=None, casbin=None, evaluation_side_effect=None):
     state_table = MagicMock(name="asset_state_table")
     state_table.query.side_effect = _serve_state_rows(state_rows)
     evaluation_table = MagicMock(name="evaluation_table")
@@ -101,11 +108,14 @@ def _run(event, tokens=(USER,), api=True, obj=True, asset_exists=True, complianc
             patch(f"{STORE}.get_compliance_record", return_value=compliance_record), \
             patch(f"{STORE}.load_schema_item", return_value=schema_item), \
             patch(f"{STORE}.run_evaluation",
-                  return_value=evaluation_result or EVALUATION_RESULT) as run_evaluation, \
-            patch(f"{MOD}.check_and_trigger_cascade") as cascade:
+                  return_value=evaluation_result or EVALUATION_RESULT,
+                  side_effect=evaluation_side_effect) as run_evaluation, \
+            patch(f"{MOD}.check_and_trigger_cascade") as cascade, \
+            patch(f"{MOD}.logger") as logger:
         response = svc.lambda_handler(event, MagicMock())
     return response, {"state": state_table, "evaluation": evaluation_table, "asset": asset_table,
-                      "run_evaluation": run_evaluation, "cascade": cascade, "casbin": casbin}
+                      "run_evaluation": run_evaluation, "cascade": cascade, "casbin": casbin,
+                      "logger": logger}
 
 
 def _enforcer_denying_database(denied_database_id):
@@ -154,6 +164,8 @@ class TestRouteDispatch:
             (DB, "a"), (OTHER_DB, "b")]
         assert body["assetsRemaining"] == 0
         assert body["skipped"] == 0
+        assert body["superseded"] == 0
+        assert all("superseded" not in t for t in body["assetsTriggered"])
         assert mocks["run_evaluation"].call_count == 2
         assert mocks["cascade"].call_count == 2
 
@@ -474,6 +486,16 @@ class TestEvaluateFlow:
         assert body_of(response)["assetsTriggered"][0]["verdict"] == "error"
         mocks["cascade"].assert_not_called()
 
+    def test_a_superseded_evaluation_is_refused_with_the_newer_evaluation_message(self):
+        response, mocks = _run(
+            rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={}),
+            compliance_record={"schemaName": SCHEMA},
+            evaluation_result=_superseded_result("eval-lost"))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == (
+            "Evaluation could not run: A newer evaluation of the asset has started")
+        mocks["cascade"].assert_not_called()
+
     def test_the_asset_state_row_is_returned_whole_including_its_evaluation_status(self):
         row = {"databaseId": DB, "assetId": ASSET, "complianceState": "compliant",
                "schemaName": SCHEMA, "lastEvaluationId": "e1",
@@ -615,6 +637,35 @@ class TestSweep:
         assert len(body["assetsTriggered"]) == svc.MAX_SWEEP_ASSETS
         assert body["skipped"] == 1
         assert body["assetsRemaining"] == 1
+
+    def test_an_asset_a_newer_evaluation_superseded_is_listed_and_counted_as_superseded(self):
+        """A sweep that collides with a trigger evaluation of one asset: that asset's run finds the
+        row claimed and does not run. It is listed with verdict `superseded` and counted under
+        `superseded` -- not as an error -- and opens no cascade; the other asset is unaffected."""
+        def evaluation(database_id, asset_id, schema_name, actor):
+            if asset_id == "busy":
+                return _superseded_result("eval-lost")
+            return dict(EVALUATION_RESULT, evaluationId=f"eval-{asset_id}")
+
+        response, mocks = _run(
+            rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), schema_item=schema_row(),
+            state_rows=[{"databaseId": DB, "assetId": "busy"}, {"databaseId": DB, "assetId": "a"}],
+            evaluation_side_effect=evaluation)
+        assert response["statusCode"] == 200, response
+        body = body_of(response)
+        assert body["assetsTriggered"] == [
+            {"databaseId": DB, "assetId": "busy", "evaluationId": "eval-lost",
+             "verdict": "superseded", "superseded": True},
+            {"databaseId": DB, "assetId": "a", "evaluationId": "eval-a", "verdict": "compliant"},
+        ]
+        assert body["superseded"] == 1
+        assert body["skipped"] == 0
+        assert body["assetsRemaining"] == 0
+        assert body["message"] == "Sweep triggered for 2 assets"
+        assert "error" not in response["body"]
+        assert [c.args for c in mocks["cascade"].call_args_list] == [(DB, "a")]
+        logged = " ".join(str(c.args[0]) for c in mocks["logger"].info.call_args_list)
+        assert "2 triggered (1 superseded by a newer evaluation), 0 skipped" in logged
 
 
 @pytest.mark.unit

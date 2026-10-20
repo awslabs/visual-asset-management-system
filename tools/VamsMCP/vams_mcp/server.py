@@ -1706,6 +1706,10 @@ def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
     that triggered it, per-node progress (`nodes`, `executionOrder`, `totalNodes`), and — once
     decided — approvedBy / approvalReason or rejectedBy / rejectionReason with completedAt.
 
+    A node's state is `pending`, `evaluating`, the verdict its evaluation produced, `skipped` (no
+    bound schema), `superseded` (a newer evaluation of that asset had already started, so this one
+    did not run; not a failure) or `error`.
+
     This is how a started cascade is followed: create_compliance_cascade() with
     `require_approval=False` and approve_compliance_cascade() return while the cascade is
     `executing`, so poll this tool until `state` is `completed` or `aborted`. An aborted cascade
@@ -2470,17 +2474,21 @@ if CONFIG.enable_writes:
     @tool_result
     def sweep_compliance_schema(schema_name: str) -> Dict[str, Any]:
         """Re-evaluate EVERY asset bound to a schema that the caller may evaluate; returns
-        `assetsTriggered` (databaseId, assetId pairs), `skipped` and `assetsRemaining`.
+        `assetsTriggered` (databaseId, assetId pairs), `skipped`, `superseded` and
+        `assetsRemaining`.
 
         `skipped` counts the bound assets the caller is not authorized to evaluate — they are
         counted, never listed, so a sweep by a narrowly scoped caller can trigger nothing and still
-        succeed. Assets awaiting evaluation are evaluated first; `assetsRemaining` counts the bound
-        assets this call did not reach (its per-call cap or its time budget) — call again to work
-        through them. The usual follow-up to update_compliance_schema(). Each asset is
-        evaluated as by evaluate_asset_compliance(), so a schema with pipeline rules starts one
-        workflow execution per bound asset — real AWS compute, multiplied by the binding count.
-        Keep this tool out of `autoApprove` and check get_compliance_bindings() for the blast
-        radius first.
+        succeed. `superseded` counts the listed assets whose evaluation did not run because a newer
+        evaluation of the same asset had already started (such an entry carries verdict
+        `superseded` and `superseded: true`); that is not a failure, and the asset's state is the
+        newer evaluation's. Assets awaiting evaluation are evaluated first; `assetsRemaining`
+        counts the bound assets this call did not reach (its per-call cap or its time budget) —
+        call again to work through them. The usual follow-up to update_compliance_schema(). Each
+        asset is evaluated as by evaluate_asset_compliance(), so a schema with pipeline rules
+        starts one workflow execution per bound asset — real AWS compute, multiplied by the
+        binding count. Keep this tool out of `autoApprove` and check get_compliance_bindings() for
+        the blast radius first.
         """
         return CLIENT.api.sweep_compliance_schema(schema_name)
 
