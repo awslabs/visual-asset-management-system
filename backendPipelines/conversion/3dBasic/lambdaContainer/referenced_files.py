@@ -1,0 +1,435 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Referenced files: fetch the files a model input names (glTF and GLB buffers and images, OBJ material
+libraries and the texture maps they name, a PLY ``TextureFile``) from the input's own asset before the
+model is loaded, and give the loader those files and nothing else.
+
+Every reference is untrusted input. This function's role can read every asset bucket, so a reference
+must not pull another asset's content into the converted model (ARCC BSC1, input validation by
+allowlist). A reference is accepted only when it is a relative path that, normalised against the
+referring file's directory, stays inside the input's asset prefix; absolute paths, ``..`` escapes,
+URI schemes (``s3:``, ``http(s):``, ``file:``, a Windows drive), control characters and over-long
+values are rejected. An inline ``data:`` URI is left to the loader and never becomes an Amazon S3
+request. The fetch is bounded by a file count, a byte total (each object's size is read with
+HeadObject before it is downloaded, and checked against free disk) and a recursion depth: only an
+OBJ's material libraries are read for further references, so the chain is at most OBJ -> MTL ->
+texture.
+
+The loader reads the fetched files through ``ConfinedResolver``, which serves the files fetched here
+from the local copy of the asset and refuses any other name.
+
+The path rules (``resolve_reference``, ``local_path_for``) and the glTF, OBJ and MTL collectors are
+vendored from the 3D Preview Thumbnail container's ``preview_pipeline/dependencies.py`` (PR #474);
+keep the two in step. This copy differs in policy: a reference that is rejected, missing or over a
+limit FAILS the conversion. A thumbnail without its texture is still a usable preview, whereas a
+converted model without its buffers or materials is a different model reported as a success.
+"""
+
+import json
+import os
+import posixpath
+import re
+import shutil
+import struct
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Tuple
+from urllib.parse import unquote
+
+from botocore.exceptions import ClientError
+
+DEFAULT_MAX_FILES = 1000
+DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 ** 3
+# Levels of referencing followed below the input: the input names an MTL (1), the MTL names a
+# texture (2). Nothing this pipeline loads needs more.
+DEFAULT_MAX_DEPTH = 2
+# Free disk kept beyond a download for the export, which is staged on the same /tmp.
+DEFAULT_DISK_HEADROOM_BYTES = 512 * 1024 ** 2
+# S3 keys are at most 1,024 bytes; a longer reference cannot name an object.
+MAX_REFERENCE_LENGTH = 1024
+# A GLB's JSON chunk, or a PLY header, larger than this is not one this pipeline reads references from.
+_HEADER_SCAN_LIMIT = 64 * 1024 ** 2
+# The longest reference quoted back in an error message.
+_SHOWN_LENGTH = 200
+
+_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+
+
+class ReferencedFileError(ValueError):
+    """A file the input model references cannot be used: rejected, missing, or over a limit."""
+
+
+@dataclass
+class FetchLimits:
+    max_files: int = DEFAULT_MAX_FILES
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES
+    max_depth: int = DEFAULT_MAX_DEPTH
+    disk_headroom_bytes: int = DEFAULT_DISK_HEADROOM_BYTES
+
+
+@dataclass
+class FetchReport:
+    fetched: List[str] = field(default_factory=list)
+    total_bytes: int = 0
+    # Each accepted reference, spelled as the referring file spells it, mapped to the local file it
+    # names. The loader asks for a reference by that spelling (a glTF URI still percent-encoded, an
+    # MTL texture name relative to the MTL rather than to the OBJ), so this is what the resolver
+    # looks it up by.
+    by_reference: Dict[str, str] = field(default_factory=dict)
+
+
+# --------------------------------------------------------------------------------------------------
+# Paths
+# --------------------------------------------------------------------------------------------------
+
+def resolve_reference(reference, referrer_dir: str = "", percent_encoded: bool = False) -> Optional[str]:
+    """The root-relative path ``reference`` names, or None when it is not an accepted reference.
+
+    ``referrer_dir`` is the referring file's directory relative to the confinement root. A
+    percent-encoded reference (a glTF URI) is decoded first, so the check applies to the name that is
+    downloaded rather than to its encoded spelling. Backslashes are read as separators (OBJ/MTL files
+    written on Windows use them) before the path is checked.
+    """
+    if not isinstance(reference, str):
+        return None
+    value = unquote(reference) if percent_encoded else reference
+    value = value.strip()
+    if not value or len(value) > MAX_REFERENCE_LENGTH:
+        return None
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        return None
+    if value.startswith("`") or _SCHEME.match(value):
+        return None
+    value = value.replace("\\", "/")
+    if value.startswith("/"):
+        return None
+    joined = posixpath.normpath(posixpath.join(referrer_dir or "", value))
+    if joined in (".", "..") or joined.startswith(("/", "../")):
+        return None
+    return joined
+
+
+def local_path_for(local_root: str, relative_path: str) -> Optional[str]:
+    """The local path mirroring ``relative_path`` under ``local_root``, or None if it would leave it."""
+    base = os.path.realpath(local_root)
+    target = os.path.realpath(os.path.join(base, relative_path))
+    if target == base or not target.startswith(base + os.sep):
+        return None
+    return target
+
+
+def confinement_root(input_key: str, relative_subdir: str = "") -> Tuple[str, str]:
+    """``(root_key, input_relative_path)``: the S3 prefix references are confined to, and the input's
+    path below it.
+
+    The root is the input's asset prefix: the input key with its asset-relative path (the manifest's
+    ``relativePath``, which ``relative_subdir`` and the file name rebuild) removed from the end. That
+    holds for an original asset file, for an asset created on an existing bucket folder, and for a
+    file an earlier workflow step wrote, which is keyed by its asset-relative path under the run's
+    output files folder. When the key does not end with that path -- a direct invocation with no
+    manifest, for one -- the root is the input file's own directory, the narrowest confinement.
+    """
+    input_key = input_key or ""
+    name = posixpath.basename(input_key)
+    own_directory = input_key[:len(input_key) - len(name)]
+    subdir = (relative_subdir or "").strip("/")
+    if subdir:
+        suffix = f"{subdir}/{name}"
+        if (input_key == suffix or input_key.endswith("/" + suffix)) and resolve_reference(suffix) == suffix:
+            return input_key[:len(input_key) - len(suffix)], suffix
+    return own_directory, name
+
+
+def _shown(value) -> str:
+    """A reference quoted for an error message: escaped, and cut to a bounded length."""
+    text = repr(value)
+    return text if len(text) <= _SHOWN_LENGTH else text[:_SHOWN_LENGTH] + "..."
+
+
+# --------------------------------------------------------------------------------------------------
+# Reference collectors: (local file) -> [(raw reference, percent_encoded)]
+# --------------------------------------------------------------------------------------------------
+
+def _gltf_document_references(document) -> List[tuple]:
+    references = []
+    if not isinstance(document, dict):
+        return references
+    for group in ("buffers", "images"):
+        for entry in document.get(group) or []:
+            uri = entry.get("uri") if isinstance(entry, dict) else None
+            if isinstance(uri, str) and uri and not uri.startswith("data:"):
+                references.append((uri, True))
+    return references
+
+
+def _gltf_references(path: str) -> List[tuple]:
+    with open(path, "r", encoding="utf-8") as handle:
+        document = json.load(handle)
+    return _gltf_document_references(document)
+
+
+def _glb_references(path: str) -> List[tuple]:
+    """The same ``buffers`` / ``images`` URIs, read from a GLB's JSON chunk. A GLB normally carries
+    its data in its own binary chunk, but its JSON may still name external files, and the loader
+    resolves those exactly as it does for a ``.gltf``."""
+    with open(path, "rb") as handle:
+        header = handle.read(20)
+        if len(header) < 20 or header[:4] != b"glTF":
+            return []
+        chunk_length, chunk_type = struct.unpack("<I4s", header[12:20])
+        if chunk_type != b"JSON" or chunk_length > _HEADER_SCAN_LIMIT:
+            return []
+        document = json.loads(handle.read(chunk_length).decode("utf-8"))
+    return _gltf_document_references(document)
+
+
+def _obj_references(path: str) -> List[tuple]:
+    """``mtllib`` names: one or more file names after the keyword."""
+    references = []
+    with open(path, "rb") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if line[:6].lower() != b"mtllib" or (len(line) > 6 and not line[6:7].isspace()):
+                continue
+            names = line[6:].decode("utf-8", errors="replace").split()
+            references.extend((name, False) for name in names)
+    return references
+
+
+# MTL texture statements and the number of values each option takes (the -o/-s/-t options take one
+# to three numbers, handled separately).
+_MTL_MAP_KEYWORDS = {
+    "map_kd", "map_ka", "map_ks", "map_ns", "map_d", "map_bump", "bump", "disp", "decal", "refl",
+    "norm", "map_pr", "map_pm", "map_ps", "map_ke", "map_rma", "map_orm",
+}
+_MTL_OPTION_ARGS = {
+    "-blendu": 1, "-blendv": 1, "-bm": 1, "-boost": 1, "-cc": 1, "-clamp": 1, "-imfchan": 1,
+    "-mm": 2, "-texres": 1, "-type": 1,
+}
+_NUMBER = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+
+
+def _mtl_texture_name(tokens: List[str]) -> Optional[str]:
+    index = 0
+    while index < len(tokens):
+        token = tokens[index].lower()
+        if token in _MTL_OPTION_ARGS:
+            index += 1 + _MTL_OPTION_ARGS[token]
+        elif token in ("-o", "-s", "-t"):
+            index += 1
+            taken = 0
+            while index < len(tokens) - 1 and taken < 3 and _NUMBER.match(tokens[index]):
+                index += 1
+                taken += 1
+        else:
+            break
+    name = " ".join(tokens[index:])
+    return name or None
+
+
+def _mtl_references(path: str) -> List[tuple]:
+    references = []
+    with open(path, "rb") as handle:
+        for raw in handle:
+            tokens = raw.decode("utf-8", errors="replace").split()
+            if len(tokens) >= 2 and tokens[0].lower() in _MTL_MAP_KEYWORDS:
+                name = _mtl_texture_name(tokens[1:])
+                if name:
+                    references.append((name, False))
+    return references
+
+
+def _ply_references(path: str) -> List[tuple]:
+    """The texture a PLY header names (``comment TextureFile fuze_uv.jpg``), read the way trimesh's
+    PLY loader reads it: the rest of any header line after ``TextureFile``."""
+    references = []
+    with open(path, "rb") as handle:
+        if handle.readline(16).strip().lower() != b"ply":
+            return []
+        scanned = 0
+        for raw in handle:
+            scanned += len(raw)
+            if scanned > _HEADER_SCAN_LIMIT:
+                break
+            line = raw.decode("utf-8", errors="replace")
+            if line.strip().lower() == "end_header":
+                break
+            lowered = line.lower()
+            if "texturefile" in lowered:
+                name = line[lowered.index("texturefile") + len("texturefile"):].strip()
+                if name:
+                    references.append((name, False))
+    return references
+
+
+_COLLECTORS: Dict[str, Callable[[str], List[tuple]]] = {
+    ".gltf": _gltf_references,
+    ".glb": _glb_references,
+    ".obj": _obj_references,
+    ".mtl": _mtl_references,
+    ".ply": _ply_references,
+}
+
+# The fetched files read for further references, by the extension of the file that referenced them.
+# A buffer or image a glTF names is data, never a document, and a fetched model is not loaded.
+_FOLLOWED = {".obj": {".mtl"}}
+
+
+def has_references(ext: str) -> bool:
+    """True when files of this extension can reference other files the container fetches."""
+    return ext.lower() in _COLLECTORS
+
+
+# --------------------------------------------------------------------------------------------------
+# Fetch
+# --------------------------------------------------------------------------------------------------
+
+_NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound", "403", "AccessDenied", "Forbidden"}
+
+
+def _object_size(client, bucket: str, key: str):
+    """``(size, version_id)`` of an object, or None when it does not exist or cannot be read."""
+    try:
+        response = client.head_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        code = str(e.response.get("Error", {}).get("Code", ""))
+        status = str(e.response.get("ResponseMetadata", {}).get("HTTPStatusCode", ""))
+        if code in _NOT_FOUND_CODES or status in ("403", "404"):
+            return None
+        raise
+    return int(response.get("ContentLength", 0)), response.get("VersionId")
+
+
+def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_path: str,
+                           local_input_path: str, local_root: str,
+                           limits: Optional[FetchLimits] = None, logger=None) -> FetchReport:
+    """Fetch every file the input references, transitively, into ``local_root``.
+
+    ``local_input_path`` is the input already downloaded at ``input_relative_path`` under
+    ``local_root``; each fetched file lands at its own root-relative path beside it, so relative
+    references resolve locally exactly as they do in the asset. ``client`` is the Amazon S3 client
+    the input was downloaded with. Raises ``ReferencedFileError`` for a reference that is rejected, names
+    no object, or would pass a limit.
+    """
+    limits = limits or FetchLimits()
+    report = FetchReport()
+    ext = os.path.splitext(input_relative_path)[1].lower()
+    if not has_references(ext):
+        return report
+
+    seen = {input_relative_path}
+    queue = deque([(local_input_path, input_relative_path, ext, 0)])
+
+    while queue:
+        local_path, rel_path, file_ext, depth = queue.popleft()
+        try:
+            references = _COLLECTORS[file_ext](local_path)
+        except Exception as e:
+            # A file whose references cannot be read is not one the loader can read either, so the
+            # load reports it in its own terms. Nothing is fetched for it, and the resolver serves
+            # only fetched files, so an unread reference cannot reach anything.
+            if logger is not None:
+                logger.warning(f"Could not read the references in {rel_path}: {e}")
+            continue
+        if references and depth + 1 > limits.max_depth:
+            raise ReferencedFileError(
+                f"{rel_path} references further files {depth + 1} levels below the input; this "
+                f"pipeline follows at most {limits.max_depth}.")
+        referrer_dir = posixpath.dirname(rel_path)
+        for raw, percent_encoded in references:
+            relative = resolve_reference(raw, referrer_dir, percent_encoded=percent_encoded)
+            target = local_path_for(local_root, relative) if relative else None
+            if relative is None or target is None:
+                raise ReferencedFileError(
+                    f"{rel_path} references {_shown(raw)}, which is not a relative path to a file in "
+                    f"the same asset. Only files inside the input's own asset are fetched: change "
+                    f"the reference to a path relative to {rel_path}, or embed the data, and run the "
+                    f"conversion again.")
+            report.by_reference.setdefault(raw.strip(), target)
+            if relative in seen:
+                continue
+            seen.add(relative)
+            if len(report.fetched) >= limits.max_files:
+                raise ReferencedFileError(
+                    f"The input references more than {limits.max_files} files; this pipeline "
+                    f"fetches at most {limits.max_files}.")
+            key = root_key + relative
+            measured = _object_size(client, bucket, key)
+            if measured is None:
+                raise ReferencedFileError(
+                    f"{rel_path} references {relative}, which is not in the asset. Upload it to the "
+                    f"asset at /{relative} and run the conversion again.")
+            size, version_id = measured
+            if report.total_bytes + size > limits.max_total_bytes:
+                raise ReferencedFileError(
+                    f"The files the input references exceed {limits.max_total_bytes} bytes "
+                    f"(reached at {relative}, {size} bytes).")
+            free = shutil.disk_usage(local_root).free
+            if size + limits.disk_headroom_bytes > free:
+                raise ReferencedFileError(
+                    f"{relative} ({size} bytes) does not fit in the {free} bytes of working disk left.")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            extra = {"VersionId": version_id} if version_id else None
+            with open(target, "wb") as handle:
+                client.download_fileobj(Bucket=bucket, Key=key, Fileobj=handle, ExtraArgs=extra)
+            report.fetched.append(relative)
+            report.total_bytes += size
+            child_ext = os.path.splitext(relative)[1].lower()
+            if child_ext in _FOLLOWED.get(file_ext, ()):
+                queue.append((target, relative, child_ext, depth + 1))
+
+    if logger is not None:
+        logger.info(f"Referenced files: {len(report.fetched)} fetched ({report.total_bytes} bytes)")
+    return report
+
+
+# --------------------------------------------------------------------------------------------------
+# The loader's view of the asset
+# --------------------------------------------------------------------------------------------------
+
+class ConfinedResolver:
+    """The resolver the model loader is given in place of its default file-path resolver.
+
+    It serves the files ``fetch_referenced_files`` fetched -- looked up by the spelling the referring
+    file uses, then by the name resolved against the input's directory -- and raises
+    ``FileNotFoundError`` for every other name, so the loader reads nothing outside this conversion's
+    local copy of the asset.
+    """
+
+    def __init__(self, local_root: str, input_relative_path: str, by_reference: Dict[str, str]):
+        self._root = os.path.realpath(local_root)
+        self._referrer_dir = posixpath.dirname(input_relative_path)
+        self._by_reference = dict(by_reference or {})
+        self._served = set(self._by_reference.values())
+        # trimesh reads these from a file-path resolver: `parent` to record where a texture came
+        # from, `file_name` to name the geometry after the file it was loaded from.
+        self.parent = os.path.join(self._root, *[p for p in self._referrer_dir.split("/") if p])
+        self.file_name = posixpath.basename(input_relative_path)
+
+    def _path(self, name) -> Optional[str]:
+        if not isinstance(name, str):
+            return None
+        path = self._by_reference.get(name.strip())
+        if path is None:
+            relative = resolve_reference(name, self._referrer_dir)
+            candidate = local_path_for(self._root, relative) if relative else None
+            path = candidate if candidate in self._served else None
+        return path if path is not None and os.path.isfile(path) else None
+
+    def get(self, name):
+        path = self._path(name)
+        if path is None:
+            raise FileNotFoundError(f"{_shown(name)} is not a file fetched for this conversion")
+        with open(path, "rb") as handle:
+            return handle.read()
+
+    def __getitem__(self, name):
+        return self.get(name)
+
+    def __contains__(self, name) -> bool:
+        return self._path(name) is not None
+
+    def keys(self):
+        return iter(sorted(self._by_reference))
