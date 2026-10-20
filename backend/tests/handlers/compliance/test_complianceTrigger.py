@@ -599,6 +599,40 @@ class TestWorkflowSourcedRowChangesAreSkipped:
 
 
 @pytest.mark.unit
+class TestAnAssetVersionReEvaluatesTheAsset:
+    """Creating or reverting an asset version stamps `lastChangeSource: assetVersion` with a fresh
+    `lastChangeAt` onto the asset row. The stream MODIFY that write emits is a user change: it is
+    evaluated, judged against its own stamp, so a version-coverage verdict that failed after an
+    upload clears once the files are versioned."""
+
+    LAST_EVALUATED = "2026-03-01T12:00:05+00:00"
+
+    def _record(self):
+        return {"schemaName": SCHEMA, "complianceState": "non_compliant",
+                "lastEvaluationId": "eval-1", "lastEvaluatedAt": self.LAST_EVALUATED,
+                "lastEvaluationStatus": "completed"}
+
+    def test_a_version_created_after_the_last_evaluation_is_evaluated(self):
+        mocks = _run(_sns_event(_stream_message(change_source="assetVersion",
+                                                change_at="2026-03-01T12:05:00+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=self._record())
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+        assert not any("workflow execution" in text for text in _info_messages(mocks))
+
+    def test_a_version_the_last_evaluation_already_read_is_covered(self):
+        mocks = _run(_sns_event(_stream_message(change_source="assetVersion",
+                                                change_at="2026-03-01T12:00:01+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=self._record())
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_the_stamp_is_not_a_workflow_execution_write(self):
+        from common.assetProvenance import ASSET_CHANGE_SOURCE_ASSET_VERSION
+        from common.s3MetadataKeys import VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+        assert ASSET_CHANGE_SOURCE_ASSET_VERSION == "assetVersion"
+        assert ASSET_CHANGE_SOURCE_ASSET_VERSION != VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+
+
+@pytest.mark.unit
 class TestAPendingEvaluationCoversOnlyTheChangesItRead:
     """An evaluation still awaiting its pipeline rules covers the changes made at or before its start
     (the N-file upload that raised it) like any other evaluation, and no more: a change after its

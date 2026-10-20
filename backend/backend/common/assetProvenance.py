@@ -1,14 +1,16 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""Change-provenance attributes written onto the asset record by every upload completion.
+"""Change-provenance attributes written onto the asset record.
 
 Shared by the synchronous upload completion (`handlers/assets/uploadFile.py`) and the
 asynchronous large-file completion (`handlers/assets/sqsUploadFileLarge.py`) so both paths stamp
-the asset row identically; the compliance trigger reads them from the table's stream image and
-from the row. `lastChangeSource` / `lastChangeAt` describe the latest completion of either kind;
-`lastUploadAt` is written by a user upload's completion only, so a workflow execution's output
-write — which re-stamps `lastChangeAt` — leaves the instant of the last user upload readable.
+the asset row identically, and by the asset-version create and revert paths
+(`handlers/assets/assetVersions.py`); the compliance trigger reads them from the table's stream
+image and from the row. `lastChangeSource` / `lastChangeAt` describe the latest change of any of
+these kinds (`upload`, `workflowExecution`, `assetVersion`); `lastUploadAt` is written by a user
+upload's completion only, so a workflow execution's output write or a new asset version — each of
+which re-stamps `lastChangeAt` — leaves the instant of the last user upload readable.
 """
 
 from datetime import datetime, timezone
@@ -17,6 +19,11 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
+
+# `lastChangeSource` of an asset row whose latest change is a new asset version (created, or made by
+# reverting to an earlier one). An asset-row value only: no S3 object carries it as its
+# `vams-changesource`.
+ASSET_CHANGE_SOURCE_ASSET_VERSION = "assetVersion"
 
 
 def asset_change_provenance(workflow_execution_id=None):
@@ -43,3 +50,15 @@ def asset_change_provenance(workflow_execution_id=None):
     else:
         attributes['lastUploadAt'] = now
     return attributes
+
+
+def stamp_asset_version_provenance(asset):
+    """Record a new asset version as the asset row's latest change, in place on the row dict the
+    caller writes back whole: `lastChangeSource` `assetVersion`, `lastChangeAt` now, and no
+    `lastChangeWorkflowExecutionId` (the latest change is not a workflow execution's).
+    `lastUploadAt` is left as it is. The stream MODIFY that write raises is what makes the compliance
+    trigger re-evaluate the asset, so a version-coverage verdict follows the new version."""
+    asset['lastChangeSource'] = ASSET_CHANGE_SOURCE_ASSET_VERSION
+    asset['lastChangeAt'] = datetime.now(timezone.utc).isoformat()
+    asset.pop('lastChangeWorkflowExecutionId', None)
+    return asset
