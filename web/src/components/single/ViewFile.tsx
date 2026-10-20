@@ -166,9 +166,10 @@ function ViewFileForAsset() {
     const [isLoadingDirectPath, setIsLoadingDirectPath] = useState(isDirectPathAccess);
     const [directPathError, setDirectPathError] = useState<string | null>(null);
     const [loadedFileInfo, setLoadedFileInfo] = useState<FileInfo | null>(null);
-    // The direct-path request that loadedFileInfo answers. Until it equals directPathRequest, the
-    // loaded file is the one the URL named before.
-    const [loadedFileRequest, setLoadedFileRequest] = useState<string | null>(null);
+    // The direct-path requests that loadedFileInfo answers: the one it was loaded for and, when that
+    // named no version, the same path with the version that was picked, until the URL names that
+    // version. Until one equals directPathRequest, the loaded file is the one the URL named before.
+    const [loadedFileRequests, setLoadedFileRequests] = useState<string[]>([]);
     // State for on-demand version loading when state is passed without versionId
     const [isLoadingVersionInfo, setIsLoadingVersionInfo] = useState(false);
 
@@ -386,6 +387,20 @@ function ViewFileForAsset() {
                 return;
             }
 
+            // The file in hand already answers this URL: the URL gained the version picked for it,
+            // or the effect re-ran after the load wrote that file. Looking it up again would show the
+            // spinner a second time.
+            if (loadedFileInfo && loadedFileRequests.includes(directPathRequest)) {
+                // Once the URL names the picked version, the request that named no version no longer
+                // stands for the file in hand: a link that names no version asks for the latest one.
+                if (loadedFileRequests.length > 1 && loadedFileRequests[0] !== directPathRequest) {
+                    setLoadedFileRequests([directPathRequest]);
+                }
+                setDirectPathError(null);
+                setIsLoadingDirectPath(false);
+                return;
+            }
+
             setIsLoadingDirectPath(true);
             setDirectPathError(null);
 
@@ -478,7 +493,9 @@ function ViewFileForAsset() {
 
                 console.log("Loaded file info:", loadedFile);
                 setLoadedFileInfo(loadedFile);
-                setLoadedFileRequest(directPathRequest);
+                setLoadedFileRequests(
+                    Array.from(new Set([directPathRequest, `${urlFilePath}?${versionToUse ?? ""}`]))
+                );
                 setIsLoadingDirectPath(false);
                 setReload(true); // Trigger asset data fetch
             } catch (error: any) {
@@ -508,7 +525,16 @@ function ViewFileForAsset() {
         return () => {
             cancelled = true;
         };
-    }, [isDirectPathAccess, databaseId, assetId, urlFilePath, urlVersion, directPathRequest]);
+    }, [
+        isDirectPathAccess,
+        databaseId,
+        assetId,
+        urlFilePath,
+        urlVersion,
+        directPathRequest,
+        loadedFileInfo,
+        loadedFileRequests,
+    ]);
 
     // Fetch version info when state is passed but versionId is missing
     useEffect(() => {
@@ -662,7 +688,7 @@ function ViewFileForAsset() {
 
         // The file in hand is the one the URL named before until the direct-path load answers the
         // current URL; writing it into the URL would send the URL, and the next load, back to it.
-        if (isDirectPathAccess && loadedFileRequest !== directPathRequest) {
+        if (isDirectPathAccess && !loadedFileRequests.includes(directPathRequest)) {
             return;
         }
 
@@ -709,7 +735,7 @@ function ViewFileForAsset() {
         isMultiFileMode,
         isLoadingDirectPath,
         isDirectPathAccess,
-        loadedFileRequest,
+        loadedFileRequests,
         directPathRequest,
         navigate,
         location.pathname,
