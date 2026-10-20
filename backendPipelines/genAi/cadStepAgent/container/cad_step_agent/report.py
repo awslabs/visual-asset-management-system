@@ -53,10 +53,11 @@ ATTRIBUTE_DECIMALS = 3
 
 # The structured result mirrored into the execution's results folder. The process-output step stores each
 # result file as one row of at most MAX_TEXT_FIELD_BYTES (backend executionRecords: 400 KiB less a 20 KiB
-# reserve); a document is bounded below that so a row is never cut.
+# reserve); both files are bounded to that many bytes as written, so a row is never cut.
 RESULT_FILE_NAME = "cad-agent-result.json"
 RESULT_REPORT_FILE_NAME = "cad-agent-report.md"
 RESULT_MAX_BYTES = 400 * 1024 - 20 * 1024
+_REPORT_CUT_NOTE = "\n\n(Cut to fit the execution record; the full report is beside the output file.)\n"
 _ASSUMPTIONS_RE = re.compile(r"\bassumptions?\s*:", re.IGNORECASE)
 _NO_ASSUMPTIONS = {"", "none", "n/a", "-"}
 
@@ -209,13 +210,37 @@ def result_document(outcome):
         "sources": json.loads(_bounded_list(outcome.sources)),
         "geometry": outcome.geometry or None,
     }
-    if len(json.dumps(doc).encode("utf-8")) > RESULT_MAX_BYTES:
+    if len(result_json(doc)) > RESULT_MAX_BYTES:
         doc["geometry"] = {"clipped": True}
     return doc
 
 
-def markdown_report(outcome):
-    """The human-readable report written beside the STEP file."""
+def result_json(doc):
+    """``doc`` as the bytes written to ``cad-agent-result.json``; ``result_document`` bounds these bytes."""
+    return json.dumps(doc, indent=2).encode("utf-8")
+
+
+def markdown_report(outcome, max_bytes=None):
+    """The human-readable report written beside the STEP file.
+
+    With ``max_bytes`` (the copy in the execution's results folder) a report larger than that names the
+    report beside the STEP file in place of its Geometry block, and one still larger -- only text of
+    mostly four-byte characters can be -- is cut to ``max_bytes`` with a closing note."""
+    geometry = json.dumps(outcome.geometry, indent=2, sort_keys=True) if outcome.geometry \
+        else "(no valid geometry produced)"
+    text = _render_report(outcome, geometry)
+    if max_bytes is None or len(text.encode("utf-8")) <= max_bytes:
+        return text
+    text = _render_report(outcome, "(The measured geometry is too large for the execution record; it is in "
+                                   f"`{report_file_name(outcome.output_file_name)}` beside the output file.)")
+    body = text.encode("utf-8")
+    if len(body) <= max_bytes:
+        return text
+    room = max_bytes - len(_REPORT_CUT_NOTE.encode("utf-8"))
+    return body[:room].decode("utf-8", errors="ignore") + _REPORT_CUT_NOTE
+
+
+def _render_report(outcome, geometry_text):
     lines = [
         f"# CAD STEP agent run {outcome.run_id}",
         "",
@@ -237,7 +262,7 @@ def markdown_report(outcome):
         "",
         "## Geometry",
         "",
-        json.dumps(outcome.geometry, indent=2, sort_keys=True) if outcome.geometry else "(no valid geometry produced)",
+        geometry_text,
         "",
         "## Not completed",
         "",

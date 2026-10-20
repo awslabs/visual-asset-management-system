@@ -233,13 +233,16 @@ def upload_outputs(s3, definition, outcome, step_path):
                            ContentType="application/json")
     results = results_prefix(definition)
     if results:
+        # Each results file becomes one execution-record row, so both are written within the row's bound;
+        # the report beside the STEP file above stays whole.
         results_bucket, prefix = results
         results_s3 = bucket_client(s3, definition, results_bucket)
         results_s3.put_object(Bucket=results_bucket, Key=f"{prefix}{report.RESULT_FILE_NAME}",
-                              Body=json.dumps(report.result_document(outcome), indent=2).encode("utf-8"),
+                              Body=report.result_json(report.result_document(outcome)),
                               ContentType="application/json")
         results_s3.put_object(Bucket=results_bucket, Key=f"{prefix}{report.RESULT_REPORT_FILE_NAME}",
-                              Body=report_body, ContentType="text/markdown")
+                              Body=report.markdown_report(outcome, report.RESULT_MAX_BYTES).encode("utf-8"),
+                              ContentType="text/markdown")
     else:
         logger.info("the definition names no results folder; the structured result is not written")
     return key

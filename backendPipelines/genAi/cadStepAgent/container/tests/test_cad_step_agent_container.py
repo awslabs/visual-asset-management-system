@@ -346,6 +346,31 @@ def _outcome(**overrides):
     return report.RunOutcome(**base)
 
 
+# backend/backend/common/workflows/executionRecords.py MAX_TEXT_FIELD_BYTES: the most one results row stores.
+ROW_TEXT_BYTES = 400 * 1024 - 20 * 1024
+
+
+def _dense_geometry(groups):
+    """A geometry summary of a dense B-rep: ``groups`` distinct sizes in each grouped feature list."""
+    sizes = [round(1 + i / 1000, 3) for i in range(groups)]
+    return {"solid_count": 1, "volume_mm3": 1.0, "bounding_box_mm": [0, 0, 0, 1, 1, 1],
+            "features": {"holes": [{"diameter_mm": d, "through": True, "count": 1} for d in sizes],
+                         "fillet_like_faces": [{"radius_mm": r, "count": 1} for r in sizes],
+                         "cylindrical_bosses": [{"diameter_mm": d, "count": 1} for d in sizes],
+                         "partial_round_cuts": []}}
+
+
+def _written_results(tmp_path, outcome):
+    """(result JSON, results-folder report, report beside the STEP) as ``upload_outputs`` writes them."""
+    s3 = _FakeS3()
+    step = tmp_path / "output.step"
+    step.write_text("ISO-10303-21;")
+    run.upload_outputs(s3, _definition(), outcome, str(step))
+    prefix = "pipelines/cad/job/output/E1/results/"
+    return (s3.objects[("abkt", prefix + report.RESULT_FILE_NAME)],
+            s3.objects[("abkt", prefix + report.RESULT_REPORT_FILE_NAME)],
+            s3.objects[("abkt", "xasset1/sub/part.stp.cad-agent-report.md")])
+
 @pytest.mark.unit
 class TestReport:
     def test_metadata_document_is_bounded_and_carries_every_key(self):
@@ -435,14 +460,43 @@ class TestReport:
         assert {k: doc[k] for k in ("status", "attempts", "unresolvedCount")} == \
             {k: payload[k] for k in ("status", "attempts", "unresolvedCount")}
 
-    def test_both_result_files_fit_the_row_the_process_output_step_stores(self):
+    def test_both_result_files_fit_the_row_the_process_output_step_stores(self, tmp_path):
         attempts = [report.AttemptRecord(n, False, "s" * 5000, "t" * 20000) for n in range(1, 11)]
         worst = _outcome(prompt="p" * 20000, summary="s" * 20000, attempts=attempts, unresolved=["u" * 5000] * 100,
                          checks=["c" * 5000] * 100, sources=["https://example.test/" + "x" * 5000] * 100,
                          geometry={"solid_count": 20, "features": {"holes": [{"diameter_mm": 1.0, "count": 1,
                                                                              "centres_mm": [{"plane": "xy", "from_bbox_min": [1.0, 2.0]}] * 24}] * 50}})
-        assert len(json.dumps(report.result_document(worst)).encode("utf-8")) <= report.RESULT_MAX_BYTES
-        assert len(report.markdown_report(worst).encode("utf-8")) <= report.RESULT_MAX_BYTES
+        result, results_report, _ = _written_results(tmp_path, worst)
+        assert len(result) <= ROW_TEXT_BYTES and len(results_report) <= ROW_TEXT_BYTES
+
+    @pytest.mark.parametrize("groups, clipped", [(1500, False), (2000, True)])
+    def test_a_dense_geometry_is_bounded_on_the_bytes_written(self, tmp_path, groups, clipped):
+        geometry = _dense_geometry(groups)
+        outcome = _outcome(status="succeeded", summary="Done.", geometry=geometry)
+        result, results_report, asset_report = _written_results(tmp_path, outcome)
+        assert len(result) <= ROW_TEXT_BYTES and len(results_report) <= ROW_TEXT_BYTES
+        doc = json.loads(result)
+        assert {k: doc[k] for k in ("status", "mode", "outputFile", "attempts", "summary")} == \
+            {"status": "succeeded", "mode": "modify", "outputFile": "part.stp", "attempts": 1, "summary": "Done."}
+        assert doc["geometry"] == ({"clipped": True} if clipped else geometry)
+        text = results_report.decode("utf-8")
+        assert "## Verification" in text and "### Attempt 1 - ok" in text
+        assert (results_report == asset_report) is not clipped
+        if clipped:
+            assert "`part.stp.cad-agent-report.md` beside the output file" in text
+        # The report beside the STEP file keeps the whole geometry summary either way.
+        block = asset_report.decode("utf-8").split("## Geometry", 1)[1].split("\n## ", 1)[0]
+        assert json.loads(block) == geometry
+
+    def test_a_report_of_four_byte_text_is_cut_to_the_row(self, tmp_path):
+        wide = "\U0001F600"
+        attempts = [report.AttemptRecord(n, False, wide * 1000, wide * 6000) for n in range(1, 11)]
+        outcome = _outcome(prompt=wide * 4000, summary=wide * 2000, attempts=attempts, unresolved=[wide * 500] * 25,
+                           checks=[wide * 500] * 25, sources=[wide * 500] * 25)
+        result, results_report, asset_report = _written_results(tmp_path, outcome)
+        assert len(result) <= ROW_TEXT_BYTES and len(asset_report) > ROW_TEXT_BYTES
+        assert len(results_report) <= ROW_TEXT_BYTES
+        assert results_report.decode("utf-8").endswith("the full report is beside the output file.)\n")
 
 
 # ---------------------------------------------------------------------------------------------------
