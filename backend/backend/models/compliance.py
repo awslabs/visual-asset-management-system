@@ -312,14 +312,16 @@ def validate_patterns(field_name: str, patterns: Optional[List[str]],
     regular expression the `REGEX` validator accepts, its backtracking budget computed for values of
     `subject_length` characters: MAX_S3_OBJECT_KEY_BYTES for a path pattern, which is searched in a
     file's S3 key, and the validator's 256-character default for a name or description pattern
-    (an asset's name and description are at most 256 characters). The message names the field,
-    never a pattern."""
+    (an asset's name and description are at most 256 characters). The budget also counts the start
+    positions `re.search` tries for a pattern not anchored with '^' (`searched`), since every rule
+    pattern is searched rather than matched. The message names the field, never a pattern."""
     for pattern in patterns or []:
         if not isinstance(pattern, str) or not pattern or len(pattern) > MAX_PATTERN_LENGTH:
             raise ValueError(
                 f"Every '{field_name}' pattern must be 1 to {MAX_PATTERN_LENGTH} characters")
         (valid, message) = validate({field_name: {'value': pattern, 'validator': 'REGEX',
-                                                  'subjectLength': subject_length}})
+                                                  'subjectLength': subject_length,
+                                                  'searched': True}})
         if not valid:
             raise ValueError(message)
 

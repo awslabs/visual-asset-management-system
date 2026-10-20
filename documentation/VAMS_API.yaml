@@ -16223,7 +16223,7 @@ components:
 
         complianceFileStructureRule:
             type: object
-            description: "Checks the paths and the number of the asset's current, non-archived files. Path patterns are Python regular expressions searched (`re.search`) in each file's asset-relative path without its leading `/`, so `^models/` anchors at the asset root and `\\.glb$` matches a GLB anywhere. Every pattern is checked when the schema is saved: it must compile, may not repeat a group that itself repeats or alternates or use a backreference, and must stay within the backtracking budget computed for keys of up to 1024 characters (at most two unbounded quantifiers)."
+            description: "Checks the paths and the number of the asset's current, non-archived files. Path patterns are Python regular expressions searched (`re.search`) in each file's asset-relative path without its leading `/`, so `^models/` anchors at the asset root and `\\.glb$` matches a GLB anywhere. Every pattern is checked when the schema is saved: it must compile, may not repeat a group that itself repeats or alternates or use a backreference, and must stay within the backtracking budget computed for keys of up to 1024 characters (at most two unbounded quantifiers in a pattern that begins with `^`, one in a pattern that does not)."
             properties:
                 ruleType:
                     type: string
@@ -16322,7 +16322,7 @@ components:
                     maxItems: 25
                     items:
                         type: object
-                        description: "For `assetName` and `description`, exactly one of `matches` (a missing or empty value fails) or `notMatches` (a missing or empty value passes), a Python regular expression searched in the value and checked like a file-structure pattern, with the backtracking budget computed for values of up to 256 characters (at most three unbounded quantifiers). For `tags`, at least one of `requiredTags`, `forbiddenTags` or `minTags`; tags compare by exact value."
+                        description: "For `assetName` and `description`, exactly one of `matches` (a missing or empty value fails) or `notMatches` (a missing or empty value passes), a Python regular expression searched in the value and checked like a file-structure pattern, with the backtracking budget computed for values of up to 256 characters (at most three unbounded quantifiers in a pattern that begins with `^`, two in a pattern that does not). For `tags`, at least one of `requiredTags`, `forbiddenTags` or `minTags`; tags compare by exact value."
                         properties:
                             name:
                                 type: string

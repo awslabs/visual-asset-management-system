@@ -508,6 +508,52 @@ MAX_REGEX_SUBJECT_LENGTH = 256
 MAX_REGEX_SEARCH_SPACE = 10 * 1000 * 1000
 
 _QUANTIFIER_BRACE = re.compile(r'\{(\d*)(,?)(\d*)\}')
+# A global inline-flag group at the start of a pattern, e.g. '(?i)'.
+_LEADING_INLINE_FLAGS = re.compile(r'\(\?([aiLmsux]+)\)')
+
+
+def _anchored_at_start(pattern):
+    """Whether every match of `pattern` must begin at the start of the subject, so `re.search` tries
+    no other start position.
+
+    True when, after any leading global inline-flag groups, the pattern opens with '^' or '\\A' and
+    has no '|' outside a group or character class (an alternative that could start anywhere).
+    Conservative: MULTILINE ('m', under which '^' also matches after a newline) and VERBOSE ('x',
+    whose comments this walk does not read) count as unanchored, as does any shape not shown to be
+    anchored."""
+    i = 0
+    while True:
+        flags = _LEADING_INLINE_FLAGS.match(pattern, i)
+        if not flags:
+            break
+        if 'm' in flags.group(1) or 'x' in flags.group(1):
+            return False
+        i = flags.end()
+    if not (pattern.startswith('^', i) or pattern.startswith('\\A', i)):
+        return False
+    depth = 0
+    while i < len(pattern):
+        character = pattern[i]
+        if character == '\\':
+            i += 2
+            continue
+        if character == '[':
+            # A ']' first in the class (after an optional '^') is a literal, not its end.
+            i += 1
+            if pattern.startswith('^', i):
+                i += 1
+            if pattern.startswith(']', i):
+                i += 1
+            while i < len(pattern) and pattern[i] != ']':
+                i += 2 if pattern[i] == '\\' else 1
+        elif character == '(':
+            depth += 1
+        elif character == ')':
+            depth -= 1
+        elif character == '|' and depth == 0:
+            return False
+        i += 1
+    return True
 
 
 def _quantifier_at(pattern, index):
@@ -538,16 +584,18 @@ def _quantifier_at(pattern, index):
     return width, max(1, int(high) - int(low or 0) + 1)
 
 
-def _backtracking_search_space(pattern, subject_length=MAX_REGEX_SUBJECT_LENGTH):
+def _backtracking_search_space(pattern, subject_length=MAX_REGEX_SUBJECT_LENGTH, searched=False):
     """Estimated worst-case number of ways a subject of `subject_length` characters can be divided
     among a pattern's quantifiers.
 
     Unbounded quantifiers share one subject, so k of them contribute comb(subject_length, k) — the
     ways to choose where each hands off to the next. A bounded quantifier contributes its own
-    repetition range. Walks the pattern rather than matching it, so an escaped metacharacter, a
-    character class, a group-extension marker and a lazy or possessive modifier are not read as
-    structure."""
-    unbounded = 0
+    repetition range. A `searched` pattern (`re.search`) is retried at every start position unless it
+    is anchored there (`_anchored_at_start`), and the start position divides the subject like one
+    more unbounded quantifier. Walks the pattern rather than matching it, so an escaped
+    metacharacter, a character class, a group-extension marker and a lazy or possessive modifier are
+    not read as structure."""
+    unbounded = 1 if searched and not _anchored_at_start(pattern) else 0
     bounded_product = 1
     ceiling = MAX_REGEX_SEARCH_SPACE + 1
     in_class = False
@@ -637,10 +685,12 @@ def _repeats_a_repeating_group(pattern):
     return False
 
 
-def validate_regex(name, value, subject_length=MAX_REGEX_SUBJECT_LENGTH):
+def validate_regex(name, value, subject_length=MAX_REGEX_SUBJECT_LENGTH, searched=False):
     """Check `value` as a regular expression a stored rule evaluates against values of at most
     `subject_length` characters: it compiles, repeats no group that itself repeats or alternates,
-    uses no backreference, and stays within MAX_REGEX_SEARCH_SPACE at that subject length."""
+    uses no backreference, and stays within MAX_REGEX_SEARCH_SPACE at that subject length — counting
+    the start positions `re.search` tries when `searched` (a Casbin criterion is matched, anchored
+    by the rule builder, so it is not)."""
     try:
         re.compile(value)
     except re.error:
@@ -648,7 +698,7 @@ def validate_regex(name, value, subject_length=MAX_REGEX_SUBJECT_LENGTH):
     if backreference_regex.search(value) or _repeats_a_repeating_group(value):
         return (False, name + " is invalid. Cannot repeat a group that itself repeats or"
                               " alternates, and cannot use a backreference.")
-    if _backtracking_search_space(value, subject_length) > MAX_REGEX_SEARCH_SPACE:
+    if _backtracking_search_space(value, subject_length, searched) > MAX_REGEX_SEARCH_SPACE:
         return (False, name + " is invalid. Too many open-ended quantifiers (*, +, ?, {n,}) to"
                               " evaluate safely; simplify the expression.")
     return (True, '')
@@ -790,7 +840,8 @@ _VALIDATOR_DISPATCH = {
     'OBJECT_NAME_ARRAY': lambda k, v: validate_objectName_array(k, v['value']),
     'EMAIL': lambda k, v: validate_email(k, v['value']),
     'USERID': lambda k, v: validate_userid(k, v['value']),
-    'REGEX': lambda k, v: validate_regex(k, v['value'], _spec_subject_length(v, k)),
+    'REGEX': lambda k, v: validate_regex(k, v['value'], _spec_subject_length(v, k),
+                                         _spec_bool_flag(v, 'searched', k)),
     'NUMBER': lambda k, v: validate_number(k, v['value']),
     'BOOL': lambda k, v: validate_bool(k, v['value']),
     'ISO8601_UTC': lambda k, v: validate_iso8601_utc(k, v['value']),

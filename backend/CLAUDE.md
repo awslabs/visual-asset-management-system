@@ -668,7 +668,10 @@ quantifiers (`.*`, `+`, `{n,}`). The budget is calibrated by measurement: three 
 separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. A value that runs
 against longer subjects is checked at its own length: `validate_regex(subject_length=...)`, or
 `subjectLength` in the `REGEX` spec (`models/compliance.py` checks path patterns at
-`MAX_S3_OBJECT_KEY_BYTES`, 1024, which admits two). A constraint criterion value
+`MAX_S3_OBJECT_KEY_BYTES`, 1024, which admits two). A value evaluated with `re.search` passes
+`searched` (`searched: True` in the spec): unless it begins with `^` (`_anchored_at_start`), the
+start positions the search tries count as one more unbounded quantifier; every compliance rule
+pattern is searched. A constraint criterion value
 becomes a Casbin `regexMatch(...)` pattern that `re.match` re-evaluates for every policy line on every
 authorization decision, so such a value hangs authorization for the affected role. General regex stays
 accepted — literals, character classes, anchors, `.*`, `|` and un-quantified groups.
