@@ -933,6 +933,9 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS == undefined) {
         config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
     }
+    if (config.app.pipelines.useConversion3dBasic.useCodeBuild == undefined) {
+        config.app.pipelines.useConversion3dBasic.useCodeBuild = false;
+    }
 
     if (config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled == undefined) {
         config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = false;
@@ -1351,10 +1354,14 @@ export function getConfig(app: cdk.App): Config {
     //The in-account AWS CodeBuild container-build path is exercised in the commercial and GovCloud
     //partitions. Elsewhere the build host cannot reach the public nvcr.io / Docker Hub GPU base
     //images these Dockerfiles pull, and the build trigger custom resource does not wait for the
-    //build, so a failure surfaces later as an image-pull error rather than at deploy time. This
+    //build, so a failure surfaces later as an image-pull error rather than at deploy time. The 3D
+    //basic conversion image differs on both counts: it builds from the non-GPU
+    //public.ecr.aws/lambda/python base image, and its trigger waits for the build because AWS Lambda
+    //resolves the image when the function is created, so a failed build fails the deployment. This
     //informs rather than prevents: support varies by partition and account, so an operator
     //evaluating it should not be blocked. Pre-build the images and point the pipelines at an
-    //existing Amazon ECR repository where the build cannot run.
+    //existing Amazon ECR repository where the build cannot run, or build the 3D basic conversion
+    //image locally as a CDK asset.
     const codeBuildSupportedPartitions = ["aws", "aws-us-gov"];
     if (!codeBuildSupportedPartitions.includes(resolvedPartition)) {
         const pipelines = config.app.pipelines as unknown as Record<
@@ -1362,6 +1369,7 @@ export function getConfig(app: cdk.App): Config {
             { useCodeBuild?: boolean } | undefined
         >;
         const codeBuildPipelinePaths = [
+            "useConversion3dBasic",
             "useConversionCoordinateTransform",
             "useSplatToolbox",
             "useIsaacLabTraining",
@@ -1369,21 +1377,43 @@ export function getConfig(app: cdk.App): Config {
             "useNvidiaCosmos3",
             "useNvidiaGr00t",
         ];
+        //The pipelines whose build trigger waits for the build (AWS Lambda container images).
+        const waitingBuildPipelinePaths = ["useConversion3dBasic"];
         const enabledOutsideSupport = codeBuildPipelinePaths.filter(
             (name) => pipelines[name]?.useCodeBuild === true
         );
         if (enabledOutsideSupport.length > 0) {
-            console.warn(
-                `Configuration Warning: useCodeBuild is true for ${enabledOutsideSupport
-                    .map((name) => `app.pipelines.${name}`)
-                    .join(", ")} while deploying to the '${resolvedPartition}' partition. The ` +
-                    "in-account CodeBuild container build is supported in the aws and aws-us-gov " +
-                    "partitions; elsewhere the build host cannot reach the public GPU base images " +
-                    "these containers pull. The build trigger does not wait for the build, so a " +
-                    "failure appears later as a container image-pull error rather than at deploy " +
-                    "time. Build the images out of band and supply an existing Amazon ECR " +
-                    "repository instead."
+            const listed = (names: string[]) =>
+                names.map((name) => `app.pipelines.${name}`).join(", ");
+            const waiting = enabledOutsideSupport.filter((name) =>
+                waitingBuildPipelinePaths.includes(name)
             );
+            const notWaiting = enabledOutsideSupport.filter(
+                (name) => !waitingBuildPipelinePaths.includes(name)
+            );
+            let message =
+                `Configuration Warning: useCodeBuild is true for ${listed(
+                    enabledOutsideSupport
+                )} ` +
+                `while deploying to the '${resolvedPartition}' partition. The in-account CodeBuild ` +
+                "container build is supported in the aws and aws-us-gov partitions.";
+            if (notWaiting.length > 0) {
+                message +=
+                    ` For ${listed(notWaiting)}, the build host cannot reach the public GPU base ` +
+                    "images these containers pull elsewhere, and the build trigger does not wait for " +
+                    "the build, so a failure appears later as a container image-pull error rather " +
+                    "than at deploy time. Build the images out of band and supply an existing " +
+                    "Amazon ECR repository instead.";
+            }
+            if (waiting.length > 0) {
+                message +=
+                    ` For ${listed(waiting)}, the build host may not reach the ` +
+                    "public.ecr.aws/lambda/python base image, and the deployment waits for the " +
+                    "build, so a failed build fails the deployment and rolls it back instead of " +
+                    "failing later. Set useCodeBuild to false to build that image locally as a CDK " +
+                    "asset instead.";
+            }
+            console.warn(message);
         }
     }
 
@@ -3655,6 +3685,7 @@ export interface ConfigPublic {
             executionLogReadPrefixes: string[];
             useConversion3dBasic: {
                 enabled: boolean;
+                useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
             };
             useConversionCadMeshMetadataExtraction: {

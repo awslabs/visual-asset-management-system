@@ -882,6 +882,15 @@ export const FIELDS: FieldMeta[] = [
         help: "Convert between STL, OBJ, PLY, GLTF, GLB, etc. No VPC required.",
     },
     {
+        path: "app.pipelines.useConversion3dBasic.useCodeBuild",
+        label: "3D basic conversion — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
+        help: "The deployment waits for the build and fails if the build fails.",
+    },
+    {
         path: "app.pipelines.useConversion3dBasic.autoRegisterWithVAMS",
         label: "3D basic conversion — auto-register",
         input: "boolean",

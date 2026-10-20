@@ -12,6 +12,7 @@ import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import * as Config from "../../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
+import * as ecr from "aws-cdk-lib/aws-ecr";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
@@ -35,20 +36,28 @@ export function buildVamsExecute3dBasicConversionPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
-    kmsKey?: kms.IKey
+    kmsKey?: kms.IKey,
+    ecrImage?: { repository: ecr.IRepository; tag: string }
 ): lambda.Function {
     const name = "vamsExecute3dBasicConversion";
 
+    // The image CodeBuild pushed when `ecrImage` is given, otherwise a local Docker build as a CDK asset.
+    const code = ecrImage
+        ? lambda.DockerImageCode.fromEcr(ecrImage.repository, { tagOrDigest: ecrImage.tag })
+        : lambda.DockerImageCode.fromImageAsset(
+              path.join(
+                  __dirname,
+                  "../../../../../../../backendPipelines/conversion/3dBasic/lambdaContainer"
+              ),
+              {
+                  platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64, //Fix to the LINUX_AMD64 platform to standardize instruction set across all loads
+                  // The CodeBuild path's buildspec stays out of the locally built image.
+                  exclude: ["buildspec.yml"],
+              }
+          );
+
     const fun = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(
-            path.join(
-                __dirname,
-                "../../../../../../../backendPipelines/conversion/3dBasic/lambdaContainer"
-            ),
-            {
-                platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64, //Fix to the LINUX_AMD64 platform to standardize instruction set across all loads
-            }
-        ),
+        code,
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         ephemeralStorageSize: CONVERSION_EPHEMERAL_STORAGE,

@@ -90,6 +90,7 @@
             "deadlineCloudExecutionTypeEnabled": false,
             "useConversion3dBasic": {
                 "enabled": true,
+                "useCodeBuild": false,
                 "autoRegisterWithVAMS": true
             },
             "usePreview3dThumbnail": {

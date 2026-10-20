@@ -13,6 +13,7 @@ import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../../../../../config/config";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import { Conversion3dBasicCodeBuildConstruct } from "./conversion3dBasicCodeBuild-construct";
 
 export interface Conversion3dBasicConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -40,6 +41,22 @@ export class Conversion3dBasicConstruct extends NestedStack {
 
         props = { ...defaultProps, ...props };
 
+        // CodeBuild-based container build (when useCodeBuild is true)
+        let codeBuildConstruct: Conversion3dBasicCodeBuildConstruct | undefined;
+        if (props.config.app.pipelines.useConversion3dBasic.useCodeBuild === true) {
+            codeBuildConstruct = new Conversion3dBasicCodeBuildConstruct(
+                this,
+                "Conversion3dBasicCodeBuild",
+                { config: props.config }
+            );
+
+            new CfnOutput(this, "Conversion3dBasicCodeBuildProject", {
+                value: codeBuildConstruct.codeBuildProjectName,
+                description:
+                    "CodeBuild project name for the 3D Basic Conversion container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+            });
+        }
+
         //Build Lambda VAMS Execution Function
         const pipelineConversion3dBasicLambdaFunction =
             buildVamsExecute3dBasicConversionPipelineFunction(
@@ -48,8 +65,22 @@ export class Conversion3dBasicConstruct extends NestedStack {
                 props.config,
                 props.vpc,
                 props.pipelineSubnets,
-                props.storageResources.encryption.kmsKey
+                props.storageResources.encryption.kmsKey,
+                codeBuildConstruct
+                    ? {
+                          repository: codeBuildConstruct.repository,
+                          tag: codeBuildConstruct.imageTag,
+                      }
+                    : undefined
             );
+
+        // Lambda resolves the image when it creates or updates the function, so the function waits
+        // for the build trigger, which completes only once the build has pushed the image.
+        if (codeBuildConstruct) {
+            const cfnFunction = pipelineConversion3dBasicLambdaFunction.node
+                .defaultChild as cdk.CfnResource;
+            cfnFunction.node.addDependency(codeBuildConstruct.buildTrigger);
+        }
 
         //Output VAMS Pipeline Execution Function name
         new CfnOutput(this, "Conversion3dBasicLambdaExecutionFunctionName", {

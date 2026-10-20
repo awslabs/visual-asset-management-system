@@ -235,6 +235,7 @@ const COMMERCIAL: ConfigShape = {
             ],
             useConversion3dBasic: {
                 enabled: true,
+                useCodeBuild: false,
                 autoRegisterWithVAMS: true,
             },
             usePreview3dThumbnail: {

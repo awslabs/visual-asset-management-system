@@ -223,6 +223,7 @@ describe("authorizerOptions.allowedIpRanges accepts both address families", () =
 const CODEBUILD_WARNING = /useCodeBuild is true for .* while deploying to the '[^']+' partition/;
 
 const CODEBUILD_PIPELINES = [
+    "useConversion3dBasic",
     "useConversionCoordinateTransform",
     "useSplatToolbox",
     "useIsaacLabTraining",
@@ -294,6 +295,33 @@ describe("useCodeBuild outside the supported partitions warns and does not rejec
         for (const pipeline of CODEBUILD_PIPELINES) {
             expect(warnings[0]).toContain(`app.pipelines.${pipeline}`);
         }
+    });
+
+    test("the 3D basic warning says its deployment waits for the build and fails with it", () => {
+        // Its trigger waits for the build, unlike the AWS Batch pipelines'. The shared sentence about
+        // a trigger that does not wait must not be applied to it, and the remedy it names (build the
+        // image locally as a CDK asset) must not be offered to the pipelines that cannot use it.
+        const only3dBasic = warningsFrom(
+            loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
+                c.app.pipelines.useConversion3dBasic.useCodeBuild = true;
+            })
+        );
+        expect(only3dBasic).toHaveLength(1);
+        expect(only3dBasic[0]).toContain("public.ecr.aws/lambda/python");
+        expect(only3dBasic[0]).toContain("the deployment waits for the build");
+        expect(only3dBasic[0]).not.toContain("does not wait");
+        expect(only3dBasic[0]).not.toContain("GPU");
+
+        const onlyBatch = warningsFrom(
+            loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
+                c.app.pipelines.useSplatToolbox.useCodeBuild = true;
+            })
+        );
+        expect(onlyBatch).toHaveLength(1);
+        expect(onlyBatch[0]).toContain("does not wait");
+        expect(onlyBatch[0]).not.toContain("useConversion3dBasic");
+        expect(onlyBatch[0]).not.toContain("public.ecr.aws/lambda/python");
+        expect(onlyBatch[0]).not.toContain("CDK asset");
     });
 
     test("does not warn in the commercial partition", () => {
