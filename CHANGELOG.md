@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines** Converting a point cloud (an `.xyz` file, or a `.ply` with no faces) to STL fails with a message that STL stores triangle meshes only, instead of writing an empty STL and reporting success; an input with no geometry fails for every target. ([#508](https://github.com/awslabs/visual-asset-management-system/issues/508))
 -   **Pipelines/Security** The 3D Basic Conversion handler checks for a task token before it logs anything, and logs the manifest and input configuration locations instead of the invocation event, so a pipeline registered with a callback by mistake does not write the token to Amazon CloudWatch Logs. ([#509](https://github.com/awslabs/visual-asset-management-system/issues/509))
 -   **Pipelines/Build** The 3D Basic Conversion container's `requirements.txt` is exported from its `poetry.lock`, which pins trimesh 4.8.3 (the version the image installed), the Lambda Python 3.12 base image is pinned by digest, and a `.dockerignore` keeps the tests, the Poetry files and local caches out of the image. ([#510](https://github.com/awslabs/visual-asset-management-system/issues/510))
+-   **Pipelines/Security** The CAD/Mesh Metadata Extraction handler checks for a task token before it logs anything, and logs the manifest location instead of the invocation event, so a pipeline registered with a callback by mistake does not write the token to Amazon CloudWatch Logs. ([#521](https://github.com/awslabs/visual-asset-management-system/issues/521))
 
 ### Chores
 
