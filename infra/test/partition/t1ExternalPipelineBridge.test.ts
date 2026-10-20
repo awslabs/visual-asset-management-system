@@ -334,16 +334,16 @@ describe("SageMaker sub-process grants", () => {
         }
     );
 
-    test.each(ALL_TEMPLATES)("%s handleExecutionError stops only", (name) => {
-        const s = synth(name);
-        const statements = lambdaRoleStatements(s, "handleExecutionError");
-        for (const action of STOPS) {
-            expect(resourcesFor(statements, action).sort()).toEqual(expected(s));
+    test.each(ALL_TEMPLATES)(
+        "%s handleExecutionError stops and describes in its own partition",
+        (name) => {
+            const s = synth(name);
+            const statements = lambdaRoleStatements(s, "handleExecutionError");
+            for (const action of [...STOPS, ...DESCRIBES]) {
+                expect(resourcesFor(statements, action).sort()).toEqual(expected(s));
+            }
         }
-        for (const action of DESCRIBES) {
-            expect(resourcesFor(statements, action)).toEqual([]);
-        }
-    });
+    );
 
     test.each(ALL_TEMPLATES)("%s grants no bare wildcard on any SageMaker action", (name) => {
         const s = synth(name);
