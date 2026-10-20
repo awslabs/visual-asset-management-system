@@ -76,34 +76,49 @@ To minimize the chance of these failures, keep the availability zone count and s
 
 ### Docker Buildx Container Image Errors
 
-When deploying with AWS CDK using Docker, you may encounter errors related to container image builds, particularly `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
+The 3D Basic Conversion and CAD/Mesh Metadata Extraction pipelines deploy as AWS Lambda container images, which AWS CDK builds with Docker and pushes to Amazon ECR during `npx cdk deploy`. Pushing one of these images or creating its function can fail with `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
 
 **Symptoms:**
 
 -   `unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request`
--   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` errors during Lambda function creation
--   Container images fail to push to Amazon ECR
+-   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` or `The image manifest, config or layer media type for the source image ... is not supported` while AWS CloudFormation creates the pipeline's Lambda function
+-   The conversion pipeline nested stack fails and the core stack rolls back
+
+**Cause:**
+
+AWS Lambda accepts a container image only as a single-platform image manifest. When Docker stores images in the containerd image store, the default in Docker Desktop 4.34 and later and in new installations of Docker Engine 29 and later, a build adds a provenance attestation by default and the image is pushed as an OCI image index, which Lambda rejects. The AWS CDK CLI version pinned in `infra/package.json` turns that default off for every image it builds: it runs the build with `BUILDX_NO_DEFAULT_ATTESTATIONS=1` regardless of the value in your shell. A deployment run with `npx cdk` from the `infra/` directory therefore pushes a single manifest.
+
+When the error appears anyway, the image index is already cached. AWS CDK tags each image with a hash of its source, and it skips the build and the push when an image with that tag exists, first in the bootstrap container assets repository in Amazon ECR and then as the local Docker image `cdkasset-<hash>`. An image index pushed by an earlier attempt, for example one built by another AWS CDK CLI version or outside the AWS CDK CLI, is reused by every later deployment until its tag is deleted.
 
 **Resolution:**
 
-This is a known issue with certain Docker buildx versions. Set the following environment variable before running `cdk deploy`:
+1. Run the deployment from the `infra/` directory with `npx cdk` so that the pinned AWS CDK CLI builds the images. `npx cdk --version` shows the version in use.
+2. List the asset hashes of the two conversion images. In `cdk.out/*.assets.json`, written by the failed deployment or by `npx cdk synth`, each image under `dockerImages` is keyed by its hash, which this command (run from the `infra/` directory) prints on the line before the image's `displayName`:
 
-```bash
-export BUILDX_NO_DEFAULT_ATTESTATIONS=1
-```
+    ```bash
+    grep -B1 -E 'vamsExecute(3dBasic|MeshCadMetadataExtraction)Conversion/AssetImage' cdk.out/*.assets.json
+    ```
 
-Additionally, if deploying from an ARM64 machine (such as Apple Silicon Mac), you may need to clear the Docker cache and configure cross-platform emulation:
+3. Delete those image tags from the container assets repository. With the default bootstrap qualifier, the repository is named `cdk-hnb659fds-container-assets-<account>-<region>`:
 
-```bash
-# Clear Docker cache
-docker system prune -a
+    ```bash
+    aws ecr batch-delete-image \
+        --repository-name cdk-hnb659fds-container-assets-<account>-<region> \
+        --image-ids imageTag=<hash>
+    ```
 
-# Set cross-platform emulation
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-```
+4. Remove the local copies, so AWS CDK builds the images again instead of pushing the cached ones:
 
-:::tip
-Set `BUILDX_NO_DEFAULT_ATTESTATIONS=1` permanently in your shell profile (`.bashrc`, `.zshrc`) to avoid repeating this step on every deployment.
+    ```bash
+    docker image rm cdkasset-<hash>
+    ```
+
+5. Deploy again with `npx cdk deploy --all --require-approval never`.
+
+Removing these two images is sufficient; clearing the whole Docker cache is not required.
+
+:::note[ARM64 hosts]
+Every VAMS container image is pinned to `linux/amd64`. Docker Desktop on macOS and Windows includes the emulation that builds these images on an ARM64 host such as a Mac with Apple silicon, so no emulation setup is required. On an ARM64 Linux host running Docker Engine, install amd64 emulation as described in the Docker [multi-platform builds](https://docs.docker.com/build/building/multi-platform/) guide.
 :::
 
 :::note[Alternative container engines]
