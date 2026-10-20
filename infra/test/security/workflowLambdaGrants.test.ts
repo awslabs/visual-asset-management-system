@@ -510,21 +510,29 @@ describe("handleExecutionError sub-process stop grants", () => {
     });
 
     // The failure path shares the stop implementation with the abort path, so it holds the same two
-    // SageMaker Stop actions on the same namespaces — and only those: it never describes a job.
-    test("grants the two SageMaker Stop actions and no Describe", () => {
+    // SageMaker Stop actions and the two Describe actions a refused stop is classified through, on the
+    // same namespaces — and no other SageMaker action.
+    test("grants the two SageMaker Stop and two Describe actions on this account's namespaces", () => {
         const { template } = synthed();
         const expected = [
             "arn:aws:sagemaker:us-east-1:123456789012:training-job/*",
             "arn:aws:sagemaker:us-east-1:123456789012:pipeline/*/execution/*",
         ].sort();
-        for (const action of ["sagemaker:StopTrainingJob", "sagemaker:StopPipelineExecution"]) {
+        const sageMakerActions = [
+            "sagemaker:StopTrainingJob",
+            "sagemaker:StopPipelineExecution",
+            "sagemaker:DescribeTrainingJob",
+            "sagemaker:DescribePipelineExecution",
+        ];
+        for (const action of sageMakerActions) {
             expect(resourceEntries(template, "handleExecutionError", action).sort()).toEqual(
                 expected
             );
         }
-        const actions = actionsOnRole(template, "handleExecutionError");
-        expect(actions).not.toContain("sagemaker:DescribeTrainingJob");
-        expect(actions).not.toContain("sagemaker:DescribePipelineExecution");
+        const granted = actionsOnRole(template, "handleExecutionError").filter((a) =>
+            a.startsWith("sagemaker:")
+        );
+        expect(granted.sort()).toEqual([...sageMakerActions].sort());
     });
 });
 

@@ -78,8 +78,8 @@ SM_STOP_TRAINING_STOPPED = "The request was rejected because the training job is
 SM_STOP_TRAINING_COMPLETED = "The request was rejected because the training job is in status Completed."
 SM_STOP_PIPELINE_FAILED = (f"Pipeline execution with ARN {PIPELINE_EXECUTION_ARN} status 'Failed'. "
                            "Only pipelines with 'Executing' status can be stopped.")
-# A permission denial on the Describe* that follows a refused stop — the failure path's role
-# (handleExecutionError) holds the Stop grants only.
+# A Describe* that fails after a refused stop. A denied permission stands in for every Describe* failure
+# (a throttle or a transient service error takes the same fallback branch).
 DESCRIBE_DENIED = _client_error("AccessDeniedException", "not authorized", "DescribeTrainingJob")
 
 
@@ -185,8 +185,8 @@ class TestTheSharedStopHelperStopsSageMaker:
 
     @pytest.mark.parametrize("stop_message", [SM_STOP_TRAINING_STOPPED, SM_STOP_TRAINING_COMPLETED])
     def test_when_describe_is_denied_the_captured_training_wording_is_benign(self, stop_message):
-        """The failure path's role holds no Describe grant, so there the classification rests on
-        SageMaker's own wording — pinned here verbatim as captured live."""
+        """When Describe* fails, the classification rests on SageMaker's own wording — pinned here
+        verbatim as captured live."""
         sagemaker = _sagemaker(_client_error("ValidationException", stop_message),
                                describe_error=DESCRIBE_DENIED)
         assert eo.stop_registered_sub_process(dict(TRAINING_SUB), sagemaker_client=sagemaker) == ""
