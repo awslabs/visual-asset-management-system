@@ -236,6 +236,64 @@ with open(os.path.join(outside, "local.mtl"), "w") as handle:
 put("xasset/cmt/box.obj", f"# mtllib {os.path.join(outside, 'local.mtl')}\n" + text.replace("mtllib box.mtl", ""))
 run("obj_comment_mtllib_local_file", "xasset/cmt/box.obj", ".glb", "cmt")
 
+# An OBJ whose material library name has a space (D1), as trimesh and Blender write it for
+# 'my box.obj', with and without that library in the asset.
+spaced, spaced_files = trimesh.exchange.obj.export_obj(textured_box(), include_texture=True,
+                                                       return_texture=True, mtl_name="my box.mtl")
+put("xasset/space/my box.obj", spaced)
+for name, data in spaced_files.items():
+    put(f"xasset/space/{name}", data)
+run("obj_spaced_mtllib_to_glb", "xasset/space/my box.obj", ".glb", "space")
+put("xasset/spacegone/my box.obj", spaced)
+run("obj_spaced_mtllib_missing", "xasset/spacegone/my box.obj", ".glb", "spacegone")
+
+# The names the OBJ and MTL collectors read, beside the names this trimesh asks its resolver for.
+import referenced_files as rf
+
+
+class Asked:
+    def __init__(self, served):
+        self.served, self.asked, self.parent, self.file_name = served, [], "", "names.obj"
+
+    def get(self, name):
+        self.asked.append(name)
+        if name in self.served:
+            return self.served[name]
+        raise FileNotFoundError(name)
+
+    __getitem__ = get
+
+
+FACES = "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nf 1/1 2/2 3/3\n"
+OBJ_TEXTS = [
+    "mtllib my box.mtl\n" + FACES, "mtllib\tmy  box.mtl  \n" + FACES,
+    ("mtllib my box.mtl\n" + FACES).replace("\n", "\r\n"), "mtllib a.mtl b.mtl\n" + FACES,
+    "mtllib a.mtl\nmtllib b.mtl\n" + FACES, "# mtllib c.mtl\nmtllib d.mtl\n" + FACES,
+    "o x_mtllib y.mtl\nmtllib d.mtl\n" + FACES, "mtllib my\\\nbox.mtl\n" + FACES,
+    "mtllib my\\\r\nbox.mtl\r\n" + FACES, FACES + "mtllib x.mtl\\\n", "MTLLIB u.mtl\n" + FACES,
+    "mtllib\n" + FACES, FACES,
+]
+MTL_TEXT = ("newmtl a\nmap_Kd my wood.png\nmap_Kd -s 1 1 1 wood.png\nbump normal.png\nmap_Ka ambient.png\n"
+            "map_Bump b.png\nnorm n.png\nKd 1 1 1\n  map_kd\t lower.png  \nmap_Kd\nnewmtl b\r\nmap_Kd b c.png\r\n")
+names_path = os.path.join(outside, "names.obj")
+reference_names = {"obj": [], "mtl": None}
+for text in OBJ_TEXTS:
+    with open(names_path, "wb") as handle:
+        handle.write(text.encode("utf-8"))
+    asked = Asked({})
+    trimesh.load(names_path, resolver=asked)
+    reference_names["obj"].append({"text": text, "trimesh": asked.asked,
+                                   "collector": [r.raw for r in rf._obj_references(names_path)]})
+with open(names_path, "w") as handle:
+    handle.write("mtllib m.mtl\n" + FACES)
+mtl_path = os.path.join(outside, "m.mtl")
+with open(mtl_path, "wb") as handle:
+    handle.write(MTL_TEXT.encode("utf-8"))
+asked = Asked({"m.mtl": MTL_TEXT.encode("utf-8")})
+trimesh.load(names_path, resolver=asked)
+reference_names["mtl"] = {"trimesh": asked.asked[1:], "collector": [r.raw for r in rf._mtl_references(mtl_path)]}
+results["reference_names"] = reference_names
+
 print("RESULTS " + json.dumps(results))
 '''
 
@@ -317,6 +375,34 @@ class TestReferencedFilesAreFetched:
         assert result["model"]["vertices"] > 0, result
         assert [16, 16] not in result["model"]["textures"], result
         assert any("noimg/tex/base.png" in w for w in result["warnings"]), result
+
+
+@pytest.mark.unit
+class TestReferenceNamesMatchTheLoader:
+    """The collectors read the names trimesh asks for (D1), so the fetch requests, and its warnings
+    name, only files the loader reads."""
+
+    def test_a_material_library_named_with_a_space_keeps_its_texture(self, results):
+        result = _ok(results, "obj_spaced_mtllib_to_glb")
+        assert result["model"]["textures"] == [[16, 16]], result
+        assert "xasset/space/my box.mtl" in result["requested"], result
+        assert not [w for w in result["warnings"] if w.startswith("Skipped")], result
+
+    def test_a_missing_material_library_named_with_a_space_is_one_warning_naming_it(self, results):
+        result = _ok(results, "obj_spaced_mtllib_missing")
+        assert result["model"]["vertices"] > 0, result
+        skipped = [w for w in result["warnings"] if w.startswith("Skipped")]
+        assert len(skipped) == 1, result
+        assert skipped[0].startswith("Skipped spacegone/my box.mtl, referenced by spacegone/my box.obj"), result
+
+    def test_obj_material_library_names_are_the_ones_trimesh_asks_for(self, results):
+        for case in results["reference_names"]["obj"]:
+            # An empty name names no file, so the collector leaves it out.
+            assert case["collector"] == [name for name in case["trimesh"] if name], case
+
+    def test_mtl_texture_names_are_the_ones_trimesh_asks_for(self, results):
+        case = results["reference_names"]["mtl"]
+        assert case["trimesh"] and case["collector"] == case["trimesh"], case
 
 
 @pytest.mark.unit

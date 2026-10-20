@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Referenced files: fetch the files a model input names (glTF and GLB buffers and images, OBJ material
-libraries and the texture maps they name, a PLY ``TextureFile``) from the input's own asset before the
-model is loaded, and give the loader those files and nothing else.
+Referenced files: fetch the files a model input names (glTF and GLB buffers and images, an OBJ's
+material library and the ``map_Kd`` textures it names, a PLY ``TextureFile``) from the input's own asset
+before the model is loaded, and give the loader those files and nothing else.
 
 Every reference is untrusted input. This function's role can read every asset bucket, so a reference
 must not pull another asset's content into the converted model (ARCC BSC1, input validation by
@@ -14,7 +14,7 @@ URI schemes (``s3:``, ``http(s):``, ``file:``, a Windows drive), control charact
 values are rejected. An inline ``data:`` URI is left to the loader and never becomes an Amazon S3
 request. The fetch is bounded by a file count (every name looked up counts, found or not), a byte
 total (each object's size is read with HeadObject before it is downloaded, and checked against free
-disk) and a recursion depth: only an OBJ's material libraries are read for further references, so the
+disk) and a recursion depth: only an OBJ's material library is read for further references, so the
 chain is at most OBJ -> MTL -> texture.
 
 What happens to a reference that is rejected, missing or over a limit depends on what it carries. A
@@ -205,59 +205,43 @@ def _glb_references(path: str) -> List[Reference]:
     return _gltf_document_references(document)
 
 
+# The OBJ and MTL collectors return exactly the names trimesh's OBJ loader asks its resolver for
+# (trimesh.exchange.obj ``load_obj`` and ``parse_mtl``, trimesh 4.8.3), so the fetch requests, and its
+# warnings name, only files the loader reads. Both read the text as the loader does: UTF-8, whole.
+# trimesh decodes other encodings only with charset_normalizer, which the image does not install, so
+# it reads no name from a file that is not UTF-8; here such a file raises, and nothing is fetched
+# for it.
+# ``tests/test_3dbasic_real_conversions.py`` compares these names with the ones the installed trimesh
+# asks for.
+
 def _obj_references(path: str) -> List[Reference]:
-    """``mtllib`` names: one or more file names after the keyword."""
-    references = []
+    """The OBJ's material library: the rest of the line after the first ``mtllib`` in the text, as
+    one name (spaces included), after the loader's line-ending and line-continuation handling. The
+    loader reads one material library per OBJ and finds ``mtllib`` anywhere in the text."""
     with open(path, "rb") as handle:
-        for raw in handle:
-            line = raw.strip()
-            if line[:6].lower() != b"mtllib" or (len(line) > 6 and not line[6:7].isspace()):
-                continue
-            names = line[6:].decode("utf-8", errors="replace").split()
-            references.extend(Reference(name, False, False) for name in names)
-    return references
-
-
-# MTL texture statements and the number of values each option takes (the -o/-s/-t options take one
-# to three numbers, handled separately).
-_MTL_MAP_KEYWORDS = {
-    "map_kd", "map_ka", "map_ks", "map_ns", "map_d", "map_bump", "bump", "disp", "decal", "refl",
-    "norm", "map_pr", "map_pm", "map_ps", "map_ke", "map_rma", "map_orm",
-}
-_MTL_OPTION_ARGS = {
-    "-blendu": 1, "-blendv": 1, "-bm": 1, "-boost": 1, "-cc": 1, "-clamp": 1, "-imfchan": 1,
-    "-mm": 2, "-texres": 1, "-type": 1,
-}
-_NUMBER = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
-
-
-def _mtl_texture_name(tokens: List[str]) -> Optional[str]:
-    index = 0
-    while index < len(tokens):
-        token = tokens[index].lower()
-        if token in _MTL_OPTION_ARGS:
-            index += 1 + _MTL_OPTION_ARGS[token]
-        elif token in ("-o", "-s", "-t"):
-            index += 1
-            taken = 0
-            while index < len(tokens) - 1 and taken < 3 and _NUMBER.match(tokens[index]):
-                index += 1
-                taken += 1
-        else:
-            break
-    name = " ".join(tokens[index:])
-    return name or None
+        text = handle.read().decode("utf-8")
+    text = "\n{}\n".format(text.strip().replace("\r\n", "\n")).replace("\\\n", "")
+    position = text.find("mtllib")
+    if position < 0:
+        return []
+    name = text[position + 6:text.find("\n", position)].strip()
+    return [Reference(name, False, False)] if name else []
 
 
 def _mtl_references(path: str) -> List[Reference]:
-    references = []
+    """Texture names: for each ``map_Kd`` statement, the rest of the line after the keyword, as one
+    name. The loader reads no other texture statement, and reads options such as ``-s`` as part of
+    the name."""
     with open(path, "rb") as handle:
-        for raw in handle:
-            tokens = raw.decode("utf-8", errors="replace").split()
-            if len(tokens) >= 2 and tokens[0].lower() in _MTL_MAP_KEYWORDS:
-                name = _mtl_texture_name(tokens[1:])
-                if name:
-                    references.append(Reference(name, False, False))
+        text = handle.read().decode("utf-8")
+    references = []
+    for line in str.splitlines(text.strip()):
+        tokens = line.strip().split()
+        if len(tokens) <= 1 or tokens[0].lower() != "map_kd":
+            continue
+        name = line[line.lower().index("map_kd") + 6:].strip()
+        if name:
+            references.append(Reference(name, False, False))
     return references
 
 
@@ -292,9 +276,10 @@ _COLLECTORS: Dict[str, Callable[[str], List[Reference]]] = {
     ".ply": _ply_references,
 }
 
-# The fetched files read for further references, by the extension of the file that referenced them.
-# A buffer or image a glTF names is data, never a document, and a fetched model is not loaded.
-_FOLLOWED = {".obj": {".mtl"}}
+# How a fetched file is read for further references, by the extension of the file that referenced
+# it: an OBJ names only its material library, which the loader reads as an MTL whatever its name. A
+# buffer or image a glTF names is data, never a document, and a fetched model is not loaded.
+_FOLLOWED = {".obj": ".mtl"}
 
 
 def has_references(ext: str) -> bool:
@@ -443,9 +428,9 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
             report.total_bytes += size
             available[relative] = target
             report.by_reference.setdefault(raw.strip(), target)
-            child_ext = os.path.splitext(relative)[1].lower()
-            if child_ext in _FOLLOWED.get(file_ext, ()):
-                queue.append((target, relative, child_ext, depth + 1))
+            child_kind = _FOLLOWED.get(file_ext)
+            if child_kind is not None:
+                queue.append((target, relative, child_kind, depth + 1))
 
     if logger is not None:
         if report.skipped_count > MAX_SKIPPED_LOGGED:

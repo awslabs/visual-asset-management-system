@@ -328,7 +328,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         os.makedirs(export_dir)
 
         # Download the input at its own path within its asset, then the files it references beside
-        # it (glTF/GLB buffers and images, an OBJ's material libraries and their texture maps, a
+        # it (glTF/GLB buffers and images, an OBJ's material library and the textures it names, a
         # PLY's texture), so its relative references resolve locally as they do in the asset. Every
         # reference is validated against the input's asset prefix before anything is fetched; a buffer
         # that cannot be fetched fails the run, and a material library or texture that cannot is

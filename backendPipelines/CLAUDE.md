@@ -101,18 +101,22 @@ Output dir: {outputS3AssetFilesPath}
 
 ## Files a Model Input References
 
-A model format can keep part of the model in other files: glTF/GLB buffers and images, an OBJ's `mtllib`
-and the texture maps the MTL names, a PLY `TextureFile`. A pipeline that loads such a model downloads
-the input at its asset-relative path and fetches those files from the **input's own asset** beside it
-before loading; downloading the selected file alone loses them, and renaming it breaks `../` references.
+A model format can keep part of the model in other files: glTF/GLB buffers and images, an OBJ's
+`mtllib` and the `map_Kd` textures the MTL names, a PLY `TextureFile`. A pipeline that loads such a
+model downloads the input at its asset-relative path and fetches those files from the **input's own
+asset** beside it before loading; downloading the selected file alone loses them, and renaming it breaks
+`../` references.
 
 Every reference is untrusted input, because the pipeline role reads every asset bucket (ARCC BSC1, input
 validation by allowlist). Accept a reference only when it is a relative path that, normalised against
 the referring file's directory, stays inside the input's asset prefix; reject absolute paths, `..`
 escapes, URI schemes and control characters before any Amazon S3 call, and bound the file count, byte
-total and depth. Hand the loader a resolver that serves **only** the fetched files: trimesh's default
-`FilePathResolver` joins a name onto the input's directory, and its loaders read references the scan
-does not see (its OBJ loader takes the first `mtllib` anywhere in the text, comments included).
+total and depth. Collect each name exactly as the loader will ask for it, so the fetch requests, and its
+warnings name, only files the loader reads: trimesh's OBJ loader asks for one material library, the
+rest of the line after the first `mtllib` anywhere in the text (spaces included), and its MTL parser
+asks only for each `map_Kd` value, the rest of its line. Hand the loader a resolver that serves **only**
+the fetched files and refuses every other name, so a reference outside the asset is refused or skipped,
+never read.
 
 The 3D Basic Conversion copy is `conversion/3dBasic/lambdaContainer/referenced_files.py`
 (`ConfinedResolver`); its path rules and collectors are vendored from the 3D Preview Thumbnail
