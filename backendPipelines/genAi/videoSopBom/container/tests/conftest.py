@@ -403,3 +403,13 @@ def vsb_fake_run():
 def vsb_task_token(monkeypatch):
     monkeypatch.setenv("TASK_TOKEN", "AAAAKgAAAAIAAAAAAAAAAfaketoken")
     return os.environ["TASK_TOKEN"]
+
+
+@pytest.fixture(autouse=True)
+def _reset_learned_tool_choice():
+    """bedrock._AUTO_TOOL_CHOICE_MODELS is per-process state; never let one test's learning reach another."""
+    from video_sop_bom_pipeline import bedrock
+
+    bedrock._AUTO_TOOL_CHOICE_MODELS.clear()
+    yield
+    bedrock._AUTO_TOOL_CHOICE_MODELS.clear()

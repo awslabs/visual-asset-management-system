@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Amazon Bedrock Converse with forced tool use: the three structured calls and the retry budget around them.
+"""Amazon Bedrock Converse with tool use (forced where the model accepts it): the three structured calls and the retry budget around them.
 
 The prompts and the tool input schemas are the package's shipped files: a prompt is rendered by substituting every
 `{{TOKEN}}` its `PROMPT_TOKENS` entry lists, and a tool schema is the shipped JSON Schema with its
@@ -214,8 +214,19 @@ class BedrockUsage:
         return {"calls": self.calls, "inputTokens": self.input_tokens, "outputTokens": self.output_tokens}
 
 
+# Models that reject a forced toolChoice ("tool"/"any") and accept only "auto". Learned per process from the
+# model's own ValidationException, so no model id is named here: the request carries the single tool and the
+# prompts instruct the model to answer through it, and _interpret's retry covers a response without the call.
+_AUTO_TOOL_CHOICE_MODELS = set()
+
+
+def _tool_choice_rejected(code, message):
+    return code == "ValidationException" and "tool_choice" in message
+
+
 def _request(model_id, system, messages, tool_name, schema, max_tokens):
     description = TOOL_DESCRIPTIONS.get(tool_name, f"Record the structured result for {tool_name}.")
+    tool_choice = {"auto": {}} if model_id in _AUTO_TOOL_CHOICE_MODELS else {"tool": {"name": tool_name}}
     return {
         "modelId": model_id,
         "system": [{"text": system}],
@@ -223,7 +234,7 @@ def _request(model_id, system, messages, tool_name, schema, max_tokens):
         "inferenceConfig": {"maxTokens": max_tokens},
         "toolConfig": {
             "tools": [{"toolSpec": {"name": tool_name, "description": description, "inputSchema": {"json": schema}}}],
-            "toolChoice": {"tool": {"name": tool_name}},
+            "toolChoice": tool_choice,
         },
     }
 
@@ -260,6 +271,13 @@ def _converse_with_budget(clients, request, stage, usage, sleep, rng, clock):
             response = clients.bedrock.converse(**request)
         except ClientError as exc:
             code, message = _code_and_message(exc)
+            forced = "auto" not in request["toolConfig"]["toolChoice"]
+            if forced and _tool_choice_rejected(code, message):
+                _AUTO_TOOL_CHOICE_MODELS.add(request["modelId"])
+                logger.warning("BEDROCK_TOOL_CHOICE_AUTO stage=%s model=%s rejects a forced toolChoice; using auto",
+                               stage, request["modelId"])
+                request = dict(request, toolConfig=dict(request["toolConfig"], toolChoice={"auto": {}}))
+                continue
             if code not in RETRYABLE_CODES:
                 raise PipelineRejection(PIPELINE_ERROR, f"Amazon Bedrock {code} at stage {stage}: {message}") from exc
             _wait_or_exhaust(code, attempt, started, stage, usage, sleep, rng, clock, exc)
@@ -339,6 +357,7 @@ def converse_tool(clients, model_id, system, messages, tool_name, schema, max_to
     if outcome[0] == "ok":
         return outcome[1]
     logger.warning("BEDROCK_RETRY stage=%s reason=%s", stage, outcome[1])
+    request = _request(model_id, system, messages, tool_name, schema, max_tokens)
     response = _converse_with_budget(clients, _with_feedback(request, tool_name, outcome[2]), stage, usage, sleep, rng, clock)
     outcome = _interpret(response, tool_name, schema, stage)
     if outcome[0] == "ok":

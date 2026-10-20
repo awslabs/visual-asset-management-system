@@ -547,3 +547,53 @@ class TestFinalize:
         assert "long note about the cover" in first and "long note about the cover" not in second
         assert raised.value.code == "VideoSopBomModelOutputInvalid"
         assert raised.value.cause == "finalize output exceeded 32K tokens for 1 components / 1 steps"
+
+
+TOOL_CHOICE_REJECTION = 'The model returned the following errors: tool_choice: type "tool" and "any" are not supported for this model.'
+
+
+class TestToolChoiceFallback:
+    """A model that rejects a forced toolChoice is answered with toolChoice auto, learned from its own error."""
+
+    def _rejecting_forced(self, request, n):
+        if "auto" not in request["toolConfig"]["toolChoice"]:
+            return client_error("ValidationException", TOOL_CHOICE_REJECTION, "Converse")
+        return tool_use_response(TOOL, {"answer": "ok"})
+
+    def test_rejected_forced_choice_is_resent_with_auto(self):
+        fake, usage, sleeps, invoke = _harness(self._rejecting_forced)
+        assert invoke() == {"answer": "ok"}
+        assert [c["toolConfig"]["toolChoice"] for c in fake.calls] == [{"tool": {"name": TOOL}}, {"auto": {}}]
+        assert sleeps == [] and usage.calls == 1
+
+    def test_the_learned_choice_applies_to_later_calls_without_a_rejection(self):
+        fake, _, _, invoke = _harness(self._rejecting_forced)
+        invoke()
+        invoke()
+        assert [c["toolConfig"]["toolChoice"] for c in fake.calls] == [
+            {"tool": {"name": TOOL}}, {"auto": {}}, {"auto": {}}]
+
+    def test_auto_response_without_the_tool_call_gets_the_feedback_retry_on_auto(self):
+        def responder(request, n):
+            if "auto" not in request["toolConfig"]["toolChoice"]:
+                return client_error("ValidationException", TOOL_CHOICE_REJECTION, "Converse")
+            return text_response("four") if n == 2 else tool_use_response(TOOL, {"answer": "ok"})
+
+        fake, _, _, invoke = _harness(responder)
+        assert invoke() == {"answer": "ok"}
+        assert [c["toolConfig"]["toolChoice"] for c in fake.calls] == [{"tool": {"name": TOOL}}, {"auto": {}}, {"auto": {}}]
+        assert "was not accepted" in fake.calls[2]["messages"][-1]["content"][-1]["text"]
+
+    def test_other_validation_errors_still_fail_without_switching(self):
+        from video_sop_bom_pipeline import bedrock
+        from video_sop_bom_pipeline.errors import PipelineRejection
+
+        fake, _, _, invoke = _harness(lambda r, n: client_error("ValidationException", "maxTokens too large", "Converse"))
+        with pytest.raises(PipelineRejection):
+            invoke()
+        assert len(fake.calls) == 1 and not bedrock._AUTO_TOOL_CHOICE_MODELS
+
+    def test_a_model_that_accepts_forcing_stays_forced(self):
+        fake, _, _, invoke = _harness(_ok)
+        invoke()
+        assert fake.calls[0]["toolConfig"]["toolChoice"] == {"tool": {"name": TOOL}}
