@@ -324,7 +324,7 @@ class TestDefinitionDocument:
             "assetId": "xidV", "databaseId": "dbV", "fileBaseExecutionPathExtension": "/E1/"}
         assert definition["auxBucket"] == "aux" and definition["auxTempPrefix"] == _AUX_PREFIX
         assert definition["kmsKeyArn"] == ""
-        assert definition["bedrockModelId"] == "global.anthropic.claude-sonnet-5"
+        assert definition["bedrockModelId"] == "global.anthropic.claude-sonnet-5-5"
         assert definition["limits"] == {
             "maxVideoFiles": 4, "maxVideoFileSizeMb": 4096, "maxTotalInputSizeMb": 16384,
             "maxTotalDurationMinutes": 240, "maxKeyFramesCeiling": 200}

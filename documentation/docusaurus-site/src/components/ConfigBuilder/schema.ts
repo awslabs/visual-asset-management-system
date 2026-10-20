@@ -1060,7 +1060,7 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Required when enabled; one model serves the text and vision calls (e.g. global.anthropic.claude-sonnet-5).",
+        help: "Required when enabled; one model serves the text and vision calls (e.g. global.anthropic.claude-sonnet-5-5).",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
     },
     {

@@ -299,7 +299,7 @@ DEFINITION_EXAMPLE = {
     "auxBucket": "vams-aux",
     "auxTempPrefix": f"pipelines/genai-video-sop-bom/{_EXEC_ID}/",
     "kmsKeyArn": "",
-    "bedrockModelId": "global.anthropic.claude-sonnet-5",
+    "bedrockModelId": "global.anthropic.claude-sonnet-5-5",
     "limits": {"maxVideoFiles": 4, "maxVideoFileSizeMb": 4096, "maxTotalInputSizeMb": 16384,
                "maxTotalDurationMinutes": 240, "maxKeyFramesCeiling": 200},
     "config": dict(FULL_CONFIG_EXAMPLE),
@@ -747,7 +747,7 @@ LIMITS_EXAMPLE = {
                  "subtitles": ["transcript.vtt", "transcript.srt"]},
 }
 ANALYSIS_REPORT_EXAMPLE = {
-    "mode": "full", "config": dict(FULL_CONFIG_EXAMPLE), "modelId": "global.anthropic.claude-sonnet-5",
+    "mode": "full", "config": dict(FULL_CONFIG_EXAMPLE), "modelId": "global.anthropic.claude-sonnet-5-5",
     "stages": [STAGE_EXAMPLE, {"name": "extract", "startedAt": "2026-09-09T12:07:00Z", "durationS": 95.1,
                                "inputTokens": 18234, "outputTokens": 6120, "calls": 1}],
     "windows": 1, "framesRequested": 3, "framesExtracted": 2, "framesSkipped": [FRAMES_EXAMPLE["skipped"][0]],

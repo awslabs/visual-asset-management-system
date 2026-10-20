@@ -402,7 +402,7 @@ describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", (
                     enableVideoSopBom(c);
                     restrictedPartition(c);
                     c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
-                        "global.anthropic.claude-sonnet-5";
+                        "global.anthropic.claude-sonnet-5-5";
                 })
             ).toThrow(
                 /pipelines\.useGenAiVideoSopBom\.bedrockModelId is .* exists only in the commercial partition/

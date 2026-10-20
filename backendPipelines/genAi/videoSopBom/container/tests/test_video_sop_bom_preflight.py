@@ -226,7 +226,7 @@ class TestConnectivityPreflight:
         transcribe, s3 = FakeTranscribe(), FakeS3()
         preflight.check_connectivity(make_clients(s3=s3, transcribe=transcribe, bedrock=bedrock), make_definition())
         assert transcribe.get_calls == ["vams-video-sop-bom-preflight"]
-        assert bedrock.calls[0]["modelId"] == "global.anthropic.claude-sonnet-5"
+        assert bedrock.calls[0]["modelId"] == "global.anthropic.claude-sonnet-5-5"
         assert bedrock.calls[0]["inferenceConfig"] == {"maxTokens": 1}
         assert s3.head_bucket_calls == ["aux-bucket"]
 
@@ -283,7 +283,7 @@ class TestConnectivityPreflight:
             preflight.check_connectivity(make_clients(bedrock=bedrock), make_definition())
         assert raised.value.code == "VideoSopBomConnectivityError"
         assert raised.value.cause == (
-            f"Amazon Bedrock model global.anthropic.claude-sonnet-5 is not accessible from this account/Region ({code}) "
+            f"Amazon Bedrock model global.anthropic.claude-sonnet-5-5 is not accessible from this account/Region ({code}) "
             "— enable model access in the Bedrock console."
         )
 

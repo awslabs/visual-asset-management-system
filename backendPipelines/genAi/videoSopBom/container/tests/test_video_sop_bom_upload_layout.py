@@ -301,7 +301,7 @@ class TestRunFullMode:
         report = _load(s3, "run-bucket", files_prefix + "analysis-report.json")
         assert report["windows"] == 1 and report["framesExtracted"] == 2 and report["framesSkipped"] == []
         assert report["limits"]["configured"] == summary["limits"]["configured"]
-        assert report["modelId"] == "global.anthropic.claude-sonnet-5"
+        assert report["modelId"] == "global.anthropic.claude-sonnet-5-5"
         assert [stage["name"] for stage in report["stages"]][:3] == ["preflight", "disk", "download"]
         assert s3.keys("aux-bucket") == [], "the whole aux prefix is deleted on success"
 

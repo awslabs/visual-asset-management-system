@@ -268,7 +268,7 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 useCodeBuild: false,
                 autoRegisterWithVAMS: true,
-                bedrockModelId: "global.anthropic.claude-sonnet-5",
+                bedrockModelId: "global.anthropic.claude-sonnet-5-5",
                 limits: {
                     maxVideoFiles: 4,
                     maxTotalDurationMinutes: 240,

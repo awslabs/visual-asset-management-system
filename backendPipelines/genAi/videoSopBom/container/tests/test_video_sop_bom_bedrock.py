@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(_HERE))
 from conftest import FakeBedrock, bare_response, client_error, make_clients, text_response, tool_use_response  # noqa: E402
 from video_sop_bom_pipeline import load_prompt, load_schema  # noqa: E402
 
-MODEL = "global.anthropic.claude-sonnet-5"
+MODEL = "global.anthropic.claude-sonnet-5-5"
 TOOL = "answer_tool"
 STAGE = "window-0"
 FENCE = "`" * 3  # built from parts so this source carries no literal triple backtick

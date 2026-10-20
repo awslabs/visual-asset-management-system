@@ -292,7 +292,7 @@ def make_definition(**overrides):
         "auxBucket": "aux-bucket",
         "auxTempPrefix": "pipelines/genai-video-sop-bom/exec-0001/",
         "kmsKeyArn": "arn:aws-fake:kms:us-east-1:123456789012:key/test-key",
-        "bedrockModelId": "global.anthropic.claude-sonnet-5",
+        "bedrockModelId": "global.anthropic.claude-sonnet-5-5",
         "limits": {
             "maxVideoFiles": 4,
             "maxVideoFileSizeMb": 4096,

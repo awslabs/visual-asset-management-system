@@ -40,7 +40,7 @@ VIDEO_SOP_BOM_TEST_ENV = {
     "VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB": "16384",
     "VIDEO_SOP_BOM_MAX_TOTAL_DURATION_MINUTES": "240",
     "VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING": "200",
-    "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-5",
+    "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-5-5",
     "KMS_KEY_ARN": "",
     "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:1:stateMachine:VideoSopBom",
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",

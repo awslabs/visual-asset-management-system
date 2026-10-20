@@ -266,7 +266,7 @@ describe("getConfig() backfills and enumerations for useGenAiVideoSopBom", () =>
             enabled: false,
             useCodeBuild: false,
             autoRegisterWithVAMS: true,
-            bedrockModelId: "global.anthropic.claude-sonnet-5",
+            bedrockModelId: "global.anthropic.claude-sonnet-5-5",
             limits: DEFAULT_LIMITS,
         });
     });
@@ -355,7 +355,7 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
             firing("govcloud", (c) => {
                 c.app.pipelines.useGenAiVideoSopBom.enabled = true;
                 c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
-                    "global.anthropic.claude-sonnet-5";
+                    "global.anthropic.claude-sonnet-5-5";
             })
         ).toEqual([]);
     });
@@ -422,7 +422,7 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
             firing("govcloud", (c) => {
                 govcloud(c);
                 c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
-                    "global.anthropic.claude-sonnet-5";
+                    "global.anthropic.claude-sonnet-5-5";
             })
         ).toEqual(["video-sop-bom-bedrock-model-id-commercial-only-prefix"]);
     });
@@ -460,7 +460,7 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
                 c.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles = 99;
                 c.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes = 0;
                 c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
-                    "global.anthropic.claude-sonnet-5";
+                    "global.anthropic.claude-sonnet-5-5";
             })
         ).toEqual([]);
     });

@@ -63,7 +63,7 @@ function enableContainerPipelines(c: any) {
         // the construct refuses an empty id, so this harness (which bypasses getConfig()) supplies a
         // foundation-model id. The role scope under test does not depend on which id it is.
         if (!pipelines.useGenAiVideoSopBom.bedrockModelId) {
-            pipelines.useGenAiVideoSopBom.bedrockModelId = "anthropic.claude-sonnet-5";
+            pipelines.useGenAiVideoSopBom.bedrockModelId = "anthropic.claude-sonnet-5-5";
         }
     }
 }
