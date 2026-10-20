@@ -45,6 +45,10 @@ Asset-state record (COMPLIANCE_ASSET_STATE_STORAGE_TABLE, PK databaseId, SK asse
     quarantine service (an evaluation clears the exception fields when it supersedes the exception).
     An evaluation writes the row only while it owns it — it is the row's `lastEvaluationId` or began
     after the row's `lastEvaluatedAt` — so an older evaluation's outcome never replaces a newer one.
+    The pointers are written twice: when the evaluation starts (its claim, status
+    `pending_pipeline`, written before any rule is evaluated or execution launched, so a concurrent
+    trigger invocation for the same change reads the change as covered) and when its outcome is
+    applied; an evaluation that loses its claim to a newer one does not run.
 """
 
 import json
@@ -124,6 +128,9 @@ AUDIT_EVALUATION_ERROR = "evaluation_error"
 
 # The `errorMessage` of an evaluation whose every rule errored, so no verdict could be reached.
 ALL_RULES_ERRORED_MESSAGE = "No rule could be evaluated"
+# The `error` of a `run_evaluation` result whose evaluation found the asset-state row already
+# claimed by a newer evaluation and so did not run.
+SUPERSEDED_MESSAGE = "A newer evaluation of the asset has started"
 
 try:
     schema_table_name = get_table_name(ResourceKeys.COMPLIANCE_SCHEMA_STORAGE_TABLE)
@@ -201,10 +208,14 @@ def get_asset_item(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]:
         Key={"databaseId": database_id, "assetId": asset_id}).get("Item")
 
 
-def get_compliance_record(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]:
-    """The asset's compliance state row, or None."""
+def get_compliance_record(database_id: str, asset_id: str,
+                          consistent_read: bool = False) -> Optional[Dict[str, Any]]:
+    """The asset's compliance state row, or None. `consistent_read` reads the row as of the last
+    write that preceded the call — an evaluation's start claim included — rather than an
+    eventually-consistent replica."""
     return asset_state_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id}).get("Item")
+        Key={"databaseId": database_id, "assetId": asset_id},
+        ConsistentRead=consistent_read).get("Item")
 
 
 def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
@@ -878,7 +889,8 @@ def run_evaluation(
     (`schemaName` / `schemaSource`) is never written here, so an evaluation against another schema
     leaves the binding as it is and records the schema it used on the evaluation row alone. The row
     is written only while this evaluation owns it (`engine.evaluation_owns_state_row`): an evaluation
-    that began before the row's last one leaves the row alone and is recorded on its own row only.
+    that a newer one claimed the row from while it ran leaves the row alone and is recorded on its
+    own row only.
 
     A pipeline rule the tooling could not evaluate (its input selection refused, its launch not
     started) is a `status: error` result. With `engine.TOOLING_FAILURES_APPLY_ENFORCEMENT` off, such
@@ -890,9 +902,24 @@ def run_evaluation(
     verdict is recorded as computed, the evaluation row carries `exceptionApplied`, and the state
     becomes `exception` on a failing verdict. An exception granted against another schema or an
     earlier version is superseded — cleared, audited, and the verdict applied normally.
+
+    Before it reads a schema, evaluates a rule or launches an execution, the evaluation claims the
+    asset-state row (`_claim_state_row`): the pointers move to this evaluation with
+    `lastEvaluationStatus: pending_pipeline`, so a trigger invocation for the same change that
+    reads the row meanwhile finds the change covered instead of starting a second evaluation and a
+    second workflow execution. An evaluation older than the row's last one, or one whose claim loses
+    to a newer evaluation's, does not run: nothing is evaluated, launched or written, and the
+    result carries `superseded: true` and an `error` (`SUPERSEDED_MESSAGE`), so the callers treat
+    it as an evaluation that could not run.
     """
     evaluated_at = now_iso()
     evaluation_id = str(uuid.uuid4())
+
+    claimed_from = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
+    if not _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, claimed_from):
+        logger.info(f"Evaluation {evaluation_id} of {database_id}:{asset_id} found the asset-state "
+                    "row claimed by a newer evaluation; nothing is evaluated")
+        return _superseded_result(evaluation_id, claimed_from)
 
     schema_item = load_schema_item(schema_name)
     if schema_item is None:
@@ -958,7 +985,10 @@ def run_evaluation(
     status = engine.evaluation_status_for(verdict)
     error_rules = engine.errored_rule_names(rule_results)
 
-    previous = get_compliance_record(database_id, asset_id) or {}
+    # Read again rather than reusing the row the claim was made from: the outcome is judged against
+    # the row as it stands now (this evaluation's claim, or a newer evaluation's), so an exception
+    # granted or revoked while the rules ran is honoured and a newer claim keeps the write away.
+    previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
     exception_applies, compliance_state = _state_for_verdict(
         verdict, previous, schema_name, schema_version)
     audit_details = {
@@ -1091,6 +1121,54 @@ def _rule_error_fields(error_rules: List[str]) -> Dict[str, Any]:
     if error_rules:
         fields["errorRules"] = list(error_rules)
     return fields
+
+
+def _claim_state_row(database_id, asset_id, evaluation_id, evaluated_at, previous) -> bool:
+    """Claim the asset-state row for an evaluation that is starting: `lastEvaluationId`,
+    `lastEvaluatedAt` (the evaluation's `evaluatedAt`), `lastEvaluationStatus: pending_pipeline`
+    and `updatedAt`, under `evaluation_ownership_condition`, so an evaluation older than the row's
+    last one cannot claim over it. The row is created when absent, as `unknown`; the state, the
+    quarantine reason, the exception fields and the binding are left as they are, and no audit
+    entry or notification is written — `_write_evaluation_state` applies the outcome and writes
+    those once the evaluation completes. `previous` is the row as read just before. Returns whether
+    the claim landed; False when the row as read, or as the write finds it, belongs to a newer
+    evaluation."""
+    if not engine.evaluation_owns_state_row(previous, evaluation_id, evaluated_at):
+        return False
+    claim: Dict[str, Any] = {
+        "lastEvaluationId": evaluation_id,
+        "lastEvaluatedAt": evaluated_at,
+        "lastEvaluationStatus": engine.EVALUATION_STATUS_PENDING_PIPELINE,
+        "updatedAt": now_iso(),
+    }
+    if "complianceState" not in previous:
+        claim["complianceState"] = engine.STATE_UNKNOWN
+    try:
+        update_asset_state(database_id, asset_id, claim,
+                           condition=evaluation_ownership_condition(evaluation_id, evaluated_at))
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        return False
+    return True
+
+
+def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str, Any]:
+    """The `run_evaluation` result of an evaluation that did not run because a newer one had
+    claimed the asset-state row: no verdict, no rule results, the asset's state as read."""
+    return {
+        "evaluationId": evaluation_id,
+        "verdict": EvaluationVerdict.error.value,
+        "complianceState": previous.get("complianceState", engine.STATE_UNKNOWN),
+        "ruleResults": [],
+        "pipelineRulesPending": 0,
+        "schemaVersion": None,
+        "exceptionApplied": False,
+        "hasRuleErrors": False,
+        "errorRules": [],
+        "superseded": True,
+        "error": SUPERSEDED_MESSAGE,
+    }
 
 
 def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluated_at, updated_at,

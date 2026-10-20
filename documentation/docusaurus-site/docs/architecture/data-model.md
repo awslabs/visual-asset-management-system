@@ -452,8 +452,9 @@ run. `PipelineExecutionLogsStorageTable` holds the per-step result and error log
 ### Compliance Tables
 
 Compliance deploys unconditionally. Schemas are versioned (`internalVersion`); asset state records a bound
-asset's latest verdict; evaluations are per run; cascades gate downstream re-evaluation on approval; the
-audit table is the compliance event trail.
+asset's latest verdict and the newest evaluation of it (`lastEvaluationId` / `lastEvaluatedAt`, written
+when an evaluation starts and again when it completes); evaluations are per run; cascades gate
+downstream re-evaluation on approval; the audit table is the compliance event trail.
 
 | Table                            | Partition Key  | Sort Key          |
 | -------------------------------- | -------------- | ----------------- |

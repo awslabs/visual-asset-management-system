@@ -31,7 +31,11 @@ workflow:
     evaluation covers the changes it read too) is not evaluated again, so an N-file upload yields
     one evaluation rather than N concurrent pipeline launches; a change after that evaluation's
     start is new and starts another evaluation, and the older evaluation's callback never
-    overwrites the newer state. The file path judges an object against the latest recorded user-change
+    overwrites the newer state. An evaluation claims the state row (`lastEvaluatedAt` its start)
+    before it evaluates or launches anything, and the trigger reads the row strongly consistent, so
+    an invocation for the same change that overlaps a running evaluation — a file event arriving
+    while a cold workflow launch is still under way — finds the change covered. The file path
+    judges an object against the latest recorded user-change
     completion on the row (`file_event_completion_time`): the later of its `lastUploadAt` (an upload
     completion) and its `lastAssetVersionAt` (an asset-version create or revert, which a revert writes
     after copying the target version's objects), whatever `lastChangeSource` says now, so a revert
@@ -428,13 +432,18 @@ def _process_compliance_event(database_id, asset_id, change_time=None, completio
 def _evaluation_target(database_id, asset_id):
     """`(compliance record, schema name)` for an asset to evaluate: its database has
     `complianceAutoEval` on and it has a bound schema (the asset override, else the database
-    binding, registering the asset under it). None (logged) when it is not to be evaluated."""
+    binding, registering the asset under it). None (logged) when it is not to be evaluated.
+
+    The record is the one the coverage decision reads, so it is read strongly consistent: an
+    evaluation of the same change that another invocation started moments ago has already claimed
+    the row (`lastEvaluatedAt` its start), and an eventually-consistent replica could still show the
+    row from before that claim and start a second evaluation."""
     db_item = _database_item(database_id)
     if not db_item or db_item.get("complianceAutoEval") is not True:
         logger.info(f"Database {database_id} does not have complianceAutoEval enabled, skipping")
         return None
 
-    compliance_record = store.get_compliance_record(database_id, asset_id)
+    compliance_record = store.get_compliance_record(database_id, asset_id, consistent_read=True)
     if not compliance_record:
         compliance_record = check_default_schema(database_id, asset_id, db_item)
         if not compliance_record:

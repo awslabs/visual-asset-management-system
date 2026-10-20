@@ -1778,6 +1778,31 @@ class TestEvaluationErrorOutput:
             assert 'Last Evaluation Status: error (no verdict' in result.output
             assert result.output.count('Last Evaluated:') == 1
 
+    def test_state_of_an_asset_whose_evaluation_has_started_prints_it_pending(
+            self, cli_runner, generic_command_mocks):
+        """An evaluation claims the record as it starts: the pointers name it, its status reads
+        `pending_pipeline`, and the state shown is the one the asset held before it."""
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_state.return_value = dict(
+                STATE_RECORD, complianceState='compliant', quarantineReason=None,
+                lastEvaluationId='ev-running', lastEvaluationStatus='pending_pipeline',
+                lastEvaluatedAt='2026-09-01T00:00:00+00:00')
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Compliance State: compliant' in result.output
+            assert 'Last Evaluation: ev-running' in result.output
+            assert 'Last Evaluation Status: pending_pipeline' in result.output
+            assert 'no verdict' not in result.output
+
+            mocks['api_client'].get_database_compliance_state.return_value = {
+                'databaseId': 'my-database', 'totalAssets': 1,
+                'summary': {'compliant': 1, 'error': 0},
+                'assets': [{'assetId': 'a1', 'complianceState': 'compliant',
+                            'schemaName': 'cad-quality', 'lastEvaluationStatus': 'pending_pipeline'}]}
+            overview = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database'])
+            assert overview.exit_code == 0
+            assert 'a1: compliant [cad-quality]' in overview.output
+
     def test_state_overview_prints_the_error_overlay_and_flags_errored_rows(self, cli_runner,
                                                                             generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:

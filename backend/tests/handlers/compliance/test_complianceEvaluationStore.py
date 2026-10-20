@@ -18,7 +18,7 @@ import pytest
 
 from backend.tests.handlers.compliance._harness import (
     ASSET, DB, REAL_TO_UPDATE_EXPR, RULES_SCHEMA_BODY, SCHEMA, SYNC_RULES_SCHEMA_BODY, USER,
-    put_items, schema_row, update_values,
+    FakeAssetStateTable, put_items, schema_row, update_values,
 )
 from handlers.compliance import complianceEvaluationStore as store
 from models.compliance import PipelineRule
@@ -237,6 +237,21 @@ class Tables:
     def audit_events(self):
         return [r["eventType"] for r in put_items(self.audit)]
 
+    def claim_and_outcome(self):
+        """`(claim, outcome)`: the two asset-state writes of a `run_evaluation` that ran — the claim
+        it made as it started (the pointers, `pending_pipeline`) and the write that applied its
+        outcome for the same evaluation."""
+        writes = update_values(self.state)
+        assert len(writes) == 2, writes
+        claim, outcome = writes
+        assert claim["lastEvaluationStatus"] == store.engine.EVALUATION_STATUS_PENDING_PIPELINE
+        assert claim["lastEvaluationId"] == outcome["lastEvaluationId"]
+        return claim, outcome
+
+    def outcome_state(self):
+        """The asset-state write that applied a `run_evaluation`'s outcome, after its claim."""
+        return self.claim_and_outcome()[1]
+
 
 @pytest.mark.unit
 class TestSynchronousEvaluation:
@@ -259,7 +274,7 @@ class TestSynchronousEvaluation:
         assert record["actor"] == USER
         assert "executionId" not in record
 
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["complianceState"] == "compliant"
         assert "schemaName" not in state
         assert "schemaSource" not in state
@@ -276,7 +291,7 @@ class TestSynchronousEvaluation:
         tables.run(store.run_evaluation, DB, ASSET, "adhoc-schema", USER)
         parents, _ = tables.evaluation_records()
         assert parents[0]["schemaName"] == "adhoc-schema"
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert "schemaName" not in state
         assert "schemaSource" not in state
         assert set(state) == {"complianceState", "lastEvaluationId", "lastEvaluatedAt",
@@ -289,7 +304,7 @@ class TestSynchronousEvaluation:
         tables.audit.put_item.side_effect = RuntimeError("AccessDeniedException")
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         assert result["verdict"] == "compliant"
-        assert update_values(tables.state)[0]["complianceState"] == "compliant"
+        assert tables.outcome_state()["complianceState"] == "compliant"
         assert tables.audit.put_item.call_count == 1
 
     def test_a_failed_quarantine_rule_quarantines_and_notifies(self, notifications_aws):
@@ -302,8 +317,8 @@ class TestSynchronousEvaluation:
         parents, _ = tables.evaluation_records()
         assert parents[0]["violations"] == ["parent: found 0 links, minimum is 1"]
         assert parents[0]["actor"] == store.SYSTEM_ACTOR
-        assert update_values(tables.state)[0]["complianceState"] == "quarantined"
-        assert update_values(tables.state)[0]["quarantineReason"] == "parent: found 0 links, minimum is 1"
+        assert tables.outcome_state()["complianceState"] == "quarantined"
+        assert tables.outcome_state()["quarantineReason"] == "parent: found 0 links, minimum is 1"
         published = notifications_aws.sns_client.publish.call_args.kwargs
         assert published["TopicArn"] == "arn:aws:sns:us-east-1:1:topic"
         assert "QUARANTINED" in published["Subject"]
@@ -313,14 +328,14 @@ class TestSynchronousEvaluation:
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, metadata_keys=())
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert result["verdict"] == "non_compliant"
-        assert update_values(tables.state)[0]["complianceState"] == "non_compliant"
+        assert tables.outcome_state()["complianceState"] == "non_compliant"
         notifications_aws.sns_client.publish.assert_not_called()
 
     def test_passing_after_quarantine_audits_the_release(self):
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, previous_state="quarantined")
         tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert tables.audit_events() == ["compliance_check", "quarantine_released"]
-        assert update_values(tables.state)[0]["quarantineReason"] is None
+        assert tables.outcome_state()["quarantineReason"] is None
         audit = put_items(tables.audit)[0]
         assert audit["previousState"] == "quarantined"
         assert audit["newState"] == "compliant"
@@ -353,7 +368,7 @@ class TestSynchronousEvaluation:
         parents, _ = tables.evaluation_records()
         assert parents[0]["status"] == "error"
         assert parents[0]["errorMessage"] == "Schema not found"
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["lastEvaluationId"] == parents[0]["evaluationId"]
         assert state["lastEvaluatedAt"] == parents[0]["evaluatedAt"]
         assert state["lastEvaluationStatus"] == "error"
@@ -372,7 +387,7 @@ class TestSynchronousEvaluation:
         tables.schema.query.return_value = {"Items": []}
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert result["complianceState"] == "unknown"
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["lastEvaluationStatus"] == "error"
         assert state["complianceState"] == "unknown"
         assert "schemaName" not in state
@@ -382,7 +397,7 @@ class TestSynchronousEvaluation:
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert result["error"] == "Schema is not vams-rules-v1 format"
         assert tables.audit_events() == ["evaluation_error"]
-        assert update_values(tables.state)[0]["lastEvaluationStatus"] == "error"
+        assert tables.outcome_state()["lastEvaluationStatus"] == "error"
 
     def test_asset_metadata_is_read_from_the_asset_root_composite_key_to_exhaustion(self):
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY)
@@ -473,7 +488,7 @@ class TestPipelineRuleLaunch:
         assert track["executionId"] == "exec-1"
         assert track["status"] == "pending"
         assert "databaseId:assetId" not in track
-        assert update_values(tables.state)[0]["complianceState"] == "pending_evaluation"
+        assert tables.outcome_state()["complianceState"] == "pending_evaluation"
 
     def test_a_template_rule_reads_its_template_row_and_applies_its_overrides(self):
         rule = _rule(pipelineRef=dict(PIPELINE_RULE.pipelineRef.dict(), templateId="tmpl-1"))
@@ -530,7 +545,7 @@ class TestPipelineRuleLaunch:
         assert record["hasRuleErrors"] is True
         assert record["errorRules"] == ["residual-bound"]
         assert "pipelineRulesPending" not in record
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["complianceState"] == "compliant"
         assert state["lastEvaluationStatus"] == "completed"
         assert tables.audit_events() == ["evaluation_error", "compliance_check"]
@@ -553,7 +568,7 @@ class TestPipelineRuleLaunch:
         parents, _ = tables.evaluation_records()
         assert parents[0]["violations"] == ["Pipeline execution could not be started"]
         assert parents[0]["hasRuleErrors"] is True
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["complianceState"] == "quarantined"
         assert state["quarantineReason"] == "Pipeline execution could not be started"
         assert tables.audit_events() == ["evaluation_error", "compliance_check"]
@@ -607,7 +622,7 @@ class TestPipelineRuleLaunch:
         assert record["hasRuleErrors"] is True
         assert record["completedAt"] == record["evaluatedAt"]
         assert json.loads(record["ruleResults"])[0]["status"] == "error"
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert set(state) == {"lastEvaluationId", "lastEvaluatedAt", "lastEvaluationStatus",
                               "updatedAt"}
         assert state["lastEvaluationId"] == record["evaluationId"]
@@ -624,7 +639,7 @@ class TestPipelineRuleLaunch:
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         assert result["verdict"] == "error"
         assert result["complianceState"] == "exception"
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert not set(state) & set(store.engine.EXCEPTION_FIELDS)
         assert "complianceState" not in state
         assert tables.audit_events() == ["evaluation_error"]
@@ -645,7 +660,7 @@ class TestPipelineRuleLaunch:
         parents, _ = tables.evaluation_records()
         assert parents[0]["status"] == "pending_pipeline"
         assert parents[0]["errorRules"] == ["other"]
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["complianceState"] == "pending_evaluation"
         assert state["lastEvaluationStatus"] == "pending_pipeline"
         assert tables.audit_events() == ["evaluation_error", "compliance_check"]
@@ -1208,7 +1223,7 @@ class TestFileAndAttributeRules:
                               version_rows=(("models/part.stl", "v:/models/part.stl"),))
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         assert result["verdict"] == "quarantined"
-        assert update_values(tables.state)[0]["quarantineReason"] == (
+        assert tables.outcome_state()["quarantineReason"] == (
             r"glb: no file matches required path pattern(s) \.glb$")
 
     def test_a_listing_that_fails_errors_the_file_rules_and_leaves_the_attribute_verdict(self):
@@ -1262,7 +1277,7 @@ class TestExceptions:
         assert parents[0]["verdict"] == "quarantined"
         assert parents[0]["violations"] == ["parent: found 0 links, minimum is 1"]
         assert parents[0]["exceptionApplied"] is True
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["complianceState"] == "exception"
         assert state["quarantineReason"] is None
         assert not set(state) & set(store.engine.EXCEPTION_FIELDS)
@@ -1276,7 +1291,7 @@ class TestExceptions:
         assert result["complianceState"] == "compliant"
         parents, _ = tables.evaluation_records()
         assert parents[0]["exceptionApplied"] is True
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["complianceState"] == "compliant"
         assert not set(state) & set(store.engine.EXCEPTION_FIELDS)
 
@@ -1301,7 +1316,7 @@ class TestExceptions:
         assert result["complianceState"] == "quarantined"
         parents, _ = tables.evaluation_records()
         assert "exceptionApplied" not in parents[0]
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["complianceState"] == "quarantined"
         assert state["exceptionGranted"] is False
         for field in store.engine.EXCEPTION_FIELDS:
@@ -1323,7 +1338,7 @@ class TestExceptions:
                         previous_row={"complianceState": "compliant", "exceptionGranted": False})
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         assert result["complianceState"] == "quarantined"
-        assert not set(update_values(tables.state)[0]) & set(store.engine.EXCEPTION_FIELDS)
+        assert not set(tables.outcome_state()) & set(store.engine.EXCEPTION_FIELDS)
         assert tables.audit_events() == ["compliance_check"]
 
     def test_a_pending_pipeline_evaluation_under_an_exception_records_it_and_stays_pending(self):
@@ -1899,7 +1914,139 @@ class TestParentRowBeforeLaunch:
         assert results["residual-bound"]["passed"] is True
         assert results["other"]["status"] == "error"
         states = [u["complianceState"] for u in update_values(tables.state) if "complianceState" in u]
-        assert states == ["pending_evaluation", "compliant"]
+        # The asset had no state row: the claim creates it as `unknown`, then the pending outcome
+        # and the finalized one follow.
+        assert states == ["unknown", "pending_evaluation", "compliant"]
+
+
+def _record_calls(tables, notify=None):
+    """Wrap the store's tables, the execute-workflow invoke and (when given) the quarantine notifier
+    so every call lands in one ordered list of `(label, detail)`; each call still does what it did.
+    The detail is the read's ConsistentRead, the state write's `lastEvaluationStatus` or the audit
+    entry's event type."""
+    calls = []
+
+    def wrap(mock, label, detail=lambda args, kwargs: None):
+        original_effect, original_return = mock.side_effect, mock.return_value
+
+        def effect(*args, **kwargs):
+            calls.append((label, detail(args, kwargs)))
+            return original_effect(*args, **kwargs) if original_effect else original_return
+        mock.side_effect = effect
+
+    def written_status(args, kwargs):
+        names = kwargs["ExpressionAttributeNames"]
+        values = kwargs["ExpressionAttributeValues"]
+        for clause in kwargs["UpdateExpression"].replace("SET ", "", 1).split(", "):
+            name_token, value_token = clause.split(" = ", 1)
+            if names[name_token] == "lastEvaluationStatus":
+                return values[value_token]
+        return None
+
+    wrap(tables.state.get_item, "state.get", lambda a, kw: kw.get("ConsistentRead", False))
+    wrap(tables.state.update_item, "state.update", written_status)
+    wrap(tables.schema.query, "schema.query")
+    wrap(tables.metadata.query, "metadata.query")
+    wrap(tables.evaluation.put_item, "evaluation.put")
+    wrap(tables.lambda_client.invoke, "invoke")
+    wrap(tables.audit.put_item, "audit", lambda a, kw: kw["Item"]["eventType"])
+    if notify is not None:
+        wrap(notify, "notify")
+    return calls
+
+
+@pytest.mark.unit
+class TestStartClaim:
+    """`run_evaluation` claims the asset-state row before it reads its schema, evaluates a rule or
+    launches an execution: the pointers move to the evaluation with `pending_pipeline`, nothing else
+    on the row changes, and nothing is audited or notified until the outcome is applied."""
+
+    PREVIOUS = {"complianceState": "compliant", "schemaName": SCHEMA, "schemaSource": "database",
+                "lastEvaluationId": "eval-older", "lastEvaluatedAt": "2026-01-01T00:00:00+00:00",
+                "lastEvaluationStatus": "completed"}
+
+    def test_the_claim_precedes_every_rule_read_and_the_launch(self):
+        tables = Tables(previous_row=self.PREVIOUS)
+        calls = _record_calls(tables)
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "pending_pipeline"
+
+        labels = [label for label, _ in calls]
+        claim = labels.index("state.update")
+        assert calls[:claim + 1] == [("state.get", True), ("state.update", "pending_pipeline")]
+        assert claim < labels.index("schema.query") < labels.index("metadata.query") \
+            < labels.index("evaluation.put") < labels.index("invoke")
+        outcome = len(labels) - 1 - labels[::-1].index("state.update")
+        assert outcome > labels.index("invoke")
+        assert calls[outcome] == ("state.update", "pending_pipeline")
+        # The outcome is judged against the row re-read after the launches, consistently.
+        assert calls[outcome - 1] == ("state.get", True)
+        assert [c for c in calls[:outcome] if c[0] == "audit"] == []
+        assert [c for c in calls if c[0] == "state.update"] == [
+            ("state.update", "pending_pipeline"), ("state.update", "pending_pipeline")]
+
+    def test_the_claim_moves_the_pointers_only_under_the_ownership_condition(self):
+        previous = dict(self.PREVIOUS, complianceState="exception", exceptionGranted=True,
+                        exceptionReason="waived", exceptionSchemaName=SCHEMA,
+                        exceptionSchemaVersion=1, quarantineReason="old")
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, previous_row=previous)
+        tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        claim, _ = tables.claim_and_outcome()
+        record = tables.evaluation_records()[0][0]
+        assert set(claim) == {"lastEvaluationId", "lastEvaluatedAt", "lastEvaluationStatus",
+                              "updatedAt"}
+        assert claim["lastEvaluationId"] == record["evaluationId"]
+        assert claim["lastEvaluatedAt"] == record["evaluatedAt"]
+        assert claim["lastEvaluationStatus"] == "pending_pipeline"
+        write = tables.state.update_item.call_args_list[0].kwargs
+        assert write["Key"] == {"databaseId": DB, "assetId": ASSET}
+        assert write["ConditionExpression"] == store.evaluation_ownership_condition(
+            record["evaluationId"], record["evaluatedAt"])[0]
+        assert write["ExpressionAttributeValues"][":ownedEvaluationId"] == record["evaluationId"]
+        assert write["ExpressionAttributeValues"][":ownedEvaluatedAt"] == record["evaluatedAt"]
+
+    def test_an_asset_without_a_state_row_is_claimed_as_unknown(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY)
+        tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        claim, outcome = tables.claim_and_outcome()
+        assert claim["complianceState"] == "unknown"
+        assert outcome["complianceState"] == "compliant"
+
+    def test_the_claim_writes_no_audit_entry_and_sends_no_notification(self):
+        """A quarantining evaluation: its one `compliance_check` entry and its one quarantine
+        notification both follow the outcome write, none the claim."""
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row=self.PREVIOUS)
+        with patch(f"{NOTIFICATIONS}.notify_quarantine") as notify:
+            calls = _record_calls(tables, notify=notify)
+            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "quarantined"
+        writes = [c for c in calls if c[0] in ("state.update", "audit", "notify")]
+        assert writes == [("state.update", "pending_pipeline"), ("state.update", "completed"),
+                          ("audit", "compliance_check"), ("notify", None)]
+
+    def test_a_concurrent_reader_sees_the_claim_while_the_launch_is_under_way(self):
+        """What the trigger's coverage read of the row returns while the first launch is still in
+        flight: this evaluation's id and start, status pending."""
+        tables = Tables(previous_row=self.PREVIOUS)
+        state = FakeAssetStateTable({"databaseId": DB, "assetId": ASSET, **self.PREVIOUS})
+        tables.state = state.mock
+        seen_during_launch = []
+        original_invoke = tables.lambda_client.invoke.return_value
+
+        def invoke(**_):
+            seen_during_launch.append(store.get_compliance_record(DB, ASSET, consistent_read=True))
+            return original_invoke
+        tables.lambda_client.invoke.side_effect = invoke
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+
+        record = tables.evaluation_records()[0][0]
+        assert len(seen_during_launch) == 1
+        row = seen_during_launch[0]
+        assert row["lastEvaluationId"] == result["evaluationId"] == record["evaluationId"]
+        assert row["lastEvaluatedAt"] == record["evaluatedAt"]
+        assert row["lastEvaluationStatus"] == "pending_pipeline"
+        assert row["complianceState"] == "compliant"
+        assert row["schemaName"] == SCHEMA and row["schemaSource"] == "database"
 
 
 @pytest.mark.unit
@@ -1921,19 +2068,42 @@ class TestOwnedStateWrite:
         assert values[":ownedEvaluatedAt"] == tables.evaluation_records()[0][0]["evaluatedAt"]
 
     def test_a_write_that_loses_the_condition_leaves_the_row_and_the_audit_alone(self):
+        """The claim lands; a newer evaluation claims the row while this one runs, so the outcome
+        write loses its condition."""
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0)
-        tables.state.update_item.side_effect = conditional_check_failure()
+        tables.state.update_item.side_effect = [{}, conditional_check_failure()]
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         assert result["verdict"] == "quarantined"
-        assert tables.state.update_item.call_count == 1
+        assert tables.state.update_item.call_count == 2
         tables.audit.put_item.assert_not_called()
         assert tables.evaluation_records()[0][0]["status"] == "completed"
 
     def test_a_real_write_failure_is_raised(self):
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0)
-        tables.state.update_item.side_effect = RuntimeError("table unavailable")
+        tables.state.update_item.side_effect = [{}, RuntimeError("table unavailable")]
         with pytest.raises(RuntimeError):
             tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+
+    def test_the_outcome_write_of_the_evaluation_that_holds_the_claim_lands(self):
+        """Same-id ownership: after the claim the row names this evaluation, with this evaluation's
+        own `lastEvaluatedAt`, so neither the `<` clause nor an absent row lets the outcome through
+        -- only the `lastEvaluationId = this evaluation` clause does, and it must."""
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0)
+        state = FakeAssetStateTable({"databaseId": DB, "assetId": ASSET,
+                                     "complianceState": "compliant", "schemaName": SCHEMA,
+                                     "lastEvaluationId": "eval-older",
+                                     "lastEvaluatedAt": "2026-01-01T00:00:00+00:00"})
+        tables.state = state.mock
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "quarantined"
+        claim, outcome = tables.claim_and_outcome()
+        row = state.row(DB, ASSET)
+        assert row["lastEvaluationId"] == result["evaluationId"] == claim["lastEvaluationId"]
+        assert row["lastEvaluatedAt"] == claim["lastEvaluatedAt"] == outcome["lastEvaluatedAt"]
+        assert row["complianceState"] == "quarantined"
+        assert row["lastEvaluationStatus"] == "completed"
+        assert row["schemaName"] == SCHEMA
+        assert tables.audit_events() == ["compliance_check"]
 
 
 @pytest.mark.unit
@@ -1985,24 +2155,67 @@ class TestLatestVerdictEvaluation:
 
 @pytest.mark.unit
 class TestEvaluationOrdering:
-    """`run_evaluation` follows the same rule as the callback: a synchronous evaluation that began
-    before the row's last evaluation records itself on its own row only."""
+    """`run_evaluation` follows the same rule as the callback, applied when it starts: an evaluation
+    that begins before the row's last evaluation cannot claim the row, so it does not run at all --
+    no rule is evaluated, no execution launched, nothing written or audited."""
 
     OLD = "2026-01-01T00:00:00+00:00"
     NEWER = "2026-01-01T00:00:10+00:00"
 
-    def test_an_evaluation_older_than_the_rows_last_one_does_not_overwrite_it(self):
+    @staticmethod
+    def _assert_superseded(tables, result):
+        assert result["superseded"] is True
+        assert result["error"] == store.SUPERSEDED_MESSAGE
+        assert result["verdict"] == "error"
+        assert result["complianceState"] == "compliant"
+        assert result["pipelineRulesPending"] == 0
+        assert tables.evaluation_records() == ([], [])
+        tables.evaluation.put_item.assert_not_called()
+        tables.state.update_item.assert_not_called()
+        tables.audit.put_item.assert_not_called()
+        tables.lambda_client.invoke.assert_not_called()
+        tables.metadata.query.assert_not_called()
+
+    def test_an_evaluation_older_than_the_rows_last_one_does_not_run(self):
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row={
             "complianceState": "compliant", "lastEvaluationId": "eval-newer",
             "lastEvaluatedAt": self.NEWER, "lastEvaluationStatus": "completed"})
         with patch(f"{STORE}.now_iso", return_value=self.OLD):
             result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
-        assert result["verdict"] == "quarantined"
-        parents, _ = tables.evaluation_records()
-        assert parents[0]["status"] == "completed"
-        assert parents[0]["verdict"] == "quarantined"
-        assert parents[0]["evaluatedAt"] == self.OLD
-        tables.state.update_item.assert_not_called()
+        self._assert_superseded(tables, result)
+        tables.schema.query.assert_not_called()
+
+    def test_an_older_pipeline_evaluation_launches_nothing(self):
+        """The row already carries a newer `lastEvaluatedAt` (a newer evaluation claimed it): the
+        claim is refused and no workflow execution is started."""
+        tables = Tables(previous_row={
+            "complianceState": "compliant", "lastEvaluationId": "eval-newer",
+            "lastEvaluatedAt": self.NEWER, "lastEvaluationStatus": "pending_pipeline"})
+        with patch(f"{STORE}.now_iso", return_value=self.OLD):
+            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        self._assert_superseded(tables, result)
+
+    def test_an_older_missing_schema_evaluation_records_nothing(self):
+        tables = Tables(previous_row={"complianceState": "compliant",
+                                      "lastEvaluationId": "eval-newer", "lastEvaluatedAt": self.NEWER})
+        tables.schema.query.return_value = {"Items": []}
+        with patch(f"{STORE}.now_iso", return_value=self.OLD):
+            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        self._assert_superseded(tables, result)
+
+    def test_a_claim_that_loses_the_write_condition_launches_nothing(self):
+        """The row read before the claim is older, but a newer evaluation claims it between that read
+        and this claim's write: the conditional write fails and the evaluation stops there."""
+        tables = Tables(previous_row={
+            "complianceState": "compliant", "lastEvaluationId": "eval-older",
+            "lastEvaluatedAt": self.OLD, "lastEvaluationStatus": "completed"})
+        tables.state.update_item.side_effect = conditional_check_failure()
+        with patch(f"{STORE}.now_iso", return_value=self.NEWER):
+            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
+        assert result["superseded"] is True and result["error"] == store.SUPERSEDED_MESSAGE
+        assert tables.state.update_item.call_count == 1
+        assert tables.evaluation_records() == ([], [])
+        tables.lambda_client.invoke.assert_not_called()
         tables.audit.put_item.assert_not_called()
 
     def test_an_evaluation_newer_than_the_rows_last_one_writes_the_state(self):
@@ -2012,36 +2225,17 @@ class TestEvaluationOrdering:
         with patch(f"{STORE}.now_iso", return_value=self.NEWER):
             result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         assert result["complianceState"] == "quarantined"
-        state = update_values(tables.state)[0]
+        state = tables.outcome_state()
         assert state["complianceState"] == "quarantined"
         assert state["lastEvaluatedAt"] == self.NEWER
         assert state["lastEvaluationStatus"] == "completed"
-
-    def test_an_older_all_errored_evaluation_leaves_the_pointers_alone_too(self):
-        body = dict(RULES_SCHEMA_BODY, rules={"residual-bound": PIPELINE_RULE.dict()})
-        tables = Tables(schema_body=body, asset_files=(), previous_row={
-            "complianceState": "compliant", "lastEvaluationId": "eval-newer",
-            "lastEvaluatedAt": self.NEWER})
-        with patch(f"{STORE}.now_iso", return_value=self.OLD):
-            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
-        assert result["verdict"] == "error"
-        tables.state.update_item.assert_not_called()
-        # The error is about the evaluation, not the asset's state, so it is still audited.
-        assert tables.audit_events() == ["evaluation_error"]
-
-    def test_an_older_missing_schema_evaluation_leaves_the_pointers_alone(self):
-        tables = Tables(previous_row={"complianceState": "compliant",
-                                      "lastEvaluationId": "eval-newer", "lastEvaluatedAt": self.NEWER})
-        tables.schema.query.return_value = {"Items": []}
-        with patch(f"{STORE}.now_iso", return_value=self.OLD):
-            tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
-        tables.state.update_item.assert_not_called()
-        assert tables.audit_events() == ["evaluation_error"]
 
     @pytest.mark.parametrize("row,evaluation_id,evaluated_at,owns", [
         ({}, "e", "2026-01-01T00:00:00+00:00", True),
         ({"lastEvaluationId": "e"}, "e", "2026-01-01T00:00:00+00:00", True),
         ({"lastEvaluationId": "e", "lastEvaluatedAt": "2026-01-01T00:00:05+00:00"}, "e",
+         "2026-01-01T00:00:00+00:00", True),
+        ({"lastEvaluationId": "e", "lastEvaluatedAt": "2026-01-01T00:00:00+00:00"}, "e",
          "2026-01-01T00:00:00+00:00", True),
         ({"lastEvaluationId": "other"}, "e", "2026-01-01T00:00:00+00:00", True),
         ({"lastEvaluationId": "other", "lastEvaluatedAt": "2026-01-01T00:00:00+00:00"}, "e",
@@ -2054,7 +2248,8 @@ class TestEvaluationOrdering:
          "2026-01-01T01:00:00+01:00", False),
         ({"lastEvaluationId": "other", "lastEvaluatedAt": "garbage"}, "e", "z", True),
         ({"lastEvaluationId": "other", "lastEvaluatedAt": "garbage"}, "e", "a", False),
-    ], ids=["no-row", "own-id", "own-id-later-row", "other-id-no-time", "newer", "older",
+    ], ids=["no-row", "own-id", "own-id-later-row", "own-claim-same-instant", "other-id-no-time",
+            "newer", "older",
             "same-instant", "same-instant-other-offset", "unparseable-text-newer",
             "unparseable-text-older"])
     def test_the_ownership_predicate(self, row, evaluation_id, evaluated_at, owns):

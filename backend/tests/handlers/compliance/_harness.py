@@ -13,6 +13,8 @@ import json
 import os
 from unittest.mock import MagicMock
 
+from botocore.exceptions import ClientError
+
 from common.auth.apiEvent import normalize_event
 
 _BACKEND_SOURCE = os.path.abspath(
@@ -205,3 +207,69 @@ def update_values(table):
             resolved[names.get(name_token, name_token)] = values.get(value_token)
         updates.append(resolved)
     return updates
+
+
+def _ownership_clause_holds(row, clause, names, values):
+    """One clause of a ConditionExpression the evaluation store writes the asset-state row under:
+    `attribute_not_exists(#n)`, `#n < :v` (strings compare as DynamoDB compares them, by code
+    point) or `#n = :v`."""
+    clause = clause.strip()
+    if clause.startswith("attribute_not_exists("):
+        return names[clause[len("attribute_not_exists("):-1]] not in row
+    for operator in (" < ", " = "):
+        if operator in clause:
+            name_token, value_token = clause.split(operator, 1)
+            attribute, value = names[name_token], values[value_token]
+            if attribute not in row:
+                return False
+            return row[attribute] < value if operator == " < " else row[attribute] == value
+    raise AssertionError(f"Unsupported condition clause: {clause}")
+
+
+class FakeAssetStateTable:
+    """An in-memory asset-state table (PK databaseId, SK assetId) that HONORS the ownership
+    condition the evaluation store writes under, the way DynamoDB does: `update_item` applies its
+    SET only when one OR-clause of the ConditionExpression holds, else raises
+    ConditionalCheckFailedException; `get_item` returns the row as last written, whatever
+    `ConsistentRead` says. `mock` is the MagicMock the store is patched with, so the harness helpers
+    (`update_values`) still read its call history, and `calls` lists `(operation, ConsistentRead)`
+    for every read and `("update_item", None)` for every write, in order."""
+
+    def __init__(self, *rows):
+        self.rows = {(row["databaseId"], row["assetId"]): dict(row) for row in rows}
+        self.calls = []
+        self.mock = MagicMock(name="asset_state_table")
+        self.mock.get_item.side_effect = self._get_item
+        self.mock.update_item.side_effect = self._update_item
+        self.mock.put_item.side_effect = self._put_item
+
+    def row(self, database_id, asset_id):
+        return self.rows.get((database_id, asset_id))
+
+    def _get_item(self, Key, ConsistentRead=False, **_):
+        self.calls.append(("get_item", ConsistentRead))
+        row = self.rows.get((Key["databaseId"], Key["assetId"]))
+        return {"Item": dict(row)} if row is not None else {}
+
+    def _put_item(self, Item, **_):
+        self.rows[(Item["databaseId"], Item["assetId"])] = dict(Item)
+        return {}
+
+    def _update_item(self, Key, UpdateExpression, ExpressionAttributeNames,
+                     ExpressionAttributeValues, ConditionExpression=None, **_):
+        self.calls.append(("update_item", None))
+        key = (Key["databaseId"], Key["assetId"])
+        row = dict(self.rows.get(key) or {})
+        if ConditionExpression is not None and not any(
+                _ownership_clause_holds(row, clause, ExpressionAttributeNames,
+                                        ExpressionAttributeValues)
+                for clause in ConditionExpression.split(" OR ")):
+            raise ClientError(
+                {"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"}},
+                "UpdateItem")
+        for clause in UpdateExpression.replace("SET ", "", 1).split(", "):
+            name_token, value_token = clause.split(" = ", 1)
+            row[ExpressionAttributeNames[name_token]] = ExpressionAttributeValues[value_token]
+        row.update({"databaseId": key[0], "assetId": key[1]})
+        self.rows[key] = row
+        return {}

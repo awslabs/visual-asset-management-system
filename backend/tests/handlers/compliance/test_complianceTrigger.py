@@ -11,8 +11,9 @@ workflow execution's outputs last changed, and the coverage rule under which a c
 last evaluation already read — an evaluation still awaiting its pipeline rules included — is not
 evaluated again while a later change is."""
 
+import itertools
 import json
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import boto3
@@ -22,7 +23,9 @@ from moto import mock_aws
 
 from backend.tests.common.test_indexerEvents import (
     indexer_message, nested_indexer_message, s3_event_record, sns_envelope, sqs_record)
-from backend.tests.handlers.compliance._harness import ASSET, DB, SCHEMA, put_items
+from backend.tests.handlers.compliance._harness import (
+    ASSET, DB, SCHEMA, FakeAssetStateTable, put_items)
+from backend.tests.handlers.compliance.test_complianceEvaluationStore import Tables
 from handlers.compliance import complianceTrigger as trigger
 
 MOD = "handlers.compliance.complianceTrigger"
@@ -111,7 +114,7 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
     def _get_evaluation(evaluation_id, consistent_read=False):
         return rows.get(evaluation_id)
 
-    def _get_compliance_record(database_id, asset_id):
+    def _get_compliance_record(database_id, asset_id, consistent_read=False):
         if compliance_records is not None:
             return compliance_records.get(f"{database_id}:{asset_id}")
         return compliance_record
@@ -122,7 +125,8 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
             patch(f"{MOD}.asset_table", asset_table), \
             patch(f"{MOD}.s3_client", s3_client), \
             patch(f"{MOD}.logger", logger), \
-            patch(f"{STORE}.get_compliance_record", side_effect=_get_compliance_record), \
+            patch(f"{STORE}.get_compliance_record",
+                  side_effect=_get_compliance_record) as get_compliance_record, \
             patch(f"{STORE}.get_evaluation", side_effect=_get_evaluation) as get_evaluation, \
             patch(f"{STORE}.get_child_links", return_value=list(children)), \
             patch(f"{STORE}.run_evaluation", return_value=evaluation) as run_evaluation, \
@@ -130,6 +134,7 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
         trigger.lambda_handler(event, MagicMock())
     return {"database": database_table, "cascade": cascade_table, "state": state_table,
             "asset": asset_table, "s3": s3_client, "get_evaluation": get_evaluation,
+            "get_compliance_record": get_compliance_record,
             "run_evaluation": run_evaluation, "audit": write_audit, "logger": logger}
 
 
@@ -1316,3 +1321,128 @@ class TestEachCoverageDecisionLogsOneLine:
         mocks = _run(_sns_event(_stream_message()), database_item={"databaseId": DB},
                      compliance_record={"schemaName": SCHEMA})
         assert _coverage_lines(mocks) == []
+
+
+# D13 as the sbxf trigger log recorded it, on a pipeline-rule asset whose workflow-launch Lambdas
+# were cold: the upload's objects land, the upload completion stamps the row, the stream MODIFY
+# starts an evaluation 0.4 s later, and the object's file-indexer message arrives while that
+# evaluation's first workflow launch is still in flight.
+COLD_PRIOR_EVALUATION_START = "2026-03-01T21:17:54.000000+00:00"
+COLD_UPLOAD_EVENT_TIME = "2026-03-01T21:18:10.900Z"
+COLD_UPLOAD_STAMP = "2026-03-01T21:18:11.050000+00:00"
+COLD_STREAM_EVALUATION_START = "2026-03-01T21:18:11.400000+00:00"
+
+
+def _clock(start):
+    """A `now_iso` stand-in: `start`, then 100 ms later on every call, so each evaluation that
+    starts later in the run starts at a later instant."""
+    first = datetime.fromisoformat(start)
+    instants = (first + timedelta(milliseconds=100 * n) for n in itertools.count())
+    return lambda: next(instants).isoformat()
+
+
+@pytest.mark.unit
+class TestAnInvocationOverlappingARunningEvaluation:
+    """Two trigger invocations for one asset, the second running while the first's evaluation is
+    still launching its workflow. The first's evaluation claimed the state row before it launched
+    and the trigger reads the row strongly consistent, so the second sees the claim: a message for
+    the change being evaluated is covered and starts nothing, while a change made after that
+    evaluation started is still evaluated. Runs the real trigger and the real evaluation store
+    against a state table that keeps what is written to it."""
+
+    def _run_overlapping(self, file_event_time):
+        tables = Tables()
+        state = FakeAssetStateTable({
+            "databaseId": DB, "assetId": ASSET, "schemaName": SCHEMA, "schemaSource": "database",
+            "complianceState": "compliant", "lastEvaluationId": "eval-prev",
+            "lastEvaluatedAt": COLD_PRIOR_EVALUATION_START, "lastEvaluationStatus": "completed"})
+        tables.state = state.mock
+        database_table = MagicMock(name="database_table")
+        database_table.get_item.return_value = {"Item": AUTO_EVAL_DB}
+        asset_table = MagicMock(name="asset_table")
+        asset_table.query.return_value = {"Items": _stamped_rows(COLD_UPLOAD_STAMP)}
+        s3_client = MagicMock(name="s3_client")
+        s3_client.head_object.return_value = _s3_head("upload")
+        logger = MagicMock(name="logger")
+        launch = tables.lambda_client.invoke.return_value
+        row_during_launch = []
+
+        def cold_launch(**_):
+            # The file indexer's message is processed by a second invocation while this launch is
+            # still in flight; only the first launch carries it.
+            if not row_during_launch:
+                row_during_launch.append(state.row(DB, ASSET))
+                trigger.lambda_handler(_sns_event(indexer_message(s3_event_record(
+                    f"{ASSET}/model.stl", event_time=file_event_time))), MagicMock())
+            return launch
+
+        tables.lambda_client.invoke.side_effect = cold_launch
+        stream = _sns_event(_stream_message(change_source="upload", change_at=COLD_UPLOAD_STAMP))
+        with patch(f"{MOD}.database_table", database_table), \
+                patch(f"{MOD}.asset_table", asset_table), \
+                patch(f"{MOD}.cascade_table", MagicMock(name="cascade_table")), \
+                patch(f"{MOD}.s3_client", s3_client), \
+                patch(f"{MOD}.logger", logger), \
+                patch(f"{STORE}.now_iso", side_effect=_clock(COLD_STREAM_EVALUATION_START)):
+            tables.run(trigger.lambda_handler, stream, MagicMock())
+        logger.exception.assert_not_called()
+        return tables, state, row_during_launch[0], {"logger": logger}
+
+    def test_the_file_message_of_the_change_being_evaluated_is_covered_and_runs_nothing(self):
+        tables, state, row_during_launch, mocks = self._run_overlapping(COLD_UPLOAD_EVENT_TIME)
+
+        parents, _ = tables.evaluation_records()
+        assert len(parents) == 1
+        evaluation_id = parents[0]["evaluationId"]
+        assert parents[0]["evaluatedAt"] == COLD_STREAM_EVALUATION_START
+        assert tables.lambda_client.invoke.call_count == 1
+        # The row the second invocation read: the first evaluation's claim, before its launch
+        # returned.
+        assert row_during_launch["lastEvaluationId"] == evaluation_id
+        assert row_during_launch["lastEvaluatedAt"] == COLD_STREAM_EVALUATION_START
+        assert row_during_launch["lastEvaluationStatus"] == "pending_pipeline"
+        assert _coverage_lines(mocks) == [
+            f"Compliance coverage asset={ASSET} path=stream stamp=lastChangeAt "
+            f"stampAt={COLD_UPLOAD_STAMP} eventTime=none lastEvaluationId=eval-prev "
+            f"lastEvaluatedAt={COLD_PRIOR_EVALUATION_START} outcome=evaluating",
+            f"Compliance coverage asset={ASSET} path=file stamp=lastUploadAt "
+            f"stampAt={COLD_UPLOAD_STAMP} eventTime=2026-03-01T21:18:10.900000+00:00 "
+            f"lastEvaluationId={evaluation_id} lastEvaluatedAt={COLD_STREAM_EVALUATION_START} "
+            "outcome=covered"]
+        assert state.row(DB, ASSET)["lastEvaluationId"] == evaluation_id
+        assert state.row(DB, ASSET)["complianceState"] == "pending_evaluation"
+        # Every read of the row on this path is strongly consistent.
+        assert {read for op, read in state.calls if op == "get_item"} == {True}
+
+    def test_a_change_made_after_the_running_evaluation_started_is_still_evaluated(self):
+        """An object written a second after the first evaluation started (an upload whose own
+        completion has not stamped the row yet) is a change that evaluation did not read: the
+        second invocation evaluates it, and its newer evaluation keeps the row."""
+        tables, state, _, mocks = self._run_overlapping("2026-03-01T21:18:12.400Z")
+
+        parents, _ = tables.evaluation_records()
+        assert len(parents) == 2
+        first, second = sorted(parents, key=lambda row: row["evaluatedAt"])
+        assert tables.lambda_client.invoke.call_count == 2
+        assert [line.rsplit(" ", 1)[1] for line in _coverage_lines(mocks)] == [
+            "outcome=evaluating", "outcome=evaluating"]
+        assert state.row(DB, ASSET)["lastEvaluationId"] == second["evaluationId"]
+        assert first["evaluatedAt"] < second["evaluatedAt"]
+
+
+@pytest.mark.unit
+class TestTheCoverageReadIsStronglyConsistent:
+
+    @pytest.mark.parametrize("event", [
+        _sns_event(_stream_message(change_source="upload")),
+        _sns_event(indexer_message(s3_event_record(f"{ASSET}/one.stl",
+                                                   event_time=UPLOAD_EVENT_TIME))),
+        _sns_event({"databaseId": DB, "assetId": ASSET}),
+    ], ids=["stream", "file", "direct"])
+    def test_every_path_reads_the_state_row_consistently(self, event):
+        mocks = _run(event, database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(COLD_PRIOR_EVALUATION_START),
+                     asset_rows=_stamped_rows(UPLOAD_STAMP))
+        reads = mocks["get_compliance_record"].call_args_list
+        assert reads
+        assert all(call.kwargs == {"consistent_read": True} for call in reads)
