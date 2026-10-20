@@ -64,6 +64,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Web** Opening a file of another asset in the same browser tab without a reload (for example by pasting its link into the address bar) loads that asset's file. The file view kept the previous asset's file in its state and rewrote the new URL to that file's key, so it requested the previous asset's file from the new asset and showed "File Not Found" until the page was reloaded. ([#492](https://github.com/awslabs/visual-asset-management-system/issues/492))
 -   **Web** Opening another file of the same asset in the same browser tab without a reload (for example by pasting its link into the address bar) shows that file, including a version the link names. The file view wrote the previously loaded file back into the new URL while it looked up the new one, so it returned to the previous file, or alternated between the two and repeated the file lookup many times a second. A lookup that finishes after the URL has moved on no longer replaces the file the URL names. ([#496](https://github.com/awslabs/visual-asset-management-system/issues/496))
+-   **Web** Opening a file from a link that names no version looks the file up once instead of twice, so the loading spinner and the file versions table no longer load a second time after the page adds the latest version to the URL. ([#512](https://github.com/awslabs/visual-asset-management-system/issues/512))
 
 ### Chores
 
