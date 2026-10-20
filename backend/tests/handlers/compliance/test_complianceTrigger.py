@@ -998,3 +998,103 @@ class TestARecordedUploadCompletionCoversItsFiles:
                      asset_rows=_stamped_rows(UPLOAD_STAMP))
         assert mocks["asset"].query.call_count == 1
         mocks["run_evaluation"].assert_not_called()
+
+
+# An asset-version revert as the round-11 re-smoke recorded it (D11): an earlier upload was stamped and
+# evaluated; the revert copies the target version's objects into the asset (new S3 versions whose
+# eventTime is the revert's), then stamps the row `assetVersion`; the stamp's stream MODIFY starts an
+# evaluation within the second, and the indexer's messages for the copies arrive about 20 s later.
+EARLIER_UPLOAD_STAMP = "2026-03-01T18:05:00.200000+00:00"
+EARLIER_UPLOAD_EVALUATION = "2026-03-01T18:05:00.900000+00:00"
+REVERT_COPY_EVENT_TIME = "2026-03-01T18:09:09.310Z"
+REVERT_STAMP = "2026-03-01T18:09:09.520000+00:00"
+REVERT_EVALUATION_START = "2026-03-01T18:09:09.700000+00:00"
+
+
+def _reverted_rows(change_source="assetVersion"):
+    """The asset's row after the revert's stamp: `lastChangeAt` moved to the stamp, `lastUploadAt`
+    still the earlier upload's. `change_source` replaces the source to show which sources the file
+    path reads the stamp for."""
+    return [{"databaseId": DB, "assetId": ASSET, "lastUploadAt": EARLIER_UPLOAD_STAMP,
+             "lastChangeAt": REVERT_STAMP, "lastChangeSource": change_source}]
+
+
+def _revert_copy_messages(event_time=REVERT_COPY_EVENT_TIME, names=("r-1.txt", "r-2.txt", "r-3.txt")):
+    """One indexer message per object the revert copied, as the file indexer emits them. The state
+    row stands still between messages here, so a test that expects an evaluation sends one."""
+    return [indexer_message(s3_event_record(f"{ASSET}/{name}", event_time=event_time))
+            for name in names]
+
+
+@pytest.mark.unit
+class TestAnAssetVersionRevertIsEvaluatedOnce:
+    """Reverting to an asset version copies the target version's objects into the asset and only then
+    stamps the row `lastChangeSource: assetVersion` with a fresh `lastChangeAt`, leaving
+    `lastUploadAt` at the last user upload. The stamp's stream MODIFY evaluates the asset once. The
+    indexer's messages for the copies arrive later and are judged by that stamp, which was written
+    after every copy completed (causal, no margin, like an upload completion's), so the evaluation
+    that started at or after it covers them. Judged by the older `lastUploadAt` they fell back to
+    their eventTime plus the skew margin and started a second evaluation, and for a pipeline rule a
+    second workflow execution, per revert (D11).
+
+    Creating an asset version stamps the row the same way but writes no S3 object
+    (`tests/handlers/assets/test_assetVersions_change_provenance.py` pins that), so no file message
+    follows it and its stream MODIFY is its only evaluation."""
+
+    def test_a_revert_evaluates_once_on_the_stream_and_not_again_on_its_copies(self):
+        stream = _run(_sns_event(_stream_message(change_source="assetVersion",
+                                                 change_at=REVERT_STAMP)),
+                      database_item=AUTO_EVAL_DB,
+                      compliance_record=_record_evaluated_at(EARLIER_UPLOAD_EVALUATION),
+                      asset_rows=_reverted_rows())
+        stream["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+        copies = _run(_sns_event(*_revert_copy_messages()), database_item=AUTO_EVAL_DB,
+                      compliance_record=_record_evaluated_at(REVERT_EVALUATION_START),
+                      asset_rows=_reverted_rows())
+        copies["run_evaluation"].assert_not_called()
+        assert sum("already covered" in m for m in _info_messages(copies)) == 3
+
+    def test_the_copies_are_covered_by_an_evaluation_started_at_the_stamp_itself(self):
+        mocks = _run(_sns_event(*_revert_copy_messages()), database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(REVERT_STAMP),
+                     asset_rows=_reverted_rows())
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_a_copy_written_at_the_stamp_instant_is_covered(self):
+        mocks = _run(_sns_event(*_revert_copy_messages("2026-03-01T18:09:09.520Z")),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(REVERT_EVALUATION_START),
+                     asset_rows=_reverted_rows())
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_an_evaluation_started_before_the_stamp_does_not_cover_the_copies(self):
+        """An evaluation that began while the revert was still copying may have read part of the
+        reverted file set, so the copies' messages start a new one."""
+        mocks = _run(_sns_event(*_revert_copy_messages(names=("r-1.txt",))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at("2026-03-01T18:09:09.400000+00:00"),
+                     asset_rows=_reverted_rows())
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    def test_an_object_written_after_the_stamp_is_a_new_change_and_is_evaluated(self):
+        """A user upload landing after the revert: its object is newer than the version stamp and its
+        own completion has not stamped the row yet, so it is judged by its eventTime with the margin
+        and evaluated."""
+        mocks = _run(_sns_event(indexer_message(s3_event_record(
+                         f"{ASSET}/new.txt", event_time="2026-03-01T18:09:30.000Z"))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(REVERT_EVALUATION_START),
+                     asset_rows=_reverted_rows())
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+    @pytest.mark.parametrize("change_source", ["upload", "assetEdit", "workflowExecution"])
+    def test_any_other_source_keeps_judging_the_object_by_the_upload_stamp(self, change_source):
+        """Only an `assetVersion` stamp is written after objects it copied. On a row stamped by any
+        other source the file path reads `lastUploadAt`, whatever `lastChangeAt` says: an edit writes
+        no objects, and a workflow execution's objects are skipped before the comparison. Here that
+        stamp predates the object, so the object is judged by its eventTime with the margin."""
+        mocks = _run(_sns_event(*_revert_copy_messages(names=("r-1.txt",))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(REVERT_EVALUATION_START),
+                     asset_rows=_reverted_rows(change_source))
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")

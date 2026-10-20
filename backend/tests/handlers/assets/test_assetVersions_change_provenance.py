@@ -7,7 +7,7 @@ the row written back carries `lastChangeSource: assetVersion` and a fresh `lastC
 the stream MODIFY the compliance trigger evaluates on, so a version-coverage verdict follows the new
 version rather than waiting for the next unrelated change."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -76,3 +76,74 @@ class TestAssetVersionProvenance:
 
     def test_a_previous_workflow_execution_id_is_dropped(self, runner):
         assert "lastChangeWorkflowExecutionId" not in _written_row(runner)
+
+
+# S3 calls that write an object (and so raise an S3 event the file indexer relays to the compliance
+# trigger).
+S3_WRITE_CALLS = {"put_object", "copy_object", "copy", "upload_file", "upload_fileobj",
+                  "create_multipart_upload", "upload_part_copy", "complete_multipart_upload"}
+
+
+def _record_writes(runner, target_files=()):
+    """Run `runner` and return, in order, the object writes it made (`("copy", instant)`), the asset
+    row it wrote (`("stamp", lastChangeAt)`), and every S3 client / resource call it made."""
+    av = _assetVersions
+    events = []
+    asset_table = MagicMock(name="asset_table")
+    asset_table.put_item.side_effect = lambda **kwargs: events.append(
+        ("stamp", kwargs["Item"]["lastChangeAt"]))
+
+    def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key):
+        events.append(("copy", datetime.now(timezone.utc).isoformat()))
+        return f"new-{source_version_id}"
+
+    s3_client = MagicMock(name="s3_client")
+    s3_resource = MagicMock(name="s3_resource")
+    with patch.object(av, "asset_table", asset_table), \
+            patch.object(av, "s3_client", s3_client), \
+            patch.object(av, "s3_resource", s3_resource), \
+            patch.object(av, "copy_s3_object_version", side_effect=_copy) as copy, \
+            patch.object(av, "does_file_version_exist", return_value=True), \
+            patch.object(av, "delete_assetAuxiliary_files"), \
+            patch.object(av, "get_asset_with_permissions", side_effect=lambda *a, **k: _asset()), \
+            patch.object(av, "get_asset_s3_location", return_value=("asset-bucket", f"{ASSET}/")), \
+            patch.object(av, "list_s3_files_with_versions", return_value=[{
+                "relativeKey": "model.glb", "versionId": "s3v1", "size": 1,
+                "lastModified": "2026-01-01T00:00:00", "etag": "e"}]), \
+            patch.object(av, "reserve_next_asset_version", return_value="6"), \
+            patch.object(av, "get_asset_version_metadata", return_value={"assetVersionId": "2"}), \
+            patch.object(av, "get_asset_file_versions", return_value={"files": list(target_files)}), \
+            patch.object(av, "save_asset_file_versions", return_value=True), \
+            patch.object(av, "save_asset_metadata_version", return_value=True), \
+            patch.object(av, "mark_assetVersion_as_current", return_value=True), \
+            patch.object(av, "send_subscription_email"):
+        runner(av)
+    s3_calls = {name.split(".")[0] for name, _args, _kwargs in s3_client.method_calls}
+    s3_calls |= {name.split(".")[-1] for name, _args, _kwargs in s3_resource.mock_calls if name}
+    return events, s3_calls, copy
+
+
+@pytest.mark.unit
+class TestTheStampFollowsEveryObjectTheVersionWrote:
+    """The compliance trigger judges the object a file event names against an `assetVersion` stamp's
+    `lastChangeAt` (`complianceTrigger.file_event_completion_time`), which holds only because the
+    stamp is written after every object the version operation wrote: a revert copies the target
+    version's objects and then stamps the row; a create writes no object at all, so no file event
+    follows it and its stamp's stream MODIFY is the one evaluation it starts."""
+
+    TARGET_FILES = [
+        {"relativeKey": f"/r-{n}.txt", "versionId": f"s3v{n}", "size": 1, "etag": "e"}
+        for n in (1, 2, 3)]
+
+    def test_a_create_writes_no_s3_object(self):
+        events, s3_calls, copy = _record_writes(_create)
+        copy.assert_not_called()
+        assert not s3_calls & S3_WRITE_CALLS
+        assert [kind for kind, _ in events] == ["stamp"]
+
+    def test_a_revert_stamps_the_row_after_its_last_copy(self):
+        events, _s3_calls, copy = _record_writes(_revert, self.TARGET_FILES)
+        assert copy.call_count == 3
+        assert [kind for kind, _ in events] == ["copy", "copy", "copy", "stamp"]
+        stamp = datetime.fromisoformat(events[-1][1])
+        assert all(datetime.fromisoformat(at) <= stamp for kind, at in events if kind == "copy")
