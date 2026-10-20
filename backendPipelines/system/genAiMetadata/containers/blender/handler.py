@@ -36,6 +36,37 @@ logger = safeLogger(service="systemGenAiMetadataBlenderRender")
 
 s3_client = boto3.client('s3', config=retry_config)
 
+# An asset bucket may be in another Region than this function. The pipeline state carries a bucket name
+# -> Region map (`bucketRegions`, built by constructPipeline from the manifest), the handler registers it,
+# and every request for a registered bucket is signed with a client for that Region; the client above
+# serves the buckets the map leaves out (the auxiliary bucket, a state from an older Lambda). Per-Region
+# clients keep the adaptive retry mode and address the regional us-east-1 endpoint, which an interface
+# endpoint's private DNS covers where the global s3.amazonaws.com name is not.
+_bucket_regions = {}
+_clients_by_region = {}
+_regional_retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                                s3={'us_east_1_regional_endpoint': 'regional'})
+
+
+def register_bucket_regions(bucket_regions):
+    """Record the Region of each named bucket from a state's bucketRegions map."""
+    for bucket_name, region in (bucket_regions or {}).items():
+        if bucket_name and region:
+            _bucket_regions[str(bucket_name)] = str(region)
+
+
+def client_for_bucket(bucket_name):
+    """The S3 client for the Region a bucket was registered in; the default client otherwise."""
+    region = _bucket_regions.get(bucket_name)
+    if not region or region == s3_client.meta.region_name:
+        return s3_client
+    regional = _clients_by_region.get(region)
+    if regional is None:
+        regional = boto3.client("s3", region_name=region, config=_regional_retry_config)
+        _clients_by_region[region] = regional
+    return regional
+
+
 RENDER_BRANCH = "BLENDER"
 DEFAULT_FILE_CLASS = "mesh"
 RENDERS_PREFIX = "renders/"
@@ -144,9 +175,9 @@ def load_render_options(config_location):
 def download_primary(bucket, key, version_id, destination):
     """Download the primary file at the manifest's version (the current version when none is given)."""
     if version_id:
-        s3_client.download_file(bucket, key, destination, ExtraArgs={"VersionId": version_id})
+        client_for_bucket(bucket).download_file(bucket, key, destination, ExtraArgs={"VersionId": version_id})
     else:
-        s3_client.download_file(bucket, key, destination)
+        client_for_bucket(bucket).download_file(bucket, key, destination)
     return destination
 
 
@@ -165,7 +196,7 @@ def confined_local_path(root, relative_key):
 
 def list_sibling_objects(bucket, parent_prefix):
     objects = []
-    paginator = s3_client.get_paginator("list_objects_v2")
+    paginator = client_for_bucket(bucket).get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket, Prefix=parent_prefix):
         for entry in page.get("Contents", []):
             objects.append({"key": entry["Key"], "size": int(entry.get("Size", 0))})
@@ -196,7 +227,7 @@ def download_siblings(bucket, primary_key, input_root):
             warnings.append(f"skipped sibling resolving outside the input directory: {key}")
             continue
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        s3_client.download_file(bucket, key, local_path)
+        client_for_bucket(bucket).download_file(bucket, key, local_path)
         downloaded.append(local_path)
         total_bytes += entry["size"]
     return downloaded, warnings
@@ -386,6 +417,8 @@ def lambda_handler(event, context):
     if missing:
         raise ValueError(f"BLENDER render branch event lacks required keys: {missing}")
 
+    # Sign each asset bucket's requests for its own Region before any S3 call.
+    register_bucket_regions(event.get("bucketRegions"))
     input_bucket, input_key = parse_s3_uri(event["inputS3AssetFilePath"])
     manifest_bucket, manifest_key = parse_s3_uri(event["analysisManifestS3Location"])
     aux_bucket, aux_prefix = parse_s3_uri(event["inputOutputS3AssetAuxiliaryFilesPath"])

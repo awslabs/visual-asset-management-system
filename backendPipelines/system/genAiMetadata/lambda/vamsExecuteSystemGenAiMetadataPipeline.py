@@ -53,6 +53,11 @@ def execute_pipeline(resolved, external_task_token, executing_userName, executin
         "relativePath": first_file.get("relativePath", "") or "",
         "versionId": first_file.get("versionId", "") or "",
         "workflowExecutionId": workflow_execution_id or "",
+        # The Regions of the input and output asset buckets, from the manifest (empty when a bucket is
+        # in the deployment Region), so every read of the input file -- the classifier's header and
+        # digest reads, the containers' downloads -- is signed for the bucket's Region.
+        "inputBucketRegion": resolved['inputBucketRegion'],
+        "outputBucketRegion": resolved['outputBucketRegion'],
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -136,6 +141,10 @@ def lambda_handler(event, context):
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
         # Single input file per execution today (SFN/manifest layer is multi-file-ready).
         manifestHelper.enforce_single_input_file(resolved)
+        # This pipeline's AWS Batch compute runs in the VPC's isolated subnets, which reach Amazon S3 in
+        # the deployment Region and in the Regions served by the VPC's cross-Region S3 endpoints
+        # (CROSS_REGION_S3_ENDPOINT_REGIONS); an input anywhere else is rejected before any compute starts.
+        manifestHelper.enforce_inputs_in_region(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         if not resolved.get('inputFiles'):

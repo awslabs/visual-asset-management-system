@@ -115,6 +115,9 @@ class TestHappyPath:
             "relativePath": "/models/pump.glb",
             "versionId": "v1",
             "workflowExecutionId": "E1",
+            # A manifest written without bucket Regions: both resolve to the deployment Region.
+            "inputBucketRegion": "",
+            "outputBucketRegion": "",
         }
 
     def test_an_unversioned_file_forwards_an_empty_version(self):

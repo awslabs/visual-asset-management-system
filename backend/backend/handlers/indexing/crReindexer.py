@@ -73,6 +73,7 @@ from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
 )
+from common.s3 import region_routing_s3_client
 from common.dynamoDbMetadataKeys import REINDEX_METADATA_RECORD_KEY
 from common.indexing.fileEnumeration import (
     extract_asset_id_from_key,
@@ -93,7 +94,7 @@ logger = safeLogger(service_name="CrReindexer")
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 dynamodb_resource = boto3.resource('dynamodb', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
+s3_client = region_routing_s3_client()
 ssm_client = boto3.client('ssm', config=retry_config)
 
 # HTTP client for CloudFormation responses

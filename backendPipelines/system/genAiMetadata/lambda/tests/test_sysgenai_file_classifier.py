@@ -47,9 +47,8 @@ def _backend_file_class_intent():
 
 def catalog_extensions():
     """The allow-list rule (only extensions a viewer serves enter the pipeline) applied to the viewer catalog."""
-    config = h.read_json_file(h.VIEWER_CONFIG)
     extensions = set()
-    for viewer in config["viewers"]:
+    for viewer in h.catalog_viewers():
         if viewer.get("enabled") is not True:
             continue
         for extension in viewer.get("supportedExtensions", []):

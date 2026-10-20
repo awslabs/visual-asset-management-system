@@ -424,6 +424,8 @@ The created guardrail satisfies the common security control that every Amazon Be
 
 The pipeline's Lambda functions run outside the VPC unless `app.useGlobalVpc.useForAllLambdas` is `true`, in which case VAMS creates the Amazon Bedrock Runtime interface endpoint for them. With `useFargateRenderer` the AWS Batch job runs in the isolated pipeline subnets and needs the shared Batch and ECR endpoints. See [Pipeline System Overview — VPC and Network Requirements](overview.md#vpc-and-network-requirements).
 
+An input file whose asset bucket is in another Region is read through that Region: the workflow manifest names the bucket's Region, `vamsExecute` forwards it, and every reader of the file — the classifier's header and digest reads, the media and Blender extractors, the 3D renderer — signs its requests for that Region through the state's `bucketRegions` map. Because the compute runs in the isolated pipeline subnets, such an input is admitted only when the VPC carries a cross-Region Amazon S3 interface endpoint for its Region (`app.useGlobalVpc.addCrossRegionS3Endpoints`); an input in any other Region is rejected at launch with `SendTaskFailure` naming both remedies. See [External Amazon S3 Setup — Pipelines and cross-Region inputs](../deployment/external-s3-setup.md#pipelines-and-cross-region-inputs).
+
 ## Configuration
 
 Enable and tune the pipeline in `infra/config/config.json`:

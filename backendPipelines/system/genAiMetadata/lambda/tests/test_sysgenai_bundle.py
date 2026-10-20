@@ -83,8 +83,7 @@ def _cdk_allow_list_literal():
 
 
 def catalog_extensions():
-    config = h.read_json_file(h.VIEWER_CONFIG)
-    return {extension.lower() for viewer in config["viewers"] if viewer.get("enabled") is True
+    return {extension.lower() for viewer in h.catalog_viewers() if viewer.get("enabled") is True
             for extension in viewer.get("supportedExtensions", []) if extension != "*"}
 
 

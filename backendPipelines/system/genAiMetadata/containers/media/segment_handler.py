@@ -40,6 +40,7 @@ from PIL import Image
 import bedrockGuardrail
 from media_extractors.common import human_duration
 from media_extractors.imaging import normalise_for_vision, write_png
+from media_extractors.s3_regions import client_for_bucket, register_bucket_regions
 from media_extractors.video import run_ffmpeg
 from vectorsearch import embeddings
 from videoSegments import SEGMENT_KIND
@@ -228,7 +229,9 @@ def presign_input(bucket: str, key: str, version_id: str) -> str:
     params = {"Bucket": bucket, "Key": key}
     if version_id:
         params["VersionId"] = version_id
-    return s3_client.generate_presigned_url("get_object", Params=params, ExpiresIn=SEGMENT_PRESIGN_SECONDS)
+    # A presigned URL is honoured only when it is signed for the bucket's own Region.
+    return client_for_bucket(bucket, s3_client).generate_presigned_url(
+        "get_object", Params=params, ExpiresIn=SEGMENT_PRESIGN_SECONDS)
 
 
 def frame_times(start_ms: int, end_ms: int) -> List[float]:
@@ -277,7 +280,8 @@ def frames_for_window(bucket: str, key: str, version_id: str, start_ms: int, end
     if paths:
         return paths, warnings
     local = os.path.join(work_dir, "input" + os.path.splitext(key)[1].lower())
-    s3_client.download_file(bucket, key, local, ExtraArgs={"VersionId": version_id} if version_id else None)
+    client_for_bucket(bucket, s3_client).download_file(
+        bucket, key, local, ExtraArgs={"VersionId": version_id} if version_id else None)
     warnings.append("presigned read produced no frame; the object was downloaded once and read locally")
     paths, more = extract_frames(local, times, work_dir, run)
     return paths, warnings + more
@@ -498,6 +502,8 @@ def lambda_handler(event, context):
 
     segment = event["segment"]
     state = event["state"]
+    # Sign each asset bucket's requests for its own Region before any S3 call.
+    register_bucket_regions(state.get("bucketRegions"))
     segment_key = segment["segmentKey"]
     start_ms, end_ms = int(segment["startMs"]), int(segment["endMs"])
     label = str(segment.get("label") or "")

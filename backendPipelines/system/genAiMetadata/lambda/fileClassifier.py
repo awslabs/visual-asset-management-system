@@ -4,8 +4,8 @@
 """File classification for the SYSTEM GenAI metadata pipeline.
 
 ``ALLOW_LIST`` is every ``supportedExtensions`` entry of every viewer with ``enabled: true`` in
-``web/src/visualizerPlugin/config/viewerConfig.json`` — viewers gated by ``featuresEnabledRestriction``
-included, the preview viewer's ``"*"`` wildcard excluded — minus ``EXCLUDED_EXTENSIONS``, plus
+``web/src/visualizerPlugin/config/viewerConfig.json`` and ``addonViewerConfig.json`` — viewers gated by
+``featuresEnabledRestriction`` included, the preview viewer's ``"*"`` wildcard excluded — minus ``EXCLUDED_EXTENSIONS``, plus
 ``ADDITIONAL_EXTENSIONS`` (formats no viewer renders, admitted for their extracted content). It is stored
 here as an explicit sorted list because a Lambda cannot read the web catalog at run time; the test
 suite re-derives it from the catalog and fails when the two drift.

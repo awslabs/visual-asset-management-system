@@ -61,9 +61,13 @@ class _FakeS3:
         self.json = dict(objects or {})
         self.files = dict(files or {})
         self.puts = []
+        self.registered_regions = []
         # Bound per instance so the module imports whether or not s3_utils carries the helper, and
         # each test reports its own failure instead of one collection error.
         self.parse_s3_uri = s3_utils.parse_s3_uri
+
+    def register_bucket_regions(self, bucket_regions):
+        self.registered_regions.append(dict(bucket_regions or {}))
 
     def download(self, bucket, key, path):
         data = self.files.get((bucket, key))
@@ -150,10 +154,11 @@ class TestParseRequest:
     def test_the_state_carries_one_render_switch_and_no_render_knobs(self, handler):
         """renderViews comes from the template configuration (constructPipeline sets no render knob on the
         state) and the size gate is constructPipeline's, so the request has no field to hold them. The one
-        render field is the state's renderImages switch: off when the pipeline's GenAI layer is off."""
+        render field is the state's renderImages switch: off when the pipeline's GenAI layer is off. The
+        other state field is bucketRegions, the asset buckets outside the deployment Region."""
         assert {field.name for field in dataclasses.fields(handler.Render3dRequest)} == {
             "analysis_manifest_s3_location", "input_s3_asset_file_path", "input_configuration_s3_location",
-            "file_class", "file_extension", "render_images"}
+            "file_class", "file_extension", "render_images", "bucket_regions"}
         assert handler.parse_request(_body()).render_images is True
         assert handler.parse_request(_body(renderImages=False)).render_images is False
         assert handler.parse_request(_body(renderImages="false")).render_images is False
@@ -316,6 +321,17 @@ class TestLambdaHandler:
         _r, _a, gltf, work_dir = _invoke(handler, tmp_path, fake, _result(frames=1),
                                          _body(inputS3AssetFilePath="s3://asset-bucket/xid/scene.gltf"))
         gltf.assert_called_once_with("asset-bucket", "xid/scene.gltf", os.path.join(work_dir, "input"))
+
+    def test_the_state_bucket_regions_are_registered_before_the_download(self, handler, tmp_path):
+        """The input file's bucket may be in another Region; the state's bucketRegions map reaches the S3
+        helper before the first read, so the download is signed for that Region. A body without the map
+        (an older constructPipeline) registers nothing and the default client serves every bucket."""
+        fake = _fake()
+        _invoke(handler, tmp_path, fake, _result(frames=1),
+                _body(bucketRegions={"asset-bucket": "eu-west-1"}))
+        assert fake.registered_regions == [{"asset-bucket": "eu-west-1"}]
+        assert handler.parse_request(_body()).bucket_regions == {}
+        assert handler.parse_request(_body(bucketRegions="eu-west-1")).bucket_regions == {}
 
     def test_a_failed_download_raises_and_removes_the_work_dir(self, handler, tmp_path):
         fake = _FakeS3({("aux-bucket", MANIFEST_KEY): dict(PREWRITTEN)}, {})

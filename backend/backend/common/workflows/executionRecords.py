@@ -241,7 +241,8 @@ def pipeline_input_manifest_key(execution_id: str, pipeline_index: int) -> str:
 def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: str = "",
                          database_id: str = "", asset_id: str = "",
                          asset_root_s3_key: str = "", aux_preview_prefix: str = "",
-                         bucket_id: str = "") -> dict:
+                         bucket_id: str = "", bucket_region: str = "",
+                         bucket_account_id: str = "") -> dict:
     """One self-locating input-manifest entry: an asset-relative path mapped to the S3
     location (bucket/key/versionId) and asset identity a pipeline reads for that path.
 
@@ -251,7 +252,10 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
     consumers reconstruct s3:// as needed from `bucket` + the relevant relative key.
     `bucketId` is the asset bucket's registration id (the asset-buckets table key), carried
     beside the bucket NAME for a consumer that resolves the registration row -- its name and
-    baseAssetsPrefix -- from the manifest alone; empty when the writer has no asset row."""
+    baseAssetsPrefix -- from the manifest alone; empty when the writer has no asset row.
+    `bucketRegion` is the Region the file's bucket is in, which a pipeline uses to build the
+    client that reads the file; a consumer treats an empty value as the deployment Region.
+    `bucketAccountId` is the bucket's owning account when it is not the deployment account."""
     return {
         "relativePath": normalize_file_key(relative_path),
         "databaseId": database_id or "",
@@ -260,6 +264,8 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
         "auxPreviewPrefix": aux_preview_prefix or "",
         "bucket": bucket,
         "bucketId": bucket_id or "",
+        "bucketRegion": bucket_region or "",
+        "bucketAccountId": bucket_account_id or "",
         "key": key,
         "versionId": version_id or "",
     }
@@ -284,13 +290,17 @@ def build_manifest_output_target(location_type="asset", asset_id="", database_id
     }
 
 
-def build_manifest_outputs(bucket="", files="", previews="", metadata="", results=""):
+def build_manifest_outputs(bucket="", files="", previews="", metadata="", results="",
+                           bucket_region=""):
     """outputs block for the manifest envelope: a single output `bucket` plus bucket-relative
     prefixes for each output kind (no pre-built s3:// URIs). Downstream consumers reconstruct
     s3://{bucket}/{prefix} as needed, so each prefix is a FULL key in `bucket` — a run-I/O prefix
-    passes through run_bucket_key first, the same way each input entry's `key` is a full key."""
+    passes through run_bucket_key first, the same way each input entry's `key` is a full key.
+    `bucketRegion` is the output bucket's Region (the default asset bucket is in the deployment
+    Region); a consumer treats an empty value as the deployment Region."""
     return {
         "bucket": bucket or "",
+        "bucketRegion": bucket_region or "",
         "files": files or "",
         "previews": previews or "",
         "metadata": metadata or "",
@@ -317,6 +327,7 @@ def build_manifest_envelope(input_files, input_metadata_s3_location, outputs,
         "inputMetadataS3Location": input_metadata_s3_location or "",
         "outputs": build_manifest_outputs(
             bucket=(outputs or {}).get("bucket", ""),
+            bucket_region=(outputs or {}).get("bucketRegion", ""),
             files=(outputs or {}).get("files", ""),
             previews=(outputs or {}).get("previews", ""),
             metadata=(outputs or {}).get("metadata", ""),

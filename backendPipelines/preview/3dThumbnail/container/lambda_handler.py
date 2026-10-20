@@ -58,6 +58,9 @@ class Render3dRequest:
     # The state's ``renderImages``: false when the pipeline's GenAI layer is off, so the file is loaded and
     # measured but no frame is rendered (frames exist only as analysis-model input).
     render_images: bool = True
+    # The state's ``bucketRegions``: bucket name -> Region for the asset buckets outside the deployment
+    # Region, registered with the S3 helper so the input file's reads are signed for its bucket's Region.
+    bucket_regions: dict = dataclasses.field(default_factory=dict)
 
 
 def _state_flag(value, default: bool) -> bool:
@@ -94,6 +97,7 @@ def parse_request(body) -> Render3dRequest:
         file_class=str(body.get("fileClass") or ""),
         file_extension=extension,
         render_images=_state_flag(body.get("renderImages"), _state_flag(body.get("genAiAnalysisEnabled"), True)),
+        bucket_regions=body.get("bucketRegions") if isinstance(body.get("bucketRegions"), dict) else {},
     )
 
 
@@ -183,6 +187,8 @@ def lambda_handler(event, context):
     try:
         input_dir = os.path.join(work_dir, "input")
         os.makedirs(input_dir, exist_ok=True)
+        # Sign each asset bucket's requests for its own Region before any S3 call (see utils s3 helper).
+        s3.register_bucket_regions(request.bucket_regions)
         input_bucket, input_key = s3.parse_s3_uri(request.input_s3_asset_file_path)
         local_path = s3.download(input_bucket, input_key,
                                  os.path.join(input_dir, os.path.basename(input_key)))

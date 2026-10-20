@@ -59,6 +59,7 @@ from common.workflows import workflowRecords as wr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows import outputPathExtension as ope
 from common.workflows import executionLocks as el
+from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.workflows.defaultBucket import (
     resolve_default_bucket,
     default_bucket_key,
@@ -169,7 +170,7 @@ DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED = (
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-s3c = boto3.client("s3", config=retry_config)
+s3c = region_routing_s3_client()
 lambda_client = boto3.client("lambda", config=retry_config)
 sfn_client = boto3.client("stepfunctions", config=retry_config)
 
@@ -274,7 +275,7 @@ def _default_run_bucket():
 
 
 def _asset_bucket_details(bucket_id):
-    """Resolve an asset's own bucket {bucketName, baseAssetsPrefix} from the buckets table.
+    """Resolve an asset's own bucket {bucketName, baseAssetsPrefix, bucketRegion[, bucketAccountId]} from the buckets table.
 
     Memoized per request (bucket rows are immutable for the launch): a single execute resolves the
     same bucketId once per verify/manifest/persist pass and once per input file, so without the cache
@@ -292,7 +293,7 @@ def _asset_bucket_details(bucket_id):
         base_prefix += "/"
     if base_prefix.startswith("/"):
         base_prefix = base_prefix[1:]
-    details = {"bucketName": bucket_name, "baseAssetsPrefix": base_prefix}
+    details = {"bucketName": bucket_name, "baseAssetsPrefix": base_prefix, **bucket_region_fields(bucket)}
     _bucket_details_cache[bucket_id] = details
     return details
 
@@ -1380,7 +1381,8 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
         asset_id = item["assetId"]
         asset = asset_records[(database_id, asset_id)]
         bucket_id = asset.get("bucketId")
-        bucket = _asset_bucket_details(bucket_id)["bucketName"]
+        bucket_details = _asset_bucket_details(bucket_id)
+        bucket = bucket_details["bucketName"]
         root = _asset_root_key(asset)
         relative = item["relativeFileKey"]
         full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
@@ -1392,7 +1394,9 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
             relative_path=relative, bucket=bucket, key=full_key,
             version_id=version_id, database_id=database_id, asset_id=asset_id,
             asset_root_s3_key=root, aux_preview_prefix=aux_preview_prefix,
-            bucket_id=bucket_id or ""))
+            bucket_id=bucket_id or "",
+            bucket_region=bucket_details.get("bucketRegion", ""),
+            bucket_account_id=bucket_details.get("bucketAccountId", "")))
     return entries
 
 
@@ -1685,6 +1689,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     # no baseAssetsPrefix of its own.
     outputs = er.build_manifest_outputs(
         bucket=run_bucket,
+        bucket_region=os.environ["AWS_REGION"],
         **{kind: er.run_bucket_key(run_prefix, prefix) for kind, prefix in out_prefixes.items()})
     first_aux_temp_prefix = er.aux_pipeline_prefix(first_pipeline_name, execution_id)
     metadata_location = "s3://{}/{}".format(run_bucket, er.run_bucket_key(

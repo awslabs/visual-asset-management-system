@@ -35,6 +35,7 @@ from media_extractors.common import (
     ExtractContext,
     class_for_extension,
 )
+from media_extractors.s3_regions import client_for_bucket, register_bucket_regions
 import videoSegments
 from contentChunks import CONTENT_EMBED_MAX_FILE_BYTES, CONTENT_TEXT_MAX_CHARS
 
@@ -201,7 +202,8 @@ def fetch_manifest(location: str) -> dict:
 def download_input(bucket: str, key: str, version_id: Optional[str], work_dir: str, file_name: str) -> str:
     local_path = os.path.join(work_dir, "input" + os.path.splitext(file_name)[1].lower())
     extra_args = {"VersionId": version_id} if version_id else None
-    s3_client.download_file(bucket, key, local_path, ExtraArgs=extra_args)
+    # The input file's bucket may be in another Region; its reads are signed for that Region.
+    client_for_bucket(bucket, s3_client).download_file(bucket, key, local_path, ExtraArgs=extra_args)
     return local_path
 
 
@@ -299,6 +301,8 @@ def write_segment_plan(plan: dict, aux_bucket: str, aux_prefix: str) -> dict:
 
 def lambda_handler(event, context):
     payload = read_event(event)
+    # Sign each asset bucket's requests for its own Region before any S3 call.
+    register_bucket_regions(payload.get("bucketRegions"))
     bucket, key = s3_location(payload, "inputS3AssetFilePath")
     aux_bucket, manifest_key = s3_location(payload, "analysisManifestS3Location")
     manifest_location = payload["analysisManifestS3Location"]

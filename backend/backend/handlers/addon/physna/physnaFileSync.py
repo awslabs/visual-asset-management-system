@@ -36,6 +36,7 @@ from common.s3MetadataKeys import (
     DATABASE_ID_METADATA_KEY,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS, join_asset_location_key
+from common.s3 import region_routing_s3_client
 from common.syncTracking import (
     SYNC_ACTION_CREATE,
     SYNC_ACTION_DELETE,
@@ -76,7 +77,7 @@ logger = safeLogger(service_name="PhysnaFileSync")
 _EXCLUDED_PREFIXES = RESERVED_S3_PREFIX_FOLDERS
 _EXCLUDED_PATTERNS = EXCLUDED_FILE_PATH_PATTERNS
 
-_s3 = boto3.client("s3", config=physnaCommon._retry_config)
+_s3 = region_routing_s3_client()
 
 # Page size for the version probe in _vams_file_still_in_s3. S3 orders version
 # listings by key, so one page of this size covers every entry belonging to the

@@ -26,9 +26,20 @@ PIPELINE_ROOT = os.path.dirname(LAMBDA_DIR)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(PIPELINE_ROOT)))
 VAMS_SCHEMA_DIR = os.path.join(PIPELINE_ROOT, "vamsSchema")
 VIEWER_CONFIG = os.path.join(REPO_ROOT, "web", "src", "visualizerPlugin", "config", "viewerConfig.json")
+# The add-on viewers (Physna, the licensed viewers) register after the core ones; the registry serves both.
+ADDON_VIEWER_CONFIG = os.path.join(REPO_ROOT, "web", "src", "visualizerPlugin", "config", "addonViewerConfig.json")
+VIEWER_CONFIGS = (VIEWER_CONFIG, ADDON_VIEWER_CONFIG)
 BACKEND_METADATA_MODEL = os.path.join(REPO_ROOT, "backend", "backend", "models", "metadata.py")
 
 TASK_TOKEN = "tok-sysgenai"
+
+
+def catalog_viewers():
+    """Every viewer entry the registry serves: the core catalog followed by the add-on catalog."""
+    viewers = []
+    for path in VIEWER_CONFIGS:
+        viewers.extend(read_json_file(path)["viewers"])
+    return viewers
 
 # Modules this pipeline's handlers import by bare name. Each is dropped from sys.modules before a
 # load so the copy under LAMBDA_DIR answers, not a same-named module another pipeline's suite loaded.

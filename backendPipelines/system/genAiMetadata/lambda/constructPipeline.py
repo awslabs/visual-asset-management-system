@@ -50,21 +50,22 @@ def _version_kwargs(version_id):
     return {}
 
 
-def _head(bucket, key, version_id):
-    return s3_client.head_object(Bucket=bucket, Key=key, **_version_kwargs(version_id))
+def _head(bucket, key, version_id, s3=None):
+    return (s3 or s3_client).head_object(Bucket=bucket, Key=key, **_version_kwargs(version_id))
 
 
-def _sniffer(bucket, key, version_id):
+def _sniffer(bucket, key, version_id, s3=None):
     """A header reader for the classifier: one ranged GET, memoised so the classification and the
     point-count check share it. An unreadable header classifies the file as ``other``."""
     cache = {}
+    client = s3 or s3_client
 
     def sniff(nbytes):
         if nbytes in cache:
             return cache[nbytes]
         try:
-            response = s3_client.get_object(Bucket=bucket, Key=key, Range=f"bytes=0-{nbytes - 1}",
-                                            **_version_kwargs(version_id))
+            response = client.get_object(Bucket=bucket, Key=key, Range=f"bytes=0-{nbytes - 1}",
+                                         **_version_kwargs(version_id))
             data = response["Body"].read()
         except Exception as e:
             logger.warning(f"Header read failed for s3://{bucket}/{key}: {e}")
@@ -75,18 +76,38 @@ def _sniffer(bucket, key, version_id):
     return sniff
 
 
-def _sha256(bucket, key, version_id):
+def _sha256(bucket, key, version_id, s3=None):
     """The object's SHA-256, streamed in chunks; ``None`` when the object cannot be read, so a digest
     that could not be taken is absent rather than a failed run."""
     digest = hashlib.sha256()
     try:
-        body = s3_client.get_object(Bucket=bucket, Key=key, **_version_kwargs(version_id))["Body"]
+        body = (s3 or s3_client).get_object(Bucket=bucket, Key=key, **_version_kwargs(version_id))["Body"]
         for chunk in body.iter_chunks(_HASH_CHUNK_BYTES):
             digest.update(chunk)
     except Exception as e:
         logger.warning(f"sha256 skipped for s3://{bucket}/{key}: {e}")
         return None
     return digest.hexdigest()
+
+
+def _input_client(region):
+    """The client that reads the input file: the default client for a bucket in the deployment Region
+    (an empty Region, or a state from an older Lambda), a client for ``region`` otherwise."""
+    return manifestHelper.s3_client_for_region(region) if region else s3_client
+
+
+def bucket_regions(event) -> dict:
+    """Bucket name -> Region for the asset buckets this run reads and writes, from the Regions the
+    vamsExecute Lambda resolved from the manifest. The containers sign each listed bucket's requests
+    with a client for that Region. A bucket in the deployment Region (an empty Region, or a state from
+    an older Lambda) is left out: requests for it use the default client, as do the auxiliary bucket's."""
+    regions = {}
+    for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
+                                 ("outputS3AssetFilesPath", "outputBucketRegion")):
+        uri, region = event.get(path_key) or "", event.get(region_key) or ""
+        if uri.startswith("s3://") and region:
+            regions[uri[len("s3://"):].split("/", 1)[0]] = region
+    return regions
 
 
 def _iso_timestamp(value):
@@ -172,7 +193,8 @@ def lambda_handler(event, context):
     aux_bucket, aux_prefix = manifestHelper.parse_s3_uri(event["inputOutputS3AssetAuxiliaryFilesPath"])
     config = manifestHelper.fetch_input_configuration(s3_client, event.get("inputConfigurationS3Location", ""))
     version_id = event.get("versionId", "") or ""
-    head = _head(bucket, key, version_id)
+    input_s3 = _input_client(event.get("inputBucketRegion", "") or "")
+    head = _head(bucket, key, version_id, input_s3)
     version_id = version_id or (head.get("VersionId", "") or "")
 
     name = key.rsplit("/", 1)[-1]
@@ -180,7 +202,7 @@ def lambda_handler(event, context):
     file_ext = ext or "none"
     size_bytes = int(head.get("ContentLength", 0) or 0)
 
-    sniff = _sniffer(bucket, key, version_id)
+    sniff = _sniffer(bucket, key, version_id, input_s3)
     file_class, natural_branch = fileClassifier.classify(ext, sniff)
 
     point_count = None
@@ -189,7 +211,7 @@ def lambda_handler(event, context):
 
     render_branch, render_skipped = apply_size_gate(file_class, natural_branch, size_bytes, point_count)
 
-    sha256_hex = _sha256(bucket, key, version_id) if size_bytes <= SHA256_MAX_BYTES else None
+    sha256_hex = _sha256(bucket, key, version_id, input_s3) if size_bytes <= SHA256_MAX_BYTES else None
     sys_file = build_sys_file(name, ext, head, version_id, sha256_hex,
                               fileClassifier.detect_format(sniff(fileClassifier.SNIFF_BYTES)))
 
@@ -226,6 +248,9 @@ def lambda_handler(event, context):
         "inputKey": key,
         "auxBucket": aux_bucket,
         "auxTempPrefix": aux_prefix,
+        # Bucket name -> Region for the asset buckets outside the deployment Region; the branch
+        # handlers sign each listed bucket's requests for its Region.
+        "bucketRegions": bucket_regions(event),
         "renderViews": common.as_int(config.get("renderViews"), DEFAULT_RENDER_VIEWS),
         "maxTextChars": common.as_int(config.get("maxTextChars"), DEFAULT_MAX_TEXT_CHARS),
         "includeSiblingFiles": common.as_bool(config.get("includeSiblingFiles"), True),
