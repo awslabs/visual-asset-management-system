@@ -143,3 +143,41 @@ describe("ComplianceSchemas row actions", () => {
         expect(screen.getByText("Sweep failed for that schema")).toBeInTheDocument();
     });
 });
+
+describe("ComplianceSchemas save errors", () => {
+    const scrollIntoView = jest.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        // jsdom does not implement scrolling.
+        Element.prototype.scrollIntoView = scrollIntoView;
+    });
+
+    afterEach(() => {
+        Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    it("brings the API's refusal into view and announces it", async () => {
+        const message =
+            "Invalid schema: rules[0]: checks.0: requiredPaths is invalid. Too many open-ended quantifiers (*, +, ?, {n,}) to evaluate safely; simplify the expression.";
+        service().fetchComplianceSchemas.mockResolvedValue([true, []]);
+        service().createComplianceSchema.mockResolvedValue([false, message]);
+
+        render(<ComplianceSchemas />);
+        await userEvent.click(await screen.findByRole("button", { name: "Create Schema" }));
+        const dialog = await screen.findByRole("dialog");
+        await userEvent.type(
+            within(dialog).getByPlaceholderText(/engineering-asset-standard/),
+            "s1"
+        );
+        expect(scrollIntoView).not.toHaveBeenCalled();
+        await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+
+        const alert = await within(dialog).findByRole("alert");
+        expect(alert).toHaveTextContent(message);
+        expect(service().createComplianceSchema).toHaveBeenCalledTimes(1);
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+        expect(scrollIntoView.mock.instances[scrollIntoView.mock.instances.length - 1]).toBe(alert);
+    });
+});

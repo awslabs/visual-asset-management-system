@@ -381,10 +381,20 @@ export default function ComplianceSchemas() {
     const [selectedTemplate, setSelectedTemplate] = useState(DEFAULT_TEMPLATE_OPTION);
     const [formError, setFormError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    const formErrorRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         loadSchemas();
     }, []);
+
+    // The error sits at the top of the modal. A save the API refuses (a pattern that does not compile
+    // or exceeds the backtracking budget) is usually made while the user is scrolled down at the rule,
+    // so bring the message into view.
+    useEffect(() => {
+        if (formError) {
+            formErrorRef.current?.scrollIntoView?.({ block: "nearest" });
+        }
+    }, [formError]);
 
     const loadSchemas = async () => {
         setLoading(true);
@@ -624,7 +634,11 @@ export default function ComplianceSchemas() {
                     }
                 >
                     <SpaceBetween size="m">
-                        {formError && <Box color="text-status-error">{formError}</Box>}
+                        {formError && (
+                            <div ref={formErrorRef} role="alert">
+                                <Box color="text-status-error">{formError}</Box>
+                            </div>
+                        )}
                         <FormField label="Schema Name">
                             <Input
                                 value={formName}
