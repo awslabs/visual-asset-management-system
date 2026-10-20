@@ -660,12 +660,15 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     exposes them as `inputBucketRegion` / `outputBucketRegion`, and `manifestHelper.s3_client_for_region()`
     builds the client that reads or writes there (adaptive retries, regional `us-east-1` endpoint, no
     `endpoint_url`). **A pipeline whose AWS Batch compute runs in the isolated subnets** (Potree viewer,
-    3D thumbnail, GenAI metadata labeling, coordinate transform) reaches Amazon S3 in the deployment
+    3D thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM) reaches Amazon S3 in the
+    deployment
     Region through the S3 gateway endpoint and in each cross-Region asset bucket's Region through the
     cross-Region S3 interface endpoint the VPC builder creates in those subnets
     (`app.useGlobalVpc.addCrossRegionS3Endpoints`), so its `vamsExecute` handler calls
-    `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file`, inside
-    the `try` that reports `SendTaskFailure`. The gate admits the deployment Region and the Regions in
+    `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file` (or, for
+    the multi-file Video SOP/BOM pipeline, right after the manifest resolves and before its own count and
+    HeadObject gates, so no head is sent to a Region the compute cannot reach), inside the `try` that
+    reports `SendTaskFailure`. The gate admits the deployment Region and the Regions in
     `CROSS_REGION_S3_ENDPOINT_REGIONS`, which the pipeline's lambda builder sets on the `vamsExecute`
     function from `Config.crossRegionS3EndpointRegions(config)` -- the same helper the VPC builder
     iterates to create the endpoints, so the two cannot drift -- and rejects any other Region with a

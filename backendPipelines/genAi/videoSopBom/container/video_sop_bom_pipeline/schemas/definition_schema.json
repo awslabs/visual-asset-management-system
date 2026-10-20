@@ -59,6 +59,11 @@
                 "results": { "type": "string", "pattern": "/results/$" }
             }
         },
+        "bucketRegions": {
+            "description": "Bucket name -> Region for the asset buckets this job reads and writes; a bucket absent from it is in the deployment Region. Optional: a definition from an older Lambda omits it.",
+            "type": "object",
+            "additionalProperties": { "type": "string", "minLength": 1 }
+        },
         "outputTarget": {
             "type": "object",
             "additionalProperties": false,

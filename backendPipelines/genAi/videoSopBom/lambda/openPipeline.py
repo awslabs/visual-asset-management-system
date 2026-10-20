@@ -225,6 +225,10 @@ def lambda_handler(event, context):
         "inputManifestS3Location": event.get('inputManifestS3Location', ''),
         "inputMetadataS3Location": event.get('inputMetadataS3Location', ''),
         "inputConfigurationS3Location": event.get('inputConfigurationS3Location', ''),
+        # Regions of the input and output asset buckets (empty = deployment Region); constructPipeline
+        # hands them to the container, which signs each bucket's requests for its Region.
+        "inputBucketRegion": event.get("inputBucketRegion", ""),
+        "outputBucketRegion": event.get("outputBucketRegion", ""),
         "externalSfnTaskToken": external_sfn_task_token,
         "orchestrationEventPrefix": orchestration_event_prefix,
     }

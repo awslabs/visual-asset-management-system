@@ -6,8 +6,9 @@ Lambda to execute the Video SOP/BOM Extraction pipeline from VAMS workflows.
 Note: Lambda function name must start with "vams" to allow invoke permissioning.
 
 Holds the workflow's task token before any other work, resolves the manifest, applies the input
-gates that need no download (container entries, count, extension, per-file and total bytes via one
-HeadObject per entry) and only then invokes openPipeline. Every refusal is one SendTaskFailure on
+gates that need no download (every input bucket in a Region the isolated-subnet compute reaches,
+container entries, count, extension, per-file and total bytes via one HeadObject per entry signed
+for its bucket's Region) and only then invokes openPipeline. Every refusal is one SendTaskFailure on
 the external token with a short code in `error` and one readable sentence in `cause`.
 """
 import os
@@ -90,6 +91,17 @@ def head_object_kwargs(entry):
     return kwargs
 
 
+def _s3_for_input(entry):
+    """The S3 client that reads one manifest input: the module client for a bucket in the deployment
+    Region, a client for the bucket's own Region otherwise. A bucket in another Region answers only
+    requests signed for it, and the Region gate admits one the VPC reaches through a cross-Region
+    endpoint, so its HeadObject must be signed the same way the container's reads will be."""
+    region = manifestHelper.input_file_region(entry)
+    if not region or region == (os.environ.get("AWS_REGION") or ""):
+        return s3_client
+    return manifestHelper.s3_client_for_region(region)
+
+
 def enforce_input_gates(input_files):
     """The gates that need no download, in the order that costs nothing until HeadObject:
     container entries, count, extension, then one HeadObject per entry for the per-file and total
@@ -125,7 +137,7 @@ def enforce_input_gates(input_files):
     total = 0
     for entry in input_files:
         try:
-            size = int(s3_client.head_object(**head_object_kwargs(entry))["ContentLength"])
+            size = int(_s3_for_input(entry).head_object(**head_object_kwargs(entry))["ContentLength"])
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code", "ClientError")
             raise PipelineRejection(
@@ -164,6 +176,11 @@ def execute_pipeline(resolved, input_files, manifest_s3_location, external_task_
         "inputManifestS3Location": manifest_s3_location,
         "inputMetadataS3Location": resolved['inputMetadataS3Location'],
         "inputConfigurationS3Location": resolved['inputConfigurationS3Location'],
+        # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+        # is in the deployment Region), so the Batch container signs its requests for each bucket
+        # with a client for that bucket's Region.
+        "inputBucketRegion": resolved['inputBucketRegion'],
+        "outputBucketRegion": resolved['outputBucketRegion'],
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
@@ -245,6 +262,11 @@ def lambda_handler(event, context):
         # cannot be read raises here, after the token capture, so it reaches the abort below.
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
         input_files = list(resolved.get("inputFiles") or [])
+        # This pipeline's AWS Batch compute runs in the VPC's isolated subnets, which reach Amazon S3 in
+        # the deployment Region and in the Regions served by the VPC's cross-Region S3 endpoints
+        # (CROSS_REGION_S3_ENDPOINT_REGIONS); an input anywhere else is rejected before the first
+        # HeadObject, which would otherwise be the request that fails.
+        manifestHelper.enforce_inputs_in_region(resolved)
         total_bytes = enforce_input_gates(input_files)
         logger.info(f"Input gates passed: {len(input_files)} video files, {total_bytes} bytes "
                     f"(manifestUsed={resolved['manifestUsed']})")

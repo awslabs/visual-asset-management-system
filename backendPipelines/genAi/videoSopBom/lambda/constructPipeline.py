@@ -124,6 +124,27 @@ def lambda_handler(event, context):
         raise
 
 
+def bucket_regions(manifest, event, input_files):
+    """Bucket name -> Region for the asset buckets this job reads and writes, left out for a bucket in
+    the deployment Region (an empty Region). The container signs each registered bucket's requests
+    with a client for that Region; the auxiliary bucket is never registered. Each input file carries
+    its own bucket's Region in the manifest (the inputs may span buckets); the output bucket's Region
+    is on the manifest's outputs, with the Regions the vamsExecute Lambda forwarded on the event as
+    the fallback for a manifest written without them."""
+    regions = {}
+    for entry in input_files:
+        bucket = entry.get("bucket") or ""
+        region = manifestHelper.input_file_region(entry) or (event.get("inputBucketRegion") or "")
+        if bucket and region:
+            regions[bucket] = region
+    outputs = manifest.get("outputs") or {}
+    output_bucket = outputs.get("bucket") or ""
+    output_region = outputs.get("bucketRegion") or event.get("outputBucketRegion") or ""
+    if output_bucket and output_region:
+        regions[output_bucket] = output_region
+    return regions
+
+
 def build_execution_params(event):
     """The state machine payload for the Batch container job."""
 
@@ -191,6 +212,7 @@ def build_execution_params(event):
             "metadata": outputs.get("metadata", ""),
             "results": outputs.get("results", ""),
         },
+        "bucketRegions": bucket_regions(manifest, event, input_files),
         "outputTarget": {
             "assetId": output_target.get("assetId", ""),
             "databaseId": output_target.get("databaseId", ""),

@@ -182,7 +182,7 @@ def _run_stages(ctx):
             kwargs = {"Bucket": entry["bucket"], "Key": entry["key"]}
             if _version(entry):
                 kwargs["VersionId"] = entry["versionId"]
-            total_bytes += int(clients.s3.head_object(**kwargs)["ContentLength"])
+            total_bytes += int(clients.s3_for_bucket(entry["bucket"]).head_object(**kwargs)["ContentLength"])
         check_disk_budget(ctx.work_dir, total_bytes)
 
     with ctx.stage(2, "download"):
@@ -193,7 +193,7 @@ def _run_stages(ctx):
         for entry in inputs:
             dst = os.path.join(input_dir, f"{entry['index']}_{entry['name']}")
             extra = {"VersionId": entry["versionId"]} if _version(entry) else None
-            clients.s3.download_file(entry["bucket"], entry["key"], dst, ExtraArgs=extra)
+            clients.s3_for_bucket(entry["bucket"]).download_file(entry["bucket"], entry["key"], dst, ExtraArgs=extra)
             size = os.path.getsize(dst)
             if size > per_file_cap:
                 raise PipelineRejection(INPUT_REJECTED, f"{entry['name']} is {_gb(size)} GB; this deployment allows at most {_gb(per_file_cap)} GB per video.")
@@ -405,6 +405,8 @@ def run(definition, media, clients, *, work_dir=None, state=None, sleep=time.sle
     released, so the cause sentence and the container log are the diagnostics that outlive a run."""
     state = state if state is not None else RunState()
     state.clients = clients
+    # Sign each asset bucket's requests for its own Region before the first S3 call (see clients.py).
+    clients.register_bucket_regions(definition.get("bucketRegions") or {})
     if work_dir is None:
         work_dir = tempfile.mkdtemp(prefix="videosopbom-", dir=SCRATCH_DIR if os.path.isdir(SCRATCH_DIR) else None)
     os.makedirs(work_dir, exist_ok=True)

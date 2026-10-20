@@ -54,9 +54,10 @@ def upload_outputs(clients, definition, work_dir):
         plan.append((summary_path, outputs["results"] + SUMMARY_FILE, False))
 
     report = UploadReport(summary_key=outputs["results"] + SUMMARY_FILE)
+    s3 = clients.s3_for_bucket(bucket)
     for path, key, is_deliverable in plan:
         try:
-            clients.s3.upload_file(path, bucket, key)
+            s3.upload_file(path, bucket, key)
         except (ClientError, BotoCoreError, OSError) as exc:
             logger.error("upload failed file=%s error=%s", os.path.basename(path), type(exc).__name__)
             report.failed.append(os.path.basename(path))

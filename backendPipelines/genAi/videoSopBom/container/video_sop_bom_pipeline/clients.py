@@ -3,7 +3,7 @@
 
 """The AWS clients the container uses, built once and handed to `run()` so tests can substitute fakes."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import boto3
 from botocore.config import Config
@@ -37,6 +37,38 @@ class Clients:
     preflight_transcribe: object
     preflight_bedrock: object
     sfn_signal: object
+    # Bucket name -> Region for the asset buckets this job reads and writes (the definition's
+    # `bucketRegions`, built by constructPipeline from the manifest); a bucket absent from it is in the
+    # deployment Region and uses `s3`. Filled by register_bucket_regions, read by s3_for_bucket.
+    bucket_regions: dict = field(default_factory=dict)
+    s3_by_region: dict = field(default_factory=dict)
+
+    def register_bucket_regions(self, bucket_regions):
+        """Record the Region of each named bucket; empty names or Regions are ignored."""
+        for bucket_name, region in (bucket_regions or {}).items():
+            if bucket_name and region:
+                self.bucket_regions[bucket_name] = region
+
+    def s3_for_bucket(self, bucket_name):
+        """The S3 client that addresses one bucket: a client for its registered Region, built once per
+        Region, or `s3` for a bucket in the deployment Region (the auxiliary bucket, an unregistered
+        name, a definition from an older Lambda). A bucket in another Region answers only requests
+        signed for it."""
+        region = self.bucket_regions.get(bucket_name)
+        default_region = getattr(getattr(self.s3, "meta", None), "region_name", None)
+        if not region or region == default_region:
+            return self.s3
+        regional = self.s3_by_region.get(region)
+        if regional is None:
+            regional = boto3.client("s3", region_name=region, config=regional_s3_config)
+            self.s3_by_region[region] = regional
+        return regional
+
+
+# Per-Region clients keep the adaptive retry mode and address the regional us-east-1 endpoint, which
+# an interface endpoint's private DNS covers where the global s3.amazonaws.com name is not.
+regional_s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                            s3={'us_east_1_regional_endpoint': 'regional'})
 
 
 def build_clients(region):

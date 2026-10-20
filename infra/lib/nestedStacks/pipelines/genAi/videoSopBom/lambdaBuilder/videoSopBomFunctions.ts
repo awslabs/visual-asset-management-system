@@ -327,6 +327,9 @@ export function buildVamsExecuteVideoSopBomFunction(
             VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB: String(
                 Config.VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB
             ),
+            // The Regions the isolated-subnet Batch compute reaches Amazon S3 in through a
+            // cross-Region interface endpoint; an input in any other Region is rejected at launch.
+            CROSS_REGION_S3_ENDPOINT_REGIONS: Config.crossRegionS3EndpointRegions(config).join(","),
         },
     });
 

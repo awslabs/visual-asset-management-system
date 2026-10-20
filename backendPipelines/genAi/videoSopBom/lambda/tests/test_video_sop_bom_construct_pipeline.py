@@ -309,8 +309,8 @@ class TestDefinitionDocument:
         _, definition = _written_definition(s3)
         assert set(definition) == {
             "schemaVersion", "batchJobName", "pipelineExecutionId", "executionId", "assetId",
-            "databaseId", "assetName", "inputFiles", "outputs", "outputTarget", "auxBucket",
-            "auxTempPrefix", "kmsKeyArn", "bedrockModelId", "limits", "config"}
+            "databaseId", "assetName", "inputFiles", "outputs", "bucketRegions", "outputTarget",
+            "auxBucket", "auxTempPrefix", "kmsKeyArn", "bedrockModelId", "limits", "config"}
         assert definition["schemaVersion"] == 1
         assert definition["batchJobName"] == _JOB_NAME
         assert definition["pipelineExecutionId"] == "P1" and definition["executionId"] == "E1"
