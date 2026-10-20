@@ -21,7 +21,8 @@ from unittest.mock import patch
 import pytest
 
 from system_genai_media_fixtures import (
-    SYDNEY_GPS, FakeS3, csv_bytes, geojson_point_dict, jpeg_with_exif_bytes, minimal_pdf_bytes, png_bytes,
+    SYDNEY_GPS, FakeS3, csv_bytes, geojson_point_dict, geopackage_bytes, jpeg_with_exif_bytes, minimal_pdf_bytes,
+    png_bytes,
     tileset_dict,
 )
 
@@ -522,6 +523,56 @@ class TestHelpers:
         assert module.select_extractor("data", ".xlsx") == (module.office.extract_xlsx, "data")
         assert module.select_extractor(None, ".XLSX") == (module.office.extract_xlsx, "data")
         assert module.select_extractor(None, ".docx") == (module.office.extract_docx, "document")
+
+    def test_select_extractor_routes_the_gis_formats(self):
+        # The extension routes a GIS container to its own extractor whatever class the state carries; absent a
+        # class, both are data, so the catalog promotes sys_geo.footprint to `location` as it does for GeoJSON.
+        module = _load(FakeS3())
+        assert module.select_extractor("data", ".gpkg") == (module.gis.extract_gis, "data")
+        assert module.select_extractor(None, ".GPKG") == (module.gis.extract_gis, "data")
+        assert module.select_extractor("data", ".lyrx") == (module.gis.extract_gis, "data")
+        assert module.select_extractor(None, ".lyrx") == (module.gis.extract_gis, "data")
+
+    def test_a_geopackage_writes_sys_geo_through_the_handler(self, s3):
+        s3.objects[(_ASSETS, "a1/sites.gpkg")] = geopackage_bytes()
+        module = _load(s3)
+        response = module.lambda_handler(_event("sites.gpkg", "data", "application/geopackage+sqlite3"), None)
+        manifest = s3.manifest(_AUX, _MANIFEST_KEY)
+        assert response["fileClass"] == "data" and manifest["fileClass"] == "data"
+        geo = manifest["attributes"]["sys_geo"]
+        assert geo["format"] == "GeoPackage" and geo["layers"][0]["name"] == "sites" and geo["crs"] == "EPSG:4326"
+        assert geo["footprint"]["type"] == "Polygon" and "sys_file" in manifest["attributes"]
+        assert manifest["renderImages"] == [] and s3.downloads == [(_ASSETS, "a1/sites.gpkg", "v1")]
+
+    def test_an_input_over_the_download_bound_is_not_fetched(self, s3):
+        """A file the ephemeral storage cannot hold is decided from the state's fileSize: nothing is downloaded, the
+        pre-written sys_file attributes stand under the state's class, no render is produced, the warning names the
+        size and the bound, and the full-text skip is recorded for a content-embedded class."""
+        s3.objects[(_ASSETS, "a1/survey.gpkg")] = geopackage_bytes()
+        module = _load(s3)
+        size = module.INPUT_MAX_DOWNLOAD_BYTES + 1
+        event = _text_event("survey.gpkg", "data", "application/geopackage+sqlite3", fileSize=size)
+        response = module.lambda_handler(event, None)
+        assert s3.downloads == []
+        manifest = s3.manifest(_AUX, _MANIFEST_KEY)
+        assert manifest["fileClass"] == "data" and response["fileClass"] == "data"
+        assert set(manifest["attributes"]) == {"sys_file"} and manifest["renderImages"] == []
+        assert manifest["renderSkipped"] == "size" and response["renderSkipped"] == "size"
+        assert manifest["warnings"][0] == "pre-existing"
+        assert any("survey.gpkg" in warning and str(size) in warning and str(module.INPUT_MAX_DOWNLOAD_BYTES) in warning
+                   and "not downloaded" in warning for warning in manifest["warnings"])
+        assert manifest["fullTextSkipped"] == "size" and manifest["fullTextChars"] == 0
+        assert _puts_under(s3, _PREFIX + "text/") == [] and _puts_under(s3, _PREFIX + "renders/") == []
+        assert response["assetId"] == "a1" and response["renderImageCount"] == 0
+
+    def test_an_input_at_the_download_bound_is_fetched(self, s3):
+        s3.objects[(_ASSETS, "a1/sites.gpkg")] = geopackage_bytes()
+        module = _load(s3)
+        event = _event("sites.gpkg", "data", "application/geopackage+sqlite3")
+        event["fileSize"] = module.INPUT_MAX_DOWNLOAD_BYTES
+        module.lambda_handler(event, None)
+        assert s3.downloads == [(_ASSETS, "a1/sites.gpkg", "v1")]
+        assert "sys_geo" in s3.manifest(_AUX, _MANIFEST_KEY)["attributes"]
 
     def test_select_extractor_routes_every_media_class(self):
         module = _load(FakeS3())

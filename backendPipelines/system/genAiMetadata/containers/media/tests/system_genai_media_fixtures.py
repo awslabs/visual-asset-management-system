@@ -533,3 +533,108 @@ class FakeEvents:
         return {"FailedEntryCount": failed,
                 "Entries": [{"ErrorCode": "InternalFailure", "ErrorMessage": "x"} if index < failed else {}
                             for index in range(len(Entries))]}
+
+
+# --- GIS containers ---------------------------------------------------------------------------------------------
+
+
+def geopackage_bytes(layers=None):
+    """A GeoPackage written through sqlite3: `gpkg_spatial_ref_sys` with EPSG:4326 and EPSG:3857, `gpkg_contents`,
+    `gpkg_geometry_columns`, and one table per layer carrying `fid`, a `geom` blob and two attribute columns, with
+    `rows` rows each. `layers` is a list of dicts with name, geometry (a GeoPackage geometry type word), srs_id,
+    extent (min_x, min_y, max_x, max_y) and rows; the default is one Sydney points layer in EPSG:4326."""
+    import sqlite3
+    import tempfile
+
+    if layers is None:
+        layers = [{"name": "sites", "geometry": "POINT", "srs_id": 4326, "extent": (151.1, -33.9, 151.3, -33.8), "rows": 3}]
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "fixture.gpkg")
+        connection = sqlite3.connect(path)
+        connection.executescript(
+            "PRAGMA application_id = 0x47504B47;"
+            "CREATE TABLE gpkg_spatial_ref_sys (srs_name TEXT NOT NULL, srs_id INTEGER PRIMARY KEY, organization TEXT"
+            " NOT NULL, organization_coordsys_id INTEGER NOT NULL, definition TEXT NOT NULL, description TEXT);"
+            "INSERT INTO gpkg_spatial_ref_sys VALUES ('WGS 84', 4326, 'EPSG', 4326, 'GEOGCS[\"WGS 84\"]', NULL);"
+            "INSERT INTO gpkg_spatial_ref_sys VALUES ('Web Mercator', 3857, 'EPSG', 3857, 'PROJCS[\"WGS 84 / "
+            "Pseudo-Mercator\"]', NULL);"
+            "INSERT INTO gpkg_spatial_ref_sys VALUES ('Undefined cartesian SRS', -1, 'NONE', -1, 'undefined', NULL);"
+            "INSERT INTO gpkg_spatial_ref_sys VALUES ('Undefined geographic SRS', 0, 'NONE', 0, 'undefined', NULL);"
+            "CREATE TABLE gpkg_contents (table_name TEXT NOT NULL PRIMARY KEY, data_type TEXT NOT NULL, identifier TEXT"
+            " UNIQUE, description TEXT DEFAULT '', last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ',"
+            " 'now')), min_x DOUBLE, min_y DOUBLE, max_x DOUBLE, max_y DOUBLE, srs_id INTEGER);"
+            "CREATE TABLE gpkg_geometry_columns (table_name TEXT NOT NULL, column_name TEXT NOT NULL, geometry_type_name"
+            " TEXT NOT NULL, srs_id INTEGER NOT NULL, z TINYINT NOT NULL, m TINYINT NOT NULL);")
+        for layer in layers:
+            name = layer["name"]
+            min_x, min_y, max_x, max_y = layer["extent"]
+            connection.execute(
+                "INSERT INTO gpkg_contents (table_name, data_type, identifier, description, min_x, min_y, max_x, max_y,"
+                " srs_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (name, layer.get("data_type", "features"), layer.get("identifier", name),
+                 layer.get("description", ""), min_x, min_y, max_x, max_y, layer["srs_id"]))
+            if layer.get("data_type", "features") == "features":
+                connection.execute(
+                    "INSERT INTO gpkg_geometry_columns VALUES (?, 'geom', ?, ?, 0, 0)",
+                    (name, layer["geometry"], layer["srs_id"]))
+                connection.execute(
+                    f'CREATE TABLE "{name}" (fid INTEGER PRIMARY KEY AUTOINCREMENT, geom BLOB, name TEXT, height REAL)')
+                # A GeoPackage geometry blob: the `GP` magic, version, flags, srs_id, then WKB. Real enough to
+                # weigh something; the extractor must never read it.
+                blob = b"GP\x00\x01" + int(layer["srs_id"]).to_bytes(4, "little", signed=True) + b"\x01" * 64
+                connection.executemany(
+                    f'INSERT INTO "{name}" (geom, name, height) VALUES (?, ?, ?)',
+                    [(blob, f"site {index}", 10.0 + index) for index in range(layer.get("rows", 3))])
+            else:
+                connection.execute(f'CREATE TABLE "{name}" (fid INTEGER PRIMARY KEY, label TEXT)')
+                connection.executemany(f'INSERT INTO "{name}" (label) VALUES (?)',
+                                       [(f"row {index}",) for index in range(layer.get("rows", 3))])
+        connection.commit()
+        connection.close()
+        with open(path, "rb") as handle:
+            return handle.read()
+
+
+def lyrx_dict(name="Parcels", dataset="Parcels", workspace="DATABASE=C:\\\\data\\\\city.gdb",
+              workspace_factory="FileGDB", extent=None):
+    """A CIM layer document as ArcGIS Pro writes it, trimmed to the parts the extractor reads: one feature layer
+    with a data connection, three visible fields and a simple renderer. `extent`, when given, is
+    (xmin, ymin, xmax, ymax, wkid) and is written as the layer's `extent` with its spatial reference."""
+    definition = {
+        "type": "CIMFeatureLayer",
+        "name": name,
+        "uRI": f"CIMPATH=map/{name.lower()}.xml",
+        "visibility": True,
+        "featureTable": {
+            "type": "CIMFeatureTable",
+            "displayField": "APN",
+            "fieldDescriptions": [
+                {"type": "CIMFieldDescription", "fieldName": "OBJECTID", "visible": True},
+                {"type": "CIMFieldDescription", "fieldName": "APN", "visible": True},
+                {"type": "CIMFieldDescription", "fieldName": "ZONING", "visible": True},
+            ],
+            "dataConnection": {
+                "type": "CIMStandardDataConnection",
+                "workspaceConnectionString": workspace,
+                "workspaceFactory": workspace_factory,
+                "dataset": dataset,
+                "datasetType": "esriDTFeatureClass",
+            },
+        },
+        "renderer": {"type": "CIMSimpleRenderer", "symbol": {"type": "CIMSymbolReference"}},
+    }
+    if extent is not None:
+        xmin, ymin, xmax, ymax, wkid = extent
+        definition["extent"] = {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
+                                "spatialReference": {"wkid": wkid, "latestWkid": wkid}}
+    return {
+        "type": "CIMLayerDocument",
+        "version": "3.3.0",
+        "build": 52636,
+        "layers": [definition["uRI"]],
+        "layerDefinitions": [definition],
+        "binaryReferences": [],
+        "elevationSurfaces": [],
+        "rGBColorProfile": "sRGB IEC61966-2.1",
+        "cMYKColorProfile": "U.S. Web Coated (SWOP) v2",
+    }

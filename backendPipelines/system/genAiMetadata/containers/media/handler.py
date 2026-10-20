@@ -19,7 +19,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
 
-from media_extractors import audio, data, documents, generic, images, office, svg, text, video
+from media_extractors import audio, data, documents, generic, gis, images, office, svg, text, video
 from media_extractors.common import (
     CLASS_AUDIO,
     CLASS_DATA,
@@ -30,7 +30,9 @@ from media_extractors.common import (
     CLASS_TILES3D,
     CLASS_VIDEO,
     DEFAULT_MAX_TEXT_CHARS,
+    INPUT_MAX_DOWNLOAD_BYTES,
     RENDER_BRANCH,
+    RENDER_SKIPPED_SIZE,
     BranchResult,
     ExtractContext,
     class_for_extension,
@@ -85,6 +87,11 @@ _OFFICE_EXTRACTORS: Dict[str, Tuple[Callable[[str, ExtractContext], BranchResult
     ".docx": (office.extract_docx, CLASS_DOCUMENT),
     ".pptx": (office.extract_pptx, CLASS_DOCUMENT),
     ".xlsx": (office.extract_xlsx, CLASS_DATA),
+}
+# GIS containers read without GDAL: the extension routes them the same way, both under the data class.
+_GIS_EXTRACTORS: Dict[str, Tuple[Callable[[str, ExtractContext], BranchResult], str]] = {
+    ".gpkg": (gis.extract_gis, CLASS_DATA),
+    ".lyrx": (gis.extract_gis, CLASS_DATA),
 }
 
 
@@ -168,7 +175,8 @@ def load_max_text_chars(config_location: Optional[str]) -> Tuple[int, List[str]]
 
 def select_extractor(file_class: Optional[str], extension: str) -> Tuple[Callable, str]:
     """The extractor for the class constructPipeline chose; the extension decides when the class is absent. An
-    office extension routes to its own extractor whatever the class says. A `.json` always takes the text path,
+    office or GIS extension routes to its own extractor whatever the class says. A `.json` always takes the text
+    path,
     which re-sniffs the parsed root and reclassifies to `tiles3d` or `data` (GeoJSON) itself, so a GeoJSON file
     the classifier already called `data` is never read as CSV. A class the table does not name, or no class at
     all for an extension no table names, is `other`: the generic extractor probes the bytes."""
@@ -176,6 +184,9 @@ def select_extractor(file_class: Optional[str], extension: str) -> Tuple[Callabl
     if ext in _OFFICE_EXTRACTORS:
         extractor, office_class = _OFFICE_EXTRACTORS[ext]
         return extractor, (file_class or office_class)
+    if ext in _GIS_EXTRACTORS:
+        extractor, gis_class = _GIS_EXTRACTORS[ext]
+        return extractor, (file_class or gis_class)
     resolved = file_class or class_for_extension(ext) or CLASS_OTHER
     if resolved == CLASS_IMAGE:
         return (svg.extract_svg if ext == ".svg" else images.extract_image), resolved
@@ -267,6 +278,19 @@ def upload_full_text(result: BranchResult, aux_bucket: str, aux_prefix: str) -> 
     }
 
 
+def oversized_input_result(file_class: str, file_name: str, file_size: int) -> BranchResult:
+    """The result for an input the image does not download: the state's class and the pre-written `sys_file`
+    attributes stand, no render is produced, and a warning names the size and the bound. The MEDIA image reads a
+    file from its ephemeral storage, so a file over INPUT_MAX_DOWNLOAD_BYTES would fail the download rather than
+    the extractor, and geospatial containers in particular reach that size."""
+    return BranchResult(
+        file_class=file_class,
+        render_skipped=RENDER_SKIPPED_SIZE,
+        warnings=[f"{file_name}: {file_size} bytes exceeds the {INPUT_MAX_DOWNLOAD_BYTES}-byte input bound; the file "
+                  "was not downloaded and sys_file attributes alone describe it"],
+    )
+
+
 def skip_full_text_for_size(manifest: dict, file_size: int) -> None:
     """Records in the manifest that no full text was captured because the file exceeds
     CONTENT_EMBED_MAX_FILE_BYTES: the skip reason, a zero character count, no text locations, and a warning naming
@@ -333,18 +357,25 @@ def lambda_handler(event, context):
     work_dir = tempfile.mkdtemp(prefix="media-")
     segment_state: Dict[str, Any] = {}
     try:
-        local_path = download_input(bucket, key, version_id, work_dir, file_name)
-        ctx = ExtractContext(
-            file_name=file_name,
-            extension=extension,
-            content_type=payload.get("contentType") or mimetypes.guess_type(file_name)[0] or _DEFAULT_CONTENT_TYPE,
-            max_text_chars=max_text_chars,
-            work_dir=work_dir,
-            extract_geo_location=extract_geo_location,
-            capture_full_text=capture_full_text,
-            render_images=render_images,
-        )
-        result = extractor(local_path, ctx)
+        if file_size > INPUT_MAX_DOWNLOAD_BYTES:
+            # Decided from the state's fileSize before any byte is fetched: the file would not fit beside the
+            # image's other temporary files, so the pre-written sys_file attributes describe it.
+            result = oversized_input_result(file_class, file_name, file_size)
+            logger.info({"message": "MEDIA extract skipped: input over the download bound", "fileClass": file_class,
+                         "fileSize": file_size, "inputMaxDownloadBytes": INPUT_MAX_DOWNLOAD_BYTES})
+        else:
+            local_path = download_input(bucket, key, version_id, work_dir, file_name)
+            ctx = ExtractContext(
+                file_name=file_name,
+                extension=extension,
+                content_type=payload.get("contentType") or mimetypes.guess_type(file_name)[0] or _DEFAULT_CONTENT_TYPE,
+                max_text_chars=max_text_chars,
+                work_dir=work_dir,
+                extract_geo_location=extract_geo_location,
+                capture_full_text=capture_full_text,
+                render_images=render_images,
+            )
+            result = extractor(local_path, ctx)
         result.warnings = config_warnings + list(result.warnings)
         render_keys = upload_renders(result.render_images, aux_bucket, aux_prefix)
         manifest = merge_manifest(existing, result, render_keys)

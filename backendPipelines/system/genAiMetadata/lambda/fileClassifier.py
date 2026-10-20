@@ -81,9 +81,11 @@ RENDER_BRANCHES = (BRANCH_BLENDER, BRANCH_RENDER3D, BRANCH_MEDIA, BRANCH_FARGATE
 EXCLUDED_EXTENSIONS: Set[str] = set()
 
 # Formats no viewer renders, admitted for their extracted content: the office formats for their text
-# (document, data and document on the MEDIA branch, never rasterised) and the video containers ffmpeg
-# decodes but no browser plays (keyframes and stream facts on the MEDIA branch).
-ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv")
+# (document, data and document on the MEDIA branch, never rasterised), the video containers ffmpeg
+# decodes but no browser plays (keyframes and stream facts on the MEDIA branch), and the GIS containers an
+# open reader in the standard library serves (a GeoPackage's layers and extents, an ArcGIS Pro layer
+# file's layer and data source; both data on the MEDIA branch).
+ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx")
 
 # Leading bytes the two sniffed formats are decided from. A PLY header and a tileset root fit in
 # this window; a .json whose root does not fit is text as far as this pipeline is concerned.
@@ -100,8 +102,8 @@ PROPRIETARY_CAD_EXTENSIONS = (".asm", ".catpart", ".catproduct", ".iam", ".ipt",
 ALLOW_LIST: List[str] = [
     ".3dm", ".3ds", ".3mf", ".aac", ".amf", ".asm", ".avi", ".bim", ".brep", ".catpart",
     ".catproduct", ".cfg", ".csv", ".dae", ".docx", ".e57", ".fbx", ".fcs", ".flac", ".flv", ".gif",
-    ".glb", ".gltf", ".htm", ".html", ".iam", ".ifc", ".ifczip", ".iges", ".igs", ".inf", ".ini",
-    ".ipt", ".ipynb", ".jpeg", ".jpg", ".js", ".json", ".jt", ".las", ".laz", ".lcc", ".log", ".m4a",
+    ".glb", ".gltf", ".gpkg", ".htm", ".html", ".iam", ".ifc", ".ifczip", ".iges", ".igs", ".inf", ".ini",
+    ".ipt", ".ipynb", ".jpeg", ".jpg", ".js", ".json", ".jt", ".las", ".laz", ".lcc", ".log", ".lyrx", ".m4a",
     ".m4v", ".md", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pdf", ".ply",
     ".png", ".pptx", ".prt", ".ps1", ".py", ".sh", ".sldasm", ".sldprt", ".sog", ".splat", ".spz",
     ".sql", ".step", ".stl", ".stp", ".svg", ".toml", ".ts", ".txt", ".usd", ".usda", ".usdc", ".usdz",
@@ -124,6 +126,10 @@ for _extension in (".txt", ".md", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cf
                    ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".ipynb", ".html", ".htm"):
     EXTENSION_CLASSES[_extension] = (CLASS_TEXT, BRANCH_MEDIA)
 for _extension in (".csv", ".fcs", ".xlsx"):
+    EXTENSION_CLASSES[_extension] = (CLASS_DATA, BRANCH_MEDIA)
+# GIS containers an open reader in the standard library serves: a GeoPackage is an SQLite database, an
+# ArcGIS Pro layer file a CIM JSON document. Both carry the data class so sys_geo.footprint promotes to `location`.
+for _extension in (".gpkg", ".lyrx"):
     EXTENSION_CLASSES[_extension] = (CLASS_DATA, BRANCH_MEDIA)
 for _extension in (".glb", ".gltf", ".fbx", ".obj", ".dae", ".stl"):
     EXTENSION_CLASSES[_extension] = (CLASS_MESH, BRANCH_BLENDER)

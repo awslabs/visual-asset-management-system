@@ -29,7 +29,8 @@ MEDIA_CLASSES = (CLASS_IMAGE, CLASS_VIDEO, CLASS_AUDIO, CLASS_DOCUMENT, CLASS_TE
 
 # Extension -> fileClass, lower-case with the leading dot. `.svg` is `image` but takes the vector path;
 # `.json` enters as `text` and is reclassified from its parsed root: `asset` + `geometricError` -> `tiles3d`,
-# a GeoJSON root -> `data`. The office formats (.docx .pptx .xlsx) are admitted by the pipeline's
+# a GeoJSON root -> `data`. The office formats (.docx .pptx .xlsx) and the GIS containers (.gpkg GeoPackage,
+# .lyrx ArcGIS Pro layer file; both `data`, read by `gis.py` without GDAL) are admitted by the pipeline's
 # ADDITIONAL_EXTENSIONS although no viewer renders them. Outside CLASSIFIER_OVERRIDE_EXTENSIONS this table
 # equals the MEDIA rows of the pipeline's `lambda/fileClassifier.py` EXTENSION_CLASSES; that suite diffs the two.
 MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
@@ -44,7 +45,7 @@ MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
     ".yml": CLASS_TEXT, ".toml": CLASS_TEXT, ".ini": CLASS_TEXT, ".cfg": CLASS_TEXT, ".inf": CLASS_TEXT,
     ".log": CLASS_TEXT, ".py": CLASS_TEXT, ".js": CLASS_TEXT, ".ts": CLASS_TEXT, ".sql": CLASS_TEXT,
     ".sh": CLASS_TEXT, ".ps1": CLASS_TEXT, ".ipynb": CLASS_TEXT, ".html": CLASS_TEXT, ".htm": CLASS_TEXT,
-    ".csv": CLASS_DATA, ".fcs": CLASS_DATA, ".xlsx": CLASS_DATA,
+    ".csv": CLASS_DATA, ".fcs": CLASS_DATA, ".xlsx": CLASS_DATA, ".gpkg": CLASS_DATA, ".lyrx": CLASS_DATA,
 }
 
 # Entries the pipeline's classifier treats differently from this table, each with its reason: `.webp` is a
@@ -104,6 +105,11 @@ DATA_MAX_COLUMNS = 200
 DATA_CELL_MAX_CHARS = 200
 DATA_MAX_ROWS_COUNTED = 2_000_000
 DATA_SNIFF_BYTES = 64 * 1024
+# The largest input the MEDIA image downloads to its ephemeral storage (4096 MiB, shared with the renders, the
+# captured text and the SQLite page cache). A larger file keeps the pre-written `sys_file` attributes and is not
+# fetched; the handler records why.
+INPUT_MAX_DOWNLOAD_BYTES = 3_500 * 1024 * 1024
+
 
 RENDER_SKIPPED_SIZE = "size"
 RENDER_SKIPPED_UNSUPPORTED = "unsupported"

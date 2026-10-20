@@ -414,9 +414,10 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
         }
         expect(matrix).toContain("`sys_geo`");
         // The formats the classifier admits for their extracted content (office text, the non-browser
-        // video containers) are marked on the matrix, and the matrix says the input filter is any file.
+        // video containers, the GIS containers read without GDAL) are marked on the matrix, and the matrix
+        // says the input filter is any file.
         expect(classifier).toMatch(
-            /ADDITIONAL_EXTENSIONS\s*=\s*\(\s*"\.docx",\s*"\.xlsx",\s*"\.pptx",\s*"\.avi",\s*"\.flv",\s*"\.wmv"\s*\)/
+            /ADDITIONAL_EXTENSIONS\s*=\s*\(\s*"\.docx",\s*"\.xlsx",\s*"\.pptx",\s*"\.avi",\s*"\.flv",\s*"\.wmv",\s*"\.gpkg",\s*"\.lyrx"\s*\)/
         );
         for (const s of [
             "‡",
@@ -424,6 +425,9 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
             "`.pptx`",
             "`.xlsx`",
             "`.avi .flv .wmv` ‡",
+            "`.gpkg` (GeoPackage)",
+            "`.lyrx` (ArcGIS Pro layer file)",
+            "without GDAL or any Esri software",
             "`ADDITIONAL_EXTENSIONS`",
             "`*.previewFile.*`",
             "generic probe",

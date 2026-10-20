@@ -95,17 +95,19 @@ class TestAllowList:
         assert fc.EXCLUDED_EXTENSIONS == set()
 
     def test_additional_extensions_are_the_formats_no_viewer_serves(self):
-        """The office formats join the allow list for their text and the ffmpeg-decodable video containers for
-        their stream facts, although no viewer renders them. The tuple is the registry literal, none of its
-        members is a viewer extension, every member is allow-listed, and their classes are document, data,
-        document, then video, all on the MEDIA branch."""
-        assert fc.ADDITIONAL_EXTENSIONS == (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv")
+        """The office formats join the allow list for their text, the ffmpeg-decodable video containers for
+        their stream facts, and the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and
+        extents, although no viewer renders them. The tuple is the registry literal, none of its members is a
+        viewer extension, every member is allow-listed, and their classes are document, data, document, video
+        three times, then data twice, all on the MEDIA branch."""
+        assert fc.ADDITIONAL_EXTENSIONS == (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx")
         assert not set(fc.ADDITIONAL_EXTENSIONS) & catalog_extensions()
         assert set(fc.ADDITIONAL_EXTENSIONS) <= set(fc.ALLOW_LIST)
         assert [fc.EXTENSION_CLASSES[extension] for extension in fc.ADDITIONAL_EXTENSIONS] == [
             (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA),
             (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA),
-            (fc.CLASS_VIDEO, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA)]
+            (fc.CLASS_VIDEO, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA),
+            (fc.CLASS_DATA, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA)]
 
     def test_allow_list_is_sorted_finite_and_dotted(self):
         assert fc.ALLOW_LIST == sorted(fc.ALLOW_LIST)
