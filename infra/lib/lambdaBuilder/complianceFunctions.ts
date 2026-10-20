@@ -57,14 +57,17 @@ function grantPublishToAssetTopics(fun: lambda.Function, config: Config.Config):
 /**
  * Tables the evaluation engine (common/compliance/evaluationEngine.py) reads while evaluating an
  * asset, shared by every Lambda that runs it: asset metadata and links, the metadata schema a rule
- * references, the workflow, pipeline and pipeline-template rows a pipeline rule launches with, and
- * the asset buckets. The compliance tables the engine writes are granted per builder, since the
- * read/write split differs between them.
+ * references, the workflow, pipeline and pipeline-template rows a pipeline rule launches with, the
+ * asset-version file records a version-coverage rule compares the current files against, and the
+ * asset buckets (the current-file listing of file-structure and version-coverage rules, a pipeline
+ * rule's input selection). The compliance tables the engine writes are granted per builder, since
+ * the read/write split differs between them.
  */
 function grantEvaluationEngineReads(fun: lambda.Function, storageResources: storageResources) {
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.metadataSchemaStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
     storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
