@@ -161,15 +161,42 @@ class TestCollectors:
         path.write_bytes(b"not a glb at all")
         assert rf._glb_references(str(path)) == []
 
-    def test_obj_mtllib_names_are_optional(self, tmp_path):
+    # The names trimesh's OBJ loader asks for (D1): one material library, everything after the first
+    # 'mtllib' in the text up to the end of that line. test_3dbasic_real_conversions.py checks the same
+    # texts against the installed trimesh.
+    @pytest.mark.parametrize("text, expected", [
+        ("mtllib my box.mtl\nv 0 0 0\n", ["my box.mtl"]),
+        ("mtllib\tmy  box.mtl  \n", ["my  box.mtl"]),
+        ("mtllib my box.mtl\r\nv 0 0 0\r\n", ["my box.mtl"]),
+        ("mtllib a.mtl b.mtl\n", ["a.mtl b.mtl"]),
+        ("mtllib a.mtl\nmtllib b.mtl\n", ["a.mtl"]),
+        ("# mtllib c.mtl\nmtllib d.mtl\n", ["c.mtl"]),
+        ("o x_mtllib y.mtl\nmtllib d.mtl\n", ["y.mtl"]),
+        ("mtllib my\\\nbox.mtl\n", ["mybox.mtl"]),
+        ("MTLLIB u.mtl\nv 0 0 0\n", []),
+        ("mtllib\nv 0 0 0\n", []),
+        ("v 0 0 0\n", []),
+    ])
+    def test_obj_material_library_is_named_as_the_loader_asks_for_it(self, tmp_path, text, expected):
         path = tmp_path / "m.obj"
-        path.write_text("# mtllibrary comment\nmtllib a.mtl b.mtl\nv 0 0 0\nmtllibx c.mtl\n")
-        assert rf._obj_references(str(path)) == [("a.mtl", False, False), ("b.mtl", False, False)]
+        path.write_bytes(text.encode("utf-8"))
+        assert rf._obj_references(str(path)) == [(name, False, False) for name in expected]
 
-    def test_mtl_texture_options_are_skipped(self, tmp_path):
+    def test_mtl_textures_are_the_rest_of_each_map_kd_line(self, tmp_path):
+        # The loader asks only for map_Kd values, whole: a spaced name stays one name, an option stays
+        # part of it, and the other texture statements are not read.
         path = tmp_path / "m.mtl"
-        path.write_text("newmtl m\nmap_Kd -s 1 1 1 -bm 0.5 wood.png\nbump normal.png\nKd 1 1 1\n")
-        assert rf._mtl_references(str(path)) == [("wood.png", False, False), ("normal.png", False, False)]
+        path.write_text("newmtl m\nmap_Kd my wood.png\nmap_Kd -s 1 1 1 wood.png\nbump normal.png\n"
+                        "map_Ka ambient.png\nKd 1 1 1\n  map_kd\t lower.png  \nmap_Kd\n")
+        assert rf._mtl_references(str(path)) == [
+            ("my wood.png", False, False), ("-s 1 1 1 wood.png", False, False), ("lower.png", False, False)]
+
+    def test_a_document_that_is_not_utf8_is_not_read_for_names(self, tmp_path):
+        # The loader reads no name from it either (see _obj_references), so nothing is fetched.
+        client, logger = FakeS3({ROOT + "box.mtl": b"newmtl a\n"}), MagicMock()
+        _, report = _fetch(tmp_path, client, "m.obj", b"# caf\xe9\nmtllib box.mtl\n", logger=logger)
+        assert report.fetched == [] and client.heads == []
+        assert "Could not read the references in m.obj" in _warnings(logger)[0]
 
     def test_ply_texturefile_comment(self, tmp_path):
         path = tmp_path / "m.ply"
@@ -284,6 +311,30 @@ class TestOptionalReferencesAreSkipped:
     """Material libraries and texture images: one that is missing, rejected or over a limit is skipped
     with a warning naming it, and the rest of the model is still fetched."""
 
+    def test_a_material_library_named_with_a_space_is_fetched_with_its_texture(self, tmp_path):
+        # D1: 'mtllib my box.mtl', as trimesh and Blender write it for 'my box.obj', is one name.
+        client = FakeS3({ROOT + "my box.mtl": b"newmtl a\nmap_Kd my wood.png\n",
+                         ROOT + "my wood.png": b"png"})
+        _, report = _fetch(tmp_path, client, "my box.obj", "mtllib my box.mtl\nv 0 0 0\n")
+        assert client.heads == [ROOT + "my box.mtl", ROOT + "my wood.png"]
+        assert report.fetched == ["my box.mtl", "my wood.png"] and report.skipped_count == 0
+        assert set(report.by_reference) == {"my box.mtl", "my wood.png"}
+
+    def test_a_missing_material_library_named_with_a_space_is_one_warning_naming_it(self, tmp_path):
+        client, logger = FakeS3({}), MagicMock()
+        _, report = _fetch(tmp_path, client, "my box.obj", "mtllib my box.mtl\nv 0 0 0\n", logger=logger)
+        assert client.heads == [ROOT + "my box.mtl"] and report.skipped_count == 1
+        warnings = _warnings(logger)
+        assert len(warnings) == 1
+        assert warnings[0].startswith("Skipped my box.mtl, referenced by my box.obj: it is not in the asset")
+
+    def test_a_material_library_is_read_as_one_whatever_its_extension(self, tmp_path):
+        # The loader parses whatever the OBJ names as its material library, so its textures are
+        # fetched too.
+        client = FakeS3({ROOT + "materials.txt": b"newmtl a\nmap_Kd wood.png\n", ROOT + "wood.png": b"png"})
+        _, report = _fetch(tmp_path, client, "box.obj", "mtllib materials.txt\n")
+        assert report.fetched == ["materials.txt", "wood.png"]
+
     def test_a_missing_material_library_is_skipped_and_named(self, tmp_path):
         client, logger = FakeS3({}), MagicMock()
         _, report = _fetch(tmp_path, client, "lonely/box.obj", "mtllib box.mtl\nv 0 0 0\n",
@@ -355,8 +406,8 @@ class TestOptionalReferencesAreSkipped:
         # A missing name is looked up with HeadObject, so it counts: a model cannot drive an unbounded
         # number of Amazon S3 requests by naming files that do not exist.
         client = FakeS3({})
-        names = " ".join(f"m{i}.mtl" for i in range(5))
-        _, report = _fetch(tmp_path, client, "box.obj", f"mtllib {names}\n",
+        images = tuple(f"t{i}.png" for i in range(5))
+        _, report = _fetch(tmp_path, client, "m.gltf", _gltf(images=images),
                            limits=rf.FetchLimits(max_files=2))
         assert len(client.heads) == 2 and report.skipped_count == 5
 
@@ -377,8 +428,8 @@ class TestOptionalReferencesAreSkipped:
     def test_the_warnings_are_bounded(self, tmp_path):
         logger = MagicMock()
         count = rf.MAX_SKIPPED_LOGGED + 10
-        obj = "".join(f"mtllib /abs/m{i}.mtl\n" for i in range(count))
-        _, report = _fetch(tmp_path, FakeS3({}), "box.obj", obj, logger=logger)
+        images = tuple(f"/abs/t{i}.png" for i in range(count))
+        _, report = _fetch(tmp_path, FakeS3({}), "m.gltf", _gltf(images=images), logger=logger)
         assert report.skipped_count == count and len(report.skipped) == rf.MAX_SKIPPED_LOGGED
         warnings = _warnings(logger)
         assert len(warnings) == rf.MAX_SKIPPED_LOGGED + 1

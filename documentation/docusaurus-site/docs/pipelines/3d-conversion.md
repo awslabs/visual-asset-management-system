@@ -25,14 +25,15 @@ STL stores triangle meshes only. A point cloud -- an XYZ file, or a PLY file tha
 
 ## Multi-File Models
 
-A GLTF file, and an OBJ file with materials, keep part of the model in other files: GLTF buffers (`.bin`) and texture images, and the OBJ material library (`.mtl`) with the texture maps it names. A GLB or PLY file can also name an external texture. The pipeline reads every file the selected input references and downloads each one from the same asset before it loads the model, so upload the companion files to the asset at the paths the model names. A model that this pipeline wrote as GLTF or as a textured OBJ can be converted again, because its companion files are written beside it.
+A GLTF file, and an OBJ file with materials, keep part of the model in other files: GLTF buffers (`.bin`) and texture images, and the OBJ material library (`.mtl`) with the base color textures (`map_Kd`) it names. A GLB or PLY file can also name an external texture. The pipeline reads every file the selected input references and downloads each one from the same asset before it loads the model, so upload the companion files to the asset at the paths the model names. A model that this pipeline wrote as GLTF or as a textured OBJ can be converted again, because its companion files are written beside it.
 
 Each reference is checked before anything is downloaded:
 
 -   It must be a path relative to the file that names it (for example `textures/wood.png` or `../shared/wood.png`) that resolves to a file inside the input's own asset. Absolute paths, URLs, and paths that leave the asset are rejected. Data embedded in the model (a `data:` URI) needs no download.
 -   A GLTF or GLB buffer holds the geometry. A rejected buffer reference, or a buffer that is not in the asset, fails the run with a message naming it.
 -   A material library or a texture image only adds appearance. One that is rejected, not in the asset, or over a limit is skipped, the run log records a warning naming it, and the model converts without it: an OBJ without its material library converts as geometry only.
--   A model may reference at most 1,000 files totalling 2 GiB, and only an OBJ file's material libraries are read for further references.
+-   A model may reference at most 1,000 files totalling 2 GiB, and only an OBJ file's material library is read for further references.
+-   Names are read the way the model loader reads them: an OBJ file's material library is everything after `mtllib` on the first line that contains it, and a texture is everything after `map_Kd` on its line, so a name may contain spaces but not texture options such as `-s`.
 
 ## Architecture
 
