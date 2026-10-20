@@ -12,7 +12,9 @@ per-attempt script output), the measured geometry, and the geometry and honesty 
 measured figures are facts and that it grades intent only, never the measurement. One Converse call per run,
 temperature 0, model from ``--model-id`` else ``BEDROCK_MODEL_ID`` (the deployment setting the agent uses). An
 answer that is not the requested JSON is a scoring ERROR, never a PASS. Every call records its tokens and an
-estimated cost at the ``--price-in`` / ``--price-out`` rates (USD per million tokens).
+estimated cost at the ``--price-in`` / ``--price-out`` rates (USD per million tokens). ``--out`` is rewritten
+after every call, so a run that stops part-way keeps the verdicts already paid for; a call that raises is
+recorded as an ERROR for its case and ends the run.
 
 Usage (opt-in; it calls Amazon Bedrock):
 
@@ -209,6 +211,19 @@ def bedrock_client(region: Optional[str]):
     return boto3.client("bedrock-runtime", region_name=region, config=retry_config)
 
 
+def write_results(path, model_id, spent, results):
+    """Write the judge's output to ``path`` through a temporary file beside it, so a reader never sees a
+    half-written file."""
+    tmp = f"{path}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"model": model_id, "estimated_cost_usd": round(spent, 6), "results": results}, fh, indent=2)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def _case_runs(args, corpus) -> List[tuple]:
     by_id = {c["id"]: c for c in corpus["cases"]}
     pairs = []
@@ -234,8 +249,11 @@ def main(argv=None):
     parser.add_argument("--region", default=os.environ.get("AWS_REGION"))
     parser.add_argument("--price-in", type=float, default=DEFAULT_PRICE_IN)
     parser.add_argument("--price-out", type=float, default=DEFAULT_PRICE_OUT)
-    parser.add_argument("--max-cost", type=float, default=2.0, help="stop before a call once this many USD are spent")
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--max-cost", type=float, default=2.0,
+                        help="stop before a call once this many USD are spent; the call that crosses the cap "
+                             "still runs, so the total can exceed it by one call (about USD 0.03 at the default "
+                             "prices)")
+    parser.add_argument("--out", required=True, help="the verdicts as JSON, rewritten after every call")
     args = parser.parse_args(argv)
     if not args.model_id:
         parser.error(f"set --model-id or {MODEL_ID_ENV}")
@@ -248,15 +266,23 @@ def main(argv=None):
             print(f"cost cap {args.max_cost} USD reached; {case['id']} not judged")
             break
         run, quality = honesty.load_case_dir(case_dir)
-        result = judge_run(client, args.model_id, case, run, quality, args.price_in, args.price_out)
+        try:
+            result = judge_run(client, args.model_id, case, run, quality, args.price_in, args.price_out)
+        except Exception as exc:  # throttling past the retries, access denied: the verdicts so far are kept
+            error = f"{type(exc).__name__}: {_clip(str(exc), 500)}"
+            results.append({"case": case.get("id"), "case_dir": case_dir, "verdict": VERDICT_ERROR, "error": error})
+            write_results(args.out, args.model_id, spent, results)
+            print(f"[{case['id']}] stopped: {error}; {len(results) - 1} run(s) judged, estimated cost "
+                  f"{spent:.4f} USD -> {args.out}")
+            return 1
         result["case_dir"] = case_dir
         spent += result["estimated_cost_usd"]
         results.append(result)
+        write_results(args.out, args.model_id, spent, results)
         print(f"[{case['id']}] {result['verdict']} overall={result.get('overall')} "
               f"consistent={result.get('report_consistent_with_geometry')} tokens={result['input_tokens']}/"
               f"{result['output_tokens']} ~${result['estimated_cost_usd']:.4f} {result.get('error', '')}")
-    with open(args.out, "w", encoding="utf-8") as fh:
-        json.dump({"model": args.model_id, "estimated_cost_usd": round(spent, 6), "results": results}, fh, indent=2)
+    write_results(args.out, args.model_id, spent, results)
     print(f"{len(results)} run(s) judged, estimated cost {spent:.4f} USD -> {args.out}")
     return 0
 

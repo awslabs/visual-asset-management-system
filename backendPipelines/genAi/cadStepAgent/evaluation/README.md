@@ -79,7 +79,7 @@ python run_live.py --out /tmp/cad-eval/live --profile <vamscli profile> --db <da
 Everything that spends money is opt-in.
 
 -   **An agent run** (offline or live) costs model tokens: about USD 0.05–0.15 per case on an Anthropic Claude Sonnet model at list price, more for cases that use all their attempts; a full corpus pass is a few US dollars. A live run also uses the stack's runtime for one to two minutes per case.
--   **A judge call** costs about 600–4 000 input and 200–400 output tokens, around USD 0.01–0.02 per run at the same price. `llm_judge.py` stops before a call once `--max-cost` (default USD 2) is spent; `--price-in` / `--price-out` set the rates the estimate uses.
+-   **A judge call** costs about 600–4 000 input and 200–400 output tokens, around USD 0.01–0.02 per run at the same price. `llm_judge.py` stops before a call once `--max-cost` (default USD 2) is spent, so the call that crosses the cap still runs (one call, about USD 0.03 at the default rates); it rewrites `--out` after every call, so a stopped run keeps the verdicts already paid for. `--price-in` / `--price-out` set the rates the estimate uses.
 -   **The tests, the scorers, the golden diff and `rescore`** cost nothing.
 
 ## Calibrating the judge

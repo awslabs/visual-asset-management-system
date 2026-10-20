@@ -116,3 +116,46 @@ def test_the_model_id_comes_from_the_deployment_setting(monkeypatch, tmp_path):
     monkeypatch.delenv(lj.MODEL_ID_ENV, raising=False)
     with pytest.raises(SystemExit):
         lj.main(["--corpus", os.path.join(EVALUATION_DIR, "corpus.yaml"), "--out", str(tmp_path / "j.json")])
+
+
+class _FailsOnThirdCall(_StubClient):
+    def __init__(self, text, error):
+        super().__init__(text)
+        self.error = error
+
+    def converse(self, **kwargs):
+        if len(self.calls) == 2:
+            raise self.error
+        return super().converse(**kwargs)
+
+
+@pytest.mark.parametrize("error", [RuntimeError("ThrottlingException: Rate exceeded"), KeyboardInterrupt()])
+def test_verdicts_already_paid_for_are_on_disk_when_a_later_call_fails(monkeypatch, tmp_path, error):
+    corpus = tmp_path / "corpus.yaml"
+    corpus.write_text(json.dumps({"cases": [dict(CASE, id=case_id) for case_id in ("A", "B", "C")]}))
+    runs = []
+    for case_id in ("A", "B", "C"):
+        case_dir = tmp_path / case_id
+        case_dir.mkdir()
+        (case_dir / "run.json").write_text(json.dumps(RUN))
+        (case_dir / "quality.json").write_text(json.dumps(QUALITY))
+        runs += ["--run", f"{case_id}={case_dir}"]
+    client = _FailsOnThirdCall(_answer(), error)
+    monkeypatch.setattr(lj, "bedrock_client", lambda region: client)
+    out = tmp_path / "judge.json"
+    argv = ["--corpus", str(corpus), "--model-id", "m", "--out", str(out)] + runs
+    if isinstance(error, KeyboardInterrupt):
+        with pytest.raises(KeyboardInterrupt):
+            lj.main(argv)
+    else:
+        assert lj.main(argv) == 1
+    written = json.loads(out.read_text())
+    paid = written["results"][:2]
+    assert [r["verdict"] for r in paid] == [lj.VERDICT_PASS, lj.VERDICT_PASS] and len(client.calls) == 2
+    assert written["estimated_cost_usd"] == round(sum(r["estimated_cost_usd"] for r in paid), 6) > 0
+    if isinstance(error, KeyboardInterrupt):
+        assert len(written["results"]) == 2
+    else:
+        assert written["results"][2]["verdict"] == lj.VERDICT_ERROR
+        assert "ThrottlingException" in written["results"][2]["error"]
+    assert not os.path.exists(f"{out}.tmp")
