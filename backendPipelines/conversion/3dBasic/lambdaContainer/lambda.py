@@ -7,8 +7,8 @@ import os
 import shutil
 import tempfile
 import threading
-import os
 import trimesh
+import referenced_files
 from common.logger import safeLogger
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
@@ -193,6 +193,38 @@ SUPPORTED_INPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb', '.xyz'}
 # this set rather than against the accept list.
 SUPPORTED_OUTPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb'}
 
+# The output formats that store triangles and nothing else. A point cloud (an `.xyz` file, or a `.ply`
+# with vertices and no faces) has none, and trimesh writes it to STL as a header and a zero triangle
+# count -- an 84-byte file -- without raising, so the run would report success for an empty model.
+# OBJ, PLY, GLB and GLTF all store the points.
+MESH_ONLY_OUTPUT_FORMATS = {'.stl'}
+
+
+def geometry_counts(loaded):
+    """``(vertices, triangles)`` summed over what trimesh loaded: a mesh, a point cloud, a path, or a
+    scene holding any of those."""
+    geometry = getattr(loaded, "geometry", None)
+    parts = list(geometry.values()) if isinstance(geometry, dict) else [loaded]
+    vertices = triangles = 0
+    for part in parts:
+        part_vertices = getattr(part, "vertices", None)
+        part_faces = getattr(part, "faces", None)
+        vertices += 0 if part_vertices is None else len(part_vertices)
+        triangles += 0 if part_faces is None else len(part_faces)
+    return vertices, triangles
+
+
+def check_exportable(loaded, output_filetype, input_name):
+    """Raise ``ValueError`` when the export would write a model with nothing in it: an input that
+    loaded no geometry at all, or one with no triangles for a target that stores only triangles."""
+    vertices, triangles = geometry_counts(loaded)
+    if vertices == 0:
+        raise ValueError(f"{input_name} contains no geometry, so there is nothing to convert")
+    if output_filetype in MESH_ONLY_OUTPUT_FORMATS and triangles == 0:
+        raise ValueError(
+            f"{input_name} contains no triangles (it is a point cloud), and {output_filetype} stores "
+            f"triangle meshes only. Convert it to .ply, .obj, .glb or .gltf, which store points.")
+
 
 # The folder a converted file is written under when the conversion does not change the file
 # extension, so a same-format re-export is a sibling of its source rather than a new version of it.
@@ -208,7 +240,8 @@ def output_relative_subdir(relative_subdir, input_extension, output_extension):
     Every format this pipeline exports is also a format it accepts, and each built-in template pins
     one target format, so a template whose target is the input file's own format is a same-extension
     run (`.glb` with Convert to GLB, `.gltf` with Convert to GLTF, `.obj` with Convert to OBJ,
-    `.stl` with Convert to STL). The output keeps both the input's subdirectory and its file name, so
+    `.ply` with Convert to PLY, `.stl` with Convert to STL). The output keeps both the input's
+    subdirectory and its file name, so
     in that case the output's ASSET-RELATIVE path equals the input's; the workflow's process-output
     step writes each staged output back to the output asset at exactly that relative path, so the
     write-back would land a new version of the operator's source object rather than a sibling file.
@@ -290,8 +323,8 @@ def exported_files(export_dir):
 def convert_input_output(input_path, output_path, output_filetype, relative_subdir=""):
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
     output_bucket, output_key = output_path.replace("s3://", "").split("/", 1)
-    logger.info(input_key)
-    logger.info(output_key)
+    logger.info(f"Converting s3://{input_bucket}/{input_key} to {output_filetype}")
+    logger.info(f"Output files prefix: s3://{output_bucket}/{output_key}")
 
     #Folder check
     if (input_key.endswith("/")):
@@ -322,12 +355,27 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         os.makedirs(input_dir)
         os.makedirs(export_dir)
 
-        # Download input file from S3
-        temp_file = os.path.join(input_dir, f'input{input_s3_asset_extension}')
+        # Download the input at its own path within its asset, then the files it references beside
+        # it (glTF/GLB buffers and images, an OBJ's material libraries and their texture maps, a
+        # PLY's texture), so its relative references resolve locally as they do in the asset. Every
+        # reference is validated against the input's asset prefix before anything is fetched, and the
+        # loader is given a resolver that serves only those files, so no reference reaches anything
+        # else on the local disk.
+        root_key, input_relative_path = referenced_files.confinement_root(input_key, relative_subdir)
+        temp_file = referenced_files.local_path_for(input_dir, input_relative_path)
+        if temp_file is None:
+            raise ValueError(f"Input S3 key {input_key} cannot be staged locally")
+        os.makedirs(os.path.dirname(temp_file), exist_ok=True)
         download(input_bucket, input_key, temp_file)
+        fetched = referenced_files.fetch_referenced_files(
+            _s3_client_for_bucket(input_bucket), input_bucket, root_key, input_relative_path,
+            temp_file, input_dir, logger=logger)
+        resolver = referenced_files.ConfinedResolver(
+            input_dir, input_relative_path, fetched.by_reference)
 
         # Load mesh using trimesh
-        mesh = trimesh.load(temp_file)
+        mesh = trimesh.load(temp_file, resolver=resolver)
+        check_exportable(mesh, output_filetype, os.path.basename(input_key))
 
         # Export mesh to output format, under the name it will carry in the asset: the input file's
         # own name with the output extension.
@@ -376,31 +424,34 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
 
 
 def lambda_handler(event, context):
-
-    logger.info(event)
-    response = {
-        'statusCode': 200,
-        'body': '',
-        'headers': {
-            'Content-Type': 'application/json'
-        }
-    }
-
-    # Parse request body
-    if not event.get('body'):
+    # Nothing from the event is logged until the task-token check has passed, and the event itself
+    # is never logged: a run whose pipeline was registered with a callback by mistake carries a
+    # Step Functions task token in its body, and this container's logger does not redact it. Only
+    # identifiers are logged below.
+    body = event.get('body') if isinstance(event, dict) else None
+    if not body:
         message = 'Request body is required'
         logger.error(message)
         raise ValueError(message)
 
-    if isinstance(event['body'], str):
-        data = json.loads(event['body'])
+    if isinstance(body, str):
+        data = json.loads(body)
     else:
-        data = event['body']
+        data = body
+    if not isinstance(data, dict):
+        message = 'Request body must be a JSON object'
+        logger.error(message)
+        raise ValueError(message)
 
     # Check external task token if passed (Synchronous Pipeline so no task token should be passed)
     if 'TaskToken' in data:
         raise Exception("VAMS Workflow TaskToken found in pipeline input. Make sure to register this pipeline in VAMS as NOT needing a task token callback.")
-        
+
+    logger.info("Conversion request received", extra={
+        "inputManifestS3Location": data.get('inputManifestS3Location', ''),
+        "inputConfigurationS3Location": data.get('inputConfigurationS3Location', ''),
+    })
+
     # Read the input configuration from its S3 location (inline fallback for transition).
     input_configuration = fetch_input_configuration(data.get('inputConfigurationS3Location', ''))
     if not input_configuration and data.get('inputParameters'):
@@ -410,18 +461,6 @@ def lambda_handler(event, context):
     # The target output format comes from the input configuration (outputType). Fall back to the
     # legacy inline body field for executions whose ASL predates this change.
     output_filetype = (input_configuration or {}).get('outputType') or data.get('outputType', '')
-
-    #Get Executing username
-    if 'executingUserName' in data:
-        executing_userName = data['executingUserName']
-    else:
-        executing_userName = ''
-
-    #Get Executing requestContext
-    if 'executingRequestContext' in data:
-        executing_requestContext = data['executingRequestContext']
-    else:
-        executing_requestContext = ''
 
     # Resolve the input file + output-files paths and the input's asset-relative subdirectory from
     # the workflow manifest (legacy body fields are the fallback for direct/local invocations).
@@ -449,4 +488,3 @@ class ProgressPercentage(object):
         # to a single filename.
         with self._lock:
             self._seen_so_far += bytes_amount
-            percentage = (self._seen_so_far / self._size) * 100
