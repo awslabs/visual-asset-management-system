@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useEffect, useCallback, useState } from "react";
+import React, { useRef, useEffect, useCallback, useId, useState } from "react";
 import Editor, { OnMount, OnValidate, loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
@@ -474,6 +474,12 @@ interface PatternListFieldProps {
 /**
  * One regular expression per line. The typed text is kept while it parses to the same list, so a
  * trailing newline the user is about to type a pattern after is not taken away.
+ *
+ * Cloudscape's Textarea names itself after the enclosing FormField labels (`aria-labelledby`, which
+ * wins over `aria-label`), so every check's field would be announced alike ("Schema Body Required
+ * paths" in the schema modal). It is labelled by its own hidden element instead, which keeps the
+ * per-check `ariaLabel` ("Required paths, check 2") as its accessible name, the way an Input given an
+ * `ariaLabel` already does.
  */
 function PatternListField({
     items,
@@ -483,21 +489,28 @@ function PatternListField({
     disabled = false,
 }: PatternListFieldProps) {
     const [text, setText] = useState(items.join("\n"));
+    const labelId = useId();
     useEffect(() => {
         setText((current) => (sameList(patternLines(current), items) ? current : items.join("\n")));
     }, [items]);
     return (
-        <Textarea
-            value={text}
-            ariaLabel={ariaLabel}
-            placeholder={placeholder}
-            rows={3}
-            disabled={disabled}
-            onChange={({ detail }) => {
-                setText(detail.value);
-                onChange(patternLines(detail.value));
-            }}
-        />
+        <>
+            <span id={labelId} hidden>
+                {ariaLabel}
+            </span>
+            <Textarea
+                value={text}
+                ariaLabel={ariaLabel}
+                ariaLabelledby={labelId}
+                placeholder={placeholder}
+                rows={3}
+                disabled={disabled}
+                onChange={({ detail }) => {
+                    setText(detail.value);
+                    onChange(patternLines(detail.value));
+                }}
+            />
+        </>
     );
 }
 

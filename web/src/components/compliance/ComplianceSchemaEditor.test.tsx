@@ -6,6 +6,7 @@
 import React, { useState } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import FormField from "@cloudscape-design/components/form-field";
 import ComplianceSchemaEditor from "./ComplianceSchemaEditor";
 
 jest.mock("@monaco-editor/react", () => ({
@@ -274,6 +275,59 @@ describe("ComplianceSchemaEditor rule types", () => {
                 { name: "check-2" },
             ]);
         });
+    });
+
+    it("names each pattern field by its check, inside the modal's Schema Body field too", async () => {
+        // The accessible name a screen reader (and Playwright's getByLabel) computes, in which the
+        // enclosing FormFields' aria-labelledby outranks the control's aria-label; getByLabelText
+        // alone would match the aria-label attribute whatever the computed name.
+        render(
+            <FormField label="Schema Body">
+                <Harness
+                    initial={ruleBody("files", {
+                        ruleType: "fileStructure",
+                        enforcement: "warn",
+                        checks: [
+                            { name: "first", requiredPaths: ["^a/"] },
+                            { name: "second", requiredPaths: ["^b/"], forbiddenPaths: ["\\.tmp$"] },
+                        ],
+                    })}
+                    onChange={jest.fn()}
+                />
+            </FormField>
+        );
+        await openBuilder();
+
+        expect(screen.getByRole("textbox", { name: "Required paths, check 1" })).toHaveValue("^a/");
+        expect(screen.getByRole("textbox", { name: "Required paths, check 2" })).toHaveValue("^b/");
+        expect(screen.getByRole("textbox", { name: "Forbidden paths, check 1" })).toHaveValue("");
+        expect(screen.getByRole("textbox", { name: "Forbidden paths, check 2" })).toHaveValue(
+            "\\.tmp$"
+        );
+        expect(screen.queryByRole("textbox", { name: "Schema Body Required paths" })).toBeNull();
+    });
+
+    it("names the excluded paths field of a version coverage check by its check", async () => {
+        render(
+            <FormField label="Schema Body">
+                <Harness
+                    initial={ruleBody("coverage", {
+                        ruleType: "versionCoverage",
+                        enforcement: "warn",
+                        checks: [{ name: "c1" }, { name: "c2", excludePaths: ["\\.preview$"] }],
+                    })}
+                    onChange={jest.fn()}
+                />
+            </FormField>
+        );
+        await openBuilder();
+
+        expect(
+            screen.getByRole("textbox", { name: "Excluded paths (optional), check 1" })
+        ).toHaveValue("");
+        expect(
+            screen.getByRole("textbox", { name: "Excluded paths (optional), check 2" })
+        ).toHaveValue("\\.preview$");
     });
 
     it("edits an asset name pattern and its condition", async () => {
