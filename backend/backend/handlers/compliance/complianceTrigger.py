@@ -31,10 +31,19 @@ workflow:
     evaluation covers the changes it read too) is not evaluated again, so an N-file upload yields
     one evaluation rather than N concurrent pipeline launches; a change after that evaluation's
     start is new and starts another evaluation, and the older evaluation's callback never
-    overwrites the newer state. The file path judges an object against the recorded completion it
-    belongs to (`file_event_completion_time`): the row's `lastUploadAt`, or its `lastChangeAt`
-    when the row's latest change is an asset version, since a revert copies the target version's
-    objects before it stamps the row, so a revert yields one evaluation as an upload does.
+    overwrites the newer state. The file path judges an object against the latest recorded user-change
+    completion on the row (`file_event_completion_time`): the later of its `lastUploadAt` (an upload
+    completion) and its `lastAssetVersionAt` (an asset-version create or revert, which a revert writes
+    after copying the target version's objects), whatever `lastChangeSource` says now, so a revert
+    yields one evaluation as an upload does even after a pipeline rule's output write re-stamps the
+    row.
+
+Each coverage decision logs one INFO line (`coverage_log_line`) naming the asset by id only, never an
+object key; wrapped here, one line at runtime:
+
+    Compliance coverage asset=<assetId> path=<stream|file|direct> stamp=<attribute|none>
+    stampAt=<instant|none> eventTime=<instant|none> lastEvaluationId=<id|none>
+    lastEvaluatedAt=<instant|none> outcome=<covered|evaluating>
 
 A cascade awaiting approval is opened once per trigger asset: while one is pending for the asset,
 a further evaluation does not open another.
@@ -49,7 +58,6 @@ import boto3
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
-from common.assetProvenance import ASSET_CHANGE_SOURCE_ASSET_VERSION
 from common.compliance import evaluationEngine as engine
 from models.compliance import EvaluationVerdict
 from common.dynamodb import query_all_items
@@ -83,18 +91,29 @@ LAST_CHANGE_SOURCE_ATTRIBUTE = "lastChangeSource"
 LAST_CHANGE_AT_ATTRIBUTE = "lastChangeAt"
 # The instant of the asset's last user-upload completion; a workflow execution's output write moves
 # `lastChangeAt` but not this, so an uploaded object is judged against the upload that completed it.
-# An asset version's stamp does not move it either; the objects a revert copies are judged against
-# that stamp's `lastChangeAt` instead (`file_event_completion_time`).
 LAST_UPLOAD_AT_ATTRIBUTE = "lastUploadAt"
+# The instant of the asset's last asset-version create or revert, its analogue for the objects a revert
+# copies: neither a workflow execution's output write nor an asset edit moves it.
+LAST_ASSET_VERSION_AT_ATTRIBUTE = "lastAssetVersionAt"
+# The asset-row stamps of the user changes that write objects into the asset before stamping the row;
+# `file_event_completion_time` judges a file event's object by the latest of them.
+FILE_EVENT_COMPLETION_STAMPS = (LAST_UPLOAD_AT_ATTRIBUTE, LAST_ASSET_VERSION_AT_ATTRIBUTE)
+
+# Path names the coverage log line records: the asset table's stream, the file indexer, or a direct
+# `{databaseId, assetId}` message.
+COVERAGE_PATH_STREAM = "stream"
+COVERAGE_PATH_FILE = "file"
+COVERAGE_PATH_DIRECT = "direct"
 
 # Skew margin for the one coverage comparison whose two instants come from unrelated clocks: an S3
-# object's `eventTime` against an evaluation start, used only for an object written outside a recorded
-# upload completion. A change older than the last evaluation start by at least this margin is covered.
+# object's `eventTime` against an evaluation start, used only for an object written after the latest
+# recorded completion (or under an asset that records none). A change older than the last evaluation
+# start by at least this margin is covered.
 # The margin keeps S3-vs-Lambda clock skew from marking an evaluation as covering a change it in fact
 # started before; a duplicate evaluation is the safe failure, a missed one is not, so it errs toward
-# evaluating. An upload whose completion the asset row records (`lastChangeAt`) needs no margin: the
+# evaluating. An upload whose completion the asset row records (`lastUploadAt`) needs no margin: the
 # stamp is written after every object of the upload was copied, so the ordering is causal. The same
-# holds for the objects an asset-version revert copies and the `assetVersion` stamp written after them.
+# holds for the objects an asset-version revert copies and the `lastAssetVersionAt` written after them.
 EVALUATION_COVERS_CHANGE_MARGIN = timedelta(seconds=2)
 
 # A cascade awaiting approval expires after this many hours.
@@ -172,7 +191,9 @@ def _process_stream_record(message):
     # stamp is the completion that raised the event.
     completion_time = (parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE))
                        if is_modify else None)
-    _process_compliance_event(database_id, asset_id, completion_time=completion_time)
+    _process_compliance_event(database_id, asset_id, completion_time=completion_time,
+                              path=COVERAGE_PATH_STREAM,
+                              stamp_attribute=LAST_CHANGE_AT_ATTRIBUTE)
 
 
 def _image_string(new_image, attribute):
@@ -196,12 +217,12 @@ def change_covered_by_last_evaluation(compliance_record, change_time=None, compl
     """Whether the asset's last evaluation started after the change and so already covers it.
 
     `completion_time` is the instant of the recorded completion the change belongs to — on the file
-    path `file_event_completion_time` of the row (its `lastUploadAt`, or its `lastChangeAt` when its
-    latest change is an asset version), on the stream path the MODIFY image's `lastChangeAt` (a
-    workflow execution's MODIFY is skipped before this point, so that stamp is an upload's, an
-    asset version's or an asset edit's). The stamp is written after every object of its upload or
-    revert was copied, so an evaluation whose start (`lastEvaluatedAt`) is at or after the stamp has
-    seen those files — the comparison is causal and needs no margin.
+    path `file_event_completion_time` of the row (the later of its `lastUploadAt` and
+    `lastAssetVersionAt`), on the stream path the MODIFY image's `lastChangeAt` (a workflow
+    execution's MODIFY is skipped before this point, so that stamp is an upload's, an asset
+    version's or an asset edit's). The stamp is written after every object of its upload or revert
+    was copied, so an evaluation whose start (`lastEvaluatedAt`) is at or after the stamp has seen
+    those files — the comparison is causal and needs no margin.
     `change_time` is an S3 object's `eventTime`. An object written at or before the recorded
     completion belongs to that upload and is judged by the stamp; an object written after it (or an
     asset with no stamp) is judged against its own `eventTime` with EVALUATION_COVERS_CHANGE_MARGIN,
@@ -260,30 +281,45 @@ def _process_file_event(message):
         evaluated.add(asset_id)
         # The object is not a workflow execution's (those were skipped above), so it belongs to a
         # user upload's completion or to an asset-version revert's stamp.
+        stamp_attribute, completion_time = file_event_completion_stamp(asset_row)
         _evaluate_if_uncovered(
             database_id, asset_id, target, change_time=change_time,
-            completion_time=file_event_completion_time(asset_row))
+            completion_time=completion_time, path=COVERAGE_PATH_FILE,
+            stamp_attribute=stamp_attribute)
 
 
 def file_event_completion_time(asset_row):
-    """The recorded completion a file event's object is judged against, from the asset row: its
-    `lastChangeAt` when its latest change is an asset version (`lastChangeSource` `assetVersion`),
-    else its `lastUploadAt`; None when the row records neither.
+    """The recorded completion a file event's object is judged against: the LATEST user-change
+    completion the asset row records, the later of its `lastUploadAt` (an upload completion) and its
+    `lastAssetVersionAt` (an asset-version create or revert), either of which may be absent;
+    None when the row records neither. `lastChangeSource` is not consulted.
 
-    A revert copies the target version's objects into the asset (new S3 versions, `eventTime` the
-    revert's) and stamps `assetVersion` after every copy completed, exactly as an upload completion
-    stamps `lastUploadAt` after its copies, so the evaluation the stamp's MODIFY starts covers the
-    copies and their messages do not start a second one. Judged by the older `lastUploadAt` they
-    would fall back to their `eventTime` and the margin, which that evaluation started within. An
-    asset-version create copies no object, so its stamp only covers objects already in place
-    before it. Any other source keeps `lastUploadAt`: an `assetEdit` stamp writes no objects, and an
-    object a `workflowExecution` wrote was skipped before this point while that stamp leaves
-    `lastUploadAt` as the upload completion the other objects belong to. An object written after the
-    stamp (a later upload whose completion has not stamped the row yet) postdates it and is judged by
-    its own `eventTime` with the margin, as before."""
-    if asset_row.get(LAST_CHANGE_SOURCE_ATTRIBUTE) == ASSET_CHANGE_SOURCE_ASSET_VERSION:
-        return parse_event_time(asset_row.get(LAST_CHANGE_AT_ATTRIBUTE))
-    return parse_event_time(asset_row.get(LAST_UPLOAD_AT_ATTRIBUTE))
+    Every completion raises a stream MODIFY that evaluates the asset, and each is stamped only after
+    the objects it wrote were copied: an upload completion after its copies, a revert after copying
+    the target version's objects (new S3 versions, `eventTime` the revert's), a create having copied
+    none. So an evaluation started at or after the latest completion has seen every object written
+    before it, whichever completion wrote it, and the indexer's later messages for those objects do
+    not start a second evaluation. A workflow execution's output write and an asset edit move neither
+    stamp — they re-stamp `lastChangeSource` / `lastChangeAt` only — so a pipeline rule's output
+    landing between a revert and its copies' messages, or an edit after a revert, leaves the copies
+    judged by the revert's stamp. (Keyed on `lastChangeSource` instead, the copies fell back to the
+    older `lastUploadAt` after such a write and started a second evaluation, and for a pipeline rule
+    a second workflow execution, per revert.) An object written after the latest stamp (an upload
+    whose completion has not stamped the row yet) postdates it and is judged by its own `eventTime`
+    with the margin; that upload's completion then raises its own MODIFY."""
+    return file_event_completion_stamp(asset_row)[1]
+
+
+def file_event_completion_stamp(asset_row):
+    """`(attribute, instant)` of the latest completion stamp of FILE_EVENT_COMPLETION_STAMPS on the
+    asset row (see `file_event_completion_time`); `(None, None)` when the row records none that
+    parses. A tie keeps the earlier-listed attribute."""
+    latest_attribute, latest_instant = None, None
+    for attribute in FILE_EVENT_COMPLETION_STAMPS:
+        instant = parse_event_time(asset_row.get(attribute))
+        if instant is not None and (latest_instant is None or instant > latest_instant):
+            latest_attribute, latest_instant = attribute, instant
+    return latest_attribute, latest_instant
 
 
 def _file_event_target(asset_id):
@@ -343,9 +379,9 @@ def _extract_asset_id_from_key(object_key, prefix):
 
 def _resolve_asset_row(asset_id):
     """The asset's row via the assetIdGSI (the first match; an asset id is unique), carrying its
-    `databaseId` and its change-provenance stamps (`lastUploadAt`, `lastChangeSource`,
-    `lastChangeAt`). An asset whose row sits under an archived partition resolves to None so it is
-    not evaluated."""
+    `databaseId` and its change-provenance stamps (`lastUploadAt`, `lastAssetVersionAt`,
+    `lastChangeSource`, `lastChangeAt`). An asset whose row sits under an archived partition resolves
+    to None so it is not evaluated."""
     try:
         response = asset_table.query(
             IndexName="assetIdGSI",
@@ -369,7 +405,8 @@ def _database_item(database_id):
     return database_table.get_item(Key={"databaseId": database_id}).get("Item")
 
 
-def _process_compliance_event(database_id, asset_id, change_time=None, completion_time=None):
+def _process_compliance_event(database_id, asset_id, change_time=None, completion_time=None,
+                              path=COVERAGE_PATH_DIRECT, stamp_attribute=None):
     """Evaluate an asset when its database has auto-evaluation on and it has a bound schema.
 
     `completion_time` is the recorded completion's instant (the MODIFY image's `lastChangeAt` on
@@ -379,11 +416,13 @@ def _process_compliance_event(database_id, asset_id, change_time=None, completio
     two paths reports it first and however many files it carries.
     An evaluation still awaiting its pipeline rules covers the changes made at or before its start
     like any other; a change after its start is evaluated now, and the state row records whichever
-    evaluation is newest."""
+    evaluation is newest. `path` and `stamp_attribute` (the row attribute `completion_time` was
+    read from) only name the decision in its log line."""
     target = _evaluation_target(database_id, asset_id)
     if target is None:
         return
-    _evaluate_if_uncovered(database_id, asset_id, target, change_time, completion_time)
+    _evaluate_if_uncovered(database_id, asset_id, target, change_time, completion_time,
+                           path=path, stamp_attribute=stamp_attribute)
 
 
 def _evaluation_target(database_id, asset_id):
@@ -410,17 +449,34 @@ def _evaluation_target(database_id, asset_id):
     return compliance_record, schema_name
 
 
-def _evaluate_if_uncovered(database_id, asset_id, target, change_time=None, completion_time=None):
-    """Run the evaluation unless the asset's last evaluation already covers the change."""
+def _evaluate_if_uncovered(database_id, asset_id, target, change_time=None, completion_time=None,
+                           path=COVERAGE_PATH_DIRECT, stamp_attribute=None):
+    """Run the evaluation unless the asset's last evaluation already covers the change, logging the
+    decision in one INFO line (`coverage_log_line`)."""
     compliance_record, schema_name = target
-    if change_covered_by_last_evaluation(compliance_record, change_time, completion_time):
-        changed_at = (completion_time or change_time).isoformat()
-        logger.info(f"Asset {database_id}:{asset_id} changed at {changed_at} and its evaluation "
-                    f"{compliance_record.get('lastEvaluationId')} started at "
-                    f"{compliance_record.get('lastEvaluatedAt')}, after the change; the change is "
-                    "already covered")
+    covered = change_covered_by_last_evaluation(compliance_record, change_time, completion_time)
+    logger.info(coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_time,
+                                  compliance_record, covered))
+    if covered:
         return
     trigger_evaluation(database_id, asset_id, schema_name)
+
+
+def coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_time,
+                      compliance_record, covered):
+    """The one INFO line a coverage decision logs: the asset (by id only, no object key), the path
+    that reported the change, the row stamp the decision used and its instant, the S3 `eventTime`
+    (file path), the last evaluation it was compared with, and the outcome. An absent value reads
+    `none`."""
+    def _instant(value):
+        return value.isoformat() if value is not None else "none"
+
+    stamp = stamp_attribute if stamp_attribute and completion_time is not None else "none"
+    return (f"Compliance coverage asset={asset_id} path={path} stamp={stamp} "
+            f"stampAt={_instant(completion_time)} eventTime={_instant(change_time)} "
+            f"lastEvaluationId={compliance_record.get('lastEvaluationId') or 'none'} "
+            f"lastEvaluatedAt={compliance_record.get('lastEvaluatedAt') or 'none'} "
+            f"outcome={'covered' if covered else 'evaluating'}")
 
 
 def check_default_schema(database_id, asset_id, db_item=None):

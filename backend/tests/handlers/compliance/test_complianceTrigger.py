@@ -137,6 +137,13 @@ def _info_messages(mocks):
     return [str(call.args[0]) for call in mocks["logger"].info.call_args_list]
 
 
+def _coverage_lines(mocks, outcome=None):
+    """The coverage-decision lines the run logged (`complianceTrigger.coverage_log_line`), only those
+    with `outcome` (`covered` / `evaluating`) when it is given."""
+    lines = [m for m in _info_messages(mocks) if m.startswith("Compliance coverage ")]
+    return [m for m in lines if outcome is None or m.endswith(f" outcome={outcome}")]
+
+
 AUTO_EVAL_DB = {"databaseId": DB, "complianceAutoEval": True, "complianceSchemaName": SCHEMA}
 ASSET_ROWS = [{"databaseId": DB, "assetId": ASSET}]
 
@@ -684,7 +691,7 @@ class TestAPendingEvaluationCoversOnlyTheChangesItRead:
         mocks["run_evaluation"].assert_not_called()
         mocks["cascade"].put_item.assert_not_called()
         mocks["get_evaluation"].assert_not_called()
-        assert any("already covered" in text for text in _info_messages(mocks))
+        assert len(_coverage_lines(mocks, "covered")) == 1
 
     def test_a_stamped_upload_completed_before_the_pending_evaluation_started_is_covered(self):
         mocks = _run(_sns_event(_stream_message(change_source="upload",
@@ -756,7 +763,7 @@ class TestAPipelineRulesOutputWriteIsNotTheUploadsCompletion:
                                                             status="pending_pipeline"),
                      asset_rows=self._rows_after_the_output_write())
         mocks["run_evaluation"].assert_not_called()
-        assert any("already covered" in text for text in _info_messages(mocks))
+        assert len(_coverage_lines(mocks, "covered")) == 1
 
     def test_a_row_without_an_upload_stamp_falls_back_to_the_object_time_and_the_margin(self):
         mocks = _run(_sns_event(indexer_message(s3_event_record(f"{ASSET}/model.stl",
@@ -836,7 +843,7 @@ class TestOneUploadIsEvaluatedOnce:
                       database_item=AUTO_EVAL_DB, compliance_record=_evaluated_record(4),
                       asset_rows=ASSET_ROWS)
         second["run_evaluation"].assert_not_called()
-        assert any("already covered" in m and "eval-prev" in m for m in _info_messages(second))
+        assert any("lastEvaluationId=eval-prev" in m for m in _coverage_lines(second, "covered"))
 
     def test_one_message_per_object_of_a_three_file_upload_evaluates_nothing_after_the_covering_run(self):
         messages = [indexer_message(s3_event_record(f"{ASSET}/{name}", event_time=CHANGE_TIME_S3))
@@ -936,7 +943,7 @@ class TestARecordedUploadCompletionCoversItsFiles:
                      compliance_record=_record_evaluated_at(STREAM_EVALUATION_START),
                      asset_rows=_stamped_rows(UPLOAD_STAMP))
         mocks["run_evaluation"].assert_not_called()
-        assert sum("already covered" in m for m in _info_messages(mocks)) == 3
+        assert len(_coverage_lines(mocks, "covered")) == 3
 
     def test_the_stream_path_is_covered_by_an_evaluation_started_at_the_stamp_itself(self):
         mocks = _run(_sns_event(_stream_message(change_source="upload", change_at=UPLOAD_STAMP)),
@@ -1002,8 +1009,9 @@ class TestARecordedUploadCompletionCoversItsFiles:
 
 # An asset-version revert as the round-11 re-smoke recorded it (D11): an earlier upload was stamped and
 # evaluated; the revert copies the target version's objects into the asset (new S3 versions whose
-# eventTime is the revert's), then stamps the row `assetVersion`; the stamp's stream MODIFY starts an
-# evaluation within the second, and the indexer's messages for the copies arrive about 20 s later.
+# eventTime is the revert's), then stamps the row `assetVersion` with `lastAssetVersionAt`; the stamp's
+# stream MODIFY starts an evaluation within the second, and the indexer's messages for the copies
+# arrive about 20 s later.
 EARLIER_UPLOAD_STAMP = "2026-03-01T18:05:00.200000+00:00"
 EARLIER_UPLOAD_EVALUATION = "2026-03-01T18:05:00.900000+00:00"
 REVERT_COPY_EVENT_TIME = "2026-03-01T18:09:09.310Z"
@@ -1011,12 +1019,14 @@ REVERT_STAMP = "2026-03-01T18:09:09.520000+00:00"
 REVERT_EVALUATION_START = "2026-03-01T18:09:09.700000+00:00"
 
 
-def _reverted_rows(change_source="assetVersion"):
-    """The asset's row after the revert's stamp: `lastChangeAt` moved to the stamp, `lastUploadAt`
-    still the earlier upload's. `change_source` replaces the source to show which sources the file
-    path reads the stamp for."""
+def _reverted_rows(change_source="assetVersion", change_at=REVERT_STAMP, **extra):
+    """The asset's row after the revert's stamp: `lastAssetVersionAt` and `lastChangeAt` at the stamp,
+    `lastUploadAt` still the earlier upload's. `change_source` / `change_at` replace the latest change
+    to show a later writer re-stamping it (a workflow execution's output write, an asset edit), which
+    leaves both completion stamps as they are; `extra` adds attributes."""
     return [{"databaseId": DB, "assetId": ASSET, "lastUploadAt": EARLIER_UPLOAD_STAMP,
-             "lastChangeAt": REVERT_STAMP, "lastChangeSource": change_source}]
+             "lastAssetVersionAt": REVERT_STAMP, "lastChangeAt": change_at,
+             "lastChangeSource": change_source, **extra}]
 
 
 def _revert_copy_messages(event_time=REVERT_COPY_EVENT_TIME, names=("r-1.txt", "r-2.txt", "r-3.txt")):
@@ -1029,9 +1039,10 @@ def _revert_copy_messages(event_time=REVERT_COPY_EVENT_TIME, names=("r-1.txt", "
 @pytest.mark.unit
 class TestAnAssetVersionRevertIsEvaluatedOnce:
     """Reverting to an asset version copies the target version's objects into the asset and only then
-    stamps the row `lastChangeSource: assetVersion` with a fresh `lastChangeAt`, leaving
-    `lastUploadAt` at the last user upload. The stamp's stream MODIFY evaluates the asset once. The
-    indexer's messages for the copies arrive later and are judged by that stamp, which was written
+    stamps the row `lastChangeSource: assetVersion` with a fresh `lastChangeAt` and the same instant
+    as `lastAssetVersionAt`, leaving `lastUploadAt` at the last user upload. The stamp's stream
+    MODIFY evaluates the asset once. The indexer's messages for the copies arrive later and are
+    judged by the latest completion stamp on the row, here `lastAssetVersionAt`, which was written
     after every copy completed (causal, no margin, like an upload completion's), so the evaluation
     that started at or after it covers them. Judged by the older `lastUploadAt` they fell back to
     their eventTime plus the skew margin and started a second evaluation, and for a pipeline rule a
@@ -1052,7 +1063,9 @@ class TestAnAssetVersionRevertIsEvaluatedOnce:
                       compliance_record=_record_evaluated_at(REVERT_EVALUATION_START),
                       asset_rows=_reverted_rows())
         copies["run_evaluation"].assert_not_called()
-        assert sum("already covered" in m for m in _info_messages(copies)) == 3
+        lines = _coverage_lines(copies, "covered")
+        assert len(lines) == 3
+        assert all("stamp=lastAssetVersionAt" in line for line in lines)
 
     def test_the_copies_are_covered_by_an_evaluation_started_at_the_stamp_itself(self):
         mocks = _run(_sns_event(*_revert_copy_messages()), database_item=AUTO_EVAL_DB,
@@ -1087,14 +1100,219 @@ class TestAnAssetVersionRevertIsEvaluatedOnce:
                      asset_rows=_reverted_rows())
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
 
-    @pytest.mark.parametrize("change_source", ["upload", "assetEdit", "workflowExecution"])
-    def test_any_other_source_keeps_judging_the_object_by_the_upload_stamp(self, change_source):
-        """Only an `assetVersion` stamp is written after objects it copied. On a row stamped by any
-        other source the file path reads `lastUploadAt`, whatever `lastChangeAt` says: an edit writes
-        no objects, and a workflow execution's objects are skipped before the comparison. Here that
-        stamp predates the object, so the object is judged by its eventTime with the margin."""
+    # An upload completed after the revert: its stamp is the latest on the row.
+    LATER_UPLOAD_EVENT_TIME = "2026-03-01T18:10:00.100Z"
+    LATER_UPLOAD_STAMP = "2026-03-01T18:10:00.200000+00:00"
+
+    def _rows_after_a_later_upload(self):
+        return _reverted_rows(change_source="upload", change_at=self.LATER_UPLOAD_STAMP,
+                              lastUploadAt=self.LATER_UPLOAD_STAMP)
+
+    def test_an_upload_after_the_revert_is_judged_by_its_own_completion(self):
+        """`lastUploadAt` is now later than `lastAssetVersionAt`, so the upload's object is judged by
+        the upload's completion; the revert's evaluation started before it and does not cover it."""
+        mocks = _run(_sns_event(indexer_message(s3_event_record(
+                         f"{ASSET}/new.txt", event_time=self.LATER_UPLOAD_EVENT_TIME))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(REVERT_EVALUATION_START),
+                     asset_rows=self._rows_after_a_later_upload())
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+        (line,) = _coverage_lines(mocks, "evaluating")
+        assert f"stamp=lastUploadAt stampAt={self.LATER_UPLOAD_STAMP}" in line
+
+    def test_an_upload_after_the_revert_is_covered_by_the_evaluation_its_completion_started(self):
+        mocks = _run(_sns_event(indexer_message(s3_event_record(
+                         f"{ASSET}/new.txt", event_time=self.LATER_UPLOAD_EVENT_TIME))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at("2026-03-01T18:10:00.900000+00:00"),
+                     asset_rows=self._rows_after_a_later_upload())
+        mocks["run_evaluation"].assert_not_called()
+
+
+# The round-12 re-smoke sequence on a pipeline-rule asset (D11, asset xed6b8739 on sbxf at 19:55Z), with
+# T1 the last user upload and T2 the revert's stamp: the revert's copies land at T2 - 0.2 s, the stamp's
+# stream MODIFY starts an evaluation at T2 + 0.8 s, that evaluation's pipeline rule launches a
+# workflow whose output completion re-stamps `lastChangeSource: workflowExecution` / `lastChangeAt` at
+# T2 + 1.5 s (leaving `lastUploadAt` and `lastAssetVersionAt`), and the indexer's messages for the
+# copies arrive about 10 s later.
+PIPELINE_UPLOAD_STAMP = "2026-03-01T19:50:10.120000+00:00"                 # T1
+PIPELINE_REVERT_STAMP = "2026-03-01T19:55:34.050000+00:00"                 # T2
+PIPELINE_REVERT_COPY_EVENT_TIME = "2026-03-01T19:55:33.850Z"                # T2 - 0.2 s
+PIPELINE_REVERT_EVALUATION_START = "2026-03-01T19:55:34.850000+00:00"      # T2 + 0.8 s
+PIPELINE_OUTPUT_STAMP = "2026-03-01T19:55:35.550000+00:00"                 # T2 + 1.5 s
+
+
+def _pipeline_rows(change_source, change_at, **extra):
+    """The pipeline-rule asset's row after the revert stamped it and a later writer re-stamped its
+    latest change; both completion stamps are as the revert left them."""
+    return [{"databaseId": DB, "assetId": ASSET, "lastUploadAt": PIPELINE_UPLOAD_STAMP,
+             "lastAssetVersionAt": PIPELINE_REVERT_STAMP, "lastChangeSource": change_source,
+             "lastChangeAt": change_at, **extra}]
+
+
+def _rows_after_the_output_write():
+    return _pipeline_rows("workflowExecution", PIPELINE_OUTPUT_STAMP,
+                          lastChangeWorkflowExecutionId="824339307d3b4bfc9429b38c574338fd")
+
+
+def _pipeline_copy_messages(names=("r12-p2.stl",)):
+    return [indexer_message(s3_event_record(f"{ASSET}/{name}",
+                                            event_time=PIPELINE_REVERT_COPY_EVENT_TIME))
+            for name in names]
+
+
+@pytest.mark.unit
+class TestARevertOnAPipelineRuleAssetIsEvaluatedOnce:
+    """D11 on an asset whose pipeline rule launches a workflow: the workflow's output completion
+    re-stamps the row's latest change as `workflowExecution` before the indexer's messages for the
+    revert's copies arrive. Keyed on `lastChangeSource`, the copies then fell back to the older
+    `lastUploadAt` and the margin and started a second evaluation and a second execution. Judged by
+    the latest completion stamp, `lastAssetVersionAt`, which no output write or edit moves, they are
+    covered by the revert's one evaluation."""
+
+    def test_the_revert_evaluates_once_and_its_copies_after_the_output_write_evaluate_nothing(self):
+        revert = _run(_sns_event(_stream_message(change_source="assetVersion",
+                                                 change_at=PIPELINE_REVERT_STAMP)),
+                      database_item=AUTO_EVAL_DB,
+                      compliance_record=_record_evaluated_at("2026-03-01T19:50:10.700000+00:00"),
+                      asset_rows=_pipeline_rows("assetVersion", PIPELINE_REVERT_STAMP))
+        revert["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+        pending = _record_evaluated_at(PIPELINE_REVERT_EVALUATION_START, status="pending_pipeline")
+        output = _run(_sns_event(_stream_message(change_source="workflowExecution",
+                                                 change_at=PIPELINE_OUTPUT_STAMP,
+                                                 workflow_execution_id="824339307d3b4bfc")),
+                      database_item=AUTO_EVAL_DB, compliance_record=pending,
+                      asset_rows=_rows_after_the_output_write())
+        output["run_evaluation"].assert_not_called()
+
+        copies = _run(_sns_event(*_pipeline_copy_messages(("r12-p2.stl", "r12-p2.glb"))),
+                      database_item=AUTO_EVAL_DB, compliance_record=pending,
+                      asset_rows=_rows_after_the_output_write(),
+                      head=[_s3_head("upload"), _s3_head("workflowExecution")])
+        copies["run_evaluation"].assert_not_called()
+        assert _coverage_lines(copies) == [
+            f"Compliance coverage asset={ASSET} path=file stamp=lastAssetVersionAt "
+            f"stampAt={PIPELINE_REVERT_STAMP} " "eventTime=2026-03-01T19:55:33.850000+00:00 "
+            f"lastEvaluationId=eval-prev lastEvaluatedAt={PIPELINE_REVERT_EVALUATION_START} "
+            "outcome=covered"]
+
+    def test_the_copies_are_covered_although_the_output_write_re_stamped_the_latest_change(self):
+        mocks = _run(_sns_event(*_pipeline_copy_messages()), database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(PIPELINE_REVERT_EVALUATION_START,
+                                                            status="pending_pipeline"),
+                     asset_rows=_rows_after_the_output_write())
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_the_copies_are_covered_although_an_asset_edit_re_stamped_the_latest_change(self):
+        mocks = _run(_sns_event(*_pipeline_copy_messages()), database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(PIPELINE_REVERT_EVALUATION_START),
+                     asset_rows=_pipeline_rows("assetEdit", PIPELINE_OUTPUT_STAMP))
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_an_object_written_after_the_revert_stamp_is_still_evaluated(self):
+        """A user upload landing after the output write: its object postdates every completion stamp
+        and its own completion has not stamped the row yet, so it is judged by its eventTime with
+        the margin and evaluated."""
+        mocks = _run(_sns_event(indexer_message(s3_event_record(
+                         f"{ASSET}/second.stl", event_time="2026-03-01T19:55:40.000Z"))),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(PIPELINE_REVERT_EVALUATION_START),
+                     asset_rows=_rows_after_the_output_write())
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+
+
+@pytest.mark.unit
+class TestTheFileEventCompletionTimeIsTheLatestCompletionStamp:
+    """`file_event_completion_time` reads `lastUploadAt` and `lastAssetVersionAt`, takes the later,
+    and never consults `lastChangeSource` / `lastChangeAt`."""
+
+    UPLOAD = "2026-03-01T10:00:00+00:00"
+    VERSION = "2026-03-01T11:00:00+00:00"
+    LATER_CHANGE = "2026-03-01T12:00:00+00:00"
+
+    @pytest.mark.parametrize("row,expected", [
+        ({}, None),
+        ({"lastUploadAt": UPLOAD}, UPLOAD),
+        ({"lastAssetVersionAt": VERSION}, VERSION),
+        ({"lastUploadAt": UPLOAD, "lastAssetVersionAt": VERSION}, VERSION),
+        ({"lastUploadAt": VERSION, "lastAssetVersionAt": UPLOAD}, VERSION),
+        ({"lastUploadAt": "not-a-time", "lastAssetVersionAt": VERSION}, VERSION),
+    ], ids=["neither", "upload-only", "version-only", "version-later", "upload-later",
+            "unparseable-upload"])
+    def test_the_later_of_the_two_stamps(self, row, expected):
+        result = trigger.file_event_completion_time(row)
+        assert result == (trigger.parse_event_time(expected) if expected else None)
+
+    @pytest.mark.parametrize("change_source", ["upload", "workflowExecution", "assetVersion",
+                                               "assetEdit"])
+    def test_the_latest_change_source_and_instant_are_not_consulted(self, change_source):
+        row = {"lastUploadAt": self.UPLOAD, "lastAssetVersionAt": self.VERSION,
+               "lastChangeSource": change_source, "lastChangeAt": self.LATER_CHANGE}
+        assert trigger.file_event_completion_time(row) == trigger.parse_event_time(self.VERSION)
+
+    def test_a_row_stamped_only_with_a_latest_change_has_no_completion(self):
+        row = {"lastChangeSource": "assetVersion", "lastChangeAt": self.LATER_CHANGE}
+        assert trigger.file_event_completion_time(row) is None
+
+    def test_the_stamp_names_the_attribute_it_read(self):
+        assert trigger.file_event_completion_stamp(
+            {"lastUploadAt": self.UPLOAD, "lastAssetVersionAt": self.VERSION}) == (
+            "lastAssetVersionAt", trigger.parse_event_time(self.VERSION))
+        assert trigger.file_event_completion_stamp({}) == (None, None)
+
+
+@pytest.mark.unit
+class TestEachCoverageDecisionLogsOneLine:
+    """One INFO line per coverage decision: the asset by id, the path, the stamp attribute and its
+    instant, the S3 eventTime, the last evaluation compared with, and the outcome; never an object
+    key."""
+
+    def test_a_covered_file_event(self):
         mocks = _run(_sns_event(*_revert_copy_messages(names=("r-1.txt",))),
                      database_item=AUTO_EVAL_DB,
                      compliance_record=_record_evaluated_at(REVERT_EVALUATION_START),
-                     asset_rows=_reverted_rows(change_source))
-        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+                     asset_rows=_reverted_rows())
+        assert _coverage_lines(mocks) == [
+            f"Compliance coverage asset={ASSET} path=file stamp=lastAssetVersionAt "
+            f"stampAt={REVERT_STAMP} " "eventTime=2026-03-01T18:09:09.310000+00:00 "
+            f"lastEvaluationId=eval-prev lastEvaluatedAt={REVERT_EVALUATION_START} outcome=covered"]
+        assert not any("r-1.txt" in message for message in _info_messages(mocks))
+
+    def test_an_evaluating_stream_modify(self):
+        mocks = _run(_sns_event(_stream_message(change_source="assetVersion",
+                                                change_at=REVERT_STAMP)),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(EARLIER_UPLOAD_EVALUATION))
+        assert _coverage_lines(mocks) == [
+            f"Compliance coverage asset={ASSET} path=stream stamp=lastChangeAt "
+            f"stampAt={REVERT_STAMP} eventTime=none lastEvaluationId=eval-prev "
+            f"lastEvaluatedAt={EARLIER_UPLOAD_EVALUATION} outcome=evaluating"]
+
+    def test_a_stream_insert_records_no_stamp(self):
+        mocks = _run(_sns_event(_stream_message(event_name="INSERT", change_source="upload")),
+                     database_item=AUTO_EVAL_DB, compliance_record={"schemaName": SCHEMA})
+        assert _coverage_lines(mocks) == [
+            f"Compliance coverage asset={ASSET} path=stream stamp=none stampAt=none eventTime=none "
+            "lastEvaluationId=none lastEvaluatedAt=none outcome=evaluating"]
+
+    def test_a_direct_message(self):
+        mocks = _run(_sns_event({"databaseId": DB, "assetId": ASSET}), database_item=AUTO_EVAL_DB,
+                     compliance_record={"schemaName": SCHEMA})
+        assert _coverage_lines(mocks) == [
+            f"Compliance coverage asset={ASSET} path=direct stamp=none stampAt=none eventTime=none "
+            "lastEvaluationId=none lastEvaluatedAt=none outcome=evaluating"]
+
+    def test_one_line_per_message_and_none_for_a_workflow_written_object(self):
+        messages = _revert_copy_messages() + [
+            indexer_message(s3_event_record(f"{ASSET}/out.glb", event_time=REVERT_COPY_EVENT_TIME))]
+        mocks = _run(_sns_event(*messages), database_item=AUTO_EVAL_DB,
+                     compliance_record=_record_evaluated_at(REVERT_EVALUATION_START),
+                     asset_rows=_reverted_rows(),
+                     head=[_s3_head("upload")] * 3 + [_s3_head("workflowExecution")])
+        assert len(_coverage_lines(mocks)) == 3
+
+    def test_an_asset_that_is_not_evaluated_logs_no_decision(self):
+        mocks = _run(_sns_event(_stream_message()), database_item={"databaseId": DB},
+                     compliance_record={"schemaName": SCHEMA})
+        assert _coverage_lines(mocks) == []

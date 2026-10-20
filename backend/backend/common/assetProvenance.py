@@ -12,6 +12,11 @@ the asset row identically, by the asset-version create and revert paths
 `workflowExecution`, `assetVersion`, `assetEdit`); `lastUploadAt` is written by a user upload's
 completion only, so a workflow execution's output write, a new asset version or an asset edit —
 each of which re-stamps `lastChangeAt` — leaves the instant of the last user upload readable.
+`lastAssetVersionAt` is its asset-version analogue: written by an asset-version create or revert
+only (the same instant as that stamp's `lastChangeAt`), and left as it is by an upload completion,
+a workflow execution's output write and an asset edit, so the instant of the last asset version —
+and with it the objects a revert copied before that stamp — stays readable after a pipeline rule's
+output write or an edit re-stamps `lastChangeSource` / `lastChangeAt`.
 """
 
 from datetime import datetime, timezone
@@ -43,10 +48,11 @@ def asset_change_provenance(workflow_execution_id=None):
     `upload` otherwise; `lastChangeWorkflowExecutionId` names that execution and is absent for an
     upload; `lastChangeAt` is the instant of the write. A user upload's completion also writes
     `lastUploadAt`, the same instant; a workflow execution's completion omits the key, so the SET
-    the callers build from these attributes leaves the previous upload's instant on the row. The
-    asset table's stream image carries them, which is how the compliance trigger tells a pipeline
-    rule's own output apart from a user change and judges an uploaded object against the upload
-    that completed it rather than against a later output write.
+    the callers build from these attributes leaves the previous upload's instant on the row. Neither
+    writes `lastAssetVersionAt`, which that SET also leaves as it is. The asset table's stream image
+    carries them, which is how the compliance trigger tells a pipeline rule's own output apart from
+    a user change and judges an uploaded object against the upload that completed it rather than
+    against a later output write.
     """
     now = datetime.now(timezone.utc).isoformat()
     attributes = {
@@ -63,12 +69,17 @@ def asset_change_provenance(workflow_execution_id=None):
 
 def stamp_asset_version_provenance(asset):
     """Record a new asset version as the asset row's latest change, in place on the row dict the
-    caller writes back whole: `lastChangeSource` `assetVersion`, `lastChangeAt` now, and no
-    `lastChangeWorkflowExecutionId` (the latest change is not a workflow execution's).
-    `lastUploadAt` is left as it is. The stream MODIFY that write raises is what makes the compliance
-    trigger re-evaluate the asset, so a version-coverage verdict follows the new version."""
+    caller writes back whole: `lastChangeSource` `assetVersion`, `lastChangeAt` now,
+    `lastAssetVersionAt` the same instant, and no `lastChangeWorkflowExecutionId` (the latest change
+    is not a workflow execution's). `lastUploadAt` is left as it is. The stream MODIFY that write
+    raises is what makes the compliance trigger re-evaluate the asset, so a version-coverage verdict
+    follows the new version. The callers stamp after a revert's last object copy, so the objects a
+    revert copied are judged against `lastAssetVersionAt`, which a later workflow execution's output
+    write or asset edit does not move."""
+    now = datetime.now(timezone.utc).isoformat()
     asset['lastChangeSource'] = ASSET_CHANGE_SOURCE_ASSET_VERSION
-    asset['lastChangeAt'] = datetime.now(timezone.utc).isoformat()
+    asset['lastChangeAt'] = now
+    asset['lastAssetVersionAt'] = now
     asset.pop('lastChangeWorkflowExecutionId', None)
     return asset
 
@@ -77,12 +88,12 @@ def asset_edit_provenance(stored_asset, edited_attributes):
     """The change-provenance update an asset edit makes beside the attributes it edits, as the
     attributes to SET and the attribute names to REMOVE: `lastChangeSource` `assetEdit`,
     `lastChangeAt` now, and `lastChangeWorkflowExecutionId` removed (the latest change is not a
-    workflow execution's). `lastUploadAt` is left as it is. Both are empty when `edited_attributes`
-    changes none of ASSET_EDIT_STAMPED_FIELDS against `stored_asset`, the row as read before the
-    edit, so an edit that resubmits the stored values or changes only `isDistributable` is not
-    stamped; tags compare regardless of order, a missing tag list as an empty one. The stream MODIFY
-    the stamped write raises is what makes the compliance trigger re-evaluate the asset, so an
-    asset-attribute verdict follows the edit."""
+    workflow execution's). `lastUploadAt` and `lastAssetVersionAt` are left as they are. Both are
+    empty when `edited_attributes` changes none of ASSET_EDIT_STAMPED_FIELDS against `stored_asset`,
+    the row as read before the edit, so an edit that resubmits the stored values or changes only
+    `isDistributable` is not stamped; tags compare regardless of order, a missing tag list as an
+    empty one. The stream MODIFY the stamped write raises is what makes the compliance trigger
+    re-evaluate the asset, so an asset-attribute verdict follows the edit."""
     if not any(_edit_changes_field(stored_asset, edited_attributes, field)
                for field in ASSET_EDIT_STAMPED_FIELDS):
         return {}, []
