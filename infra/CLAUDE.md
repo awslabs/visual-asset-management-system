@@ -378,6 +378,12 @@ is defined exactly when the flag is on.
 | `logs.LogGroup`         | `encryptionKey`                      | The key policy already admits the Logs service principal      |
 | `efs.FileSystem`        | `encrypted: true` + `kmsKey`         | See trap 1                                                    |
 | `secretsmanager.Secret` | `encryptionKey`                      | See trap 2                                                    |
+| `ecr.Repository`        | `encryption` + `encryptionKey`       | `KMS` with the key imported by ARN, `AES_256` without         |
+
+An `ecr.Repository`'s encryption is immutable, so changing it replaces the repository, and AWS CloudFormation
+cannot replace an explicitly named resource under the same name. An explicit `repositoryName` must therefore
+change with the encryption, as `conversion3dBasicCodeBuild-construct.ts` does with its `-kms` suffix. Import
+the key by ARN, as for secrets (trap 2).
 
 Three traps, each of which passes `cdk synth` and fails later:
 

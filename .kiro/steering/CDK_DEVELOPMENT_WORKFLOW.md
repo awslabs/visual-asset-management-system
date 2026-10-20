@@ -562,7 +562,9 @@ type to choose; they take the key and fall back to their service default without
 (`encryption` + `encryptionKey`), S3 buckets (the same, plus `bucketKeyEnabled`) and SQS queues
 (`encryption` + `encryptionMasterKey`) choose the encryption type from the key, as above; without it they use
 `AWS_MANAGED`, `S3_MANAGED` (no bucket key) and `SQS_MANAGED`. SNS topics take it as `masterKey` and have no
-server-side encryption without it.
+server-side encryption without it. ECR repositories take `encryption: kmsKey ? KMS : AES_256` with the key
+imported by ARN; their encryption is immutable, so a custom `repositoryName` must change with it (the 3D Basic
+Conversion repository adds `-kms`), or a CMK flip fails on a custom-named replacement.
 
 ```typescript
 // ✅ CORRECT - CloudWatch log group

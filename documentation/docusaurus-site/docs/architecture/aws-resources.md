@@ -520,15 +520,17 @@ return.
 | **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                                                |
 | **CodeBuild project** | One per repository, privileged mode for container builds, one-hour timeout (3D Basic Conversion: 20 minutes, plus up to 10 minutes in the queue) |
 | **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                                                    |
+| **Encryption**        | Amazon ECR's default AES-256. The 3D Basic Conversion repository uses the VAMS KMS key when `useKmsCmkEncryption.enabled` is `true`              |
 
 All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
 images are removed when the stack is destroyed cleanly.
 
 Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. The
 **Coordinate Transform** and **3D Basic Conversion** repositories are the exceptions: they carry explicit
-names, `{config.name}-{app.baseStackName}-coordtransform` and `{config.name}-{app.baseStackName}-3dbasic`,
-and are redeploy-collision relevant. Delete any orphaned repository of those names left by a failed
-teardown before redeploying with the same configuration name and account.
+names, `{config.name}-{app.baseStackName}-coordtransform` and `{config.name}-{app.baseStackName}-3dbasic`
+(`{config.name}-{app.baseStackName}-3dbasic-kms` when `useKmsCmkEncryption.enabled` is `true`), and are
+redeploy-collision relevant. Delete any orphaned repository of those names left by a failed teardown before
+redeploying with the same configuration name and account.
 
 :::note[Why two repositories are explicitly named]
 Amazon ECS and AWS Batch cap a container image reference at 255 characters across the whole
@@ -539,6 +541,27 @@ job never starts, no container log or exit code is produced; the reason appears 
 `statusReason`. An explicit short name keeps the reference well inside the limit without shortening the
 content-addressed tag. The 3D Basic Conversion repository sits one nested stack deeper still and is named
 explicitly as well, which keeps its Lambda function's image URI short and the same across deployments.
+:::
+
+:::note[The 3D Basic Conversion repository name follows its encryption]
+Amazon ECR cannot change a repository's encryption after the repository is created, and AWS
+CloudFormation cannot replace an explicitly named resource under the same name. The `-kms` suffix makes
+turning `useKmsCmkEncryption.enabled` on or off a rename: the deployment creates the repository under the
+other name, builds the image into it, moves the function to that image, and then deletes the old
+repository. Changing to a different key while the CMK stays on (for example, setting
+`optionalExternalCmkArn` on a deployment that uses the VAMS-generated key) keeps the name, so that update
+fails. Deploy once with `useConversion3dBasic.useCodeBuild` set to `false`, which builds the image with
+local Docker for that deployment, then set it back to `true`.
+
+The principal that creates a KMS-encrypted Amazon ECR repository needs `kms:CreateGrant`,
+`kms:DescribeKey` and `kms:RetireGrant` on the key, and Amazon ECR requires `kms:RetireGrant` in that
+principal's IAM policy. For VAMS that principal is the AWS CloudFormation execution role, which also
+deletes the repository. The default CDK bootstrap role has these permissions. A custom execution role
+(`app.iamRoleConfig.useCustomBootstrapRoles`, or `cdk bootstrap --cloudformation-execution-policies`) must
+allow them on the key; with `useCliCredentialsSynthesizer`, the deploying credentials must. An external
+key's policy must keep the statement that lets IAM policies in the account authorize use of the key.
+Pushing and pulling need no permission on the key, so the build, the trigger functions and the AWS Lambda
+function get none.
 :::
 
 ## AWS CloudTrail

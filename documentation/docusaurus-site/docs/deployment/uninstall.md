@@ -312,7 +312,7 @@ VAMS log group names are deterministic (a hash of the stack name plus account ID
 
 A pipeline configured with `useCodeBuild: true` creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
 
-Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform and 3D Basic Conversion repositories are the exceptions — they carry the explicit names `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform` and `<CONFIG_NAME>-<BASE_STACK_NAME>-3dbasic` — so if a teardown fails and leaves one behind, delete it before redeploying with the same configuration name and account. The commands below show the Coordinate Transform name; substitute the 3D Basic Conversion name for that repository:
+Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform and 3D Basic Conversion repositories are the exceptions — they carry the explicit names `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform` and `<CONFIG_NAME>-<BASE_STACK_NAME>-3dbasic` (`<CONFIG_NAME>-<BASE_STACK_NAME>-3dbasic-kms` when `app.useKmsCmkEncryption.enabled` is `true`) — so if a teardown fails and leaves one behind, delete it before redeploying with the same configuration name and account. The commands below show the Coordinate Transform name; substitute the 3D Basic Conversion name for that repository. Deleting the `-kms` repository retires the grants Amazon ECR holds on the VAMS KMS key, so the caller needs `kms:RetireGrant` on the key:
 
 ```bash
 # Check for the explicitly named repository

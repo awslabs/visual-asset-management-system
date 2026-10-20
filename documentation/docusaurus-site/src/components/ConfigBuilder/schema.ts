@@ -888,7 +888,7 @@ export const FIELDS: FieldMeta[] = [
         section: "pipelines-standard",
         advanced: true,
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
-        help: "The deployment waits for the build and fails if the build fails.",
+        help: "Build the 3D basic conversion Lambda image in the cloud with AWS CodeBuild instead of locally during CDK deploy. The deployment waits for the build and fails if it fails.",
     },
     {
         path: "app.pipelines.useConversion3dBasic.autoRegisterWithVAMS",
