@@ -70,6 +70,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Assertion-shape guard passes on development** — The assetLinks batch_get helper test asserts the recorded `sleep` call count before asserting over its contents, so a zero-sleep test double fails instead of passing vacuously. (issue #414)
 -   **3D Basic Conversion PLY template and documentation** — A Convert to PLY template is registered, and the pipeline page states the five output formats, the manifest-based inputs, which targets keep point clouds and the multi-file model rules; the architecture page lists its compute, and that of the CAD/Mesh Metadata Extraction pipeline, as an AWS Lambda container image. (issue #511)
 -   **NOTICE lists the Text Diff Viewer dependency** — `NOTICE.md` lists `react-diff-viewer-continued` 4.4.0 (MIT), which the Text Diff Viewer plugin depends on. (issue #522)
+-   **SageMaker stop on workflow failure classified by status** — The workflow error handler holds `sagemaker:DescribeTrainingJob` and `sagemaker:DescribePipelineExecution` on the same account and Region namespaces as its SageMaker Stop grants, so a refused stop of a registered training job or pipeline execution is classified by the job's live status, as on abort, rather than by the service's error wording. (issue #505)
 
 **Other changes:**
 
